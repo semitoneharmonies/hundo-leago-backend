@@ -1,0 +1,557 @@
+{
+  "teams": [
+    {
+      "name": "Pacino Amigo",
+      "roster": [
+        {
+          "name": "Thomson",
+          "salary": 6,
+          "position": "F"
+        },
+        {
+          "name": "Rantanen",
+          "salary": 8,
+          "position": "F"
+        },
+        {
+          "name": "Reinhart",
+          "salary": 8,
+          "position": "F"
+        },
+        {
+          "name": "Necas",
+          "salary": 3,
+          "position": "F"
+        },
+        {
+          "name": "Hagel",
+          "salary": 2,
+          "position": "F"
+        },
+        {
+          "name": "B Tkachuk",
+          "salary": 6,
+          "position": "F"
+        },
+        {
+          "name": "Stutzle",
+          "salary": 3,
+          "position": "F"
+        },
+        {
+          "name": "Q Hughes",
+          "salary": 15,
+          "position": "D"
+        },
+        {
+          "name": "Morrissey",
+          "salary": 3,
+          "position": "D"
+        },
+        {
+          "name": "Dahlin",
+          "salary": 9,
+          "position": "D"
+        },
+        {
+          "name": "Hutson",
+          "salary": 7,
+          "position": "D"
+        },
+        {
+          "name": "Boldy",
+          "salary": 6,
+          "position": "F"
+        },
+        {
+          "name": "J Robsertson",
+          "salary": 4,
+          "position": "F"
+        },
+        {
+          "name": "DeBrincat",
+          "salary": 4,
+          "position": "F"
+        }
+      ],
+      "buyouts": [
+        {
+          "player": "Kucherov",
+          "penalty": 4,
+          "createdAt": 1765016538416
+        }
+      ]
+    },
+    {
+      "name": "El Camino",
+      "roster": [
+        {
+          "name": "Pastrnak",
+          "salary": 10,
+          "position": "F"
+        },
+        {
+          "name": "Suzuki",
+          "salary": 8,
+          "position": "F"
+        },
+        {
+          "name": "Guenther",
+          "salary": 5,
+          "position": "F"
+        },
+        {
+          "name": "Jarvis",
+          "salary": 8,
+          "position": "F"
+        },
+        {
+          "name": "Johnston",
+          "salary": 5,
+          "position": "F"
+        },
+        {
+          "name": "Snuggerud",
+          "salary": 1,
+          "position": "F"
+        },
+        {
+          "name": "Aho",
+          "salary": 6,
+          "position": "F"
+        },
+        {
+          "name": "Cozens",
+          "salary": 2,
+          "position": "F"
+        },
+        {
+          "name": "LaComb",
+          "salary": 8,
+          "position": "D"
+        },
+        {
+          "name": "Sergachev",
+          "salary": 8,
+          "position": "D"
+        },
+        {
+          "name": "Werenski",
+          "salary": 15,
+          "position": "D"
+        },
+        {
+          "name": "Hedman",
+          "salary": 5,
+          "position": "D"
+        },
+        {
+          "name": "Hintz",
+          "salary": 4,
+          "position": "F"
+        },
+        {
+          "name": "Byfield",
+          "salary": 3,
+          "position": "F"
+        },
+        {
+          "name": "Tippett",
+          "salary": 1,
+          "position": "F"
+        }
+      ],
+      "buyouts": []
+    },
+    {
+      "name": "DeNiro Amigo",
+      "roster": [
+        {
+          "name": "Crosby",
+          "salary": 7,
+          "position": "F"
+        },
+        {
+          "name": "Pettersson",
+          "salary": 11,
+          "position": "F"
+        },
+        {
+          "name": "Panarin",
+          "salary": 11,
+          "position": "F"
+        },
+        {
+          "name": "Ovechkin",
+          "salary": 7,
+          "position": "F"
+        },
+        {
+          "name": "Celebrini",
+          "salary": 8,
+          "position": "F"
+        },
+        {
+          "name": "Bedard",
+          "salary": 8,
+          "position": "F"
+        },
+        {
+          "name": "Larkin",
+          "salary": 3,
+          "position": "F"
+        },
+        {
+          "name": "Dadonov",
+          "salary": 7,
+          "position": "F"
+        },
+        {
+          "name": "Hronek",
+          "salary": 5,
+          "position": "D"
+        },
+        {
+          "name": "Theodore",
+          "salary": 6,
+          "position": "D"
+        },
+        {
+          "name": "Josi",
+          "salary": 7,
+          "position": "D"
+        },
+        {
+          "name": "Dobson",
+          "salary": 7,
+          "position": "D"
+        },
+        {
+          "name": "DeBrusk",
+          "salary": 4,
+          "position": "F"
+        },
+        {
+          "name": "Boeser",
+          "salary": 4,
+          "position": "F"
+        },
+        {
+          "name": "Lekkerimaki",
+          "salary": 5,
+          "position": "F"
+        }
+      ],
+      "buyouts": []
+    },
+    {
+      "name": "Champino",
+      "roster": [
+        {
+          "name": "McDavid",
+          "salary": 16,
+          "position": "F"
+        },
+        {
+          "name": "McKinnon",
+          "salary": 14,
+          "position": "F"
+        },
+        {
+          "name": "Nylander",
+          "salary": 7,
+          "position": "F"
+        },
+        {
+          "name": "Hyman",
+          "salary": 5,
+          "position": "F"
+        },
+        {
+          "name": "Point",
+          "salary": 13,
+          "position": "F"
+        },
+        {
+          "name": "Matthews",
+          "salary": 17,
+          "position": "F"
+        },
+        {
+          "name": "Brown",
+          "salary": 1,
+          "position": "F"
+        },
+        {
+          "name": "Monahan",
+          "salary": 2,
+          "position": "F"
+        },
+        {
+          "name": "Parekh",
+          "salary": 4,
+          "position": "D"
+        },
+        {
+          "name": "Heiskanen",
+          "salary": 10,
+          "position": "D"
+        },
+        {
+          "name": "McAvoy",
+          "salary": 6,
+          "position": "D"
+        },
+        {
+          "name": "Weegar",
+          "salary": 1,
+          "position": "D"
+        },
+        {
+          "name": "Hamilton",
+          "salary": 2,
+          "position": "D"
+        },
+        {
+          "name": "Lehkonen",
+          "salary": 1,
+          "position": "F"
+        },
+        {
+          "name": "Stankoven",
+          "salary": 1,
+          "position": "F"
+        }
+      ],
+      "buyouts": []
+    },
+    {
+      "name": "Bottle O Draino",
+      "roster": [
+        {
+          "name": "Draisaitl",
+          "salary": 19,
+          "position": "F"
+        },
+        {
+          "name": "Eichel",
+          "salary": 10,
+          "position": "F"
+        },
+        {
+          "name": "Keller",
+          "salary": 10,
+          "position": "F"
+        },
+        {
+          "name": "Caulfield",
+          "salary": 1,
+          "position": "F"
+        },
+        {
+          "name": "Raymond",
+          "salary": 2,
+          "position": "F"
+        },
+        {
+          "name": "Konecny",
+          "salary": 1,
+          "position": "F"
+        },
+        {
+          "name": "J Miller",
+          "salary": 2,
+          "position": "F"
+        },
+        {
+          "name": "Kempe",
+          "salary": 6,
+          "position": "F"
+        },
+        {
+          "name": "Makar",
+          "salary": 20,
+          "position": "D"
+        },
+        {
+          "name": "Sanderson",
+          "salary": 9,
+          "position": "D"
+        },
+        {
+          "name": "E Karlsson",
+          "salary": 1,
+          "position": "D"
+        },
+        {
+          "name": "Gostisbehere",
+          "salary": 1,
+          "position": "D"
+        },
+        {
+          "name": "J Hughes",
+          "salary": 9,
+          "position": "F"
+        },
+        {
+          "name": "Connor",
+          "salary": 1,
+          "position": "F"
+        },
+        {
+          "name": "Schiefele",
+          "salary": 1,
+          "position": "F"
+        }
+      ],
+      "buyouts": []
+    },
+    {
+      "name": "Imano Lizzo",
+      "roster": [
+        {
+          "name": "Marner",
+          "salary": 10,
+          "position": "F"
+        },
+        {
+          "name": "P Kane",
+          "salary": 2,
+          "position": "F"
+        },
+        {
+          "name": "Demidov",
+          "salary": 6,
+          "position": "F"
+        },
+        {
+          "name": "L Carlsson",
+          "salary": 6,
+          "position": "F"
+        },
+        {
+          "name": "Bratt",
+          "salary": 6,
+          "position": "F"
+        },
+        {
+          "name": "Thomas",
+          "salary": 6,
+          "position": "F"
+        },
+        {
+          "name": "Knies",
+          "salary": 4,
+          "position": "F"
+        },
+        {
+          "name": "Kaprizov",
+          "salary": 14,
+          "position": "F"
+        },
+        {
+          "name": "Fox",
+          "salary": 9,
+          "position": "D"
+        },
+        {
+          "name": "Bouchard",
+          "salary": 9,
+          "position": "D"
+        },
+        {
+          "name": "Schaefer",
+          "salary": 6,
+          "position": "D"
+        },
+        {
+          "name": "Chychrun",
+          "salary": 3,
+          "position": "D"
+        },
+        {
+          "name": "Forsberg",
+          "salary": 7,
+          "position": "F"
+        },
+        {
+          "name": "Tavares",
+          "salary": 2,
+          "position": "F"
+        },
+        {
+          "name": "Michkov",
+          "salary": 6,
+          "position": "F"
+        }
+      ],
+      "buyouts": []
+    }
+  ],
+  "freeAgents": [],
+  "leagueLog": [
+    {
+      "type": "tradeCancelled",
+      "id": 1765019771851.202,
+      "fromTeam": "Pacino Amigo",
+      "toTeam": "Bottle O Draino",
+      "requestedPlayers": [
+        "Draisaitl"
+      ],
+      "offeredPlayers": [
+        "Rantanen"
+      ],
+      "penaltyFrom": 0,
+      "penaltyTo": 0,
+      "timestamp": 1765019771851
+    },
+    {
+      "type": "tradeProposed",
+      "id": 1765017004262.5,
+      "fromTeam": "Pacino Amigo",
+      "toTeam": "Bottle O Draino",
+      "requestedPlayers": [
+        "Draisaitl"
+      ],
+      "offeredPlayers": [
+        "Rantanen"
+      ],
+      "penaltyFrom": 0,
+      "penaltyTo": 0,
+      "retentionFrom": {},
+      "retentionTo": {},
+      "timestamp": 1765017004262
+    },
+    {
+      "id": "buyout-Pacino Amigo-Kucherov-1765016538416",
+      "type": "buyout",
+      "team": "Pacino Amigo",
+      "player": "Kucherov",
+      "penalty": 4,
+      "beforeCap": 100,
+      "afterCap": 88,
+      "timestamp": 1765016538416
+    }
+  ],
+  "tradeProposals": [
+    {
+      "id": 1765017004262.0352,
+      "fromTeam": "Pacino Amigo",
+      "toTeam": "Bottle O Draino",
+      "requestedPlayers": [
+        "Draisaitl"
+      ],
+      "offeredPlayers": [
+        "Rantanen"
+      ],
+      "penaltyFrom": 0,
+      "penaltyTo": 0,
+      "retentionFrom": {},
+      "retentionTo": {},
+      "status": "cancelled",
+      "createdAt": 1765017004262,
+      "expiresAt": 1765621804262
+    }
+  ],
+  "nextAuctionDeadline": "2025-12-08T00:00:00.000Z"
+}

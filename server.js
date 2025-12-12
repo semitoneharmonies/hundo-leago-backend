@@ -3,6 +3,8 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
+const http = require("http");             // For Socket.IO integration
+const { Server } = require("socket.io");  // Socket.IO server
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -10,13 +12,48 @@ const PORT = process.env.PORT || 4000;
 app.use(cors());
 app.use(express.json());
 
-// Where we store the league data on the server
-const DATA_FILE = path.join(__dirname, "league-state.json");
-const SNAPSHOT_DIR = path.join(__dirname, "snapshots");
+// Create HTTP server and wrap Express (for Socket.IO)
+const server = http.createServer(app);
+
+// Create Socket.IO server
+const io = new Server(server, {
+  cors: {
+    origin: "*", // you can restrict this later if you want
+    methods: ["GET", "POST"],
+  },
+});
+
+// Optional: log connections for debugging
+io.on("connection", (socket) => {
+  console.log("🔌 WebSocket client connected:", socket.id);
+
+  socket.on("disconnect", () => {
+    console.log("❌ WebSocket client disconnected:", socket.id);
+  });
+});
+
+// Make io available inside route handlers via req.app.get("io")
+app.set("io", io);
+
+// ===============================
+//   PERSISTENT STORAGE PATHS
+// ===============================
+//
+// On Render you set:
+//   LEAGUE_FILE  = /opt/render/project/data/hundo/league-state.json
+//   SNAPSHOT_DIR = /opt/render/project/data/hundo/snapshots
+//
+// Locally (on your PC), it will fall back to files next to server.js.
+
+const DATA_FILE =
+  process.env.LEAGUE_FILE || path.join(__dirname, "league-state.json");
+
+const SNAPSHOT_DIR =
+  process.env.SNAPSHOT_DIR || path.join(__dirname, "snapshots");
 
 // Make sure snapshot folder exists
 if (!fs.existsSync(SNAPSHOT_DIR)) {
-  fs.mkdirSync(SNAPSHOT_DIR);
+  fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
 }
 
 function emptyState() {
@@ -75,6 +112,13 @@ app.post("/api/league", (req, res) => {
 
   try {
     saveLeagueState(state);
+
+    // 🔔 Notify all connected clients that the league changed
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("league:updated", { reason: "saveLeague" });
+    }
+
     res.json({ ok: true });
   } catch (err) {
     console.error("[BACKEND] Error writing league-state.json:", err);
@@ -137,6 +181,16 @@ app.post("/api/snapshots/restore", (req, res) => {
     const raw = fs.readFileSync(file, "utf8");
     const state = JSON.parse(raw);
     saveLeagueState(state);
+
+    // 🔔 Notify all clients that a snapshot restore changed the league state
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("league:updated", {
+        reason: "snapshotRestored",
+        snapshotId: id,
+      });
+    }
+
     res.json({ ok: true });
   } catch (err) {
     console.error("[BACKEND] Error restoring snapshot:", err);
@@ -150,10 +204,8 @@ app.post("/api/snapshots/restore", (req, res) => {
 app.get("/", (req, res) => {
   res.send("Hundo Leago backend is running.");
 });
-app.get("/", (req, res) => {
-  res.send("Hundo Leago backend is running.");
-});
 
-app.listen(PORT, () => {
-  console.log(`Hundo Leago backend listening on port ${PORT}`);
+// 🔁 IMPORTANT: use server.listen instead of app.listen now
+server.listen(PORT, () => {
+  console.log(`Hundo Leago backend + WebSocket listening on port ${PORT}`);
 });
