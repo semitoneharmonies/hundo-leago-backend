@@ -65,6 +65,7 @@ function emptyState() {
     tradeBlock: [],
     settings: { frozen: false },
     nextAuctionDeadline: null,
+    lastAutoWeeklySnapshotId: null,
   };
 }
 
@@ -95,6 +96,79 @@ app.get("/api/league", (req, res) => {
   const state = loadLeagueState();
   res.json(state);
 });
+
+// -------------------------------
+// Auto-weekly snapshot (Sunday 4:00 PM Pacific)
+// -------------------------------
+function getPartsInTZ(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const out = {};
+  for (const p of parts) {
+    if (p.type !== "literal") out[p.type] = p.value;
+  }
+  // out: { weekday, year, month, day, hour, minute }
+  return out;
+}
+
+function buildAutoSnapshotId(partsPT) {
+  // Example: auto-2025-12-14-1600PT
+  return `auto-${partsPT.year}-${partsPT.month}-${partsPT.day}-${partsPT.hour}${partsPT.minute}PT`;
+}
+
+function writeSnapshotFile(snapshotId, state) {
+  const file = path.join(SNAPSHOT_DIR, `${snapshotId}.json`);
+  fs.writeFileSync(file, JSON.stringify(state, null, 2), "utf8");
+  return snapshotId;
+}
+
+function tryAutoWeeklySnapshot() {
+  try {
+    const timeZone = "America/Los_Angeles";
+    const partsPT = getPartsInTZ(new Date(), timeZone);
+
+    // Only on Sunday
+    if (partsPT.weekday !== "Sun") return;
+
+    // 4:00 PM Pacific = 16:00
+    // Give a 10-minute window so we don't miss it if the check isn't exact.
+    const hour = Number(partsPT.hour);
+    const minute = Number(partsPT.minute);
+    const inWindow = hour === 16 && minute >= 0 && minute <= 10;
+    if (!inWindow) return;
+
+    const snapshotId = buildAutoSnapshotId({
+      ...partsPT,
+      minute: "00", // normalize to 1600 for the id
+    });
+
+    const state = loadLeagueState();
+
+    // Persist “already created this week” on disk so restarts don’t double-create
+    if (state.lastAutoWeeklySnapshotId === snapshotId) return;
+
+    writeSnapshotFile(snapshotId, state);
+
+    state.lastAutoWeeklySnapshotId = snapshotId;
+    saveLeagueState(state);
+
+    console.log(`[AUTO SNAPSHOT] Created weekly snapshot: ${snapshotId}`);
+
+    const io = app.get("io");
+    if (io) io.emit("league:updated", { reason: "autoWeeklySnapshot", snapshotId });
+  } catch (err) {
+    console.error("[AUTO SNAPSHOT] Failed:", err);
+  }
+}
 
 /**
  * POST /api/league
@@ -255,6 +329,10 @@ app.post("/api/snapshots/create", (req, res) => {
 app.get("/", (req, res) => {
   res.send("Hundo Leago backend is running.");
 });
+
+// Run once on boot, then every minute
+tryAutoWeeklySnapshot();
+setInterval(tryAutoWeeklySnapshot, 60 * 1000);
 
 // 🔁 IMPORTANT: use server.listen instead of app.listen now
 server.listen(PORT, () => {
