@@ -62,9 +62,12 @@ function emptyState() {
     freeAgents: [],
     leagueLog: [],
     tradeProposals: [],
+    tradeBlock: [],
+    settings: { frozen: false },
     nextAuctionDeadline: null,
   };
 }
+
 
 function loadLeagueState() {
   try {
@@ -100,15 +103,16 @@ app.get("/api/league", (req, res) => {
 app.post("/api/league", (req, res) => {
   const body = req.body || {};
 
-  const state = {
+    const state = {
     teams: Array.isArray(body.teams) ? body.teams : [],
     freeAgents: Array.isArray(body.freeAgents) ? body.freeAgents : [],
     leagueLog: Array.isArray(body.leagueLog) ? body.leagueLog : [],
-    tradeProposals: Array.isArray(body.tradeProposals)
-      ? body.tradeProposals
-      : [],
+    tradeProposals: Array.isArray(body.tradeProposals) ? body.tradeProposals : [],
+    tradeBlock: Array.isArray(body.tradeBlock) ? body.tradeBlock : [],
+    settings: body.settings && typeof body.settings === "object" ? body.settings : { frozen: false },
     nextAuctionDeadline: body.nextAuctionDeadline || null,
   };
+
 
   try {
     saveLeagueState(state);
@@ -195,6 +199,53 @@ app.post("/api/snapshots/restore", (req, res) => {
   } catch (err) {
     console.error("[BACKEND] Error restoring snapshot:", err);
     res.status(500).json({ ok: false, error: "Failed to restore snapshot" });
+  }
+});
+/**
+ * POST /api/snapshots/create
+ * Creates a snapshot file in SNAPSHOT_DIR based on the CURRENT league-state.json
+ * Body: { name?: string | null }
+ */
+app.post("/api/snapshots/create", (req, res) => {
+  try {
+    const { name } = req.body || {};
+
+    // Load current league state (what's currently in league-state.json)
+    const state = loadLeagueState();
+
+    // Build a snapshot id
+    const ts = new Date();
+    const stamp = ts
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .replace("T", "_")
+      .replace("Z", "");
+
+    const rawName = (name || "").trim();
+    const safeName = rawName
+      ? rawName
+          .toLowerCase()
+          .replace(/[^a-z0-9-_ ]/g, "")
+          .replace(/\s+/g, "-")
+          .slice(0, 40)
+      : "";
+
+    const snapshotId = safeName ? `${stamp}__${safeName}` : stamp;
+
+    const file = path.join(SNAPSHOT_DIR, `${snapshotId}.json`);
+
+    fs.writeFileSync(file, JSON.stringify(state, null, 2), "utf8");
+
+    // Notify clients so commissioner dropdown can refresh (optional but nice)
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("league:updated", { reason: "snapshotCreated", snapshotId });
+    }
+
+    return res.json({ ok: true, snapshotId });
+  } catch (err) {
+    console.error("[BACKEND] Error creating snapshot:", err);
+    return res.status(500).json({ ok: false, error: "Failed to create snapshot" });
   }
 });
 
