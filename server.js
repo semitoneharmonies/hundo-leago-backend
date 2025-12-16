@@ -68,6 +68,7 @@ function emptyState() {
     settings: { frozen: false },
     nextAuctionDeadline: null,
     lastAutoWeeklySnapshotId: null,
+    lastAutoAuctionRolloverId: null,
   };
 }
 
@@ -179,25 +180,34 @@ function tryAutoWeeklySnapshot() {
 app.post("/api/league", (req, res) => {
   const body = req.body || {};
 
-    const state = {
-    teams: Array.isArray(body.teams) ? body.teams : [],
-    freeAgents: Array.isArray(body.freeAgents) ? body.freeAgents : [],
-    leagueLog: Array.isArray(body.leagueLog) ? body.leagueLog : [],
-    tradeProposals: Array.isArray(body.tradeProposals) ? body.tradeProposals : [],
-    tradeBlock: Array.isArray(body.tradeBlock) ? body.tradeBlock : [],
-    settings: body.settings && typeof body.settings === "object" ? body.settings : { frozen: false },
-    nextAuctionDeadline: body.nextAuctionDeadline || null,
-  };
-
-
   try {
-    saveLeagueState(state);
+    // ✅ Load existing so we don't wipe fields we don't explicitly send from frontend
+    const prev = loadLeagueState();
 
-    // 🔔 Notify all connected clients that the league changed
+    const next = {
+      ...prev,
+
+      // Overwrite the fields the frontend actually owns
+      teams: Array.isArray(body.teams) ? body.teams : [],
+      freeAgents: Array.isArray(body.freeAgents) ? body.freeAgents : [],
+      leagueLog: Array.isArray(body.leagueLog) ? body.leagueLog : [],
+      tradeProposals: Array.isArray(body.tradeProposals) ? body.tradeProposals : [],
+      tradeBlock: Array.isArray(body.tradeBlock) ? body.tradeBlock : [],
+      settings:
+        body.settings && typeof body.settings === "object"
+          ? body.settings
+          : prev.settings || { frozen: false },
+      nextAuctionDeadline: body.nextAuctionDeadline || prev.nextAuctionDeadline || null,
+
+      // ✅ Explicitly preserve auto-run markers
+      lastAutoWeeklySnapshotId: prev.lastAutoWeeklySnapshotId || null,
+      lastAutoAuctionRolloverId: prev.lastAutoAuctionRolloverId || null,
+    };
+
+    saveLeagueState(next);
+
     const io = req.app.get("io");
-    if (io) {
-      io.emit("league:updated", { reason: "saveLeague" });
-    }
+    if (io) io.emit("league:updated", { reason: "saveLeague" });
 
     res.json({ ok: true });
   } catch (err) {
@@ -205,6 +215,7 @@ app.post("/api/league", (req, res) => {
     res.status(500).json({ ok: false, error: "Failed to save state" });
   }
 });
+
 
 /**
  * GET /api/snapshots
@@ -335,8 +346,148 @@ app.get("/", (req, res) => {
 // Run once on boot, then every minute
 tryAutoWeeklySnapshot();
 setInterval(tryAutoWeeklySnapshot, 60 * 1000);
+tryAutoAuctionRollover();
+setInterval(tryAutoAuctionRollover, 60 * 1000);
+
 
 // 🔁 IMPORTANT: use server.listen instead of app.listen now
 server.listen(PORT, () => {
   console.log(`Hundo Leago backend + WebSocket listening on port ${PORT}`);
 });
+
+// -------------------------------
+// Auto-auction rollover (Sunday 4:00 PM Pacific)
+// -------------------------------
+const BUYOUT_LOCK_MS = 14 * 24 * 60 * 60 * 1000;
+
+function buildAutoAuctionRolloverId(partsPT) {
+  // Example: auction-2025-12-14-1600PT
+  return `auction-${partsPT.year}-${partsPT.month}-${partsPT.day}-${partsPT.hour}${partsPT.minute}PT`;
+}
+
+function resolveAuctionsServer(state, nowMs) {
+  const teams = Array.isArray(state.teams) ? state.teams : [];
+  const bids = Array.isArray(state.freeAgents) ? state.freeAgents : [];
+  const leagueLog = Array.isArray(state.leagueLog) ? state.leagueLog : [];
+
+  // Active bids = unresolved bids
+  const activeBids = bids.filter((b) => !b.resolved);
+  if (activeBids.length === 0) {
+    return { nextTeams: teams, nextFreeAgents: bids, nextLeagueLog: leagueLog, newLogs: [] };
+  }
+
+  // Group bids by player key
+  const bidsByPlayer = new Map();
+  for (const bid of activeBids) {
+    const key = String(bid.player || "").toLowerCase();
+    if (!key) continue;
+    if (!bidsByPlayer.has(key)) bidsByPlayer.set(key, []);
+    bidsByPlayer.get(key).push(bid);
+  }
+
+  // Copy teams shallowly
+  const nextTeams = teams.map((t) => ({
+    ...t,
+    roster: [...(t.roster || [])],
+    buyouts: [...(t.buyouts || [])],
+  }));
+
+  const resolvedBidIds = new Set();
+  const newLogs = [];
+
+  for (const [, playerBids] of bidsByPlayer.entries()) {
+    const sorted = [...playerBids].sort((a, b) => {
+      const aAmt = Number(a.amount) || 0;
+      const bAmt = Number(b.amount) || 0;
+      if (bAmt !== aAmt) return bAmt - aAmt;
+      const aTs = a.timestamp || 0;
+      const bTs = b.timestamp || 0;
+      return aTs - bTs;
+    });
+
+    const winner = sorted[0];
+    if (!winner) continue;
+
+    const playerName = winner.player;
+    const winningTeamName = winner.team;
+    const newSalary = Number(winner.amount) || 0;
+    const position = winner.position || "F";
+
+    // Mark all bids for this player as resolved (we'll delete them after)
+    for (const bid of playerBids) resolvedBidIds.add(bid.id);
+
+    const teamIdx = nextTeams.findIndex((t) => t.name === winningTeamName);
+    if (teamIdx === -1) continue;
+
+    // Add player to roster (no fancy sorting needed server-side)
+    nextTeams[teamIdx].roster.push({
+      name: playerName,
+      salary: newSalary,
+      position,
+      buyoutLockedUntil: nowMs + BUYOUT_LOCK_MS,
+    });
+
+    newLogs.push({
+      type: "faSigned",
+      id: nowMs + Math.random(),
+      team: winningTeamName,
+      player: playerName,
+      amount: newSalary,
+      position,
+      timestamp: nowMs,
+    });
+  }
+
+  // ✅ Delete all bids for resolved auctions (same as your frontend resolveAuctions)
+  const nextFreeAgents = bids.filter((bid) => !resolvedBidIds.has(bid.id));
+
+  // Prepend logs
+  const nextLeagueLog = [...newLogs, ...leagueLog];
+
+  return { nextTeams, nextFreeAgents, nextLeagueLog, newLogs };
+}
+
+function tryAutoAuctionRollover() {
+  try {
+    const timeZone = "America/Los_Angeles";
+    const partsPT = getPartsInTZ(new Date(), timeZone);
+
+    // Only on Sunday
+    if (partsPT.weekday !== "Sun") return;
+
+    // 4:00 PM Pacific = 16:00
+    // Give a 10-minute window
+    const hour = Number(partsPT.hour);
+    const minute = Number(partsPT.minute);
+    const inWindow = hour === 16 && minute >= 0 && minute <= 10;
+    if (!inWindow) return;
+
+    const rolloverId = buildAutoAuctionRolloverId({
+      ...partsPT,
+      minute: "00", // normalize id to 1600
+    });
+
+    const state = loadLeagueState();
+
+    // Run once per week (persisted)
+    if (state.lastAutoAuctionRolloverId === rolloverId) return;
+
+    const nowMs = Date.now();
+    const { nextTeams, nextFreeAgents, nextLeagueLog, newLogs } = resolveAuctionsServer(state, nowMs);
+
+    // If there were no active auctions, still mark it as "ran" so it doesn't spam
+    state.teams = nextTeams;
+    state.freeAgents = nextFreeAgents;
+    state.leagueLog = nextLeagueLog;
+
+    state.lastAutoAuctionRolloverId = rolloverId;
+    saveLeagueState(state);
+
+    console.log(`[AUTO AUCTIONS] Rollover complete: ${rolloverId} (signings: ${newLogs.length})`);
+
+    const io = app.get("io");
+    if (io) io.emit("league:updated", { reason: "autoAuctionRollover", rolloverId });
+  } catch (err) {
+    console.error("[AUTO AUCTIONS] Failed:", err);
+  }
+}
