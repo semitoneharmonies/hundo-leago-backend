@@ -214,14 +214,20 @@ function resolveAuctionsServer(state, nowMs) {
     return { nextTeams: teams, nextFreeAgents: bids, nextLeagueLog: leagueLog, newLogs: [] };
   }
 
-  // Group bids by player key (case-insensitive)
-  const bidsByPlayer = new Map();
-  for (const bid of activeBids) {
-    const key = String(bid.player || "").toLowerCase().trim();
-    if (!key) continue;
-    if (!bidsByPlayer.has(key)) bidsByPlayer.set(key, []);
-    bidsByPlayer.get(key).push(bid);
-  }
+ // Group bids by auctionKey (preferred) or normalized player name
+const bidsByPlayer = new Map();
+for (const bid of activeBids) {
+  const key = String(
+    bid?.auctionKey || String(bid?.player || "").trim().toLowerCase()
+  )
+    .trim()
+    .toLowerCase();
+
+  if (!key) continue;
+  if (!bidsByPlayer.has(key)) bidsByPlayer.set(key, []);
+  bidsByPlayer.get(key).push(bid);
+}
+
 
   const nextTeams = teams.map((t) => ({
     ...t,
@@ -255,12 +261,27 @@ function resolveAuctionsServer(state, nowMs) {
     const teamIdx = nextTeams.findIndex((t) => t.name === winningTeamName);
     if (teamIdx === -1) continue;
 
-    nextTeams[teamIdx].roster.push({
-      name: playerName,
-      salary: newSalary,
-      position,
-      buyoutLockedUntil: nowMs + BUYOUT_LOCK_MS,
-    });
+   nextTeams[teamIdx].roster.push({
+  name: playerName,
+  salary: newSalary,
+  position,
+  buyoutLockedUntil: nowMs + BUYOUT_LOCK_MS,
+});
+
+// Keep roster ordering consistent after auto-rollover:
+// Forwards first, then Defense; salary high -> low; tie-break name A -> Z
+nextTeams[teamIdx].roster.sort((a, b) => {
+  const aIsD = (a?.position || "F") === "D";
+  const bIsD = (b?.position || "F") === "D";
+  if (aIsD !== bIsD) return aIsD ? 1 : -1;
+
+  const sa = Number(a?.salary) || 0;
+  const sb = Number(b?.salary) || 0;
+  if (sb !== sa) return sb - sa;
+
+  return String(a?.name || "").localeCompare(String(b?.name || ""));
+});
+
 
     newLogs.push({
       type: "faSigned",
