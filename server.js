@@ -420,8 +420,13 @@ app.post("/api/snapshots/restore", (req, res) => {
 
   try {
     const raw = fs.readFileSync(file, "utf8");
-    const state = JSON.parse(raw);
-    saveLeagueState(state);
+    const restored = JSON.parse(raw);
+
+// IMPORTANT: merge with defaults so new fields aren't lost
+const next = { ...emptyState(), ...restored };
+
+saveLeagueState(next);
+
 
     const ioRef = req.app.get("io");
     if (ioRef) ioRef.emit("league:updated", { reason: "snapshotRestored", snapshotId: id });
