@@ -338,6 +338,30 @@ function tryAutoAuctionRollover() {
     console.error("[AUTO AUCTIONS] Failed:", err);
   }
 }
+function isArray(x) {
+  return Array.isArray(x);
+}
+
+function looksLikeWipe(prev, incomingTeams) {
+  const prevTeams = Array.isArray(prev?.teams) ? prev.teams : [];
+  const nextTeams = Array.isArray(incomingTeams) ? incomingTeams : [];
+
+  // If we had teams before, and the incoming save has zero teams -> classic wipe
+  return prevTeams.length > 0 && nextTeams.length === 0;
+}
+
+function isManagerWriteBlockedByFreeze(prevState, meta) {
+  const frozen = Boolean(prevState?.settings?.frozen);
+  if (!frozen) return false;
+
+  const role = String(meta?.actorRole || "").toLowerCase();
+
+  // Commissioner can still write while frozen
+  if (role === "commissioner") return false;
+
+  // Everyone else blocked while frozen
+  return true;
+}
 
 // ===============================
 // ROUTES
@@ -356,6 +380,41 @@ app.post("/api/league", (req, res) => {
 
   try {
     const prev = loadLeagueState();
+
+    // ----------------------------
+    // Phase 0 write-safety guards
+    // ----------------------------
+    const meta = body.meta || {};
+
+    // Freeze enforcement: block manager writes while frozen
+    if (isManagerWriteBlockedByFreeze(prev, meta)) {
+      return res.status(423).json({
+        ok: false,
+        error: "League is frozen. Manager writes are blocked.",
+      });
+    }
+
+    // Prevent accidental wipe saves (teams becomes empty)
+    if (looksLikeWipe(prev, body.teams)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Refusing save: incoming teams is empty (wipe protection).",
+      });
+    }
+
+    // Basic shape validation: arrays must be arrays (not null/objects)
+    if (
+      !isArray(body.teams) ||
+      !isArray(body.freeAgents) ||
+      !isArray(body.leagueLog) ||
+      !isArray(body.tradeProposals) ||
+      !isArray(body.tradeBlock)
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "Refusing save: invalid payload shape (arrays expected).",
+      });
+    }
 
     const next = {
       ...prev,
@@ -386,6 +445,7 @@ app.post("/api/league", (req, res) => {
     res.status(500).json({ ok: false, error: "Failed to save state" });
   }
 });
+
 
 app.get("/api/snapshots", (req, res) => {
   try {
