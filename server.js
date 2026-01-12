@@ -14,6 +14,10 @@ const PORT = process.env.PORT || 4000;
 // CORS allowlist (Netlify + local dev)
 // -------------------------------
 const allowlist = [
+  "http://localhost:5173",
+"http://localhost:5174",
+"http://127.0.0.1:5173",
+"http://127.0.0.1:5174",
   "https://hundoleago.netlify.app",
   "http://localhost:5173",
   "http://127.0.0.1:5173",
@@ -480,18 +484,32 @@ app.post("/api/snapshots/restore", (req, res) => {
 
   try {
     const raw = fs.readFileSync(file, "utf8");
-    const restored = JSON.parse(raw);
+const restored = JSON.parse(raw);
 
 // IMPORTANT: merge with defaults so new fields aren't lost
 const next = { ...emptyState(), ...restored };
 
+// ✅ Phase 0F: backend-owned restore log (cannot be lost)
+const now = Date.now();
+const prevLog = Array.isArray(next.leagueLog) ? next.leagueLog : [];
+next.leagueLog = [
+  {
+    id: now + Math.random(),
+    type: "commRestoreSnapshot",
+    by: "Commissioner",
+    snapshotId: id,
+    timestamp: now,
+  },
+  ...prevLog,
+];
+
 saveLeagueState(next);
 
+const ioRef = req.app.get("io");
+if (ioRef) ioRef.emit("league:updated", { reason: "snapshotRestored", snapshotId: id });
 
-    const ioRef = req.app.get("io");
-    if (ioRef) ioRef.emit("league:updated", { reason: "snapshotRestored", snapshotId: id });
+res.json({ ok: true });
 
-    res.json({ ok: true });
   } catch (err) {
     console.error("[BACKEND] Error restoring snapshot:", err);
     res.status(500).json({ ok: false, error: "Failed to restore snapshot" });
