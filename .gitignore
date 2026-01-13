@@ -1,1 +1,12 @@
+
+# local runtime state
 league-state.json
+backups/
+snapshots/
+
+# node stuff
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
