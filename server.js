@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const { Server } = require("socket.io");
+const { createLeagueStore } = require("./leagueStore");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -88,42 +89,22 @@ function ensureDirSync(dirPath) {
 }
 ensureDirSync(path.dirname(DATA_FILE));
 ensureDirSync(SNAPSHOT_DIR);
-
 // -------------------------------
-// State helpers
+// LeagueStore (Phase 1: atomic + queued writes)
 // -------------------------------
-function emptyState() {
-  return {
-    teams: [],
-    freeAgents: [],
-    leagueLog: [],
-    tradeProposals: [],
-    tradeBlock: [],
-    settings: { frozen: false },
-    nextAuctionDeadline: null,
-    lastAutoWeeklySnapshotId: null,
-    lastAutoAuctionRolloverId: null,
-  };
-}
+const BACKUPS_DIR =
+  process.env.BACKUPS_DIR || path.join(path.dirname(DATA_FILE), "backups");
 
-function loadLeagueState() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) {
-      console.warn("[BACKEND] league-state.json not found, using empty state");
-      return emptyState();
-    }
-    const raw = fs.readFileSync(DATA_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : emptyState();
-  } catch (err) {
-    console.error("[BACKEND] Failed to read league-state.json:", err);
-    return emptyState();
-  }
-}
+ensureDirSync(BACKUPS_DIR);
 
-function saveLeagueState(state) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2), "utf8");
-}
+const leagueStore = createLeagueStore({
+  dataFilePath: DATA_FILE,
+  backupsDirPath: BACKUPS_DIR,
+  maxBackups: Number(process.env.MAX_BACKUPS || 200) || 200,
+});
+
+
+
 
 // -------------------------------
 // Time helpers (Pacific time window checks)
@@ -181,13 +162,17 @@ function tryAutoWeeklySnapshot() {
       minute: "00",
     });
 
-    const state = loadLeagueState();
+    const state = leagueStore.loadLeague();
     if (state.lastAutoWeeklySnapshotId === snapshotId) return;
 
     writeSnapshotFile(snapshotId, state);
 
     state.lastAutoWeeklySnapshotId = snapshotId;
-    saveLeagueState(state);
+    Promise.resolve(
+  leagueStore.saveLeague(state, { savedBy: "system:autoWeeklySnapshot" })
+).catch((e) => console.error("[AUTO SNAPSHOT] save failed:", e));
+
+
 
     console.log(`[AUTO SNAPSHOT] Created weekly snapshot: ${snapshotId}`);
 
@@ -321,7 +306,7 @@ function tryAutoAuctionRollover() {
       minute: "00",
     });
 
-    const state = loadLeagueState();
+    const state = leagueStore.loadLeague();
     if (state.lastAutoAuctionRolloverId === rolloverId) return;
 
     const nowMs = Date.now();
@@ -332,7 +317,10 @@ function tryAutoAuctionRollover() {
     state.leagueLog = nextLeagueLog;
 
     state.lastAutoAuctionRolloverId = rolloverId;
-    saveLeagueState(state);
+    Promise.resolve(
+  leagueStore.saveLeague(state, { savedBy: "system:autoAuctionRollover" })
+).catch((e) => console.error("[AUTO AUCTIONS] save failed:", e));
+
 
     console.log(`[AUTO AUCTIONS] Rollover complete: ${rolloverId} (signings: ${newLogs.length})`);
 
@@ -374,16 +362,40 @@ app.get("/", (req, res) => {
   res.send("Hundo Leago backend is running.");
 });
 
+app.get("/health", (req, res) => {
+  const st = leagueStore.loadLeague();
+  res.json({
+    ok: true,
+    schemaVersion: st.schemaVersion ?? null,
+    loadedFromDisk: Boolean(st?.meta?.loadedFromDisk),
+    dataFilePath: st?.meta?.dataFilePath || DATA_FILE,
+    lastSavedAt: st?.meta?.lastSavedAt || null,
+    lastSavedBy: st?.meta?.lastSavedBy || null,
+    hasLoadError: Boolean(st?.meta?.loadError),
+        backupsDir: leagueStore.backupsDir || BACKUPS_DIR,
+    backupsCount: (() => {
+      try {
+        return leagueStore.listBackups({ limit: 999999 }).length;
+      } catch (_) {
+        return null;
+      }
+    })(),
+
+  });
+  
+});
+
 app.get("/api/league", (req, res) => {
-  const state = loadLeagueState();
+  const state = leagueStore.loadLeague();
   res.json(state);
 });
 
-app.post("/api/league", (req, res) => {
+app.post("/api/league", async (req, res) => {
   const body = req.body || {};
 
   try {
-    const prev = loadLeagueState();
+    const prev = leagueStore.loadLeague();
+
 
     // ----------------------------
     // Phase 0 write-safety guards
@@ -438,7 +450,13 @@ app.post("/api/league", (req, res) => {
       lastAutoAuctionRolloverId: prev.lastAutoAuctionRolloverId || null,
     };
 
-    saveLeagueState(next);
+    await leagueStore.saveLeague(next, {
+  savedBy:
+    String(meta?.actorRole || "").toLowerCase() === "commissioner"
+      ? "commissioner"
+      : (meta?.actorTeam || "manager"),
+});
+
 
     const ioRef = req.app.get("io");
     if (ioRef) ioRef.emit("league:updated", { reason: "saveLeague" });
@@ -475,7 +493,7 @@ app.get("/api/snapshots", (req, res) => {
   }
 });
 
-app.post("/api/snapshots/restore", (req, res) => {
+app.post("/api/snapshots/restore", async (req, res) => {
   const { id } = req.body || {};
   if (!id) return res.status(400).json({ ok: false, error: "Missing snapshot id in body" });
 
@@ -487,7 +505,8 @@ app.post("/api/snapshots/restore", (req, res) => {
 const restored = JSON.parse(raw);
 
 // IMPORTANT: merge with defaults so new fields aren't lost
-const next = { ...emptyState(), ...restored };
+const next = { ...leagueStore.emptyState(), ...restored };
+
 
 // ✅ Phase 0F: backend-owned restore log (cannot be lost)
 const now = Date.now();
@@ -503,7 +522,8 @@ next.leagueLog = [
   ...prevLog,
 ];
 
-saveLeagueState(next);
+await leagueStore.saveLeague(next, { savedBy: "commissioner:snapshotRestore" });
+
 
 const ioRef = req.app.get("io");
 if (ioRef) ioRef.emit("league:updated", { reason: "snapshotRestored", snapshotId: id });
@@ -519,7 +539,8 @@ res.json({ ok: true });
 app.post("/api/snapshots/create", (req, res) => {
   try {
     const { name } = req.body || {};
-    const state = loadLeagueState();
+    const state = leagueStore.loadLeague();
+
 
     const ts = new Date();
     const stamp = ts
@@ -549,6 +570,78 @@ app.post("/api/snapshots/create", (req, res) => {
   } catch (err) {
     console.error("[BACKEND] Error creating snapshot:", err);
     res.status(500).json({ ok: false, error: "Failed to create snapshot" });
+  }
+});
+
+// -------------------------------
+// Backups (Phase 1: versioned backups)
+// -------------------------------
+
+// List backups (newest first)
+// GET /api/backups?limit=50
+app.get("/api/backups", (req, res) => {
+  try {
+    const limit = Number(req.query?.limit || 50) || 50;
+    const backups = leagueStore.listBackups({ limit });
+    res.json({ ok: true, backups, backupsDir: leagueStore.backupsDir });
+  } catch (err) {
+    console.error("[BACKUPS] list failed:", err);
+    res.status(500).json({ ok: false, error: "Failed to list backups" });
+  }
+});
+
+// Restore a backup by filename id
+// POST /api/backups/restore { id, meta? }
+app.post("/api/backups/restore", async (req, res) => {
+  console.log("[RESTORE] content-type:", req.headers["content-type"]);
+console.log("[RESTORE] body:", req.body);
+
+ const body = req.body || {};
+const meta = body.meta || {};
+const id = body.id || body.backupId; // accept either key
+
+if (!id) {
+  return res.status(400).json({
+    ok: false,
+    error: "Missing backup id in body (expected: id or backupId)",
+  });
+}
+
+
+  // Safety: only allow commissioner-triggered restore
+  const role = String(meta?.actorRole || "").toLowerCase();
+  if (role !== "commissioner") {
+    return res.status(403).json({ ok: false, error: "Restore requires commissioner role." });
+  }
+
+  try {
+    const restoredRaw = await leagueStore.restoreBackup(id, { restoredBy: "commissioner" });
+const restored = { ...leagueStore.emptyState(), ...restoredRaw };
+
+
+    // Add a backend-owned log entry so it can't be “not saved”
+    const now = Date.now();
+    const prevLog = Array.isArray(restored.leagueLog) ? restored.leagueLog : [];
+    restored.leagueLog = [
+      {
+        id: now + Math.random(),
+        type: "commRestoreBackup",
+        by: "Commissioner",
+        backupId: id,
+        timestamp: now,
+      },
+      ...prevLog,
+    ];
+
+    await leagueStore.saveLeague(restored, { savedBy: "commissioner:backupRestore" });
+
+    const ioRef = req.app.get("io");
+    if (ioRef) ioRef.emit("league:updated", { reason: "backupRestored", backupId: id });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[BACKUPS] restore failed:", err);
+    res.status(500).json({ ok: false, error: err?.message || "Failed to restore backup" });
   }
 });
 
