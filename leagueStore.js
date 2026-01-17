@@ -364,16 +364,18 @@ fs.renameSync(tmpPath, dataFilePath);
 function restoreBackup(backupId, { restoredBy = "system" } = {}) {
   if (!backupId) throw new Error("restoreBackup requires backupId");
 
-  // serialize restore with saves
-  writeChain = writeChain.then(() => {
+  // serialize restore with saves and RETURN the restored state
+  const restorePromise = (writeChain = writeChain.then(() => {
     const backupPath = path.join(backupsDir, backupId);
     if (!fs.existsSync(backupPath)) {
       throw new Error(`Backup not found: ${backupId}`);
     }
 
     const restoredRaw = safeReadJsonSync(backupPath);
-const st = normalizeLeagueState(restoredRaw, { dataFilePath, loadedFromDisk: true });
-
+    const st = normalizeLeagueState(restoredRaw, {
+      dataFilePath,
+      loadedFromDisk: true,
+    });
 
     st.schemaVersion = Number(st.schemaVersion || SCHEMA_VERSION) || SCHEMA_VERSION;
     st.meta = {
@@ -393,11 +395,11 @@ const st = normalizeLeagueState(restoredRaw, { dataFilePath, loadedFromDisk: tru
     pruneBackupsBestEffort();
 
     return st;
-  });
+  }));
 
-  // Return a promise that resolves to the restored state
-  return writeChain;
+  return restorePromise;
 }
+
 
 
   return {

@@ -77,6 +77,9 @@ const DATA_FILE =
 
 const SNAPSHOT_DIR =
   process.env.SNAPSHOT_DIR || path.join(__dirname, "snapshots");
+// Phase 2A: players database file (separate from league state)
+const PLAYERS_FILE =
+  process.env.PLAYERS_FILE || path.join(path.dirname(DATA_FILE), "players.json");
 
 // Ensure dirs exist (important on Render disk paths)
 function ensureDirSync(dirPath) {
@@ -89,6 +92,8 @@ function ensureDirSync(dirPath) {
 }
 ensureDirSync(path.dirname(DATA_FILE));
 ensureDirSync(SNAPSHOT_DIR);
+ensureDirSync(path.dirname(PLAYERS_FILE));
+
 // -------------------------------
 // LeagueStore (Phase 1: atomic + queued writes)
 // -------------------------------
@@ -103,8 +108,132 @@ const leagueStore = createLeagueStore({
   maxBackups: Number(process.env.MAX_BACKUPS || 200) || 200,
 });
 
+// ===============================
+// Phase 2A — Player DB (file-backed)
+// ===============================
+let playersCache = [];
+let playersById = new Map();
+
+function normalizeStr(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildSearchHaystack(p) {
+  const full = p.fullName || `${p.firstName || ""} ${p.lastName || ""}`.trim();
+  const first = p.firstName || "";
+  const last = p.lastName || "";
+  const lastFirst = `${last}, ${first}`.trim();
+  return normalizeStr([full, first, last, lastFirst].filter(Boolean).join(" | "));
+}
+
+function loadPlayersFromDisk() {
+  try {
+    if (!fs.existsSync(PLAYERS_FILE)) {
+      playersCache = [];
+      playersById = new Map();
+      return { ok: true, count: 0, source: "missing-file" };
+    }
+
+    const raw = fs.readFileSync(PLAYERS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    const arr = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.players)
+      ? parsed.players
+      : [];
+
+    // Helper: pick first non-empty string from several possible keys
+    const pickStr = (obj, keys) => {
+      for (const k of keys) {
+        const v = obj?.[k];
+        if (v == null) continue;
+        const s = String(v).trim();
+        if (s) return s;
+      }
+      return "";
+    };
+
+    const pickNum = (obj, keys) => {
+      for (const k of keys) {
+        const v = obj?.[k];
+        const n = Number(v);
+        if (Number.isFinite(n)) return n;
+      }
+      return NaN;
+    };
+
+    playersCache = arr
+      .filter(Boolean)
+      .map((p) => {
+        const id = pickNum(p, ["id", "playerId", "player_id"]);
+        const fullName = pickStr(p, ["fullName", "full_name", "name", "playerName"]);
+        const firstName = pickStr(p, ["firstName", "first_name", "first"]);
+        const lastName = pickStr(p, ["lastName", "last_name", "last"]);
+        const position = pickStr(p, ["position", "pos"]) || null;
+        const teamAbbrev = pickStr(p, ["teamAbbrev", "team_abbrev", "team", "teamAbbreviation"]) || null;
+
+        // active can be missing; treat missing as true
+        const activeRaw = p?.active;
+        const active = activeRaw === undefined ? true : activeRaw !== false;
+
+        return {
+          id,
+          fullName,
+          firstName,
+          lastName,
+          position,
+          teamAbbrev,
+          active,
+        };
+      })
+      .filter((p) => Number.isFinite(p.id) && p.id > 0);
+
+    playersById = new Map(playersCache.map((p) => [p.id, p]));
+
+    // 🔎 One very useful debug print so we can see if names loaded
+
+    return { ok: true, count: playersCache.length, source: PLAYERS_FILE };
+  } catch (e) {
+    console.error("[PLAYERS] Failed to load players:", e);
+    playersCache = [];
+    playersById = new Map();
+    return { ok: false, count: 0, error: String(e?.message || e) };
+  }
+}
+
+function searchPlayers(query, limit = 25) {
+  const q = normalizeStr(query);
+  if (!q) return [];
+
+  const tokens = q.split(" ").filter(Boolean);
+  const out = [];
+
+  for (const p of playersCache) {
+    if (!p?.active) continue;
+
+    const hay = buildSearchHaystack(p);
+
+    // Match ALL tokens anywhere in the haystack
+    const ok = tokens.every((t) => hay.includes(t));
+    if (ok) out.push(p);
+
+    if (out.length >= limit) break;
+  }
+
+  return out;
+}
 
 
+// Load players on boot
+const playersLoad = loadPlayersFromDisk();
+console.log("[PLAYERS] PLAYERS_FILE =", PLAYERS_FILE);
+
+console.log(
+  `[PLAYERS] loaded: ok=${playersLoad.ok} count=${playersLoad.count} source=${playersLoad.source || "?"}`
+);
 
 // -------------------------------
 // Time helpers (Pacific time window checks)
@@ -446,8 +575,8 @@ app.post("/api/league", async (req, res) => {
       nextAuctionDeadline: body.nextAuctionDeadline || prev.nextAuctionDeadline || null,
 
       // preserve auto markers
-      lastAutoWeeklySnapshotId: prev.lastAutoWeeklySnapshotId || null,
-      lastAutoAuctionRolloverId: prev.lastAutoAuctionRolloverId || null,
+     lastAutoWeeklySnapshotId: prev.lastAutoWeeklySnapshotId,
+lastAutoAuctionRolloverId: prev.lastAutoAuctionRolloverId,
     };
 
     await leagueStore.saveLeague(next, {
@@ -466,6 +595,43 @@ app.post("/api/league", async (req, res) => {
     console.error("[BACKEND] Error writing league-state.json:", err);
     res.status(500).json({ ok: false, error: "Failed to save state" });
   }
+});
+// ===============================
+// Phase 2A — Player API
+// ===============================
+
+// GET /api/players?query=mcdavid&limit=25
+app.get("/api/players", (req, res) => {
+  console.log("[/api/players] req.query =", req.query);
+
+  const q = String(req.query?.query || "").trim();
+  const limit = Math.max(1, Math.min(100, Number(req.query?.limit || 25) || 25));
+
+  // If no query, return just a small default slice (avoid sending 1000s)
+  if (!q) {
+    return res.json({ ok: true, players: playersCache.slice(0, limit), count: playersCache.length });
+  }
+
+  const results = searchPlayers(q, limit);
+  res.json({ ok: true, players: results, count: playersCache.length });
+});
+
+// GET /api/players/8478402
+app.get("/api/players/:id", (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: "Invalid player id" });
+
+  const p = playersById.get(id);
+  if (!p) return res.status(404).json({ ok: false, error: "Player not found" });
+
+  res.json({ ok: true, player: p });
+});
+
+// POST /api/players/reload  (optional admin utility for dev)
+// NOTE: keep it simple for now; you can lock this down later.
+app.post("/api/players/reload", (req, res) => {
+  const r = loadPlayersFromDisk();
+  res.json({ ok: r.ok, count: r.count, source: r.source || null, error: r.error || null });
 });
 
 

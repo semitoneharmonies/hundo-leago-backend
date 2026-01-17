@@ -1,0 +1,7301 @@
+[
+  {
+    "id": 8479022,
+    "fullName": "Rodrigo Abols",
+    "firstName": "Rodrigo",
+    "lastName": "Abols",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8478569,
+    "fullName": "Noel Acciari",
+    "firstName": "Noel",
+    "lastName": "Acciari",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8478427,
+    "fullName": "Sebastian Aho",
+    "firstName": "Sebastian",
+    "lastName": "Aho",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8484428,
+    "fullName": "Charles Alexis Legault",
+    "firstName": "Charles",
+    "lastName": "Alexis Legault",
+    "position": "D",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8474596,
+    "fullName": "Jake Allen",
+    "firstName": "Jake",
+    "lastName": "Allen",
+    "position": "G",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8478020,
+    "fullName": "Michael Amadio",
+    "firstName": "Michael",
+    "lastName": "Amadio",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8482496,
+    "fullName": "Nils Aman",
+    "firstName": "Nils",
+    "lastName": "Aman",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8475883,
+    "fullName": "Frederik Andersen",
+    "firstName": "Frederik",
+    "lastName": "Andersen",
+    "position": "G",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8476981,
+    "fullName": "Josh Anderson",
+    "firstName": "Josh",
+    "lastName": "Anderson",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8479998,
+    "fullName": "Mikey Anderson",
+    "firstName": "Mikey",
+    "lastName": "Anderson",
+    "position": "D",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8478397,
+    "fullName": "Rasmus Andersson",
+    "firstName": "Rasmus",
+    "lastName": "Andersson",
+    "position": "D",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8482126,
+    "fullName": "Emil Andrae",
+    "firstName": "Emil",
+    "lastName": "Andrae",
+    "position": "D",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8481020,
+    "fullName": "Justus Annunen",
+    "firstName": "Justus",
+    "lastName": "Annunen",
+    "position": "G",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8478891,
+    "fullName": "Mason Appleton",
+    "firstName": "Mason",
+    "lastName": "Appleton",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8476469,
+    "fullName": "Joel Armia",
+    "firstName": "Joel",
+    "lastName": "Armia",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8478042,
+    "fullName": "Viktor Arvidsson",
+    "firstName": "Viktor",
+    "lastName": "Arvidsson",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8482137,
+    "fullName": "Yaroslav Askarov",
+    "firstName": "Yaroslav",
+    "lastName": "Askarov",
+    "position": "G",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8481219,
+    "fullName": "Jonathan Aspirot",
+    "firstName": "Jonathan",
+    "lastName": "Aspirot",
+    "position": "D",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8479944,
+    "fullName": "Zachary Aston-Reese",
+    "firstName": "Zachary",
+    "lastName": "Aston-Reese",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8480840,
+    "fullName": "Oskar Bäck",
+    "firstName": "Oskar",
+    "lastName": "Bäck",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8474150,
+    "fullName": "Mikael Backlund",
+    "firstName": "Mikael",
+    "lastName": "Backlund",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8480860,
+    "fullName": "Kevin Bahl",
+    "firstName": "Kevin",
+    "lastName": "Bahl",
+    "position": "D",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8483395,
+    "fullName": "Arshdeep Bains",
+    "firstName": "Arshdeep",
+    "lastName": "Bains",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8484304,
+    "fullName": "Uvis Balinskis",
+    "firstName": "Uvis",
+    "lastName": "Balinskis",
+    "position": "D",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8477964,
+    "fullName": "Ivan Barbashev",
+    "firstName": "Ivan",
+    "lastName": "Barbashev",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8484142,
+    "fullName": "Denver Barkey",
+    "firstName": "Denver",
+    "lastName": "Barkey",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8477493,
+    "fullName": "Aleksander Barkov",
+    "firstName": "Aleksander",
+    "lastName": "Barkov",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8482111,
+    "fullName": "Justin Barron",
+    "firstName": "Justin",
+    "lastName": "Barron",
+    "position": "D",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8480289,
+    "fullName": "Morgan Barron",
+    "firstName": "Morgan",
+    "lastName": "Barron",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8478445,
+    "fullName": "Mathew Barzal",
+    "firstName": "Mathew",
+    "lastName": "Barzal",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8479414,
+    "fullName": "Nathan Bastian",
+    "firstName": "Nathan",
+    "lastName": "Bastian",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8480208,
+    "fullName": "Drake Batherson",
+    "firstName": "Drake",
+    "lastName": "Batherson",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8479402,
+    "fullName": "Jake Bean",
+    "firstName": "Jake",
+    "lastName": "Bean",
+    "position": "D",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8478463,
+    "fullName": "Anthony Beauvillier",
+    "firstName": "Anthony",
+    "lastName": "Beauvillier",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8483424,
+    "fullName": "Owen Beck",
+    "firstName": "Owen",
+    "lastName": "Beck",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8484144,
+    "fullName": "Connor Bedard",
+    "firstName": "Connor",
+    "lastName": "Bedard",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8481556,
+    "fullName": "John Beecher",
+    "firstName": "John",
+    "lastName": "Beecher",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8482665,
+    "fullName": "Matty Beniers",
+    "firstName": "Matty",
+    "lastName": "Beniers",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8473994,
+    "fullName": "Jamie Benn",
+    "firstName": "Jamie",
+    "lastName": "Benn",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8477935,
+    "fullName": "Sam Bennett",
+    "firstName": "Sam",
+    "lastName": "Bennett",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8476988,
+    "fullName": "Matt Benning",
+    "firstName": "Matt",
+    "lastName": "Benning",
+    "position": "D",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8481122,
+    "fullName": "Simon Benoit",
+    "firstName": "Simon",
+    "lastName": "Benoit",
+    "position": "D",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8484145,
+    "fullName": "Zach Benson",
+    "firstName": "Zach",
+    "lastName": "Benson",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8481013,
+    "fullName": "Jonatan Berggren",
+    "firstName": "Jonatan",
+    "lastName": "Berggren",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8480879,
+    "fullName": "Jacob Bernard-Docker",
+    "firstName": "Jacob",
+    "lastName": "Bernard-Docker",
+    "position": "D",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8477479,
+    "fullName": "Tyler Bertuzzi",
+    "firstName": "Tyler",
+    "lastName": "Bertuzzi",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8483425,
+    "fullName": "Lian Bichsel",
+    "firstName": "Lian",
+    "lastName": "Bichsel",
+    "position": "D",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8476412,
+    "fullName": "Jordan Binnington",
+    "firstName": "Jordan",
+    "lastName": "Binnington",
+    "position": "G",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8477416,
+    "fullName": "Oliver Bjorkstrand",
+    "firstName": "Oliver",
+    "lastName": "Bjorkstrand",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8475760,
+    "fullName": "Nick Bjugstad",
+    "firstName": "Nick",
+    "lastName": "Bjugstad",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8476278,
+    "fullName": "Colin Blackwell",
+    "firstName": "Colin",
+    "lastName": "Blackwell",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8478406,
+    "fullName": "Mackenzie Blackwood",
+    "firstName": "Mackenzie",
+    "lastName": "Blackwood",
+    "position": "G",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8478104,
+    "fullName": "Sammy Blais",
+    "firstName": "Sammy",
+    "lastName": "Blais",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8482809,
+    "fullName": "Jackson Blake",
+    "firstName": "Jackson",
+    "lastName": "Blake",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8483565,
+    "fullName": "Nick Blankenburg",
+    "firstName": "Nick",
+    "lastName": "Blankenburg",
+    "position": "D",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8476927,
+    "fullName": "Teddy Blueger",
+    "firstName": "Teddy",
+    "lastName": "Blueger",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8475683,
+    "fullName": "Sergei Bobrovsky",
+    "firstName": "Sergei",
+    "lastName": "Bobrovsky",
+    "position": "G",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8478444,
+    "fullName": "Brock Boeser",
+    "firstName": "Brock",
+    "lastName": "Boeser",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8474567,
+    "fullName": "Zach Bogosian",
+    "firstName": "Zach",
+    "lastName": "Bogosian",
+    "position": "D",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8482737,
+    "fullName": "Zachary Bolduc",
+    "firstName": "Zachary",
+    "lastName": "Bolduc",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8481557,
+    "fullName": "Matt Boldy",
+    "firstName": "Matt",
+    "lastName": "Boldy",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8480871,
+    "fullName": "Adam Boqvist",
+    "firstName": "Adam",
+    "lastName": "Boqvist",
+    "position": "D",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8480003,
+    "fullName": "Jesper Boqvist",
+    "firstName": "Jesper",
+    "lastName": "Boqvist",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8478840,
+    "fullName": "Will Borgen",
+    "firstName": "Will",
+    "lastName": "Borgen",
+    "position": "D",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8480803,
+    "fullName": "Evan Bouchard",
+    "firstName": "Evan",
+    "lastName": "Bouchard",
+    "position": "D",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8482145,
+    "fullName": "Mavrik Bourque",
+    "firstName": "Mavrik",
+    "lastName": "Bourque",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8483890,
+    "fullName": "Braeden Bowman",
+    "firstName": "Braeden",
+    "lastName": "Bowman",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8479407,
+    "fullName": "Jesper Bratt",
+    "firstName": "Jesper",
+    "lastName": "Bratt",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8479638,
+    "fullName": "Justin Brazeau",
+    "firstName": "Justin",
+    "lastName": "Brazeau",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8484149,
+    "fullName": "Gavin Brindley",
+    "firstName": "Gavin",
+    "lastName": "Brindley",
+    "position": "F",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8481553,
+    "fullName": "Bobby Brink",
+    "firstName": "Bobby",
+    "lastName": "Brink",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8481598,
+    "fullName": "Philip Broberg",
+    "firstName": "Philip",
+    "lastName": "Broberg",
+    "position": "D",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8476463,
+    "fullName": "Jonas Brodin",
+    "firstName": "Jonas",
+    "lastName": "Brodin",
+    "position": "D",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8477380,
+    "fullName": "Jonny Brodzinski",
+    "firstName": "Jonny",
+    "lastName": "Brodzinski",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8477015,
+    "fullName": "Connor Brown",
+    "firstName": "Connor",
+    "lastName": "Brown",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8482698,
+    "fullName": "Tristan Broz",
+    "firstName": "Tristan",
+    "lastName": "Broz",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8480196,
+    "fullName": "Jacob Bryson",
+    "firstName": "Jacob",
+    "lastName": "Bryson",
+    "position": "D",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8484150,
+    "fullName": "Hunter Brzustewicz",
+    "firstName": "Hunter",
+    "lastName": "Brzustewicz",
+    "position": "D",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8477402,
+    "fullName": "Pavel Buchnevich",
+    "firstName": "Pavel",
+    "lastName": "Buchnevich",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8484798,
+    "fullName": "Zeev Buium",
+    "firstName": "Zeev",
+    "lastName": "Buium",
+    "position": "D",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8478047,
+    "fullName": "Michael Bunting",
+    "firstName": "Michael",
+    "lastName": "Bunting",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8477444,
+    "fullName": "Andre Burakovsky",
+    "firstName": "Andre",
+    "lastName": "Burakovsky",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8470613,
+    "fullName": "Brent Burns",
+    "firstName": "Brent",
+    "lastName": "Burns",
+    "position": "D",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8483548,
+    "fullName": "Brandon Bussi",
+    "firstName": "Brandon",
+    "lastName": "Bussi",
+    "position": "G",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8484388,
+    "fullName": "Daniil But",
+    "firstName": "Daniil",
+    "lastName": "But",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8482124,
+    "fullName": "Quinton Byfield",
+    "firstName": "Quinton",
+    "lastName": "Byfield",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8481524,
+    "fullName": "Bowen Byram",
+    "firstName": "Bowen",
+    "lastName": "Byram",
+    "position": "D",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8478476,
+    "fullName": "Kyle Capobianco",
+    "firstName": "Kyle",
+    "lastName": "Capobianco",
+    "position": "D",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8479619,
+    "fullName": "Michael Carcone",
+    "firstName": "Michael",
+    "lastName": "Carcone",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8483398,
+    "fullName": "Declan Carlile",
+    "firstName": "Declan",
+    "lastName": "Carlile",
+    "position": "D",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8478443,
+    "fullName": "Brandon Carlo",
+    "firstName": "Brandon",
+    "lastName": "Carlo",
+    "position": "D",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8474590,
+    "fullName": "John Carlson",
+    "firstName": "John",
+    "lastName": "Carlson",
+    "position": "D",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8484153,
+    "fullName": "Leo Carlsson",
+    "firstName": "Leo",
+    "lastName": "Carlsson",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8475842,
+    "fullName": "Sam Carrick",
+    "firstName": "Sam",
+    "lastName": "Carrick",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8478851,
+    "fullName": "Alexandre Carrier",
+    "firstName": "Alexandre",
+    "lastName": "Carrier",
+    "position": "D",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8477478,
+    "fullName": "William Carrier",
+    "firstName": "William",
+    "lastName": "Carrier",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8480220,
+    "fullName": "Noah Cates",
+    "firstName": "Noah",
+    "lastName": "Cates",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8484800,
+    "fullName": "Berkly Catton",
+    "firstName": "Berkly",
+    "lastName": "Catton",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8481540,
+    "fullName": "Cole Caufield",
+    "firstName": "Cole",
+    "lastName": "Caufield",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8476879,
+    "fullName": "Cody Ceci",
+    "firstName": "Cody",
+    "lastName": "Ceci",
+    "position": "D",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8484801,
+    "fullName": "Macklin Celebrini",
+    "firstName": "Macklin",
+    "lastName": "Celebrini",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8478416,
+    "fullName": "Erik Cernak",
+    "firstName": "Erik",
+    "lastName": "Cernak",
+    "position": "D",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8478469,
+    "fullName": "Thomas Chabot",
+    "firstName": "Thomas",
+    "lastName": "Chabot",
+    "position": "D",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8478970,
+    "fullName": "Jalen Chatfield",
+    "firstName": "Jalen",
+    "lastName": "Chatfield",
+    "position": "D",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8484994,
+    "fullName": "Igor Chernyshov",
+    "firstName": "Igor",
+    "lastName": "Chernyshov",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8475279,
+    "fullName": "Ben Chiarot",
+    "firstName": "Ben",
+    "lastName": "Chiarot",
+    "position": "D",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8482475,
+    "fullName": "Egor Chinakhov",
+    "firstName": "Egor",
+    "lastName": "Chinakhov",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8480990,
+    "fullName": "Declan Chisholm",
+    "firstName": "Declan",
+    "lastName": "Chisholm",
+    "position": "D",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8481161,
+    "fullName": "Jake Christiansen",
+    "firstName": "Jake",
+    "lastName": "Christiansen",
+    "position": "D",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8479345,
+    "fullName": "Jakob Chychrun",
+    "firstName": "Jakob",
+    "lastName": "Chychrun",
+    "position": "D",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8480078,
+    "fullName": "Filip Chytil",
+    "firstName": "Filip",
+    "lastName": "Chytil",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8478519,
+    "fullName": "Anthony Cirelli",
+    "firstName": "Anthony",
+    "lastName": "Cirelli",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8475231,
+    "fullName": "Casey Cizikas",
+    "firstName": "Casey",
+    "lastName": "Cizikas",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8482730,
+    "fullName": "Brandt Clarke",
+    "firstName": "Brandt",
+    "lastName": "Clarke",
+    "position": "D",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8477365,
+    "fullName": "Connor Clifton",
+    "firstName": "Connor",
+    "lastName": "Clifton",
+    "position": "D",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8482118,
+    "fullName": "Sam Colangelo",
+    "firstName": "Sam",
+    "lastName": "Colangelo",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8474013,
+    "fullName": "Ian Cole",
+    "firstName": "Ian",
+    "lastName": "Cole",
+    "position": "D",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8476399,
+    "fullName": "Blake Coleman",
+    "firstName": "Blake",
+    "lastName": "Coleman",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8479525,
+    "fullName": "Ross Colton",
+    "firstName": "Ross",
+    "lastName": "Colton",
+    "position": "F",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8477456,
+    "fullName": "J.T. Compher",
+    "firstName": "J.T.",
+    "lastName": "Compher",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8477480,
+    "fullName": "Eric Comrie",
+    "firstName": "Eric",
+    "lastName": "Comrie",
+    "position": "G",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8478398,
+    "fullName": "Kyle Connor",
+    "firstName": "Kyle",
+    "lastName": "Connor",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8482445,
+    "fullName": "Devin Cooley",
+    "firstName": "Devin",
+    "lastName": "Cooley",
+    "position": "G",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8483431,
+    "fullName": "Logan Cooley",
+    "firstName": "Logan",
+    "lastName": "Cooley",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8477429,
+    "fullName": "Andrew Copp",
+    "firstName": "Andrew",
+    "lastName": "Copp",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8482679,
+    "fullName": "Matt Coronato",
+    "firstName": "Matt",
+    "lastName": "Coronato",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8481032,
+    "fullName": "Paul Cotter",
+    "firstName": "Paul",
+    "lastName": "Cotter",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8476393,
+    "fullName": "Nick Cousins",
+    "firstName": "Nick",
+    "lastName": "Cousins",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8476461,
+    "fullName": "Sean Couturier",
+    "firstName": "Sean",
+    "lastName": "Couturier",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8484158,
+    "fullName": "Easton Cowan",
+    "firstName": "Easton",
+    "lastName": "Cowan",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8475745,
+    "fullName": "Charlie Coyle",
+    "firstName": "Charlie",
+    "lastName": "Coyle",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8481528,
+    "fullName": "Dylan Cozens",
+    "firstName": "Dylan",
+    "lastName": "Cozens",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8481806,
+    "fullName": "Louis Crevier",
+    "firstName": "Louis",
+    "lastName": "Crevier",
+    "position": "D",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8471675,
+    "fullName": "Sidney Crosby",
+    "firstName": "Sidney",
+    "lastName": "Crosby",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8478474,
+    "fullName": "Lawson Crouse",
+    "firstName": "Lawson",
+    "lastName": "Crouse",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8481719,
+    "fullName": "Max Crozier",
+    "firstName": "Max",
+    "lastName": "Crozier",
+    "position": "D",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8482157,
+    "fullName": "Will Cuylle",
+    "firstName": "Will",
+    "lastName": "Cuylle",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8480426,
+    "fullName": "Charle-Edouard D'Astous",
+    "firstName": "Charle-Edouard",
+    "lastName": "D'Astous",
+    "position": "D",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8478916,
+    "fullName": "Joey Daccord",
+    "firstName": "Joey",
+    "lastName": "Daccord",
+    "position": "G",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8482703,
+    "fullName": "Colton Dach",
+    "firstName": "Colton",
+    "lastName": "Dach",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8481523,
+    "fullName": "Kirby Dach",
+    "firstName": "Kirby",
+    "lastName": "Dach",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8474149,
+    "fullName": "Evgenii Dadonov",
+    "firstName": "Evgenii",
+    "lastName": "Dadonov",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8480839,
+    "fullName": "Rasmus Dahlin",
+    "firstName": "Rasmus",
+    "lastName": "Dahlin",
+    "position": "D",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8476479,
+    "fullName": "Phillip Danault",
+    "firstName": "Phillip",
+    "lastName": "Danault",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8479941,
+    "fullName": "Justin Danforth",
+    "firstName": "Justin",
+    "lastName": "Danforth",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8477950,
+    "fullName": "Tony DeAngelo",
+    "firstName": "Tony",
+    "lastName": "DeAngelo",
+    "position": "D",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8479337,
+    "fullName": "Alex DeBrincat",
+    "firstName": "Alex",
+    "lastName": "DeBrincat",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8478498,
+    "fullName": "Jake DeBrusk",
+    "firstName": "Jake",
+    "lastName": "DeBrusk",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8480848,
+    "fullName": "Ty Dellandrea",
+    "firstName": "Ty",
+    "lastName": "Dellandrea",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8476331,
+    "fullName": "Dylan DeMelo",
+    "firstName": "Dylan",
+    "lastName": "DeMelo",
+    "position": "D",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8484984,
+    "fullName": "Ivan Demidov",
+    "firstName": "Ivan",
+    "lastName": "Demidov",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8477967,
+    "fullName": "Thatcher Demko",
+    "firstName": "Thatcher",
+    "lastName": "Demko",
+    "position": "G",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8479576,
+    "fullName": "Vincent Desharnais",
+    "firstName": "Vincent",
+    "lastName": "Desharnais",
+    "position": "D",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8480084,
+    "fullName": "Nick DeSimone",
+    "firstName": "Nick",
+    "lastName": "DeSimone",
+    "position": "D",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8475235,
+    "fullName": "Nicolas Deslauriers",
+    "firstName": "Nicolas",
+    "lastName": "Deslauriers",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8479193,
+    "fullName": "Casey DeSmith",
+    "firstName": "Casey",
+    "lastName": "DeSmith",
+    "position": "G",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8480980,
+    "fullName": "Connor Dewar",
+    "firstName": "Connor",
+    "lastName": "Dewar",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8477450,
+    "fullName": "Jason Dickinson",
+    "firstName": "Jason",
+    "lastName": "Dickinson",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8484806,
+    "fullName": "Sam Dickinson",
+    "firstName": "Sam",
+    "lastName": "Dickinson",
+    "position": "D",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8475455,
+    "fullName": "Brenden Dillon",
+    "firstName": "Brenden",
+    "lastName": "Dillon",
+    "position": "D",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8482659,
+    "fullName": "Josh Doan",
+    "firstName": "Josh",
+    "lastName": "Doan",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8482487,
+    "fullName": "Jakub Dobes",
+    "firstName": "Jakub",
+    "lastName": "Dobes",
+    "position": "G",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8480865,
+    "fullName": "Noah Dobson",
+    "firstName": "Noah",
+    "lastName": "Dobson",
+    "position": "D",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8477503,
+    "fullName": "Max Domi",
+    "firstName": "Max",
+    "lastName": "Domi",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8477987,
+    "fullName": "Ryan Donato",
+    "firstName": "Ryan",
+    "lastName": "Donato",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8481604,
+    "fullName": "Pavel Dorofeyev",
+    "firstName": "Pavel",
+    "lastName": "Dorofeyev",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8480843,
+    "fullName": "Lukas Dostal",
+    "firstName": "Lukas",
+    "lastName": "Dostal",
+    "position": "G",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8474563,
+    "fullName": "Drew Doughty",
+    "firstName": "Drew",
+    "lastName": "Doughty",
+    "position": "D",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8480876,
+    "fullName": "Curtis Douglas",
+    "firstName": "Curtis",
+    "lastName": "Douglas",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8475343,
+    "fullName": "Nic Dowd",
+    "firstName": "Nic",
+    "lastName": "Dowd",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8477934,
+    "fullName": "Leon Draisaitl",
+    "firstName": "Leon",
+    "lastName": "Draisaitl",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8480326,
+    "fullName": "Sheldon Dries",
+    "firstName": "Sheldon",
+    "lastName": "Dries",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8477494,
+    "fullName": "Jonathan Drouin",
+    "firstName": "Jonathan",
+    "lastName": "Drouin",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8480835,
+    "fullName": "Jack Drury",
+    "firstName": "Jack",
+    "lastName": "Drury",
+    "position": "F",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8482142,
+    "fullName": "Jamie Drysdale",
+    "firstName": "Jamie",
+    "lastName": "Drysdale",
+    "position": "D",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8479400,
+    "fullName": "Pierre-Luc Dubois",
+    "firstName": "Pierre-Luc",
+    "lastName": "Dubois",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8475168,
+    "fullName": "Matt Duchene",
+    "firstName": "Matt",
+    "lastName": "Duchene",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8477407,
+    "fullName": "Anthony Duclair",
+    "firstName": "Anthony",
+    "lastName": "Duclair",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8479520,
+    "fullName": "Brandon Duhaime",
+    "firstName": "Brandon",
+    "lastName": "Duhaime",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8475208,
+    "fullName": "Brian Dumoulin",
+    "firstName": "Brian",
+    "lastName": "Dumoulin",
+    "position": "D",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8478407,
+    "fullName": "Vince Dunn",
+    "firstName": "Vince",
+    "lastName": "Dunn",
+    "position": "D",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8482623,
+    "fullName": "Josh Dunne",
+    "firstName": "Josh",
+    "lastName": "Dunne",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8480434,
+    "fullName": "Sean Durzi",
+    "firstName": "Sean",
+    "lastName": "Durzi",
+    "position": "D",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8477989,
+    "fullName": "Christian Dvorak",
+    "firstName": "Christian",
+    "lastName": "Dvorak",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8484164,
+    "fullName": "Dalibor Dvorsky",
+    "firstName": "Dalibor",
+    "lastName": "Dvorsky",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8474586,
+    "fullName": "Jordan Eberle",
+    "firstName": "Jordan",
+    "lastName": "Eberle",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8476441,
+    "fullName": "Joel Edmundson",
+    "firstName": "Joel",
+    "lastName": "Edmundson",
+    "position": "D",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8481726,
+    "fullName": "Adam Edstrom",
+    "firstName": "Adam",
+    "lastName": "Edstrom",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8482762,
+    "fullName": "Simon Edvinsson",
+    "firstName": "Simon",
+    "lastName": "Edvinsson",
+    "position": "D",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8477940,
+    "fullName": "Nikolaj Ehlers",
+    "firstName": "Nikolaj",
+    "lastName": "Ehlers",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8478403,
+    "fullName": "Jack Eichel",
+    "firstName": "Jack",
+    "lastName": "Eichel",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8477932,
+    "fullName": "Aaron Ekblad",
+    "firstName": "Aaron",
+    "lastName": "Ekblad",
+    "position": "D",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8475218,
+    "fullName": "Mattias Ekholm",
+    "firstName": "Mattias",
+    "lastName": "Ekholm",
+    "position": "D",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8482667,
+    "fullName": "William Eklund",
+    "firstName": "William",
+    "lastName": "Eklund",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8475171,
+    "fullName": "Oliver Ekman-Larsson",
+    "firstName": "Oliver",
+    "lastName": "Ekman-Larsson",
+    "position": "D",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8474189,
+    "fullName": "Lars Eller",
+    "firstName": "Lars",
+    "lastName": "Eller",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8481551,
+    "fullName": "Colten Ellis",
+    "firstName": "Colten",
+    "lastName": "Ellis",
+    "position": "G",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8475176,
+    "fullName": "Ryan Ellis",
+    "firstName": "Ryan",
+    "lastName": "Ellis",
+    "position": "D",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8480834,
+    "fullName": "Ty Emberson",
+    "firstName": "Ty",
+    "lastName": "Emberson",
+    "position": "D",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8478493,
+    "fullName": "Joel Eriksson Ek",
+    "firstName": "Joel",
+    "lastName": "Eriksson Ek",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8477454,
+    "fullName": "Adam Erne",
+    "firstName": "Adam",
+    "lastName": "Erne",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8481035,
+    "fullName": "Samuel Ersson",
+    "firstName": "Samuel",
+    "lastName": "Ersson",
+    "position": "G",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8482146,
+    "fullName": "Luke Evangelista",
+    "firstName": "Luke",
+    "lastName": "Evangelista",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8478133,
+    "fullName": "Jake Evans",
+    "firstName": "Jake",
+    "lastName": "Evans",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8482858,
+    "fullName": "Ryker Evans",
+    "firstName": "Ryker",
+    "lastName": "Evans",
+    "position": "D",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8479591,
+    "fullName": "Michael Eyssimont",
+    "firstName": "Michael",
+    "lastName": "Eyssimont",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8477952,
+    "fullName": "Robby Fabbri",
+    "firstName": "Robby",
+    "lastName": "Fabbri",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8479371,
+    "fullName": "Dante Fabbro",
+    "firstName": "Dante",
+    "lastName": "Fabbro",
+    "position": "D",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8482122,
+    "fullName": "Brock Faber",
+    "firstName": "Brock",
+    "lastName": "Faber",
+    "position": "D",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8476889,
+    "fullName": "Radek Faksa",
+    "firstName": "Radek",
+    "lastName": "Faksa",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8484166,
+    "fullName": "Adam Fantilli",
+    "firstName": "Adam",
+    "lastName": "Fantilli",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8480797,
+    "fullName": "Joel Farabee",
+    "firstName": "Joel",
+    "lastName": "Farabee",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8475753,
+    "fullName": "Justin Faulk",
+    "firstName": "Justin",
+    "lastName": "Faulk",
+    "position": "D",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8480796,
+    "fullName": "Martin Fehérváry",
+    "firstName": "Martin",
+    "lastName": "Fehérváry",
+    "position": "D",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8479983,
+    "fullName": "Mario Ferraro",
+    "firstName": "Mario",
+    "lastName": "Ferraro",
+    "position": "D",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8477942,
+    "fullName": "Kevin Fiala",
+    "firstName": "Kevin",
+    "lastName": "Fiala",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8482090,
+    "fullName": "Jack Finley",
+    "firstName": "Jack",
+    "lastName": "Finley",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8484471,
+    "fullName": "Emmitt Finnie",
+    "firstName": "Emmitt",
+    "lastName": "Finnie",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8479985,
+    "fullName": "Cale Fleury",
+    "firstName": "Cale",
+    "lastName": "Fleury",
+    "position": "D",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8477938,
+    "fullName": "Haydn Fleury",
+    "firstName": "Haydn",
+    "lastName": "Fleury",
+    "position": "D",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8477998,
+    "fullName": "Warren Foegele",
+    "firstName": "Warren",
+    "lastName": "Foegele",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8482159,
+    "fullName": "Tyson Foerster",
+    "firstName": "Tyson",
+    "lastName": "Foerster",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8475220,
+    "fullName": "Marcus Foligno",
+    "firstName": "Marcus",
+    "lastName": "Foligno",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8473422,
+    "fullName": "Nick Foligno",
+    "firstName": "Nick",
+    "lastName": "Foligno",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8475762,
+    "fullName": "Derek Forbort",
+    "firstName": "Derek",
+    "lastName": "Forbort",
+    "position": "D",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8476341,
+    "fullName": "Anton Forsberg",
+    "firstName": "Anton",
+    "lastName": "Forsberg",
+    "position": "G",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8476887,
+    "fullName": "Filip Forsberg",
+    "firstName": "Filip",
+    "lastName": "Forsberg",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8478055,
+    "fullName": "Gustav Forsling",
+    "firstName": "Gustav",
+    "lastName": "Forsling",
+    "position": "D",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8475764,
+    "fullName": "Cam Fowler",
+    "firstName": "Cam",
+    "lastName": "Fowler",
+    "position": "D",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8484170,
+    "fullName": "Jacob Fowler",
+    "firstName": "Jacob",
+    "lastName": "Fowler",
+    "position": "G",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8479323,
+    "fullName": "Adam Fox",
+    "firstName": "Adam",
+    "lastName": "Fox",
+    "position": "D",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8483573,
+    "fullName": "Ethen Frank",
+    "firstName": "Ethen",
+    "lastName": "Frank",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8479365,
+    "fullName": "Trent Frederic",
+    "firstName": "Trent",
+    "lastName": "Frederic",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8480028,
+    "fullName": "Morgan Frost",
+    "firstName": "Morgan",
+    "lastName": "Frost",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8479981,
+    "fullName": "Jonah Gadjovich",
+    "firstName": "Jonah",
+    "lastName": "Gadjovich",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8475848,
+    "fullName": "Brendan Gallagher",
+    "firstName": "Brendan",
+    "lastName": "Gallagher",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8478856,
+    "fullName": "Conor Garland",
+    "firstName": "Conor",
+    "lastName": "Garland",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8483553,
+    "fullName": "Marc Gatcomb",
+    "firstName": "Marc",
+    "lastName": "Gatcomb",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8478874,
+    "fullName": "Adam Gaudette",
+    "firstName": "Adam",
+    "lastName": "Gaudette",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8477919,
+    "fullName": "Frederick Gaudreau",
+    "firstName": "Frederick",
+    "lastName": "Gaudreau",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8476867,
+    "fullName": "Brendan Gaunce",
+    "firstName": "Brendan",
+    "lastName": "Gaunce",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8483445,
+    "fullName": "Cutter Gauthier",
+    "firstName": "Cutter",
+    "lastName": "Gauthier",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8478882,
+    "fullName": "Vladislav Gavrikov",
+    "firstName": "Vladislav",
+    "lastName": "Gavrikov",
+    "position": "D",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8479987,
+    "fullName": "Morgan Geekie",
+    "firstName": "Morgan",
+    "lastName": "Geekie",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8476434,
+    "fullName": "John Gibson",
+    "firstName": "John",
+    "lastName": "Gibson",
+    "position": "G",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8479398,
+    "fullName": "Samuel Girard",
+    "firstName": "Samuel",
+    "lastName": "Girard",
+    "position": "D",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8476878,
+    "fullName": "Zemgus Girgensons",
+    "firstName": "Zemgus",
+    "lastName": "Girgensons",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8473512,
+    "fullName": "Claude Giroux",
+    "firstName": "Claude",
+    "lastName": "Giroux",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8479996,
+    "fullName": "Cody Glass",
+    "firstName": "Cody",
+    "lastName": "Glass",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8476822,
+    "fullName": "Luke Glendening",
+    "firstName": "Luke",
+    "lastName": "Glendening",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8482201,
+    "fullName": "Gage Goncalves",
+    "firstName": "Gage",
+    "lastName": "Goncalves",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8476624,
+    "fullName": "Barclay Goodrow",
+    "firstName": "Barclay",
+    "lastName": "Goodrow",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8476906,
+    "fullName": "Shayne Gostisbehere",
+    "firstName": "Shayne",
+    "lastName": "Gostisbehere",
+    "position": "D",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8476826,
+    "fullName": "Yanni Gourde",
+    "firstName": "Yanni",
+    "lastName": "Gourde",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8484911,
+    "fullName": "Collin Graf",
+    "firstName": "Collin",
+    "lastName": "Graf",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8475798,
+    "fullName": "Mikael Granlund",
+    "firstName": "Mikael",
+    "lastName": "Granlund",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8477435,
+    "fullName": "Ryan Graves",
+    "firstName": "Ryan",
+    "lastName": "Graves",
+    "position": "D",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8482982,
+    "fullName": "Jet Greaves",
+    "firstName": "Jet",
+    "lastName": "Greaves",
+    "position": "G",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8483733,
+    "fullName": "Nikita Grebenkin",
+    "firstName": "Nikita",
+    "lastName": "Grebenkin",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8483450,
+    "fullName": "Ryan Greene",
+    "firstName": "Ryan",
+    "lastName": "Greene",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8478413,
+    "fullName": "Jordan Greenway",
+    "firstName": "Jordan",
+    "lastName": "Greenway",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8478421,
+    "fullName": "A.J. Greer",
+    "firstName": "A.J.",
+    "lastName": "Greer",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8479393,
+    "fullName": "Noah Gregor",
+    "firstName": "Noah",
+    "lastName": "Gregor",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8482092,
+    "fullName": "Ridly Greig",
+    "firstName": "Ridly",
+    "lastName": "Greig",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8481721,
+    "fullName": "Arseny Gritsyuk",
+    "firstName": "Arseny",
+    "lastName": "Gritsyuk",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8475831,
+    "fullName": "Philipp Grubauer",
+    "firstName": "Philipp",
+    "lastName": "Grubauer",
+    "position": "G",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8479336,
+    "fullName": "Carl Grundstrom",
+    "firstName": "Carl",
+    "lastName": "Grundstrom",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8476891,
+    "fullName": "Matt Grzelcyk",
+    "firstName": "Matt",
+    "lastName": "Grzelcyk",
+    "position": "D",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8475462,
+    "fullName": "Radko Gudas",
+    "firstName": "Radko",
+    "lastName": "Gudas",
+    "position": "D",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8475790,
+    "fullName": "Erik Gudbranson",
+    "firstName": "Erik",
+    "lastName": "Gudbranson",
+    "position": "D",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8482699,
+    "fullName": "Dylan Guenther",
+    "firstName": "Dylan",
+    "lastName": "Guenther",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8477404,
+    "fullName": "Jake Guentzel",
+    "firstName": "Jake",
+    "lastName": "Guentzel",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8482087,
+    "fullName": "Kaiden Guhle",
+    "firstName": "Kaiden",
+    "lastName": "Guhle",
+    "position": "D",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8479406,
+    "fullName": "Filip Gustavsson",
+    "firstName": "Filip",
+    "lastName": "Gustavsson",
+    "position": "G",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8479542,
+    "fullName": "Brandon Hagel",
+    "firstName": "Brandon",
+    "lastName": "Hagel",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8479980,
+    "fullName": "Nicolas Hague",
+    "firstName": "Nicolas",
+    "lastName": "Hague",
+    "position": "D",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8475791,
+    "fullName": "Taylor Hall",
+    "firstName": "Taylor",
+    "lastName": "Hall",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8480842,
+    "fullName": "Filip Hallander",
+    "firstName": "Filip",
+    "lastName": "Hallander",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8476462,
+    "fullName": "Dougie Hamilton",
+    "firstName": "Dougie",
+    "lastName": "Hamilton",
+    "position": "D",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8474612,
+    "fullName": "Travis Hamonic",
+    "firstName": "Travis",
+    "lastName": "Hamonic",
+    "position": "D",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8478396,
+    "fullName": "Noah Hanifin",
+    "firstName": "Noah",
+    "lastName": "Hanifin",
+    "position": "D",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8477810,
+    "fullName": "Joel Hanley",
+    "firstName": "Joel",
+    "lastName": "Hanley",
+    "position": "D",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8478424,
+    "fullName": "Jansen Harkins",
+    "firstName": "Jansen",
+    "lastName": "Harkins",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8481581,
+    "fullName": "Thomas Harley",
+    "firstName": "Thomas",
+    "lastName": "Harley",
+    "position": "D",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8480887,
+    "fullName": "Jordan Harris",
+    "firstName": "Jordan",
+    "lastName": "Harris",
+    "position": "D",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8479394,
+    "fullName": "Carter Hart",
+    "firstName": "Carter",
+    "lastName": "Hart",
+    "position": "G",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8477451,
+    "fullName": "Ryan Hartman",
+    "firstName": "Ryan",
+    "lastName": "Hartman",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8477903,
+    "fullName": "Garnet Hathaway",
+    "firstName": "Garnet",
+    "lastName": "Hathaway",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8475287,
+    "fullName": "Erik Haula",
+    "firstName": "Erik",
+    "lastName": "Haula",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8475763,
+    "fullName": "Kevin Hayes",
+    "firstName": "Kevin",
+    "lastName": "Hayes",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8480849,
+    "fullName": "Barrett Hayton",
+    "firstName": "Barrett",
+    "lastName": "Hayton",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8475167,
+    "fullName": "Victor Hedman",
+    "firstName": "Victor",
+    "lastName": "Hedman",
+    "position": "D",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8482476,
+    "fullName": "Emil Heineman",
+    "firstName": "Emil",
+    "lastName": "Heineman",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8478046,
+    "fullName": "Danton Heinen",
+    "firstName": "Danton",
+    "lastName": "Heinen",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8480036,
+    "fullName": "Miro Heiskanen",
+    "firstName": "Miro",
+    "lastName": "Heiskanen",
+    "position": "D",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8482726,
+    "fullName": "Samuel Helenius",
+    "firstName": "Samuel",
+    "lastName": "Helenius",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8476945,
+    "fullName": "Connor Hellebuyck",
+    "firstName": "Connor",
+    "lastName": "Hellebuyck",
+    "position": "G",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8481563,
+    "fullName": "Drew Helleson",
+    "firstName": "Drew",
+    "lastName": "Helleson",
+    "position": "D",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8474641,
+    "fullName": "Adam Henrique",
+    "firstName": "Adam",
+    "lastName": "Henrique",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8476881,
+    "fullName": "Tomas Hertl",
+    "firstName": "Tomas",
+    "lastName": "Hertl",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8483710,
+    "fullName": "Dennis Hildeby",
+    "firstName": "Dennis",
+    "lastName": "Hildeby",
+    "position": "G",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8478499,
+    "fullName": "Adin Hill",
+    "firstName": "Adin",
+    "lastName": "Hill",
+    "position": "G",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8476994,
+    "fullName": "Vinnie Hinostroza",
+    "firstName": "Vinnie",
+    "lastName": "Hinostroza",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8478449,
+    "fullName": "Roope Hintz",
+    "firstName": "Roope",
+    "lastName": "Hintz",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8480002,
+    "fullName": "Nico Hischier",
+    "firstName": "Nico",
+    "lastName": "Hischier",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8480981,
+    "fullName": "Joel Hofer",
+    "firstName": "Joel",
+    "lastName": "Hofer",
+    "position": "G",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8481535,
+    "fullName": "Nils Hoglander",
+    "firstName": "Nils",
+    "lastName": "Hoglander",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8482077,
+    "fullName": "Dylan Holloway",
+    "firstName": "Dylan",
+    "lastName": "Holloway",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8480995,
+    "fullName": "Pontus Holmberg",
+    "firstName": "Pontus",
+    "lastName": "Holmberg",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8481601,
+    "fullName": "Simon Holmstrom",
+    "firstName": "Simon",
+    "lastName": "Holmstrom",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8482125,
+    "fullName": "Alexander Holtz",
+    "firstName": "Alexander",
+    "lastName": "Holtz",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8484180,
+    "fullName": "Samuel Honzek",
+    "firstName": "Samuel",
+    "lastName": "Honzek",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8477500,
+    "fullName": "Bo Horvat",
+    "firstName": "Bo",
+    "lastName": "Horvat",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8483455,
+    "fullName": "Isaac Howard",
+    "firstName": "Isaac",
+    "lastName": "Howard",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8479353,
+    "fullName": "Brett Howden",
+    "firstName": "Brett",
+    "lastName": "Howden",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8479425,
+    "fullName": "Filip Hronek",
+    "firstName": "Filip",
+    "lastName": "Hronek",
+    "position": "D",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8484829,
+    "fullName": "Justin Hryckowian",
+    "firstName": "Justin",
+    "lastName": "Hryckowian",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8476456,
+    "fullName": "Jonathan Huberdeau",
+    "firstName": "Jonathan",
+    "lastName": "Huberdeau",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8481559,
+    "fullName": "Jack Hughes",
+    "firstName": "Jack",
+    "lastName": "Hughes",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8482684,
+    "fullName": "Luke Hughes",
+    "firstName": "Luke",
+    "lastName": "Hughes",
+    "position": "D",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8480800,
+    "fullName": "Quinn Hughes",
+    "firstName": "Quinn",
+    "lastName": "Hughes",
+    "position": "D",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8482094,
+    "fullName": "Daemon Hunt",
+    "firstName": "Daemon",
+    "lastName": "Hunt",
+    "position": "D",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8478024,
+    "fullName": "Ville Husso",
+    "firstName": "Ville",
+    "lastName": "Husso",
+    "position": "G",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8483457,
+    "fullName": "Lane Hutson",
+    "firstName": "Lane",
+    "lastName": "Hutson",
+    "position": "D",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8477018,
+    "fullName": "Ben Hutton",
+    "firstName": "Ben",
+    "lastName": "Hutton",
+    "position": "D",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8475786,
+    "fullName": "Zach Hyman",
+    "firstName": "Zach",
+    "lastName": "Hyman",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8480113,
+    "fullName": "Alex Iafallo",
+    "firstName": "Alex",
+    "lastName": "Iafallo",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8478971,
+    "fullName": "Connor Ingram",
+    "firstName": "Connor",
+    "lastName": "Ingram",
+    "position": "G",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8482861,
+    "fullName": "Vincent Iorio",
+    "firstName": "Vincent",
+    "lastName": "Iorio",
+    "position": "D",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8483752,
+    "fullName": "Dominic James",
+    "firstName": "Dominic",
+    "lastName": "James",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8476873,
+    "fullName": "Mark Jankowski",
+    "firstName": "Mark",
+    "lastName": "Jankowski",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8477406,
+    "fullName": "Mattias Janmark",
+    "firstName": "Mattias",
+    "lastName": "Janmark",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8475714,
+    "fullName": "Calle Jarnkrok",
+    "firstName": "Calle",
+    "lastName": "Jarnkrok",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8477465,
+    "fullName": "Tristan Jarry",
+    "firstName": "Tristan",
+    "lastName": "Jarry",
+    "position": "G",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8482093,
+    "fullName": "Seth Jarvis",
+    "firstName": "Seth",
+    "lastName": "Jarvis",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8479661,
+    "fullName": "Tanner Jeannot",
+    "firstName": "Tanner",
+    "lastName": "Jeannot",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8476432,
+    "fullName": "Boone Jenner",
+    "firstName": "Boone",
+    "lastName": "Jenner",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8475324,
+    "fullName": "Nick Jensen",
+    "firstName": "Nick",
+    "lastName": "Jensen",
+    "position": "D",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8481607,
+    "fullName": "Albert Johansson",
+    "firstName": "Albert",
+    "lastName": "Johansson",
+    "position": "D",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8477992,
+    "fullName": "Jonas Johansson",
+    "firstName": "Jonas",
+    "lastName": "Johansson",
+    "position": "G",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8475149,
+    "fullName": "Marcus Johansson",
+    "firstName": "Marcus",
+    "lastName": "Johansson",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8482660,
+    "fullName": "Kent Johnson",
+    "firstName": "Kent",
+    "lastName": "Johnson",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8477527,
+    "fullName": "Ross Johnston",
+    "firstName": "Ross",
+    "lastName": "Johnston",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8482740,
+    "fullName": "Wyatt Johnston",
+    "firstName": "Wyatt",
+    "lastName": "Johnston",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8480035,
+    "fullName": "Henri Jokiharju",
+    "firstName": "Henri",
+    "lastName": "Jokiharju",
+    "position": "D",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8480259,
+    "fullName": "Ben Jones",
+    "firstName": "Ben",
+    "lastName": "Jones",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8477495,
+    "fullName": "Seth Jones",
+    "firstName": "Seth",
+    "lastName": "Jones",
+    "position": "D",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8481708,
+    "fullName": "Zac Jones",
+    "firstName": "Zac",
+    "lastName": "Jones",
+    "position": "D",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8478472,
+    "fullName": "Mathieu Joseph",
+    "firstName": "Mathieu",
+    "lastName": "Joseph",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8480058,
+    "fullName": "P.O Joseph",
+    "firstName": "P.O",
+    "lastName": "Joseph",
+    "position": "D",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8478057,
+    "fullName": "Dakota Joshua",
+    "firstName": "Dakota",
+    "lastName": "Joshua",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8474600,
+    "fullName": "Roman Josi",
+    "firstName": "Roman",
+    "lastName": "Josi",
+    "position": "D",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8479370,
+    "fullName": "Tyson Jost",
+    "firstName": "Tyson",
+    "lastName": "Jost",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8478454,
+    "fullName": "Noah Juulsen",
+    "firstName": "Noah",
+    "lastName": "Juulsen",
+    "position": "D",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8475172,
+    "fullName": "Nazem Kadri",
+    "firstName": "Nazem",
+    "lastName": "Kadri",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8482176,
+    "fullName": "Wyatt Kaiser",
+    "firstName": "Wyatt",
+    "lastName": "Kaiser",
+    "position": "D",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8481554,
+    "fullName": "Kaapo Kakko",
+    "firstName": "Kaapo",
+    "lastName": "Kakko",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8480144,
+    "fullName": "David Kampf",
+    "firstName": "David",
+    "lastName": "Kampf",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8475169,
+    "fullName": "Evander Kane",
+    "firstName": "Evander",
+    "lastName": "Kane",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8474141,
+    "fullName": "Patrick Kane",
+    "firstName": "Patrick",
+    "lastName": "Kane",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8477953,
+    "fullName": "Kasperi Kapanen",
+    "firstName": "Kasperi",
+    "lastName": "Kapanen",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8482775,
+    "fullName": "Oliver Kapanen",
+    "firstName": "Oliver",
+    "lastName": "Kapanen",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8478864,
+    "fullName": "Kirill Kaprizov",
+    "firstName": "Kirill",
+    "lastName": "Kaprizov",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8474578,
+    "fullName": "Erik Karlsson",
+    "firstName": "Erik",
+    "lastName": "Karlsson",
+    "position": "D",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8481024,
+    "fullName": "Linus Karlsson",
+    "firstName": "Linus",
+    "lastName": "Karlsson",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8476448,
+    "fullName": "William Karlsson",
+    "firstName": "William",
+    "lastName": "Karlsson",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8481789,
+    "fullName": "Tye Kartye",
+    "firstName": "Tye",
+    "lastName": "Kartye",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8483464,
+    "fullName": "Marco Kasper",
+    "firstName": "Marco",
+    "lastName": "Kasper",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8480355,
+    "fullName": "Mark Kastelic",
+    "firstName": "Mark",
+    "lastName": "Kastelic",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8479343,
+    "fullName": "Clayton Keller",
+    "firstName": "Clayton",
+    "lastName": "Keller",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8480448,
+    "fullName": "Parker Kelly",
+    "firstName": "Parker",
+    "lastName": "Kelly",
+    "position": "F",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8477960,
+    "fullName": "Adrian Kempe",
+    "firstName": "Adrian",
+    "lastName": "Kempe",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8477021,
+    "fullName": "Alexander Kerfoot",
+    "firstName": "Alexander",
+    "lastName": "Kerfoot",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8482516,
+    "fullName": "Matthew Kessel",
+    "firstName": "Matthew",
+    "lastName": "Kessel",
+    "position": "D",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8480891,
+    "fullName": "Michael Kesselring",
+    "firstName": "Michael",
+    "lastName": "Kesselring",
+    "position": "D",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8482177,
+    "fullName": "Marat Khusnutdinov",
+    "firstName": "Marat",
+    "lastName": "Khusnutdinov",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8473986,
+    "fullName": "Alex Killorn",
+    "firstName": "Alex",
+    "lastName": "Killorn",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8485414,
+    "fullName": "Ben Kindel",
+    "firstName": "Ben",
+    "lastName": "Kindel",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8477993,
+    "fullName": "Justin Kirkland",
+    "firstName": "Justin",
+    "lastName": "Kirkland",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8481641,
+    "fullName": "Joel Kiviranta",
+    "firstName": "Joel",
+    "lastName": "Kiviranta",
+    "position": "F",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8483609,
+    "fullName": "Adam Klapka",
+    "firstName": "Adam",
+    "lastName": "Klapka",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8482095,
+    "fullName": "Tyler Kleven",
+    "firstName": "Tyler",
+    "lastName": "Kleven",
+    "position": "D",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8475906,
+    "fullName": "John Klingberg",
+    "firstName": "John",
+    "lastName": "Klingberg",
+    "position": "D",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8482720,
+    "fullName": "Matthew Knies",
+    "firstName": "Matthew",
+    "lastName": "Knies",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8481519,
+    "fullName": "Spencer Knight",
+    "firstName": "Spencer",
+    "lastName": "Knight",
+    "position": "G",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8481611,
+    "fullName": "Pyotr Kochetkov",
+    "firstName": "Pyotr",
+    "lastName": "Kochetkov",
+    "position": "G",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8481043,
+    "fullName": "Cole Koepke",
+    "firstName": "Cole",
+    "lastName": "Koepke",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8478434,
+    "fullName": "Keegan Kolesar",
+    "firstName": "Keegan",
+    "lastName": "Kolesar",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8481609,
+    "fullName": "Vladislav Kolyachonok",
+    "firstName": "Vladislav",
+    "lastName": "Kolyachonok",
+    "position": "D",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8478439,
+    "fullName": "Travis Konecny",
+    "firstName": "Travis",
+    "lastName": "Konecny",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8471685,
+    "fullName": "Anze Kopitar",
+    "firstName": "Anze",
+    "lastName": "Kopitar",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8481527,
+    "fullName": "Kaedan Korczak",
+    "firstName": "Kaedan",
+    "lastName": "Korczak",
+    "position": "D",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8476914,
+    "fullName": "Joonas Korpisalo",
+    "firstName": "Joonas",
+    "lastName": "Korpisalo",
+    "position": "G",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8480829,
+    "fullName": "Jesperi Kotkaniemi",
+    "firstName": "Jesperi",
+    "lastName": "Kotkaniemi",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8480192,
+    "fullName": "Johnathan Kovacevic",
+    "firstName": "Johnathan",
+    "lastName": "Kovacevic",
+    "position": "D",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8482896,
+    "fullName": "Tyson Kozak",
+    "firstName": "Tyson",
+    "lastName": "Kozak",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8481522,
+    "fullName": "Peyton Krebs",
+    "firstName": "Peyton",
+    "lastName": "Krebs",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8475184,
+    "fullName": "Chris Kreider",
+    "firstName": "Chris",
+    "lastName": "Kreider",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8476453,
+    "fullName": "Nikita Kucherov",
+    "firstName": "Nikita",
+    "lastName": "Kucherov",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8475311,
+    "fullName": "Darcy Kuemper",
+    "firstName": "Darcy",
+    "lastName": "Kuemper",
+    "position": "G",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8476967,
+    "fullName": "Brett Kulak",
+    "firstName": "Brett",
+    "lastName": "Kulak",
+    "position": "D",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8483468,
+    "fullName": "Jiri Kulich",
+    "firstName": "Jiri",
+    "lastName": "Kulich",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8475179,
+    "fullName": "Dmitry Kulikov",
+    "firstName": "Dmitry",
+    "lastName": "Kulikov",
+    "position": "D",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8479316,
+    "fullName": "Luke Kunin",
+    "firstName": "Luke",
+    "lastName": "Kunin",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8476374,
+    "fullName": "Sean Kuraly",
+    "firstName": "Sean",
+    "lastName": "Kuraly",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8480798,
+    "fullName": "Philipp Kurashev",
+    "firstName": "Philipp",
+    "lastName": "Kurashev",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8483808,
+    "fullName": "Andrei Kuzmenko",
+    "firstName": "Andrei",
+    "lastName": "Kuzmenko",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8482165,
+    "fullName": "Yan Kuznetsov",
+    "firstName": "Yan",
+    "lastName": "Kuznetsov",
+    "position": "D",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8479385,
+    "fullName": "Jordan Kyrou",
+    "firstName": "Jordan",
+    "lastName": "Kyrou",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8483690,
+    "fullName": "Noah Laba",
+    "firstName": "Noah",
+    "lastName": "Laba",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8481605,
+    "fullName": "Jackson LaCombe",
+    "firstName": "Jackson",
+    "lastName": "LaCombe",
+    "position": "D",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8482155,
+    "fullName": "Alex Laferriere",
+    "firstName": "Alex",
+    "lastName": "Laferriere",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8478043,
+    "fullName": "Sam Lafferty",
+    "firstName": "Sam",
+    "lastName": "Lafferty",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8482109,
+    "fullName": "Alexis Lafrenière",
+    "firstName": "Alexis",
+    "lastName": "Lafrenière",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8479339,
+    "fullName": "Patrik Laine",
+    "firstName": "Patrik",
+    "lastName": "Laine",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8477996,
+    "fullName": "Juho Lammikko",
+    "firstName": "Juho",
+    "lastName": "Lammikko",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8476455,
+    "fullName": "Gabriel Landeskog",
+    "firstName": "Gabriel",
+    "lastName": "Landeskog",
+    "position": "F",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8480947,
+    "fullName": "Kevin Lankinen",
+    "firstName": "Kevin",
+    "lastName": "Lankinen",
+    "position": "G",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8482148,
+    "fullName": "Hendrix Lapierre",
+    "firstName": "Hendrix",
+    "lastName": "Lapierre",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8484185,
+    "fullName": "Nick Lardis",
+    "firstName": "Nick",
+    "lastName": "Lardis",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8477946,
+    "fullName": "Dylan Larkin",
+    "firstName": "Dylan",
+    "lastName": "Larkin",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8476457,
+    "fullName": "Adam Larsson",
+    "firstName": "Adam",
+    "lastName": "Larsson",
+    "position": "D",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8476872,
+    "fullName": "Scott Laughton",
+    "firstName": "Scott",
+    "lastName": "Laughton",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8478468,
+    "fullName": "Jeremy Lauzon",
+    "firstName": "Jeremy",
+    "lastName": "Lauzon",
+    "position": "D",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8477508,
+    "fullName": "Curtis Lazar",
+    "firstName": "Curtis",
+    "lastName": "Lazar",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8481517,
+    "fullName": "Brett Leason",
+    "firstName": "Brett",
+    "lastName": "Leason",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8475181,
+    "fullName": "Nick Leddy",
+    "firstName": "Nick",
+    "lastName": "Leddy",
+    "position": "D",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8475314,
+    "fullName": "Anders Lee",
+    "firstName": "Anders",
+    "lastName": "Lee",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8481732,
+    "fullName": "Andre Lee",
+    "firstName": "Andre",
+    "lastName": "Lee",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8477476,
+    "fullName": "Artturi Lehkonen",
+    "firstName": "Artturi",
+    "lastName": "Lehkonen",
+    "position": "F",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8484186,
+    "fullName": "Ryan Leonard",
+    "firstName": "Ryan",
+    "lastName": "Leonard",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8471724,
+    "fullName": "Kris Letang",
+    "firstName": "Kris",
+    "lastName": "Letang",
+    "position": "D",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8484783,
+    "fullName": "Artyom Levshunov",
+    "firstName": "Artyom",
+    "lastName": "Levshunov",
+    "position": "D",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8480043,
+    "fullName": "Timothy Liljegren",
+    "firstName": "Timothy",
+    "lastName": "Liljegren",
+    "position": "D",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8482929,
+    "fullName": "Emil Lilleberg",
+    "firstName": "Emil",
+    "lastName": "Lilleberg",
+    "position": "D",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8482761,
+    "fullName": "Carl Lindbom",
+    "firstName": "Carl",
+    "lastName": "Lindbom",
+    "position": "G",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8476902,
+    "fullName": "Esa Lindell",
+    "firstName": "Esa",
+    "lastName": "Lindell",
+    "position": "D",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8479292,
+    "fullName": "Charlie Lindgren",
+    "firstName": "Charlie",
+    "lastName": "Lindgren",
+    "position": "G",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8479324,
+    "fullName": "Ryan Lindgren",
+    "firstName": "Ryan",
+    "lastName": "Lindgren",
+    "position": "D",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8477496,
+    "fullName": "Elias Lindholm",
+    "firstName": "Elias",
+    "lastName": "Lindholm",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8476854,
+    "fullName": "Hampus Lindholm",
+    "firstName": "Hampus",
+    "lastName": "Lindholm",
+    "position": "D",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8481481,
+    "fullName": "Blake Lizotte",
+    "firstName": "Blake",
+    "lastName": "Lizotte",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8482511,
+    "fullName": "Mason Lohrei",
+    "firstName": "Mason",
+    "lastName": "Lohrei",
+    "position": "D",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8479066,
+    "fullName": "Ryan Lomberg",
+    "firstName": "Ryan",
+    "lastName": "Lomberg",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8478904,
+    "fullName": "Steven Lorentz",
+    "firstName": "Steven",
+    "lastName": "Lorentz",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8476392,
+    "fullName": "Adam Lowry",
+    "firstName": "Adam",
+    "lastName": "Lowry",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8482113,
+    "fullName": "Anton Lundell",
+    "firstName": "Anton",
+    "lastName": "Lundell",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8480806,
+    "fullName": "Isac Lundeström",
+    "firstName": "Isac",
+    "lastName": "Lundeström",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8480878,
+    "fullName": "Nils Lundkvist",
+    "firstName": "Nils",
+    "lastName": "Lundkvist",
+    "position": "D",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8481547,
+    "fullName": "Simon Lundmark",
+    "firstName": "Simon",
+    "lastName": "Lundmark",
+    "position": "D",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8480185,
+    "fullName": "Eetu Luostarinen",
+    "firstName": "Eetu",
+    "lastName": "Luostarinen",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8480045,
+    "fullName": "Ukko-Pekka Luukkonen",
+    "firstName": "Ukko-Pekka",
+    "lastName": "Luukkonen",
+    "position": "G",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8479312,
+    "fullName": "Alex Lyon",
+    "firstName": "Alex",
+    "lastName": "Lyon",
+    "position": "G",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8480950,
+    "fullName": "Ilya Lyubushkin",
+    "firstName": "Ilya",
+    "lastName": "Lyubushkin",
+    "position": "D",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8476874,
+    "fullName": "Olli Määttä",
+    "firstName": "Olli",
+    "lastName": "Määttä",
+    "position": "D",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8481711,
+    "fullName": "Matias Maccelli",
+    "firstName": "Matias",
+    "lastName": "Maccelli",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8477073,
+    "fullName": "Kurtis MacDermid",
+    "firstName": "Kurtis",
+    "lastName": "MacDermid",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8479772,
+    "fullName": "Zack MacEwen",
+    "firstName": "Zack",
+    "lastName": "MacEwen",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8477492,
+    "fullName": "Nathan MacKinnon",
+    "firstName": "Nathan",
+    "lastName": "MacKinnon",
+    "position": "F",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8481237,
+    "fullName": "Kyle MacLean",
+    "firstName": "Kyle",
+    "lastName": "MacLean",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8479372,
+    "fullName": "Joshua Mahura",
+    "firstName": "Joshua",
+    "lastName": "Mahura",
+    "position": "D",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8482733,
+    "fullName": "Logan Mailloux",
+    "firstName": "Logan",
+    "lastName": "Mailloux",
+    "position": "D",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8480069,
+    "fullName": "Cale Makar",
+    "firstName": "Cale",
+    "lastName": "Makar",
+    "position": "D",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8479359,
+    "fullName": "Beck Malenstyn",
+    "firstName": "Beck",
+    "lastName": "Malenstyn",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8484258,
+    "fullName": "Sam Malinski",
+    "firstName": "Sam",
+    "lastName": "Malinski",
+    "position": "D",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8471215,
+    "fullName": "Evgeni Malkin",
+    "firstName": "Evgeni",
+    "lastName": "Malkin",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8482408,
+    "fullName": "Jeff Malott",
+    "firstName": "Jeff",
+    "lastName": "Malott",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8483768,
+    "fullName": "Victor Mancini",
+    "firstName": "Victor",
+    "lastName": "Mancini",
+    "position": "D",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8478233,
+    "fullName": "Andrew Mangiapane",
+    "firstName": "Andrew",
+    "lastName": "Mangiapane",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8476312,
+    "fullName": "Josh Manson",
+    "firstName": "Josh",
+    "lastName": "Manson",
+    "position": "D",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8477511,
+    "fullName": "Anthony Mantha",
+    "firstName": "Anthony",
+    "lastName": "Mantha",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8473419,
+    "fullName": "Brad Marchand",
+    "firstName": "Brad",
+    "lastName": "Marchand",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8480893,
+    "fullName": "Kirill Marchenko",
+    "firstName": "Kirill",
+    "lastName": "Marchenko",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8476539,
+    "fullName": "Jonathan Marchessault",
+    "firstName": "Jonathan",
+    "lastName": "Marchessault",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8478975,
+    "fullName": "Mason Marchment",
+    "firstName": "Mason",
+    "lastName": "Marchment",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8478507,
+    "fullName": "John Marino",
+    "firstName": "John",
+    "lastName": "Marino",
+    "position": "D",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8474593,
+    "fullName": "Jacob Markstrom",
+    "firstName": "Jacob",
+    "lastName": "Markstrom",
+    "position": "G",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8478483,
+    "fullName": "Mitch Marner",
+    "firstName": "Mitch",
+    "lastName": "Marner",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8477484,
+    "fullName": "Spencer Martin",
+    "firstName": "Spencer",
+    "lastName": "Martin",
+    "position": "G",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8476921,
+    "fullName": "Jordan Martinook",
+    "firstName": "Jordan",
+    "lastName": "Martinook",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8483485,
+    "fullName": "Denton Mateychuk",
+    "firstName": "Denton",
+    "lastName": "Mateychuk",
+    "position": "D",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8476875,
+    "fullName": "Mike Matheson",
+    "firstName": "Mike",
+    "lastName": "Matheson",
+    "position": "D",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8484321,
+    "fullName": "Nikolas Matinpalo",
+    "firstName": "Nikolas",
+    "lastName": "Matinpalo",
+    "position": "D",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8479318,
+    "fullName": "Auston Matthews",
+    "firstName": "Auston",
+    "lastName": "Matthews",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8476429,
+    "fullName": "Scott Mayfield",
+    "firstName": "Scott",
+    "lastName": "Mayfield",
+    "position": "D",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8478062,
+    "fullName": "Dysin Mayo",
+    "firstName": "Dysin",
+    "lastName": "Mayo",
+    "position": "D",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8479325,
+    "fullName": "Charlie McAvoy",
+    "firstName": "Charlie",
+    "lastName": "McAvoy",
+    "position": "D",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8480855,
+    "fullName": "Jack McBain",
+    "firstName": "Jack",
+    "lastName": "McBain",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8476931,
+    "fullName": "Jake McCabe",
+    "firstName": "Jake",
+    "lastName": "McCabe",
+    "position": "D",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8477955,
+    "fullName": "Jared McCann",
+    "firstName": "Jared",
+    "lastName": "McCann",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8477446,
+    "fullName": "Michael McCarron",
+    "firstName": "Michael",
+    "lastName": "McCarron",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8478402,
+    "fullName": "Connor McDavid",
+    "firstName": "Connor",
+    "lastName": "McDavid",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8474151,
+    "fullName": "Ryan McDonagh",
+    "firstName": "Ryan",
+    "lastName": "McDonagh",
+    "position": "D",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8483487,
+    "fullName": "Rutger McGroarty",
+    "firstName": "Rutger",
+    "lastName": "McGroarty",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8475795,
+    "fullName": "Dylan McIlrath",
+    "firstName": "Dylan",
+    "lastName": "McIlrath",
+    "position": "D",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8483397,
+    "fullName": "Marc McLaughlin",
+    "firstName": "Marc",
+    "lastName": "McLaughlin",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8480802,
+    "fullName": "Ryan McLeod",
+    "firstName": "Ryan",
+    "lastName": "McLeod",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8482259,
+    "fullName": "Bobby McMann",
+    "firstName": "Bobby",
+    "lastName": "McMann",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8481580,
+    "fullName": "Connor McMichael",
+    "firstName": "Connor",
+    "lastName": "McMichael",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8475188,
+    "fullName": "Brayden McNabb",
+    "firstName": "Brayden",
+    "lastName": "McNabb",
+    "position": "D",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8482745,
+    "fullName": "Mason McTavish",
+    "firstName": "Mason",
+    "lastName": "McTavish",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8484287,
+    "fullName": "Cole McWard",
+    "firstName": "Cole",
+    "lastName": "McWard",
+    "position": "D",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8478414,
+    "fullName": "Timo Meier",
+    "firstName": "Timo",
+    "lastName": "Meier",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8482874,
+    "fullName": "Jacob Melanson",
+    "firstName": "Jacob",
+    "lastName": "Melanson",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8482110,
+    "fullName": "Dawson Mercer",
+    "firstName": "Dawson",
+    "lastName": "Mercer",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8482447,
+    "fullName": "Leevi Meriläinen",
+    "firstName": "Leevi",
+    "lastName": "Meriläinen",
+    "position": "G",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8477541,
+    "fullName": "Dakota Mermis",
+    "firstName": "Dakota",
+    "lastName": "Mermis",
+    "position": "D",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8478007,
+    "fullName": "Elvis Merzlikins",
+    "firstName": "Elvis",
+    "lastName": "Merzlikins",
+    "position": "G",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8484305,
+    "fullName": "Zach Metsa",
+    "firstName": "Zach",
+    "lastName": "Metsa",
+    "position": "D",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8483570,
+    "fullName": "Ben Meyers",
+    "firstName": "Ben",
+    "lastName": "Meyers",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8484387,
+    "fullName": "Matvei Michkov",
+    "firstName": "Matvei",
+    "lastName": "Michkov",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8478136,
+    "fullName": "Jake Middleton",
+    "firstName": "Jake",
+    "lastName": "Middleton",
+    "position": "D",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8481624,
+    "fullName": "Ilya Mikheyev",
+    "firstName": "Ilya",
+    "lastName": "Mikheyev",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8478859,
+    "fullName": "Niko Mikkola",
+    "firstName": "Niko",
+    "lastName": "Mikkola",
+    "position": "D",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8477947,
+    "fullName": "Sonny Milano",
+    "firstName": "Sonny",
+    "lastName": "Milano",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8476525,
+    "fullName": "Colin Miller",
+    "firstName": "Colin",
+    "lastName": "Miller",
+    "position": "D",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8476468,
+    "fullName": "J.T. Miller",
+    "firstName": "J.T.",
+    "lastName": "Miller",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8480817,
+    "fullName": "K'Andre Miller",
+    "firstName": "K'Andre",
+    "lastName": "Miller",
+    "position": "D",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8481529,
+    "fullName": "Trent Miner",
+    "firstName": "Trent",
+    "lastName": "Miner",
+    "position": "G",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8483489,
+    "fullName": "Fraser Minten",
+    "firstName": "Fraser",
+    "lastName": "Minten",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8483490,
+    "fullName": "Pavel Mintyukov",
+    "firstName": "Pavel",
+    "lastName": "Mintyukov",
+    "position": "D",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8485402,
+    "fullName": "Michael Misa",
+    "firstName": "Michael",
+    "lastName": "Misa",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8479999,
+    "fullName": "Casey Mittelstadt",
+    "firstName": "Casey",
+    "lastName": "Mittelstadt",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8477497,
+    "fullName": "Sean Monahan",
+    "firstName": "Sean",
+    "lastName": "Monahan",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8478470,
+    "fullName": "Samuel Montembeault",
+    "firstName": "Samuel",
+    "lastName": "Montembeault",
+    "position": "G",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8477986,
+    "fullName": "Brandon Montour",
+    "firstName": "Brandon",
+    "lastName": "Montour",
+    "position": "D",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8482178,
+    "fullName": "Ian Moore",
+    "firstName": "Ian",
+    "lastName": "Moore",
+    "position": "D",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8484197,
+    "fullName": "Oliver Moore",
+    "firstName": "Oliver",
+    "lastName": "Moore",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8479675,
+    "fullName": "Trevor Moore",
+    "firstName": "Trevor",
+    "lastName": "Moore",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8477504,
+    "fullName": "Josh Morrissey",
+    "firstName": "Josh",
+    "lastName": "Morrissey",
+    "position": "D",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8482666,
+    "fullName": "Scott Morrow",
+    "firstName": "Scott",
+    "lastName": "Morrow",
+    "position": "D",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8482655,
+    "fullName": "J.J. Moser",
+    "firstName": "J.J.",
+    "lastName": "Moser",
+    "position": "D",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8479421,
+    "fullName": "Jacob Moverare",
+    "firstName": "Jacob",
+    "lastName": "Moverare",
+    "position": "D",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8475852,
+    "fullName": "Petr Mrazek",
+    "firstName": "Petr",
+    "lastName": "Mrazek",
+    "position": "G",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8482166,
+    "fullName": "Shakir Mukhamadullin",
+    "firstName": "Shakir",
+    "lastName": "Mukhamadullin",
+    "position": "D",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8476473,
+    "fullName": "Connor Murphy",
+    "firstName": "Connor",
+    "lastName": "Murphy",
+    "position": "D",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8476899,
+    "fullName": "Matt Murray",
+    "firstName": "Matt",
+    "lastName": "Murray",
+    "position": "G",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8479026,
+    "fullName": "Philippe Myers",
+    "firstName": "Philippe",
+    "lastName": "Myers",
+    "position": "D",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8474574,
+    "fullName": "Tyler Myers",
+    "firstName": "Tyler",
+    "lastName": "Myers",
+    "position": "D",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8476480,
+    "fullName": "Vladislav Namestnikov",
+    "firstName": "Vladislav",
+    "lastName": "Namestnikov",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8483493,
+    "fullName": "Frank Nazar",
+    "firstName": "Frank",
+    "lastName": "Nazar",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8480039,
+    "fullName": "Martin Necas",
+    "firstName": "Martin",
+    "lastName": "Necas",
+    "position": "F",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8477968,
+    "fullName": "Alex Nedeljkovic",
+    "firstName": "Alex",
+    "lastName": "Nedeljkovic",
+    "position": "G",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8482089,
+    "fullName": "Jake Neighbours",
+    "firstName": "Jake",
+    "lastName": "Neighbours",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8475754,
+    "fullName": "Brock Nelson",
+    "firstName": "Brock",
+    "lastName": "Nelson",
+    "position": "F",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8483495,
+    "fullName": "Simon Nemec",
+    "firstName": "Simon",
+    "lastName": "Nemec",
+    "position": "D",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8481754,
+    "fullName": "Nikita Nesterenko",
+    "firstName": "Nikita",
+    "lastName": "Nesterenko",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8481618,
+    "fullName": "Alex Newhook",
+    "firstName": "Alex",
+    "lastName": "Newhook",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8477501,
+    "fullName": "Valeri Nichushkin",
+    "firstName": "Valeri",
+    "lastName": "Nichushkin",
+    "position": "F",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8475799,
+    "fullName": "Nino Niederreiter",
+    "firstName": "Nino",
+    "lastName": "Niederreiter",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8482100,
+    "fullName": "Alexander Nikishin",
+    "firstName": "Alexander",
+    "lastName": "Nikishin",
+    "position": "D",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8476474,
+    "fullName": "Stefan Noesen",
+    "firstName": "Stefan",
+    "lastName": "Noesen",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8480064,
+    "fullName": "Josh Norris",
+    "firstName": "Josh",
+    "lastName": "Norris",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8478438,
+    "fullName": "Tommy Novak",
+    "firstName": "Tommy",
+    "lastName": "Novak",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8476454,
+    "fullName": "Ryan Nugent-Hopkins",
+    "firstName": "Ryan",
+    "lastName": "Nugent-Hopkins",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8477498,
+    "fullName": "Darnell Nurse",
+    "firstName": "Darnell",
+    "lastName": "Nurse",
+    "position": "D",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8477939,
+    "fullName": "William Nylander",
+    "firstName": "William",
+    "lastName": "Nylander",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8474679,
+    "fullName": "Gustav Nyquist",
+    "firstName": "Gustav",
+    "lastName": "Nyquist",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8477070,
+    "fullName": "Liam O'Brien",
+    "firstName": "Liam",
+    "lastName": "O'Brien",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8482055,
+    "fullName": "Drew O'Connor",
+    "firstName": "Drew",
+    "lastName": "O'Connor",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8475158,
+    "fullName": "Ryan O'Reilly",
+    "firstName": "Ryan",
+    "lastName": "O'Reilly",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8479979,
+    "fullName": "Jake Oettinger",
+    "firstName": "Jake",
+    "lastName": "Oettinger",
+    "position": "G",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8483499,
+    "fullName": "Liam Ohgren",
+    "firstName": "Liam",
+    "lastName": "Ohgren",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8476467,
+    "fullName": "Jamie Oleksiak",
+    "firstName": "Jamie",
+    "lastName": "Oleksiak",
+    "position": "D",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8479671,
+    "fullName": "Mathieu Olivier",
+    "firstName": "Mathieu",
+    "lastName": "Olivier",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8478109,
+    "fullName": "Victor Olofsson",
+    "firstName": "Victor",
+    "lastName": "Olofsson",
+    "position": "F",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8475200,
+    "fullName": "Dmitry Orlov",
+    "firstName": "Dmitry",
+    "lastName": "Orlov",
+    "position": "D",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8482859,
+    "fullName": "Zack Ostapchuk",
+    "firstName": "Zack",
+    "lastName": "Ostapchuk",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8483500,
+    "fullName": "Noah Ostlund",
+    "firstName": "Noah",
+    "lastName": "Ostlund",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8482747,
+    "fullName": "Brennan Othmann",
+    "firstName": "Brennan",
+    "lastName": "Othmann",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8471214,
+    "fullName": "Alex Ovechkin",
+    "firstName": "Alex",
+    "lastName": "Ovechkin",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8481167,
+    "fullName": "Brayden Pachal",
+    "firstName": "Brayden",
+    "lastName": "Pachal",
+    "position": "D",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8476419,
+    "fullName": "Jean-Gabriel Pageau",
+    "firstName": "Jean-Gabriel",
+    "lastName": "Pageau",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8476292,
+    "fullName": "Ondrej Palat",
+    "firstName": "Ondrej",
+    "lastName": "Palat",
+    "position": "F",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8475151,
+    "fullName": "Kyle Palmieri",
+    "firstName": "Kyle",
+    "lastName": "Palmieri",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8478550,
+    "fullName": "Artemi Panarin",
+    "firstName": "Artemi",
+    "lastName": "Panarin",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8476892,
+    "fullName": "Colton Parayko",
+    "firstName": "Colton",
+    "lastName": "Parayko",
+    "position": "D",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8484768,
+    "fullName": "Zayne Parekh",
+    "firstName": "Zayne",
+    "lastName": "Parekh",
+    "position": "D",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8477956,
+    "fullName": "David Pastrnak",
+    "firstName": "David",
+    "lastName": "Pastrnak",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8477426,
+    "fullName": "Nick Paul",
+    "firstName": "Nick",
+    "lastName": "Paul",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8476871,
+    "fullName": "Tanner Pearson",
+    "firstName": "Tanner",
+    "lastName": "Pearson",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8479369,
+    "fullName": "Andrew Peeke",
+    "firstName": "Andrew",
+    "lastName": "Peeke",
+    "position": "D",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8476917,
+    "fullName": "Adam Pelech",
+    "firstName": "Adam",
+    "lastName": "Pelech",
+    "position": "D",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8480246,
+    "fullName": "Nick Perbix",
+    "firstName": "Nick",
+    "lastName": "Perbix",
+    "position": "D",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8482149,
+    "fullName": "Cole Perfetti",
+    "firstName": "Cole",
+    "lastName": "Perfetti",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8484210,
+    "fullName": "Gabe Perreault",
+    "firstName": "Gabe",
+    "lastName": "Perreault",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8474102,
+    "fullName": "David Perron",
+    "firstName": "David",
+    "lastName": "Perron",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8470621,
+    "fullName": "Corey Perry",
+    "firstName": "Corey",
+    "lastName": "Perry",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8477488,
+    "fullName": "Brett Pesce",
+    "firstName": "Brett",
+    "lastName": "Pesce",
+    "position": "D",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8482175,
+    "fullName": "JJ Peterka",
+    "firstName": "JJ",
+    "lastName": "Peterka",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8475755,
+    "fullName": "Alexander Petrovic",
+    "firstName": "Alexander",
+    "lastName": "Petrovic",
+    "position": "D",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8473507,
+    "fullName": "Jeff Petry",
+    "firstName": "Jeff",
+    "lastName": "Petry",
+    "position": "D",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8480012,
+    "fullName": "Elias Pettersson",
+    "firstName": "Elias",
+    "lastName": "Pettersson",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8477969,
+    "fullName": "Marcus Pettersson",
+    "firstName": "Marcus",
+    "lastName": "Pettersson",
+    "position": "D",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8482192,
+    "fullName": "Isaak Phillips",
+    "firstName": "Isaak",
+    "lastName": "Phillips",
+    "position": "D",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8481491,
+    "fullName": "Noah Philp",
+    "firstName": "Noah",
+    "lastName": "Philp",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8475717,
+    "fullName": "Calvin Pickard",
+    "firstName": "Calvin",
+    "lastName": "Pickard",
+    "position": "G",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8481596,
+    "fullName": "Shane Pinto",
+    "firstName": "Shane",
+    "lastName": "Pinto",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8480145,
+    "fullName": "Neal Pionk",
+    "firstName": "Neal",
+    "lastName": "Pionk",
+    "position": "D",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8475752,
+    "fullName": "Tyler Pitlick",
+    "firstName": "Tyler",
+    "lastName": "Pitlick",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8481617,
+    "fullName": "Vasily Podkolzin",
+    "firstName": "Vasily",
+    "lastName": "Podkolzin",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8480068,
+    "fullName": "Ryan Poehling",
+    "firstName": "Ryan",
+    "lastName": "Poehling",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8478010,
+    "fullName": "Brayden Point",
+    "firstName": "Brayden",
+    "lastName": "Point",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8481028,
+    "fullName": "Martin Pospisil",
+    "firstName": "Martin",
+    "lastName": "Pospisil",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8482671,
+    "fullName": "Owen Power",
+    "firstName": "Owen",
+    "lastName": "Power",
+    "position": "D",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8481656,
+    "fullName": "Aliaksei Protas",
+    "firstName": "Aliaksei",
+    "lastName": "Protas",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8478500,
+    "fullName": "Ivan Provorov",
+    "firstName": "Ivan",
+    "lastName": "Provorov",
+    "position": "D",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8477506,
+    "fullName": "Ryan Pulock",
+    "firstName": "Ryan",
+    "lastName": "Pulock",
+    "position": "D",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8471734,
+    "fullName": "Jonathan Quick",
+    "firstName": "Jonathan",
+    "lastName": "Quick",
+    "position": "G",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8482097,
+    "fullName": "Jack Quinn",
+    "firstName": "Jack",
+    "lastName": "Quinn",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8478178,
+    "fullName": "Darren Raddysh",
+    "firstName": "Darren",
+    "lastName": "Raddysh",
+    "position": "D",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8479390,
+    "fullName": "Taylor Raddysh",
+    "firstName": "Taylor",
+    "lastName": "Raddysh",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8476483,
+    "fullName": "Rickard Rakell",
+    "firstName": "Rickard",
+    "lastName": "Rakell",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8478420,
+    "fullName": "Mikko Rantanen",
+    "firstName": "Mikko",
+    "lastName": "Rantanen",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8479992,
+    "fullName": "Michael Rasmussen",
+    "firstName": "Michael",
+    "lastName": "Rasmussen",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8482691,
+    "fullName": "Aatu Raty",
+    "firstName": "Aatu",
+    "lastName": "Raty",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8482078,
+    "fullName": "Lucas Raymond",
+    "firstName": "Lucas",
+    "lastName": "Raymond",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8471817,
+    "fullName": "Ryan Reaves",
+    "firstName": "Ryan",
+    "lastName": "Reaves",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8483630,
+    "fullName": "Pavol Regenda",
+    "firstName": "Pavol",
+    "lastName": "Regenda",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8480831,
+    "fullName": "Alec Regula",
+    "firstName": "Alec",
+    "lastName": "Regula",
+    "position": "D",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8476422,
+    "fullName": "Mike Reilly",
+    "firstName": "Mike",
+    "lastName": "Reilly",
+    "position": "D",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8473503,
+    "fullName": "James Reimer",
+    "firstName": "James",
+    "lastName": "Reimer",
+    "position": "G",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8481133,
+    "fullName": "Cole Reinhardt",
+    "firstName": "Cole",
+    "lastName": "Reinhardt",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8477933,
+    "fullName": "Sam Reinhart",
+    "firstName": "Sam",
+    "lastName": "Reinhart",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8482460,
+    "fullName": "Matt Rempe",
+    "firstName": "Matt",
+    "lastName": "Rempe",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8476853,
+    "fullName": "Morgan Rielly",
+    "firstName": "Morgan",
+    "lastName": "Rielly",
+    "position": "D",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8477499,
+    "fullName": "Rasmus Ristolainen",
+    "firstName": "Rasmus",
+    "lastName": "Ristolainen",
+    "position": "D",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8484221,
+    "fullName": "Calum Ritchie",
+    "firstName": "Calum",
+    "lastName": "Ritchie",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8479496,
+    "fullName": "David Rittich",
+    "firstName": "David",
+    "lastName": "Rittich",
+    "position": "G",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8480027,
+    "fullName": "Jason Robertson",
+    "firstName": "Jason",
+    "lastName": "Robertson",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8481525,
+    "fullName": "Matthew Robertson",
+    "firstName": "Matthew",
+    "lastName": "Robertson",
+    "position": "D",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8481582,
+    "fullName": "Nicholas Robertson",
+    "firstName": "Nicholas",
+    "lastName": "Robertson",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8480762,
+    "fullName": "Eric Robinson",
+    "firstName": "Eric",
+    "lastName": "Robinson",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8478542,
+    "fullName": "Evan Rodrigues",
+    "firstName": "Evan",
+    "lastName": "Rodrigues",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8481014,
+    "fullName": "Alexander Romanov",
+    "firstName": "Alexander",
+    "lastName": "Romanov",
+    "position": "D",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8479291,
+    "fullName": "Kevin Rooney",
+    "firstName": "Kevin",
+    "lastName": "Rooney",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8478458,
+    "fullName": "Jack Roslovic",
+    "firstName": "Jack",
+    "lastName": "Roslovic",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8482079,
+    "fullName": "Marco Rossi",
+    "firstName": "Marco",
+    "lastName": "Rossi",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8478911,
+    "fullName": "Matt Roy",
+    "firstName": "Matt",
+    "lastName": "Roy",
+    "position": "D",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8478462,
+    "fullName": "Nicolas Roy",
+    "firstName": "Nicolas",
+    "lastName": "Roy",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8475810,
+    "fullName": "Bryan Rust",
+    "firstName": "Bryan",
+    "lastName": "Rust",
+    "position": "F",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8476438,
+    "fullName": "Brandon Saad",
+    "firstName": "Brandon",
+    "lastName": "Saad",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8477149,
+    "fullName": "Scott Sabourin",
+    "firstName": "Scott",
+    "lastName": "Sabourin",
+    "position": "F",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8480049,
+    "fullName": "Dylan Samberg",
+    "firstName": "Dylan",
+    "lastName": "Samberg",
+    "position": "D",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8482713,
+    "fullName": "Mackie Samoskevich",
+    "firstName": "Mackie",
+    "lastName": "Samoskevich",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8480807,
+    "fullName": "Mattias Samuelsson",
+    "firstName": "Mattias",
+    "lastName": "Samuelsson",
+    "position": "D",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8482105,
+    "fullName": "Jake Sanderson",
+    "firstName": "Jake",
+    "lastName": "Sanderson",
+    "position": "D",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8480873,
+    "fullName": "Rasmus Sandin",
+    "firstName": "Rasmus",
+    "lastName": "Sandin",
+    "position": "D",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8484223,
+    "fullName": "Axel Sandin-Pellikka",
+    "firstName": "Axel",
+    "lastName": "Sandin-Pellikka",
+    "position": "D",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8477948,
+    "fullName": "Travis Sanheim",
+    "firstName": "Travis",
+    "lastName": "Sanheim",
+    "position": "D",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8477424,
+    "fullName": "Juuse Saros",
+    "firstName": "Juuse",
+    "lastName": "Saros",
+    "position": "G",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8484136,
+    "fullName": "Max Sasson",
+    "firstName": "Max",
+    "lastName": "Sasson",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8483512,
+    "fullName": "Matt Savoie",
+    "firstName": "Matt",
+    "lastName": "Savoie",
+    "position": "F",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8485366,
+    "fullName": "Matthew Schaefer",
+    "firstName": "Matthew",
+    "lastName": "Schaefer",
+    "position": "D",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8483513,
+    "fullName": "Reid Schaefer",
+    "firstName": "Reid",
+    "lastName": "Schaefer",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8476460,
+    "fullName": "Mark Scheifele",
+    "firstName": "Mark",
+    "lastName": "Scheifele",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8475170,
+    "fullName": "Brayden Schenn",
+    "firstName": "Brayden",
+    "lastName": "Schenn",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8474568,
+    "fullName": "Luke Schenn",
+    "firstName": "Luke",
+    "lastName": "Schenn",
+    "position": "D",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8477951,
+    "fullName": "Nick Schmaltz",
+    "firstName": "Nick",
+    "lastName": "Schmaltz",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8481033,
+    "fullName": "Akira Schmid",
+    "firstName": "Akira",
+    "lastName": "Schmid",
+    "position": "G",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8477220,
+    "fullName": "Nate Schmidt",
+    "firstName": "Nate",
+    "lastName": "Schmidt",
+    "position": "D",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8482073,
+    "fullName": "Braden Schneider",
+    "firstName": "Braden",
+    "lastName": "Schneider",
+    "position": "D",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8475768,
+    "fullName": "Jaden Schwartz",
+    "firstName": "Jaden",
+    "lastName": "Schwartz",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8481655,
+    "fullName": "Cole Schwindt",
+    "firstName": "Cole",
+    "lastName": "Schwindt",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8482131,
+    "fullName": "Donovan Sebrango",
+    "firstName": "Donovan",
+    "lastName": "Sebrango",
+    "position": "D",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8476372,
+    "fullName": "Nick Seeler",
+    "firstName": "Nick",
+    "lastName": "Seeler",
+    "position": "D",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8475794,
+    "fullName": "Tyler Seguin",
+    "firstName": "Tyler",
+    "lastName": "Seguin",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8481542,
+    "fullName": "Moritz Seider",
+    "firstName": "Moritz",
+    "lastName": "Seider",
+    "position": "D",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8484762,
+    "fullName": "Beckett Sennecke",
+    "firstName": "Beckett",
+    "lastName": "Sennecke",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8479410,
+    "fullName": "Mikhail Sergachev",
+    "firstName": "Mikhail",
+    "lastName": "Sergachev",
+    "position": "D",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8476923,
+    "fullName": "Damon Severson",
+    "firstName": "Damon",
+    "lastName": "Severson",
+    "position": "D",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8485702,
+    "fullName": "Max Shabanov",
+    "firstName": "Max",
+    "lastName": "Shabanov",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8481068,
+    "fullName": "Yegor Sharangovich",
+    "firstName": "Yegor",
+    "lastName": "Sharangovich",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8478854,
+    "fullName": "Ryan Shea",
+    "firstName": "Ryan",
+    "lastName": "Shea",
+    "position": "D",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8477839,
+    "fullName": "Conor Sheary",
+    "firstName": "Conor",
+    "lastName": "Sheary",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8482411,
+    "fullName": "Hunter Shepard",
+    "firstName": "Hunter",
+    "lastName": "Shepard",
+    "position": "G",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8480748,
+    "fullName": "Kiefer Sherwood",
+    "firstName": "Kiefer",
+    "lastName": "Sherwood",
+    "position": "F",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8478048,
+    "fullName": "Igor Shesterkin",
+    "firstName": "Igor",
+    "lastName": "Shesterkin",
+    "position": "G",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8478399,
+    "fullName": "Jonas Siegenthaler",
+    "firstName": "Jonas",
+    "lastName": "Siegenthaler",
+    "position": "D",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8482705,
+    "fullName": "Cole Sillinger",
+    "firstName": "Cole",
+    "lastName": "Sillinger",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8481668,
+    "fullName": "Arturs Silovs",
+    "firstName": "Arturs",
+    "lastName": "Silovs",
+    "position": "G",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8476925,
+    "fullName": "Colton Sissons",
+    "firstName": "Colton",
+    "lastName": "Sissons",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8475784,
+    "fullName": "Jeff Skinner",
+    "firstName": "Jeff",
+    "lastName": "Skinner",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8479973,
+    "fullName": "Stuart Skinner",
+    "firstName": "Stuart",
+    "lastName": "Skinner",
+    "position": "G",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8476869,
+    "fullName": "Brady Skjei",
+    "firstName": "Brady",
+    "lastName": "Skjei",
+    "position": "D",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8483515,
+    "fullName": "Juraj Slafkovský",
+    "firstName": "Juraj",
+    "lastName": "Slafkovský",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8482172,
+    "fullName": "Landon Slaggert",
+    "firstName": "Landon",
+    "lastName": "Slaggert",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8476958,
+    "fullName": "Jaccob Slavin",
+    "firstName": "Jaccob",
+    "lastName": "Slavin",
+    "position": "D",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8474090,
+    "fullName": "Brendan Smith",
+    "firstName": "Brendan",
+    "lastName": "Smith",
+    "position": "D",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8482062,
+    "fullName": "Cole Smith",
+    "firstName": "Cole",
+    "lastName": "Smith",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8475191,
+    "fullName": "Reilly Smith",
+    "firstName": "Reilly",
+    "lastName": "Smith",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8484227,
+    "fullName": "Will Smith",
+    "firstName": "Will",
+    "lastName": "Smith",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8483516,
+    "fullName": "Jimmy Snuggerud",
+    "firstName": "Jimmy",
+    "lastName": "Snuggerud",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8482821,
+    "fullName": "Arvid Soderblom",
+    "firstName": "Arvid",
+    "lastName": "Soderblom",
+    "position": "G",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8481725,
+    "fullName": "Elmer Soderblom",
+    "firstName": "Elmer",
+    "lastName": "Soderblom",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8482470,
+    "fullName": "Ilya Solovyov",
+    "firstName": "Ilya",
+    "lastName": "Solovyov",
+    "position": "D",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8478009,
+    "fullName": "Ilya Sorokin",
+    "firstName": "Ilya",
+    "lastName": "Sorokin",
+    "position": "G",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8477369,
+    "fullName": "Carson Soucy",
+    "firstName": "Carson",
+    "lastName": "Soucy",
+    "position": "D",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8482088,
+    "fullName": "Justin Sourdif",
+    "firstName": "Justin",
+    "lastName": "Sourdif",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8481606,
+    "fullName": "Jordan Spence",
+    "firstName": "Jordan",
+    "lastName": "Spence",
+    "position": "D",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8474716,
+    "fullName": "Jared Spurgeon",
+    "firstName": "Jared",
+    "lastName": "Spurgeon",
+    "position": "D",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8481030,
+    "fullName": "Jack St. Ivany",
+    "firstName": "Jack",
+    "lastName": "St. Ivany",
+    "position": "D",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8473533,
+    "fullName": "Jordan Staal",
+    "firstName": "Jordan",
+    "lastName": "Staal",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8474564,
+    "fullName": "Steven Stamkos",
+    "firstName": "Steven",
+    "lastName": "Stamkos",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8482702,
+    "fullName": "Logan Stankoven",
+    "firstName": "Logan",
+    "lastName": "Stankoven",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8479378,
+    "fullName": "Logan Stanley",
+    "firstName": "Logan",
+    "lastName": "Stanley",
+    "position": "D",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8481056,
+    "fullName": "Spencer Stastney",
+    "firstName": "Spencer",
+    "lastName": "Stastney",
+    "position": "D",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8479442,
+    "fullName": "Troy Stecher",
+    "firstName": "Troy",
+    "lastName": "Stecher",
+    "position": "D",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8479351,
+    "fullName": "Sam Steel",
+    "firstName": "Sam",
+    "lastName": "Steel",
+    "position": "F",
+    "teamAbbrev": "DAL",
+    "active": true
+  },
+  {
+    "id": 8482634,
+    "fullName": "Alex Steeves",
+    "firstName": "Alex",
+    "lastName": "Steeves",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8484230,
+    "fullName": "Otto Stenberg",
+    "firstName": "Otto",
+    "lastName": "Stenberg",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8478831,
+    "fullName": "Kevin Stenlund",
+    "firstName": "Kevin",
+    "lastName": "Stenlund",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8476905,
+    "fullName": "Chandler Stephenson",
+    "firstName": "Chandler",
+    "lastName": "Stephenson",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8476932,
+    "fullName": "Anthony Stolarz",
+    "firstName": "Anthony",
+    "lastName": "Stolarz",
+    "position": "G",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8475913,
+    "fullName": "Mark Stone",
+    "firstName": "Mark",
+    "lastName": "Stone",
+    "position": "F",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8478440,
+    "fullName": "Dylan Strome",
+    "firstName": "Dylan",
+    "lastName": "Strome",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8476458,
+    "fullName": "Ryan Strome",
+    "firstName": "Ryan",
+    "lastName": "Strome",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8482766,
+    "fullName": "William Stromgren",
+    "firstName": "William",
+    "lastName": "Stromgren",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8481593,
+    "fullName": "Jayden Struble",
+    "firstName": "Jayden",
+    "lastName": "Struble",
+    "position": "D",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8480021,
+    "fullName": "Jack Studnicka",
+    "firstName": "Jack",
+    "lastName": "Studnicka",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8481477,
+    "fullName": "Nico Sturm",
+    "firstName": "Nico",
+    "lastName": "Sturm",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8482116,
+    "fullName": "Tim Stützle",
+    "firstName": "Tim",
+    "lastName": "Stützle",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8476897,
+    "fullName": "Oskar Sundqvist",
+    "firstName": "Oskar",
+    "lastName": "Sundqvist",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8480459,
+    "fullName": "Pius Suter",
+    "firstName": "Pius",
+    "lastName": "Suter",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8480018,
+    "fullName": "Nick Suzuki",
+    "firstName": "Nick",
+    "lastName": "Suzuki",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8482768,
+    "fullName": "Fedor Svechkov",
+    "firstName": "Fedor",
+    "lastName": "Svechkov",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8480830,
+    "fullName": "Andrei Svechnikov",
+    "firstName": "Andrei",
+    "lastName": "Svechnikov",
+    "position": "F",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8480280,
+    "fullName": "Jeremy Swayman",
+    "firstName": "Jeremy",
+    "lastName": "Swayman",
+    "position": "G",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8475660,
+    "fullName": "Cam Talbot",
+    "firstName": "Cam",
+    "lastName": "Talbot",
+    "position": "G",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8479293,
+    "fullName": "Brandon Tanev",
+    "firstName": "Brandon",
+    "lastName": "Tanev",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8475690,
+    "fullName": "Chris Tanev",
+    "firstName": "Chris",
+    "lastName": "Tanev",
+    "position": "D",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8475765,
+    "fullName": "Vladimir Tarasenko",
+    "firstName": "Vladimir",
+    "lastName": "Tarasenko",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8480193,
+    "fullName": "Daniil Tarasov",
+    "firstName": "Daniil",
+    "lastName": "Tarasov",
+    "position": "G",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8475166,
+    "fullName": "John Tavares",
+    "firstName": "John",
+    "lastName": "Tavares",
+    "position": "F",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8476882,
+    "fullName": "Teuvo Teravainen",
+    "firstName": "Teuvo",
+    "lastName": "Teravainen",
+    "position": "F",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8478873,
+    "fullName": "Troy Terry",
+    "firstName": "Troy",
+    "lastName": "Terry",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8480074,
+    "fullName": "Alexandre Texier",
+    "firstName": "Alexandre",
+    "lastName": "Texier",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8477447,
+    "fullName": "Shea Theodore",
+    "firstName": "Shea",
+    "lastName": "Theodore",
+    "position": "D",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8480023,
+    "fullName": "Robert Thomas",
+    "firstName": "Robert",
+    "lastName": "Thomas",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8480313,
+    "fullName": "Logan Thompson",
+    "firstName": "Logan",
+    "lastName": "Thompson",
+    "position": "G",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8479420,
+    "fullName": "Tage Thompson",
+    "firstName": "Tage",
+    "lastName": "Thompson",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8479982,
+    "fullName": "Conor Timmins",
+    "firstName": "Conor",
+    "lastName": "Timmins",
+    "position": "D",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8480015,
+    "fullName": "Owen Tippett",
+    "firstName": "Owen",
+    "lastName": "Tippett",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8480801,
+    "fullName": "Brady Tkachuk",
+    "firstName": "Brady",
+    "lastName": "Tkachuk",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8478038,
+    "fullName": "Devon Toews",
+    "firstName": "Devon",
+    "lastName": "Toews",
+    "position": "D",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8473604,
+    "fullName": "Jonathan Toews",
+    "firstName": "Jonathan",
+    "lastName": "Toews",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8475726,
+    "fullName": "Tyler Toffoli",
+    "firstName": "Tyler",
+    "lastName": "Toffoli",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8484268,
+    "fullName": "Nikita Tolopilo",
+    "firstName": "Nikita",
+    "lastName": "Tolopilo",
+    "position": "G",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8480009,
+    "fullName": "Eeli Tolvanen",
+    "firstName": "Eeli",
+    "lastName": "Tolvanen",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8480281,
+    "fullName": "Alexey Toropchenko",
+    "firstName": "Alexey",
+    "lastName": "Toropchenko",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8478508,
+    "fullName": "Yakov Trenin",
+    "firstName": "Yakov",
+    "lastName": "Trenin",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8476389,
+    "fullName": "Vincent Trocheck",
+    "firstName": "Vincent",
+    "lastName": "Trocheck",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8476885,
+    "fullName": "Jacob Trouba",
+    "firstName": "Jacob",
+    "lastName": "Trouba",
+    "position": "D",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8484958,
+    "fullName": "Maxim Tsyplakov",
+    "firstName": "Maxim",
+    "lastName": "Tsyplakov",
+    "position": "F",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8477949,
+    "fullName": "Alex Tuch",
+    "firstName": "Alex",
+    "lastName": "Tuch",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  },
+  {
+    "id": 8481006,
+    "fullName": "Tyler Tucker",
+    "firstName": "Tyler",
+    "lastName": "Tucker",
+    "position": "D",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8481532,
+    "fullName": "Alex Turcotte",
+    "firstName": "Alex",
+    "lastName": "Turcotte",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8480001,
+    "fullName": "Urho Vaakanainen",
+    "firstName": "Urho",
+    "lastName": "Vaakanainen",
+    "position": "D",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8474037,
+    "fullName": "James van Riemsdyk",
+    "firstName": "James",
+    "lastName": "van Riemsdyk",
+    "position": "F",
+    "teamAbbrev": "DET",
+    "active": true
+  },
+  {
+    "id": 8477845,
+    "fullName": "Trevor van Riemsdyk",
+    "firstName": "Trevor",
+    "lastName": "van Riemsdyk",
+    "position": "D",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8477970,
+    "fullName": "Vitek Vanecek",
+    "firstName": "Vitek",
+    "lastName": "Vanecek",
+    "position": "G",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8473575,
+    "fullName": "Semyon Varlamov",
+    "firstName": "Semyon",
+    "lastName": "Varlamov",
+    "position": "G",
+    "teamAbbrev": "NYI",
+    "active": true
+  },
+  {
+    "id": 8476883,
+    "fullName": "Andrei Vasilevskiy",
+    "firstName": "Andrei",
+    "lastName": "Vasilevskiy",
+    "position": "G",
+    "teamAbbrev": "TBL",
+    "active": true
+  },
+  {
+    "id": 8478366,
+    "fullName": "Frank Vatrano",
+    "firstName": "Frank",
+    "lastName": "Vatrano",
+    "position": "F",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8478872,
+    "fullName": "Karel Vejmelka",
+    "firstName": "Karel",
+    "lastName": "Vejmelka",
+    "position": "G",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8480813,
+    "fullName": "Joe Veleno",
+    "firstName": "Joe",
+    "lastName": "Veleno",
+    "position": "F",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8477409,
+    "fullName": "Carter Verhaeghe",
+    "firstName": "Carter",
+    "lastName": "Verhaeghe",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8479705,
+    "fullName": "Jeffrey Viel",
+    "firstName": "Jeffrey",
+    "lastName": "Viel",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8480014,
+    "fullName": "Gabriel Vilardi",
+    "firstName": "Gabriel",
+    "lastName": "Vilardi",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8483771,
+    "fullName": "Sandis Vilmanis",
+    "firstName": "Sandis",
+    "lastName": "Vilmanis",
+    "position": "F",
+    "teamAbbrev": "FLA",
+    "active": true
+  },
+  {
+    "id": 8478435,
+    "fullName": "Dan Vladar",
+    "firstName": "Dan",
+    "lastName": "Vladar",
+    "position": "G",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8481568,
+    "fullName": "Alex Vlasic",
+    "firstName": "Alex",
+    "lastName": "Vlasic",
+    "position": "D",
+    "teamAbbrev": "CHI",
+    "active": true
+  },
+  {
+    "id": 8481716,
+    "fullName": "Dmitri Voronkov",
+    "firstName": "Dmitri",
+    "lastName": "Voronkov",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8477573,
+    "fullName": "Nathan Walker",
+    "firstName": "Nathan",
+    "lastName": "Walker",
+    "position": "F",
+    "teamAbbrev": "STL",
+    "active": true
+  },
+  {
+    "id": 8480336,
+    "fullName": "Sean Walker",
+    "firstName": "Sean",
+    "lastName": "Walker",
+    "position": "D",
+    "teamAbbrev": "CAR",
+    "active": true
+  },
+  {
+    "id": 8482661,
+    "fullName": "Jesper Wallstedt",
+    "firstName": "Jesper",
+    "lastName": "Wallstedt",
+    "position": "G",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8478013,
+    "fullName": "Jake Walman",
+    "firstName": "Jake",
+    "lastName": "Walman",
+    "position": "D",
+    "teamAbbrev": "EDM",
+    "active": true
+  },
+  {
+    "id": 8483406,
+    "fullName": "Taylor Ward",
+    "firstName": "Taylor",
+    "lastName": "Ward",
+    "position": "F",
+    "teamAbbrev": "LAK",
+    "active": true
+  },
+  {
+    "id": 8475809,
+    "fullName": "Scott Wedgewood",
+    "firstName": "Scott",
+    "lastName": "Wedgewood",
+    "position": "G",
+    "teamAbbrev": "COL",
+    "active": true
+  },
+  {
+    "id": 8477346,
+    "fullName": "MacKenzie Weegar",
+    "firstName": "MacKenzie",
+    "lastName": "Weegar",
+    "position": "D",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8477505,
+    "fullName": "Alexander Wennberg",
+    "firstName": "Alexander",
+    "lastName": "Wennberg",
+    "position": "F",
+    "teamAbbrev": "SJS",
+    "active": true
+  },
+  {
+    "id": 8478460,
+    "fullName": "Zach Werenski",
+    "firstName": "Zach",
+    "lastName": "Werenski",
+    "position": "D",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8478841,
+    "fullName": "Colton White",
+    "firstName": "Colton",
+    "lastName": "White",
+    "position": "D",
+    "teamAbbrev": "NJD",
+    "active": true
+  },
+  {
+    "id": 8480727,
+    "fullName": "Zach Whitecloud",
+    "firstName": "Zach",
+    "lastName": "Whitecloud",
+    "position": "D",
+    "teamAbbrev": "VGK",
+    "active": true
+  },
+  {
+    "id": 8482103,
+    "fullName": "Ozzy Wiesblatt",
+    "firstName": "Ozzy",
+    "lastName": "Wiesblatt",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8484240,
+    "fullName": "Tom Willander",
+    "firstName": "Tom",
+    "lastName": "Willander",
+    "position": "D",
+    "teamAbbrev": "VAN",
+    "active": true
+  },
+  {
+    "id": 8482482,
+    "fullName": "Adam Wilsby",
+    "firstName": "Adam",
+    "lastName": "Wilsby",
+    "position": "D",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8476880,
+    "fullName": "Tom Wilson",
+    "firstName": "Tom",
+    "lastName": "Wilson",
+    "position": "F",
+    "teamAbbrev": "WSH",
+    "active": true
+  },
+  {
+    "id": 8482751,
+    "fullName": "Ryan Winterton",
+    "firstName": "Ryan",
+    "lastName": "Winterton",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8481692,
+    "fullName": "Dustin Wolf",
+    "firstName": "Dustin",
+    "lastName": "Wolf",
+    "position": "G",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8479361,
+    "fullName": "Joseph Woll",
+    "firstName": "Joseph",
+    "lastName": "Woll",
+    "position": "G",
+    "teamAbbrev": "TOR",
+    "active": true
+  },
+  {
+    "id": 8484241,
+    "fullName": "Matthew Wood",
+    "firstName": "Matthew",
+    "lastName": "Wood",
+    "position": "F",
+    "teamAbbrev": "NSH",
+    "active": true
+  },
+  {
+    "id": 8477425,
+    "fullName": "Miles Wood",
+    "firstName": "Miles",
+    "lastName": "Wood",
+    "position": "F",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8478450,
+    "fullName": "Parker Wotherspoon",
+    "firstName": "Parker",
+    "lastName": "Wotherspoon",
+    "position": "D",
+    "teamAbbrev": "PIT",
+    "active": true
+  },
+  {
+    "id": 8483524,
+    "fullName": "Shane Wright",
+    "firstName": "Shane",
+    "lastName": "Wright",
+    "position": "F",
+    "teamAbbrev": "SEA",
+    "active": true
+  },
+  {
+    "id": 8482964,
+    "fullName": "Arber Xhekaj",
+    "firstName": "Arber",
+    "lastName": "Xhekaj",
+    "position": "D",
+    "teamAbbrev": "MTL",
+    "active": true
+  },
+  {
+    "id": 8479977,
+    "fullName": "Kailer Yamamoto",
+    "firstName": "Kailer",
+    "lastName": "Yamamoto",
+    "position": "F",
+    "teamAbbrev": "UTA",
+    "active": true
+  },
+  {
+    "id": 8481546,
+    "fullName": "Cam York",
+    "firstName": "Cam",
+    "lastName": "York",
+    "position": "D",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8483525,
+    "fullName": "Danila Yurov",
+    "firstName": "Danila",
+    "lastName": "Yurov",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8478401,
+    "fullName": "Pavel Zacha",
+    "firstName": "Pavel",
+    "lastName": "Zacha",
+    "position": "F",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8477507,
+    "fullName": "Nikita Zadorov",
+    "firstName": "Nikita",
+    "lastName": "Zadorov",
+    "position": "D",
+    "teamAbbrev": "BOS",
+    "active": true
+  },
+  {
+    "id": 8481178,
+    "fullName": "Egor Zamula",
+    "firstName": "Egor",
+    "lastName": "Zamula",
+    "position": "D",
+    "teamAbbrev": "CBJ",
+    "active": true
+  },
+  {
+    "id": 8482074,
+    "fullName": "Connor Zary",
+    "firstName": "Connor",
+    "lastName": "Zary",
+    "position": "F",
+    "teamAbbrev": "CGY",
+    "active": true
+  },
+  {
+    "id": 8481533,
+    "fullName": "Trevor Zegras",
+    "firstName": "Trevor",
+    "lastName": "Zegras",
+    "position": "F",
+    "teamAbbrev": "PHI",
+    "active": true
+  },
+  {
+    "id": 8482803,
+    "fullName": "Olen Zellweger",
+    "firstName": "Olen",
+    "lastName": "Zellweger",
+    "position": "D",
+    "teamAbbrev": "ANA",
+    "active": true
+  },
+  {
+    "id": 8480188,
+    "fullName": "Fabian Zetterlund",
+    "firstName": "Fabian",
+    "lastName": "Zetterlund",
+    "position": "F",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8483526,
+    "fullName": "Danil Zhilkin",
+    "firstName": "Danil",
+    "lastName": "Zhilkin",
+    "position": "F",
+    "teamAbbrev": "WPG",
+    "active": true
+  },
+  {
+    "id": 8476459,
+    "fullName": "Mika Zibanejad",
+    "firstName": "Mika",
+    "lastName": "Zibanejad",
+    "position": "F",
+    "teamAbbrev": "NYR",
+    "active": true
+  },
+  {
+    "id": 8482245,
+    "fullName": "Artem Zub",
+    "firstName": "Artem",
+    "lastName": "Zub",
+    "position": "D",
+    "teamAbbrev": "OTT",
+    "active": true
+  },
+  {
+    "id": 8475692,
+    "fullName": "Mats Zuccarello",
+    "firstName": "Mats",
+    "lastName": "Zuccarello",
+    "position": "F",
+    "teamAbbrev": "MIN",
+    "active": true
+  },
+  {
+    "id": 8475722,
+    "fullName": "Jason Zucker",
+    "firstName": "Jason",
+    "lastName": "Zucker",
+    "position": "F",
+    "teamAbbrev": "BUF",
+    "active": true
+  }
+]
