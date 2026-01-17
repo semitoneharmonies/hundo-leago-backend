@@ -78,8 +78,18 @@ const DATA_FILE =
 const SNAPSHOT_DIR =
   process.env.SNAPSHOT_DIR || path.join(__dirname, "snapshots");
 // Phase 2A: players database file (separate from league state)
+//
+// IMPORTANT:
+// On Render, do NOT derive this from DATA_FILE. DATA_FILE can be /data/... depending on your env,
+// while Render’s persistent disk is /opt/render/project/data.
+// Default to the same /opt/render/project/data/hundo folder you use for league-state.json.
+const DEFAULT_PLAYERS_FILE = "/opt/render/project/data/hundo/players.json";
 const PLAYERS_FILE =
-  process.env.PLAYERS_FILE || path.join(path.dirname(DATA_FILE), "players.json");
+  process.env.PLAYERS_FILE ||
+  (String(process.env.LEAGUE_FILE || "").includes("/opt/render/project/data/")
+    ? path.join(path.dirname(process.env.LEAGUE_FILE), "players.json")
+    : DEFAULT_PLAYERS_FILE);
+
 
 // Ensure dirs exist (important on Render disk paths)
 function ensureDirSync(dirPath) {
@@ -93,6 +103,22 @@ function ensureDirSync(dirPath) {
 ensureDirSync(path.dirname(DATA_FILE));
 ensureDirSync(SNAPSHOT_DIR);
 ensureDirSync(path.dirname(PLAYERS_FILE));
+
+// If players file is missing on the Render disk, bootstrap it from repo players.json (one-time).
+// This avoids “empty DB” in production after deploys.
+try {
+  if (!fs.existsSync(PLAYERS_FILE)) {
+    const repoPlayers = path.join(__dirname, "players.json");
+    if (fs.existsSync(repoPlayers)) {
+      fs.copyFileSync(repoPlayers, PLAYERS_FILE);
+      console.log("[PLAYERS] bootstrapped players.json to", PLAYERS_FILE);
+    } else {
+      console.warn("[PLAYERS] missing both disk and repo players.json; DB will be empty until synced");
+    }
+  }
+} catch (e) {
+  console.error("[PLAYERS] bootstrap copy failed:", e?.message || e);
+}
 
 // -------------------------------
 // LeagueStore (Phase 1: atomic + queued writes)
@@ -634,6 +660,32 @@ app.post("/api/players/reload", (req, res) => {
   res.json({ ok: r.ok, count: r.count, source: r.source || null, error: r.error || null });
 });
 
+// TEMP DEBUG: verify players file path + existence + size (safe read-only)
+app.get("/api/players/debug", (req, res) => {
+  try {
+    const repoPlayers = path.join(__dirname, "players.json");
+
+    const statSafe = (p) => {
+      try {
+        if (!fs.existsSync(p)) return { exists: false };
+        const st = fs.statSync(p);
+        return { exists: true, size: st.size, mtimeMs: st.mtimeMs };
+      } catch (e) {
+        return { exists: false, error: String(e?.message || e) };
+      }
+    };
+
+    res.json({
+      ok: true,
+      PLAYERS_FILE,
+      disk: statSafe(PLAYERS_FILE),
+      repo: statSafe(repoPlayers),
+      cacheCount: playersCache.length,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 
 app.get("/api/snapshots", (req, res) => {
   try {
