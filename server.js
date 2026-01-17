@@ -631,36 +631,27 @@ app.get("/api/players", (req, res) => {
   console.log("[/api/players] req.query =", req.query);
 
   const q = String(req.query?.query || "").trim();
-  const limit = Math.max(1, Math.min(100, Number(req.query?.limit || 25) || 25));
+  const limit = Math.max(
+    1,
+    Math.min(100, Number(req.query?.limit || 25) || 25)
+  );
 
   // If no query, return just a small default slice (avoid sending 1000s)
   if (!q) {
-    return res.json({ ok: true, players: playersCache.slice(0, limit), count: playersCache.length });
+    return res.json({
+      ok: true,
+      players: playersCache.slice(0, limit),
+      count: playersCache.length,
+    });
   }
 
   const results = searchPlayers(q, limit);
   res.json({ ok: true, players: results, count: playersCache.length });
 });
 
-// GET /api/players/8478402
-app.get("/api/players/:id", (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: "Invalid player id" });
-
-  const p = playersById.get(id);
-  if (!p) return res.status(404).json({ ok: false, error: "Player not found" });
-
-  res.json({ ok: true, player: p });
-});
-
-// POST /api/players/reload  (optional admin utility for dev)
-// NOTE: keep it simple for now; you can lock this down later.
-app.post("/api/players/reload", (req, res) => {
-  const r = loadPlayersFromDisk();
-  res.json({ ok: r.ok, count: r.count, source: r.source || null, error: r.error || null });
-});
 
 // TEMP DEBUG: verify players file path + existence + size (safe read-only)
+// IMPORTANT: must come BEFORE /api/players/:id
 app.get("/api/players/debug", (req, res) => {
   try {
     const repoPlayers = path.join(__dirname, "players.json");
@@ -686,6 +677,35 @@ app.get("/api/players/debug", (req, res) => {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
+
+
+// GET /api/players/8478402
+app.get("/api/players/:id", (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ ok: false, error: "Invalid player id" });
+  }
+
+  const p = playersById.get(id);
+  if (!p) {
+    return res.status(404).json({ ok: false, error: "Player not found" });
+  }
+
+  res.json({ ok: true, player: p });
+});
+
+
+// POST /api/players/reload  (optional admin utility for dev)
+app.post("/api/players/reload", (req, res) => {
+  const r = loadPlayersFromDisk();
+  res.json({
+    ok: r.ok,
+    count: r.count,
+    source: r.source || null,
+    error: r.error || null,
+  });
+});
+
 
 app.get("/api/snapshots", (req, res) => {
   try {
