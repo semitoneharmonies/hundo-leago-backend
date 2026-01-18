@@ -1,5 +1,9 @@
 // scripts/syncPlayers.js
-// Pull active NHL players and write to PLAYERS_FILE (or default players.json)
+// Pull active NHL players (including injured, as long as they are "active") and write to PLAYERS_FILE.
+// Output schema (backward-compatible):
+//   id, fullName, firstName, lastName, position, teamAbbrev
+//   + birthDate (NEW)
+// Safety: only generates players.json; does NOT touch league state.
 
 const fs = require("fs");
 const path = require("path");
@@ -24,15 +28,16 @@ function uniqBy(arr, keyFn) {
   return out;
 }
 
-// NHL web API base
+// NHL web API base (player landing, etc.)
 const NHL_BASE = "https://api-web.nhle.com/v1";
+// NHL search index (best “all active players” source)
+const NHL_SEARCH_BASE = "https://search.d3.nhle.com/api/v1/search";
 
-// standings/now gives active teams (includes triCode in teamAbbrev-ish fields)
 async function fetchJson(url) {
   const res = await fetch(url, {
     headers: {
       "User-Agent": "hundo-leago/phase2 (players sync)",
-      "Accept": "application/json",
+      Accept: "application/json",
     },
   });
   if (!res.ok) {
@@ -41,6 +46,7 @@ async function fetchJson(url) {
   }
   return res.json();
 }
+
 // NHL API often returns name fields like { default: "Connor" }.
 // This safely pulls a usable string out of either a string or object.
 function pickName(v) {
@@ -59,7 +65,6 @@ function pickName(v) {
 
   return "";
 }
-
 
 function normalizeNameParts(fullName) {
   const name = String(fullName || "").trim();
@@ -84,74 +89,88 @@ function normalizePosition(pos) {
   return "F";
 }
 
-async function getActiveTeamTriCodes() {
-  const data = await fetchJson(`${NHL_BASE}/standings/now`);
+// Pull “all active players” from NHL search index.
+// This is more complete than walking /roster/{TEAM}/current.
+async function fetchAllActivePlayersFromSearchIndex() {
+  // q=* returns the full index; active=true filters to active NHL players.
+  // Use a very high limit to avoid truncation.
+  const url = `${NHL_SEARCH_BASE}/player?culture=en-us&limit=50000&q=*&active=true`;
 
-  // The exact JSON shape can vary; handle common patterns defensively.
-  // Many responses include an array of standings rows.
-  const rows =
-    Array.isArray(data?.standings) ? data.standings :
-    Array.isArray(data?.records) ? data.records :
-    Array.isArray(data) ? data :
-    [];
-
-  const codes = [];
-  for (const r of rows) {
-    // Common: r.teamAbbrev?.default or r.teamAbbrev, or r.team?.abbrev
-    const code =
-      r?.teamAbbrev?.default ||
-      r?.teamAbbrev ||
-      r?.team?.abbrev ||
-      r?.teamAbbrev?.trim?.();
-
-    if (code && typeof code === "string") {
-      codes.push(code.trim().toUpperCase());
-    }
-  }
-
-  // Fallback if parsing fails: you can hardcode later, but usually not needed
-  return Array.from(new Set(codes)).filter(Boolean);
-}
-
-async function fetchRosterForTeam(triCode) {
-  // /roster/{TEAM}/current is commonly used and may redirect internally
-  const url = `${NHL_BASE}/roster/${encodeURIComponent(triCode)}/current`;
   const data = await fetchJson(url);
 
-  // The roster response typically has groups like forwards/defensemen/goalies
-  // with items containing id + firstName/lastName or fullName.
-  const groups = [
-    { key: "forwards", defaultPos: "F" },
-    { key: "defensemen", defaultPos: "D" },
-    { key: "goalies", defaultPos: "G" },
-  ];
+  // Sometimes it's an array, sometimes wrapped — handle both.
+  const rows = Array.isArray(data) ? data : Array.isArray(data?.docs) ? data.docs : [];
 
   const players = [];
 
-  for (const g of groups) {
-    const arr = Array.isArray(data?.[g.key]) ? data[g.key] : [];
-    for (const p of arr) {
-      const id = Number(p?.id);
-      if (!Number.isFinite(id) || id <= 0) continue;
+  for (const r of rows) {
+    // Different shapes exist; be defensive.
+    const id = Number(r?.playerId ?? r?.id ?? r?.player_id ?? r?.playerID);
+    if (!Number.isFinite(id) || id <= 0) continue;
 
-        const first = pickName(p?.firstName);
-      const last = pickName(p?.lastName);
+       // NHL search index uses `name` as the full name (e.g., "Artur Akhtyamov")
+    const full = pickName(r?.name);
+    const nameParts = normalizeNameParts(full);
 
-      // Some endpoints may provide fullName (sometimes as { default: "..." })
-      const full = pickName(p?.fullName) || `${first} ${last}`.trim();
 
-      const nameParts = normalizeNameParts(full);
+    const teamAbbrevRaw =
+      pickName(r?.teamAbbrev) ||
+      pickName(r?.teamAbbreviation) ||
+      pickName(r?.triCode) ||
+      pickName(r?.currentTeamAbbrev);
 
-      players.push({
-        id,
-        ...nameParts,
-        position: normalizePosition(p?.position || g.defaultPos),
-        teamAbbrev: triCode,
-        active: true,
-      });
+    const posRaw =
+      pickName(r?.position) ||
+      pickName(r?.positionCode) ||
+      pickName(r?.position_code);
+
+    // birthDate might be present on the index for some players
+    const birthDate = pickName(r?.birthDate ?? r?.birth_date) || null;
+
+    players.push({
+      id,
+      ...nameParts,
+      position: normalizePosition(posRaw),
+      teamAbbrev: teamAbbrevRaw ? String(teamAbbrevRaw).toUpperCase() : "",
+      birthDate, // NEW FIELD
+      active: true,
+    });
+  }
+
+  return players;
+}
+
+// If some players are missing birthDate in the search index,
+// fill it from /v1/player/{id}/landing (specific player info).
+async function fillMissingBirthDates(players, { concurrency = 8 } = {}) {
+  const need = players.filter((p) => !p.birthDate && Number.isFinite(p?.id));
+  if (!need.length) return players;
+
+  console.log(
+    `[syncPlayers] birthDate missing for ${need.length} players; filling via /player/{id}/landing`
+  );
+
+  let i = 0;
+
+  async function worker() {
+    while (true) {
+      const idx = i++;
+      if (idx >= need.length) return;
+
+      const p = need[idx];
+      try {
+        const info = await fetchJson(`${NHL_BASE}/player/${p.id}/landing`);
+        const bd = pickName(info?.birthDate) || pickName(info?.birth_date) || null;
+        if (bd) p.birthDate = bd;
+      } catch (e) {
+        // Don't fail the whole sync for one player.
+        console.warn(`[syncPlayers] birthDate fill failed for ${p.id}: ${e?.message || e}`);
+      }
     }
   }
 
+  const n = Math.max(1, Math.min(32, Number(concurrency) || 8));
+  await Promise.all(Array.from({ length: n }, () => worker()));
   return players;
 }
 
@@ -160,25 +179,17 @@ async function main() {
 
   console.log(`[syncPlayers] writing to: ${PLAYERS_FILE}`);
 
-  const teamCodes = await getActiveTeamTriCodes();
-  if (!teamCodes.length) {
-    throw new Error("No team codes found from standings/now. NHL response shape may have changed.");
+  const all = await fetchAllActivePlayersFromSearchIndex();
+  if (!all.length) {
+    throw new Error("No players returned from NHL search index. Response shape may have changed.");
   }
 
-  console.log(`[syncPlayers] teams found: ${teamCodes.length}`);
+  console.log(`[syncPlayers] active players fetched: ${all.length}`);
 
-  const all = [];
-  for (const code of teamCodes) {
-    try {
-      const rosterPlayers = await fetchRosterForTeam(code);
-      console.log(`[syncPlayers] ${code}: ${rosterPlayers.length} players`);
-      all.push(...rosterPlayers);
-    } catch (e) {
-      console.error(`[syncPlayers] ${code}: FAILED`, e?.message || e);
-    }
-  }
+  // Fill missing birthdates (safe: only touches players.json generation)
+  await fillMissingBirthDates(all, { concurrency: 8 });
 
-  // Deduplicate by player id (a player might appear in multiple places depending on endpoint quirks)
+  // Deduplicate by player id (defensive)
   const unique = uniqBy(all, (p) => p.id);
 
   // Sort for stable diffs
@@ -196,7 +207,12 @@ async function main() {
   fs.writeFileSync(tmp, JSON.stringify(unique, null, 2), "utf8");
   fs.renameSync(tmp, PLAYERS_FILE);
 
-  console.log(`[syncPlayers] DONE. players: ${unique.length}`);
+  const missingTeam = unique.filter((p) => !p.teamAbbrev).length;
+  const missingBD = unique.filter((p) => !p.birthDate).length;
+
+  console.log(
+    `[syncPlayers] DONE. players: ${unique.length} (missing teamAbbrev: ${missingTeam}, missing birthDate: ${missingBD})`
+  );
 }
 
 main().catch((e) => {
