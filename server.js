@@ -200,6 +200,8 @@ function loadPlayersFromDisk() {
         const lastName = pickStr(p, ["lastName", "last_name", "last"]);
         const position = pickStr(p, ["position", "pos"]) || null;
         const teamAbbrev = pickStr(p, ["teamAbbrev", "team_abbrev", "team", "teamAbbreviation"]) || null;
+        const birthDate = pickStr(p, ["birthDate", "birth_date", "dob", "dateOfBirth"]) || null;
+
 
         // active can be missing; treat missing as true
         const activeRaw = p?.active;
@@ -213,6 +215,7 @@ function loadPlayersFromDisk() {
           position,
           teamAbbrev,
           active,
+          birthDate,
         };
       })
       .filter((p) => Number.isFinite(p.id) && p.id > 0);
@@ -626,28 +629,30 @@ lastAutoAuctionRolloverId: prev.lastAutoAuctionRolloverId,
 // Phase 2A — Player API
 // ===============================
 
-// GET /api/players?query=mcdavid&limit=25
 app.get("/api/players", (req, res) => {
-  console.log("[/api/players] req.query =", req.query);
-
   const q = String(req.query?.query || "").trim();
-  const limit = Math.max(
-    1,
-    Math.min(100, Number(req.query?.limit || 25) || 25)
-  );
+  const limit = Math.max(1, Math.min(100, Number(req.query?.limit || 25) || 25));
 
-  // If no query, return just a small default slice (avoid sending 1000s)
+  // No query: return a small slice (and RETURN)
   if (!q) {
     return res.json({
       ok: true,
       players: playersCache.slice(0, limit),
       count: playersCache.length,
+      cacheCount: playersCache.length,
     });
   }
 
   const results = searchPlayers(q, limit);
-  res.json({ ok: true, players: results, count: playersCache.length });
+  return res.json({
+    ok: true,
+    players: results,
+    count: playersCache.length,
+    cacheCount: playersCache.length,
+  });
 });
+
+
 
 
 // TEMP DEBUG: verify players file path + existence + size (safe read-only)
