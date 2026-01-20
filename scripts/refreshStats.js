@@ -77,7 +77,7 @@ function buildUrl(start) {
   return `https://api.nhle.com/stats/rest/en/skater/summary?isAggregate=false&isGame=false&sort=${sort}&start=${start}&limit=${PAGE_SIZE}&factCayenneExp=${factCayenneExp}&cayenneExp=${cayenneExp}`;
 }
 
-async function refresh() {
+async function refreshStatsNow() {
   ensureDirSync(DATA_DIR);
 
   if (!acquireLock()) {
@@ -143,7 +143,13 @@ async function refresh() {
   }
 }
 
-refresh().catch((err) => {
-  console.error("Stats refresh failed:", err?.message || err);
-  process.exitCode = 1;
-});
+module.exports = { refreshStatsNow };
+
+// If run directly (cron / manual CLI), execute it
+if (require.main === module) {
+  refreshStatsNow().catch((err) => {
+    console.error("Stats refresh failed:", err?.message || err);
+    process.exitCode = 1;
+  });
+}
+

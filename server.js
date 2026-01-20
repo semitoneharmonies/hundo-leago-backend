@@ -761,6 +761,28 @@ app.get("/api/stats", (req, res) => {
   }
 });
 
+// POST /api/stats/refresh (protected)
+// Triggers stats refresh + writes cache to disk.
+// Does NOT touch league state.
+app.post("/api/stats/refresh", async (req, res) => {
+  try {
+    const token = req.get("x-stats-token") || "";
+    const expected = process.env.STATS_REFRESH_TOKEN || "";
+
+    if (!expected || token !== expected) {
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
+    }
+
+    // We will export this function from scripts/refreshStats.js in the next step.
+    const { refreshStatsNow } = require("./scripts/refreshStats");
+
+    const result = await refreshStatsNow();
+    return res.json({ ok: true, result });
+  } catch (err) {
+    console.error("stats refresh failed:", err);
+    return res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
 
 
 app.get("/api/snapshots", (req, res) => {
