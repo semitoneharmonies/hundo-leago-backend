@@ -631,26 +631,37 @@ lastAutoAuctionRolloverId: prev.lastAutoAuctionRolloverId,
 
 app.get("/api/players", (req, res) => {
   const q = String(req.query?.query || "").trim();
-  const limit = Math.max(1, Math.min(100, Number(req.query?.limit || 25) || 25));
 
-  // No query: return a small slice (and RETURN)
+  // If NO query (your preload case), allow a large response, but keep a safety cap.
+  // 5000 is plenty (your DB is ~2k) and prevents insane payloads.
+  const rawLimit = Number(req.query?.limit);
+  const limitNoQuery = Math.max(1, Math.min(5000, Number.isFinite(rawLimit) ? rawLimit : 5000));
+
+  // If query IS present (typeahead search), keep it small for speed.
+  const limitQuery = Math.max(1, Math.min(100, Number(req.query?.limit || 25) || 25));
+
+  // No query: return a large slice (PRELOAD PATH)
   if (!q) {
     return res.json({
       ok: true,
-      players: playersCache.slice(0, limit),
+      players: playersCache.slice(0, limitNoQuery),
       count: playersCache.length,
       cacheCount: playersCache.length,
+      limitUsed: limitNoQuery,
     });
   }
 
-  const results = searchPlayers(q, limit);
+  // Query: return search results (SEARCH PATH)
+  const results = searchPlayers(q, limitQuery);
   return res.json({
     ok: true,
     players: results,
     count: playersCache.length,
     cacheCount: playersCache.length,
+    limitUsed: limitQuery,
   });
 });
+
 
 
 
