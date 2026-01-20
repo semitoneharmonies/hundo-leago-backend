@@ -90,6 +90,13 @@ const PLAYERS_FILE =
     ? path.join(path.dirname(process.env.LEAGUE_FILE), "players.json")
     : DEFAULT_PLAYERS_FILE);
 
+// Phase 2B: stats cache file (separate from league state + players DB)
+const DEFAULT_STATS_FILE = "/opt/render/project/data/hundo/stats-cache.json";
+const STATS_FILE =
+  process.env.STATS_FILE ||
+  (String(process.env.LEAGUE_FILE || "").includes("/opt/render/project/data/")
+    ? path.join(path.dirname(process.env.LEAGUE_FILE), "stats-cache.json")
+    : DEFAULT_STATS_FILE);
 
 // Ensure dirs exist (important on Render disk paths)
 function ensureDirSync(dirPath) {
@@ -103,6 +110,7 @@ function ensureDirSync(dirPath) {
 ensureDirSync(path.dirname(DATA_FILE));
 ensureDirSync(SNAPSHOT_DIR);
 ensureDirSync(path.dirname(PLAYERS_FILE));
+ensureDirSync(path.dirname(STATS_FILE));
 
 // If players file is missing on the Render disk, bootstrap it from repo players.json (one-time).
 // This avoids “empty DB” in production after deploys.
@@ -721,6 +729,38 @@ app.post("/api/players/reload", (req, res) => {
     error: r.error || null,
   });
 });
+
+// ===============================
+// Phase 2B — Stats Cache API (read-only)
+// ===============================
+
+app.get("/api/stats", (req, res) => {
+  try {
+    if (!fs.existsSync(STATS_FILE)) {
+      return res.status(200).json({ ok: true, ready: false, byPlayerId: {} });
+    }
+
+    const raw = fs.readFileSync(STATS_FILE, "utf8");
+    const json = JSON.parse(raw);
+
+    // OPTIONAL: allow fetching a single player's stats
+    const playerId = String(req.query?.playerId || "").trim();
+    if (playerId) {
+      return res.status(200).json({
+        ok: true,
+        playerId,
+        stats: json?.byPlayerId?.[playerId] || null,
+      });
+    }
+
+    // Default: return full cache
+    return res.status(200).json(json);
+  } catch (e) {
+    console.error("[STATS] Failed to read stats cache:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "Failed to load stats cache" });
+  }
+});
+
 
 
 app.get("/api/snapshots", (req, res) => {
