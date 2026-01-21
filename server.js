@@ -19,7 +19,8 @@ const allowlist = [
 "http://localhost:5174",
 "http://127.0.0.1:5173",
 "http://127.0.0.1:5174",
-  "https://hundoleago.netlify.app",
+"https://hundoleago.netlify.app",
+"https://hundoleago.netlify.app",
   "http://localhost:5173",
   "http://127.0.0.1:5173",
 ];
@@ -28,14 +29,22 @@ const allowlist = [
 app.use(
   cors({
     origin: function (origin, cb) {
-      // allow curl/postman/no-origin requests
       if (!origin) return cb(null, true);
+
       if (allowlist.includes(origin)) return cb(null, true);
+
+      // allow any netlify.app (prod + previews)
+      try {
+        const u = new URL(origin);
+        if (u.hostname.endsWith(".netlify.app")) return cb(null, true);
+      } catch {}
+
       return cb(new Error("CORS blocked: " + origin));
     },
     credentials: true,
   })
 );
+
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -45,22 +54,29 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 // -------------------------------
 const server = http.createServer(app);
 
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // curl/postman/no-origin
+  if (allowlist.includes(origin)) return true;
+
+  // Optional: allow Netlify preview deploys
+  try {
+    const u = new URL(origin);
+    if (u.hostname.endsWith(".netlify.app")) return true;
+  } catch {}
+  return false;
+}
+
 const io = new Server(server, {
   cors: {
-    origin: allowlist,
+    origin: (origin, cb) => {
+      if (isAllowedOrigin(origin)) return cb(null, true);
+      return cb(new Error("Socket CORS blocked: " + origin));
+    },
     methods: ["GET", "POST"],
     credentials: true,
   },
 });
 
-io.on("connection", (socket) => {
-  console.log("🔌 WebSocket client connected:", socket.id);
-  socket.on("disconnect", () => {
-    console.log("❌ WebSocket client disconnected:", socket.id);
-  });
-});
-
-app.set("io", io);
 
 // ===============================
 //   PERSISTENT STORAGE PATHS
