@@ -711,6 +711,29 @@ app.get("/api/players/debug", (req, res) => {
   }
 });
 
+// TEMP DEBUG: verify stats file path + existence + size
+app.get("/api/stats/debug", (req, res) => {
+  try {
+    const statSafe = (p) => {
+      try {
+        if (!fs.existsSync(p)) return { exists: false };
+        const st = fs.statSync(p);
+        return { exists: true, size: st.size, mtimeMs: st.mtimeMs };
+      } catch (e) {
+        return { exists: false, error: String(e?.message || e) };
+      }
+    };
+
+    res.json({
+      ok: true,
+      STATS_FILE,
+      disk: statSafe(STATS_FILE),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 
 // GET /api/players/8478402
 app.get("/api/players/:id", (req, res) => {
