@@ -26,24 +26,17 @@ const allowlist = [
 ];
 
 // Express CORS (for fetch /api/league)
+// Express CORS (for fetch /api/*)
 app.use(
   cors({
     origin: function (origin, cb) {
-      if (!origin) return cb(null, true);
-
-      if (allowlist.includes(origin)) return cb(null, true);
-
-      // allow any netlify.app (prod + previews)
-      try {
-        const u = new URL(origin);
-        if (u.hostname.endsWith(".netlify.app")) return cb(null, true);
-      } catch {}
-
+      if (isAllowedOrigin(origin)) return cb(null, true);
       return cb(new Error("CORS blocked: " + origin));
     },
     credentials: true,
   })
 );
+
 
 
 app.use(express.json({ limit: "10mb" }));
