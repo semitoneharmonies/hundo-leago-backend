@@ -304,6 +304,203 @@ function getPartsInTZ(date, timeZone) {
 }
 
 // -------------------------------
+// Phase 3 — Matchups helpers (PT scheduling + round robin)
+// -------------------------------
+const PT_TZ = "America/Los_Angeles";
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Convert "Mon"/"Tue"/... to index where Mon=0 ... Sun=6
+function weekdayIndexPT(shortWeekday) {
+  const map = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+  return map[shortWeekday] ?? 0;
+}
+
+// Make a UTC timestamp that corresponds to a local time in a given TZ.
+// Uses a tiny correction loop so it works across DST.
+function makeUtcMsForTZ({ year, month, day, hour = 0, minute = 0 }, timeZone) {
+  // initial guess (UTC)
+  let d = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), 0));
+
+  // correct once or twice (DST-safe)
+  for (let i = 0; i < 3; i++) {
+    const p = getPartsInTZ(d, timeZone);
+    const gotY = Number(p.year);
+    const gotM = Number(p.month);
+    const gotD = Number(p.day);
+    const gotH = Number(p.hour);
+    const gotMin = Number(p.minute);
+
+    const wantY = Number(year);
+    const wantM = Number(month);
+    const wantD = Number(day);
+    const wantH = Number(hour);
+    const wantMin = Number(minute);
+
+    // compute minute delta (rough but effective)
+    const got = Date.UTC(gotY, gotM - 1, gotD, gotH, gotMin, 0);
+    const want = Date.UTC(wantY, wantM - 1, wantD, wantH, wantMin, 0);
+    const deltaMs = want - got;
+
+    if (Math.abs(deltaMs) < 1000) break;
+    d = new Date(d.getTime() + deltaMs);
+  }
+
+  return d.getTime();
+}
+
+// Get the upcoming Monday 00:00 PT (default schedule start)
+function getNextMondayStartMsPT(nowMs = Date.now()) {
+  const now = new Date(nowMs);
+  const parts = getPartsInTZ(now, PT_TZ);
+
+  // Anchor at local NOON today (noon always exists, DST-safe)
+  const utcNoonToday = makeUtcMsForTZ(
+    { year: parts.year, month: parts.month, day: parts.day, hour: 12, minute: 0 },
+    PT_TZ
+  );
+
+  const dow = weekdayIndexPT(parts.weekday); // Mon=0..Sun=6
+  const utcNoonMondayThisWeek = utcNoonToday - dow * DAY_MS;
+
+  // Get local date parts for that Monday
+  const mondayParts = getPartsInTZ(new Date(utcNoonMondayThisWeek), PT_TZ);
+
+  const mondayStartThisWeekMs = makeUtcMsForTZ(
+    { year: mondayParts.year, month: mondayParts.month, day: mondayParts.day, hour: 0, minute: 0 },
+    PT_TZ
+  );
+
+  // If we're already past Monday 00:00 PT this week, start NEXT Monday
+  if (nowMs >= mondayStartThisWeekMs) {
+    const utcNoonNextMonday = utcNoonMondayThisWeek + 7 * DAY_MS;
+    const nextMondayParts = getPartsInTZ(new Date(utcNoonNextMonday), PT_TZ);
+    return makeUtcMsForTZ(
+      { year: nextMondayParts.year, month: nextMondayParts.month, day: nextMondayParts.day, hour: 0, minute: 0 },
+      PT_TZ
+    );
+  }
+
+  // Otherwise (only possible very early Monday before 00:00, rare), start this week
+  return mondayStartThisWeekMs;
+}
+
+// Circle method round-robin pairing for even N (e.g., 6 teams)
+function generateRoundRobinPairs(teamNames) {
+  const names = [...teamNames];
+  const n = names.length;
+
+  if (n < 2) return [];
+  if (n % 2 !== 0) names.push("__BYE__");
+
+  const teams = [...names];
+  const rounds = teams.length - 1;
+  const half = teams.length / 2;
+
+  const schedule = [];
+
+  for (let r = 0; r < rounds; r++) {
+    const pairs = [];
+
+    for (let i = 0; i < half; i++) {
+      const a = teams[i];
+      const b = teams[teams.length - 1 - i];
+      if (a !== "__BYE__" && b !== "__BYE__") pairs.push([a, b]);
+    }
+
+    schedule.push(pairs);
+
+    // rotate all but first
+    const fixed = teams[0];
+    const rest = teams.slice(1);
+    rest.unshift(rest.pop());
+    teams.splice(0, teams.length, fixed, ...rest);
+  }
+
+  return schedule; // length = N-1 rounds
+}
+
+// Build scheduleWeeks with default timing:
+// - weekStartAtMs: first day 00:00 PT
+// - weekEndAtMs: last day 23:59 PT (Sunday by default)
+// - lockAtMs: first day at lockHour:lockMinute PT (default 16:00)
+// - rolloverAtMs: next day after week end at 01:00 PT (default Monday 01:00 PT)
+// Build scheduleWeeks with default timing:
+// - weekStartAtMs: Monday 00:00 PT
+// - weekEndAtMs: Sunday 23:59 PT
+// - lockAtMs: Monday at lockHour:lockMinute PT (default 16:00)
+// - rolloverAtMs: NEXT Monday 00:00 PT (== next week start; no overlap)
+function buildScheduleWeeks({
+  teamNames,
+  startWeekMsPT,
+  numWeeks = 26,
+  lockHour = 16,
+  lockMinute = 0,
+  seasonId = null,
+}) {
+  const baseRoundPairs = generateRoundRobinPairs(teamNames);
+  if (baseRoundPairs.length === 0) return [];
+
+  const out = [];
+
+  const startNoonMs = (() => {
+    // Anchor to noon on the start date (DST-safe stepping by weeks)
+    const p = getPartsInTZ(new Date(startWeekMsPT), PT_TZ);
+    return makeUtcMsForTZ({ year: p.year, month: p.month, day: p.day, hour: 12, minute: 0 }, PT_TZ);
+  })();
+
+  for (let weekIndex = 0; weekIndex < numWeeks; weekIndex++) {
+    const weekNoonMs = startNoonMs + weekIndex * 7 * DAY_MS;
+    const wParts = getPartsInTZ(new Date(weekNoonMs), PT_TZ);
+
+    // week start 00:00 PT (Monday)
+    const weekStartAtMs = makeUtcMsForTZ(
+      { year: wParts.year, month: wParts.month, day: wParts.day, hour: 0, minute: 0 },
+      PT_TZ
+    );
+
+    // week end = Sunday 23:59 PT (6 days after start)
+    const endNoonMs = weekNoonMs + 6 * DAY_MS;
+    const endParts = getPartsInTZ(new Date(endNoonMs), PT_TZ);
+    const weekEndAtMs = makeUtcMsForTZ(
+      { year: endParts.year, month: endParts.month, day: endParts.day, hour: 23, minute: 59 },
+      PT_TZ
+    );
+
+    // lock on first day (Monday) at lock time
+    const lockAtMs = makeUtcMsForTZ(
+      { year: wParts.year, month: wParts.month, day: wParts.day, hour: lockHour, minute: lockMinute },
+      PT_TZ
+    );
+
+    // rollover at NEXT Monday 00:00 PT (== next week's start)
+    const nextWeekNoonMs = weekNoonMs + 7 * DAY_MS;
+    const nextParts = getPartsInTZ(new Date(nextWeekNoonMs), PT_TZ);
+    const rolloverAtMs = makeUtcMsForTZ(
+      { year: nextParts.year, month: nextParts.month, day: nextParts.day, hour: 0, minute: 0 },
+      PT_TZ
+    );
+
+    const weekId = `${seasonId || wParts.year}-W${String(weekIndex + 1).padStart(2, "0")}`;
+    const pairs = baseRoundPairs[weekIndex % baseRoundPairs.length];
+const baselineAtMs = weekStartAtMs + 60 * 60 * 1000; // default +1h
+
+    out.push({
+      weekIndex,
+      weekId,
+      weekStartAtMs,
+      baselineAtMs,
+      weekEndAtMs,
+      lockAtMs,
+      rolloverAtMs,
+      pairs,
+    });
+  }
+
+  return out;
+}
+
+
+// -------------------------------
 // Snapshots helpers
 // -------------------------------
 function buildAutoSnapshotId(partsPT) {
@@ -509,6 +706,10 @@ function isArray(x) {
   return Array.isArray(x);
 }
 
+function isPlainObject(x) {
+  return x != null && typeof x === "object" && !Array.isArray(x);
+}
+
 function looksLikeWipe(prev, incomingTeams) {
   const prevTeams = Array.isArray(prev?.teams) ? prev.teams : [];
   const nextTeams = Array.isArray(incomingTeams) ? incomingTeams : [];
@@ -560,10 +761,369 @@ app.get("/health", (req, res) => {
   
 });
 
+// ===============================
+// Phase 3 — Matchups: Read current week (read-only)
+// ===============================
+app.get("/api/matchups/current", (req, res) => {
+  const st = leagueStore.loadLeague();
+  const m = st.matchups || {};
+  const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+  const idx = Number(m.currentWeekIndex || 0);
+
+  const cur = weeks[idx] || null;
+
+  return res.json({
+    ok: true,
+    seasonId: m.seasonId || null,
+    currentWeekIndex: idx,
+    currentWeekId: m.currentWeekId || cur?.weekId || null,
+    week: cur,
+    // helpful for UI:
+    serverNowMs: Date.now(),
+  });
+});
+
+
 app.get("/api/league", (req, res) => {
   const state = leagueStore.loadLeague();
   res.json(state);
 });
+// ===============================
+// Phase 3 — Matchups: Generate schedule (commissioner-only)
+// ===============================
+app.post("/api/matchups/schedule/generate", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const meta = body.meta || {};
+
+    const role = String(meta?.actorRole || "").toLowerCase();
+    if (role !== "commissioner") {
+      return res.status(403).json({ ok: false, error: "Commissioner only." });
+    }
+
+    const prev = leagueStore.loadLeague();
+
+    const teamNames = (prev.teams || []).map((t) => t?.name).filter(Boolean);
+    if (teamNames.length < 2) {
+      return res.status(400).json({ ok: false, error: "Need at least 2 teams to generate schedule." });
+    }
+    if (teamNames.length % 2 !== 0) {
+      return res.status(400).json({ ok: false, error: "Round robin schedule currently requires an even number of teams." });
+    }
+
+    // Allow optional overrides (commissioner-controlled)
+// Defaults: next Monday 00:00 PT start, lock 16:00 PT, rollover next Monday 00:00 PT, 26 weeks
+    const seasonId = body.seasonId ?? prev?.matchups?.seasonId ?? null;
+    const numWeeks = Number(body.numWeeks || 26) || 26;
+
+    const lockHour = Number(body.lockHour ?? 16);
+    const lockMinute = Number(body.lockMinute ?? 0);
+
+
+    const startWeekMsPT = Number(body.startWeekMsPT) || getNextMondayStartMsPT(Date.now());
+
+   const scheduleWeeks = buildScheduleWeeks({
+  teamNames,
+  startWeekMsPT,
+  numWeeks,
+  lockHour,
+  lockMinute,
+  seasonId,
+});
+
+
+    const next = {
+      ...prev,
+      matchups: {
+        ...(prev.matchups || {}),
+        seasonId,
+        scheduleWeeks,
+        currentWeekIndex: 0,
+        currentWeekId: scheduleWeeks?.[0]?.weekId || null,
+        // Keep these for later sessions (don’t wipe if already present)
+        locksByTeam: prev?.matchups?.locksByTeam || {},
+        baselineByPlayerId: prev?.matchups?.baselineByPlayerId || {},
+        resultsByWeek: prev?.matchups?.resultsByWeek || {},
+      },
+    };
+
+    await leagueStore.saveLeague(next, { savedBy: "commissioner:generateSchedule" });
+
+    const ioRef = req.app.get("io");
+    if (ioRef) ioRef.emit("league:updated", { reason: "matchups:scheduleGenerated" });
+
+    return res.json({
+      ok: true,
+      generated: {
+        seasonId,
+        numWeeks: scheduleWeeks.length,
+        startWeekMsPT,
+        currentWeekId: next.matchups.currentWeekId,
+      },
+    });
+  } catch (err) {
+    console.error("[MATCHUPS] schedule generate failed:", err);
+    return res.status(500).json({ ok: false, error: "Failed to generate schedule." });
+  }
+});
+
+// ===============================
+// Phase 3 — Matchups: Update a single week window (commissioner-only)
+// ===============================
+app.post("/api/matchups/schedule/updateWeek", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const meta = body.meta || {};
+
+    const role = String(meta?.actorRole || "").toLowerCase();
+    if (role !== "commissioner") {
+      return res.status(403).json({ ok: false, error: "Commissioner only." });
+    }
+
+    const weekIndex = Number(body.weekIndex);
+    if (!Number.isFinite(weekIndex) || weekIndex < 0) {
+      return res.status(400).json({ ok: false, error: "weekIndex is required and must be >= 0." });
+    }
+
+    const prev = leagueStore.loadLeague();
+    const m = prev.matchups || {};
+    const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+
+    if (!weeks[weekIndex]) {
+      return res.status(404).json({ ok: false, error: "Week not found in scheduleWeeks." });
+    }
+
+    const force = Boolean(body.force);
+
+    const cur = weeks[weekIndex];
+    const nowMs = Date.now();
+if (!force && nowMs >= cur.weekStartAtMs) {
+  return res.status(400).json({
+    ok: false,
+    error: "Only future weeks can be edited. Use force=true only for emergency commissioner fixes.",
+  });
+}
+
+
+   // Only apply fields if provided
+const weekStartAtMs =
+  body.weekStartAtMs != null ? Number(body.weekStartAtMs) : cur.weekStartAtMs;
+
+const weekEndAtMs =
+  body.weekEndAtMs != null ? Number(body.weekEndAtMs) : cur.weekEndAtMs;
+
+const lockAtMs =
+  body.lockAtMs != null ? Number(body.lockAtMs) : cur.lockAtMs;
+
+const rolloverAtMs =
+  body.rolloverAtMs != null ? Number(body.rolloverAtMs) : cur.rolloverAtMs;
+
+// derived (canonical)
+const baselineAtMs = weekStartAtMs + 60 * 60 * 1000;
+
+const nextWeek = {
+  ...cur,
+  weekStartAtMs,
+  baselineAtMs,
+  weekEndAtMs,
+  lockAtMs,
+  rolloverAtMs,
+};
+
+
+
+    // Basic numeric validation
+for (const k of ["weekStartAtMs", "baselineAtMs", "weekEndAtMs", "lockAtMs", "rolloverAtMs"]) {
+  const v = nextWeek[k];
+  if (!Number.isFinite(v) || v <= 0) {
+    return res.status(400).json({ ok: false, error: `Invalid ${k}. Must be a positive number (ms).` });
+  }
+}
+
+// baseline ordering validation
+if (!(nextWeek.weekStartAtMs < nextWeek.baselineAtMs && nextWeek.baselineAtMs <= nextWeek.weekEndAtMs)) {
+  return res.status(400).json({
+    ok: false,
+    error: "baselineAtMs must be after weekStartAtMs and on/before weekEndAtMs.",
+  });
+}
+
+
+    // Ordering validation
+    if (!(nextWeek.weekStartAtMs < nextWeek.weekEndAtMs)) {
+      return res.status(400).json({ ok: false, error: "weekStartAtMs must be < weekEndAtMs." });
+    }
+    if (!(nextWeek.weekEndAtMs < nextWeek.rolloverAtMs)) {
+      return res.status(400).json({ ok: false, error: "weekEndAtMs must be < rolloverAtMs." });
+    }
+    if (!(nextWeek.weekStartAtMs <= nextWeek.lockAtMs && nextWeek.lockAtMs <= nextWeek.weekEndAtMs)) {
+      return res.status(400).json({ ok: false, error: "lockAtMs must be between weekStartAtMs and weekEndAtMs." });
+    }
+
+    // Neighbor overlap guardrails (unless forced)
+    const prevWeek = weeks[weekIndex - 1];
+    const nextWeekNeighbor = weeks[weekIndex + 1];
+
+    if (!force && prevWeek) {
+      // current start must be after previous rollover
+      if (!(prevWeek.rolloverAtMs <= nextWeek.weekStartAtMs)) {
+        return res.status(400).json({
+          ok: false,
+          error: "This change would overlap the previous week. Use force=true if you really intend this.",
+        });
+      }
+    }
+
+    if (!force && nextWeekNeighbor) {
+      // current rollover must be before next start
+      if (!(nextWeek.rolloverAtMs <= nextWeekNeighbor.weekStartAtMs)) {
+        return res.status(400).json({
+          ok: false,
+          error: "This change would overlap the next week. Use force=true if you really intend this.",
+        });
+      }
+    }
+
+    const nextWeeks = [...weeks];
+    nextWeeks[weekIndex] = nextWeek;
+
+    const next = {
+      ...prev,
+      matchups: {
+        ...m,
+        scheduleWeeks: nextWeeks,
+      },
+    };
+
+    await leagueStore.saveLeague(next, { savedBy: "commissioner:updateWeekWindow" });
+
+    const ioRef = req.app.get("io");
+    if (ioRef) ioRef.emit("league:updated", { reason: "matchups:weekUpdated", weekIndex });
+
+    return res.json({ ok: true, weekIndex, updated: nextWeek });
+  } catch (err) {
+    console.error("[MATCHUPS] updateWeek failed:", err);
+    return res.status(500).json({ ok: false, error: "Failed to update week." });
+  }
+});
+
+// ===============================
+// Phase 3 — Matchups: Shift schedule forward from a weekIndex (commissioner-only)
+// Rebuilds weeks [fromWeekIndex..end] so there are no overlaps, using default week length.
+// ===============================
+app.post("/api/matchups/schedule/shiftFrom", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const meta = body.meta || {};
+
+    const role = String(meta?.actorRole || "").toLowerCase();
+    if (role !== "commissioner") {
+      return res.status(403).json({ ok: false, error: "Commissioner only." });
+    }
+
+    const fromWeekIndex = Number(body.fromWeekIndex);
+    if (!Number.isFinite(fromWeekIndex) || fromWeekIndex < 0) {
+      return res.status(400).json({ ok: false, error: "fromWeekIndex is required and must be >= 0." });
+    }
+
+    const prev = leagueStore.loadLeague();
+    const m = prev.matchups || {};
+    const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+
+    if (weeks.length === 0) {
+      return res.status(400).json({ ok: false, error: "No scheduleWeeks to shift." });
+    }
+    if (!weeks[fromWeekIndex]) {
+      return res.status(404).json({ ok: false, error: "fromWeekIndex out of range." });
+    }
+
+    // Defaults (same as generate)
+    const lockHour = Number(body.lockHour ?? 16);
+    const lockMinute = Number(body.lockMinute ?? 0);
+
+    // Helper: take a ms timestamp and return that local day 00:00 PT
+    function dayStartMsPT(ms) {
+      const p = getPartsInTZ(new Date(ms), PT_TZ);
+      return makeUtcMsForTZ({ year: p.year, month: p.month, day: p.day, hour: 0, minute: 0 }, PT_TZ);
+    }
+
+    // Anchor: weekStart is based on previous week's rollover
+    const nextWeeks = [...weeks];
+
+    for (let i = fromWeekIndex; i < nextWeeks.length; i++) {
+      const prevWeek = nextWeeks[i - 1];
+      const curWeek = nextWeeks[i];
+
+      // If i=0 (rare shift from 0), anchor to its existing start day
+      const startAnchor = i === 0 ? curWeek.weekStartAtMs : prevWeek.rolloverAtMs;
+
+      // Start at 00:00 PT of that day (keeps clean boundaries)
+      const weekStartAtMs = dayStartMsPT(startAnchor);
+const baselineAtMs = weekStartAtMs + 60 * 60 * 1000;
+
+      // End 6 days later at 23:59 PT
+      const endNoonMs = (() => {
+        const p = getPartsInTZ(new Date(weekStartAtMs), PT_TZ);
+        const noon = makeUtcMsForTZ({ year: p.year, month: p.month, day: p.day, hour: 12, minute: 0 }, PT_TZ);
+        return noon + 6 * DAY_MS;
+      })();
+
+      const endParts = getPartsInTZ(new Date(endNoonMs), PT_TZ);
+      const weekEndAtMs = makeUtcMsForTZ(
+        { year: endParts.year, month: endParts.month, day: endParts.day, hour: 23, minute: 59 },
+        PT_TZ
+      );
+
+      // Lock on start day at lockHour
+      const startParts = getPartsInTZ(new Date(weekStartAtMs), PT_TZ);
+      const lockAtMs = makeUtcMsForTZ(
+        { year: startParts.year, month: startParts.month, day: startParts.day, hour: lockHour, minute: lockMinute },
+        PT_TZ
+      );
+
+     // Rollover at NEXT week start (Monday 00:00 PT) — equals next week's weekStartAtMs
+const nextWeekNoonMs = (() => {
+  const p = getPartsInTZ(new Date(weekStartAtMs), PT_TZ);
+  const noon = makeUtcMsForTZ({ year: p.year, month: p.month, day: p.day, hour: 12, minute: 0 }, PT_TZ);
+  return noon + 7 * DAY_MS;
+})();
+const rollParts = getPartsInTZ(new Date(nextWeekNoonMs), PT_TZ);
+const rolloverAtMs = makeUtcMsForTZ(
+  { year: rollParts.year, month: rollParts.month, day: rollParts.day, hour: 0, minute: 0 },
+  PT_TZ
+);
+
+
+      nextWeeks[i] = {
+        ...curWeek,
+        weekStartAtMs,
+        baselineAtMs,
+        weekEndAtMs,
+        lockAtMs,
+        rolloverAtMs,
+      };
+    }
+
+    const next = {
+      ...prev,
+      matchups: {
+        ...m,
+        scheduleWeeks: nextWeeks,
+      },
+    };
+
+    await leagueStore.saveLeague(next, { savedBy: "commissioner:shiftSchedule" });
+
+    const ioRef = req.app.get("io");
+    if (ioRef) ioRef.emit("league:updated", { reason: "matchups:scheduleShifted", fromWeekIndex });
+
+    return res.json({ ok: true, shiftedFrom: fromWeekIndex, weeksShifted: nextWeeks.length - fromWeekIndex });
+  } catch (err) {
+    console.error("[MATCHUPS] shiftFrom failed:", err);
+    return res.status(500).json({ ok: false, error: "Failed to shift schedule." });
+  }
+});
+
 
 app.post("/api/league", async (req, res) => {
   const body = req.body || {};
@@ -607,6 +1167,14 @@ app.post("/api/league", async (req, res) => {
       });
     }
 
+    // Optional: matchups must be an object if provided
+if (body.matchups !== undefined && !isPlainObject(body.matchups)) {
+  return res.status(400).json({
+    ok: false,
+    error: "Refusing save: matchups must be an object if provided.",
+  });
+}
+
     const next = {
       ...prev,
       teams: Array.isArray(body.teams) ? body.teams : [],
@@ -614,6 +1182,8 @@ app.post("/api/league", async (req, res) => {
       leagueLog: Array.isArray(body.leagueLog) ? body.leagueLog : [],
       tradeProposals: Array.isArray(body.tradeProposals) ? body.tradeProposals : [],
       tradeBlock: Array.isArray(body.tradeBlock) ? body.tradeBlock : [],
+      matchups: isPlainObject(body.matchups) ? body.matchups : prev.matchups,
+
       settings:
         body.settings && typeof body.settings === "object"
           ? body.settings

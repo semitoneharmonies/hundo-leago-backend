@@ -29,12 +29,26 @@ function emptyState() {
     leagueLog: [],
     tradeProposals: [],
     tradeBlock: [],
+
+    // Phase 3 — Matchups (state only for now)
+   matchups: {
+  seasonId: null,
+  scheduleWeeks: [],
+  currentWeekIndex: 0,
+  currentWeekId: null,
+  locksByTeam: {},
+  baselineByPlayerId: {},
+  resultsByWeek: {},
+},
+
+
     settings: { frozen: false },
     nextAuctionDeadline: null,
     lastAutoWeeklySnapshotId: null,
     lastAutoAuctionRolloverId: null,
   };
 }
+
 function toStr(x, fallback = "") {
   if (x == null) return fallback;
   return String(x);
@@ -58,6 +72,20 @@ function toObj(x, fallback = {}) {
 
 function toArr(x) {
   return Array.isArray(x) ? x : [];
+}
+
+function normalizeMatchups(m) {
+  const obj = toObj(m, {});
+  return {
+    seasonId: obj.seasonId == null ? null : toStr(obj.seasonId, "").trim(),
+    scheduleWeeks: toArr(obj.scheduleWeeks),
+    currentWeekIndex: toNum(obj.currentWeekIndex, 0),
+    currentWeekId: obj.currentWeekId == null ? null : toStr(obj.currentWeekId, "").trim(),
+    locksByTeam: toObj(obj.locksByTeam, {}),
+    baselineByPlayerId: toObj(obj.baselineByPlayerId, {}),
+    resultsByWeek: toObj(obj.resultsByWeek, {}),
+    
+  };
 }
 
 function normalizeNameKey(s) {
@@ -174,6 +202,7 @@ function normalizeLeagueState(input, { dataFilePath, loadedFromDisk } = {}) {
     leagueLog: toArr(raw.leagueLog),
     tradeProposals: toArr(raw.tradeProposals).map(normalizeTrade),
     tradeBlock: toArr(raw.tradeBlock),
+matchups: normalizeMatchups(raw.matchups),
 
     settings: {
       ...base.settings,
