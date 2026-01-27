@@ -9,6 +9,8 @@ const { Server } = require("socket.io");
 const { createLeagueStore } = require("./leagueStore");
 
 const app = express();
+console.log("SERVER ENTRY LOADED: server.js", new Date().toISOString());
+
 const PORT = process.env.PORT || 4000;
 
 // -------------------------------
@@ -16,14 +18,12 @@ const PORT = process.env.PORT || 4000;
 // -------------------------------
 const allowlist = [
   "http://localhost:5173",
-"http://localhost:5174",
-"http://127.0.0.1:5173",
-"http://127.0.0.1:5174",
-"https://hundoleago.netlify.app",
-"https://hundoleago.netlify.app",
-  "http://localhost:5173",
+  "http://localhost:5174",
   "http://127.0.0.1:5173",
+  "http://127.0.0.1:5174",
+  "https://hundoleago.netlify.app",
 ];
+
 
 // Express CORS (for fetch /api/league)
 // Express CORS (for fetch /api/*)
@@ -100,12 +100,22 @@ const PLAYERS_FILE =
     : DEFAULT_PLAYERS_FILE);
 
 // Phase 2B: stats cache file (separate from league state + players DB)
+//
+// Production (Render disk): /opt/render/project/data/hundo/stats-cache.json
+// Local dev (Windows/macOS): fall back to ./stats-cache.json next to server.js
 const DEFAULT_STATS_FILE = "/opt/render/project/data/hundo/stats-cache.json";
+
+const LOCAL_STATS_FILE = path.join(__dirname, "stats-cache.json");
+const isLocalDev = process.env.NODE_ENV !== "production";
+
 const STATS_FILE =
   process.env.STATS_FILE ||
-  (String(process.env.LEAGUE_FILE || "").includes("/opt/render/project/data/")
-    ? path.join(path.dirname(process.env.LEAGUE_FILE), "stats-cache.json")
-    : DEFAULT_STATS_FILE);
+  (isLocalDev && fs.existsSync(LOCAL_STATS_FILE)
+    ? LOCAL_STATS_FILE
+    : (String(process.env.LEAGUE_FILE || "").includes("/opt/render/project/data/")
+        ? path.join(path.dirname(process.env.LEAGUE_FILE), "stats-cache.json")
+        : DEFAULT_STATS_FILE));
+
 
 // Ensure dirs exist (important on Render disk paths)
 function ensureDirSync(dirPath) {
@@ -308,6 +318,23 @@ function getPartsInTZ(date, timeZone) {
 // -------------------------------
 const PT_TZ = "America/Los_Angeles";
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+// -------------------------------
+// Phase 3 — Session 3: legality check (read-only helper)
+// -------------------------------
+function isTeamLegalNow(team) {
+  // SAFETY: strict, predictable rules.
+  // If anything looks missing/invalid, treat as illegal (prevents accidental locks).
+  if (!team || typeof team !== "object") return false;
+
+  const roster = Array.isArray(team.roster) ? team.roster : [];
+  // Basic “has players” check (adjust later if your cap/IR rules need to be included)
+  if (roster.length === 0) return false;
+
+  // If you already have an authoritative legality check, we will swap to that.
+  // For now we keep this minimal and conservative.
+  return true;
+}
 
 // Convert "Mon"/"Tue"/... to index where Mon=0 ... Sun=6
 function weekdayIndexPT(shortWeekday) {
@@ -761,6 +788,143 @@ app.get("/health", (req, res) => {
   
 });
 
+// -------------------------------
+// Phase 3 — Session 6: Standings (Read-Only)
+// Canonical inputs: resultsByWeek + scheduleWeeks (+ teams list for names)
+// -------------------------------
+function computeStandingsFromResults(state) {
+  const matchups = state?.matchups || {};
+  const resultsByWeek = matchups.resultsByWeek || {};
+  const scheduleWeeks = Array.isArray(matchups.scheduleWeeks) ? matchups.scheduleWeeks : [];
+  const teamsArr = Array.isArray(state?.teams) ? state.teams : [];
+
+  // Build schedule lookup so we only count weeks that have known pairs
+  const scheduleByWeekId = new Map();
+  scheduleWeeks.forEach((w, idx) => {
+    const weekId = w?.weekId ?? w?.id ?? `week_${idx}`;
+    scheduleByWeekId.set(weekId, w);
+  });
+
+  // Initialize table with known team names (safe if teams[] missing/odd)
+  const table = new Map();
+  const ensureRow = (teamName) => {
+    const name = String(teamName || "").trim();
+    if (!name) return null;
+    if (!table.has(name)) {
+      table.set(name, {
+        teamName: name,
+        GP: 0,
+        W: 0,
+        L: 0,
+        T: 0,
+        PTS: 0,
+        PF: 0,
+        PA: 0,
+        DIFF: 0,
+      });
+    }
+    return table.get(name);
+  };
+
+  teamsArr.forEach((t) => {
+    const name = t?.name ?? t?.teamName ?? t?.id;
+    ensureRow(name);
+  });
+
+  // Only count a week if:
+  // - it exists in resultsByWeek
+  // - scheduleWeeks has known pairs for that weekId
+  const countedWeekIds = [];
+  for (const weekId of Object.keys(resultsByWeek)) {
+    const sched = scheduleByWeekId.get(weekId);
+    const pairs = Array.isArray(sched?.pairs) ? sched.pairs : null;
+    if (!pairs || pairs.length === 0) continue;
+
+    const weekRes = resultsByWeek[weekId] || {};
+    const perTeam = weekRes.perTeam || {};
+
+    countedWeekIds.push(weekId);
+
+    for (const pair of pairs) {
+      const A = Array.isArray(pair) ? pair[0] : null;
+      const B = Array.isArray(pair) ? pair[1] : null;
+      if (!A || !B) continue;
+
+      const rowA = ensureRow(A);
+      const rowB = ensureRow(B);
+      if (!rowA || !rowB) continue;
+
+      const fpA = Number(perTeam?.[A]?.weeklyFP ?? 0) || 0;
+      const fpB = Number(perTeam?.[B]?.weeklyFP ?? 0) || 0;
+
+      // Everyone in a scheduled pair has "played" a game for standings purposes
+      rowA.GP += 1;
+      rowB.GP += 1;
+
+      rowA.PF += fpA;
+      rowA.PA += fpB;
+
+      rowB.PF += fpB;
+      rowB.PA += fpA;
+
+      if (fpA > fpB) {
+        rowA.W += 1;
+        rowA.PTS += 2;
+        rowB.L += 1;
+      } else if (fpB > fpA) {
+        rowB.W += 1;
+        rowB.PTS += 2;
+        rowA.L += 1;
+      } else {
+        rowA.T += 1;
+        rowB.T += 1;
+        rowA.PTS += 1;
+        rowB.PTS += 1;
+      }
+    }
+  }
+
+  // finalize DIFF
+  for (const row of table.values()) {
+    row.DIFF = row.PF - row.PA;
+  }
+
+  const standings = Array.from(table.values()).sort((a, b) => {
+    // PTS desc
+    if (b.PTS !== a.PTS) return b.PTS - a.PTS;
+    // DIFF desc
+    if (b.DIFF !== a.DIFF) return b.DIFF - a.DIFF;
+    // PF desc
+    if (b.PF !== a.PF) return b.PF - a.PF;
+    // teamName asc (stable)
+    return String(a.teamName).localeCompare(String(b.teamName));
+  });
+
+  return {
+    ok: true,
+    computedAtMs: Date.now(),
+    weeksCounted: countedWeekIds.length,
+    countedWeekIds,
+    standings,
+  };
+}
+
+// -------------------------------
+// Phase 3 — Session 6: Standings (Read-Only)
+// GET /api/matchups/standings
+// -------------------------------
+app.get("/api/matchups/standings", (req, res) => {
+  try {
+    const state = leagueStore.loadLeague();
+    const payload = computeStandingsFromResults(state);
+    return res.json(payload);
+  } catch (err) {
+    console.error("[matchups/standings] error:", err);
+    return res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+
 // ===============================
 // Phase 3 — Matchups: Read current week (read-only)
 // ===============================
@@ -783,6 +947,816 @@ app.get("/api/matchups/current", (req, res) => {
   });
 });
 
+// ===============================
+// Phase 3 — Matchups: Lock status (read-only, Session 3)
+// ===============================
+app.get("/api/matchups/locks", (req, res) => {
+  const st = leagueStore.loadLeague();
+  const m = st.matchups || {};
+  const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+  const idx = Number(m.currentWeekIndex || 0);
+  const week = weeks[idx] || null;
+
+  return res.json({
+    ok: true,
+    currentWeekIndex: idx,
+    currentWeekId: m.currentWeekId || week?.weekId || null,
+    lockAtMs: week?.lockAtMs || null,
+    serverNowMs: Date.now(),
+    locksByTeam: m.locksByTeam || {},
+  });
+});
+
+// ===============================
+// Phase 3 — Matchups: Preview who would lock now (read-only)
+// ===============================
+app.get("/api/matchups/locks/preview", (req, res) => {
+  const st = leagueStore.loadLeague();
+  const m = st.matchups || {};
+  const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+  const idx = Number(m.currentWeekIndex || 0);
+  const week = weeks[idx] || null;
+
+  const teams = Array.isArray(st.teams) ? st.teams : [];
+  const locksByTeam = m.locksByTeam || {};
+
+  const nowMs = Date.now();
+  const lockAtMs = week?.lockAtMs ?? null;
+
+  // If we don't have a week or lock time, nothing can lock.
+  if (!week || !Number.isFinite(lockAtMs)) {
+    return res.json({
+      ok: true,
+      reason: "missingWeekOrLockTime",
+      serverNowMs: nowMs,
+      currentWeekIndex: idx,
+      currentWeekId: m.currentWeekId || week?.weekId || null,
+      wouldLock: [],
+    });
+  }
+
+  // Before lock time, we do nothing.
+  if (nowMs < lockAtMs) {
+    return res.json({
+      ok: true,
+      reason: "beforeLockTime",
+      serverNowMs: nowMs,
+      lockAtMs,
+      currentWeekIndex: idx,
+      currentWeekId: m.currentWeekId || week?.weekId || null,
+      wouldLock: [],
+    });
+  }
+
+  // After lock time: any team that is legal AND not already locked would lock now.
+  const wouldLock = [];
+  for (const t of teams) {
+    const name = t?.name;
+    if (!name) continue;
+    if (locksByTeam[name]) continue; // already locked
+    if (!isTeamLegalNow(t)) continue;
+    wouldLock.push(name);
+  }
+
+  return res.json({
+    ok: true,
+    reason: "afterLockTime",
+    serverNowMs: nowMs,
+    lockAtMs,
+    currentWeekIndex: idx,
+    currentWeekId: m.currentWeekId || week?.weekId || null,
+    alreadyLocked: Object.keys(locksByTeam),
+    wouldLock,
+  });
+});
+
+// ===============================
+// Phase 3 — Session 4: Baseline preview (read-only, NO WRITES)
+// Shows what would be captured for baselineByWeekId[weekId] if we captured now.
+// ===============================
+app.get("/api/matchups/baseline/preview", (req, res) => {
+  try {
+    const st = leagueStore.loadLeague();
+    const m = st.matchups || {};
+    const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+    const idx = Number(m.currentWeekIndex || 0);
+    const week = weeks[idx] || null;
+
+    const nowMs = Date.now();
+
+    if (!week || !week.weekId || !Number.isFinite(week.baselineAtMs)) {
+      return res.json({
+        ok: true,
+        reason: "missingWeekOrBaselineTime",
+        serverNowMs: nowMs,
+        currentWeekIndex: idx,
+        currentWeekId: m.currentWeekId || week?.weekId || null,
+      });
+    }
+
+    const weekId = week.weekId;
+
+    const baselineByWeekId = m.baselineByWeekId || {};
+    const alreadyCaptured = Boolean(baselineByWeekId[weekId]);
+
+    // Read stats cache directly (same as /api/stats)
+    if (!fs.existsSync(STATS_FILE)) {
+      return res.json({
+        ok: true,
+        reason: "statsCacheMissing",
+        serverNowMs: nowMs,
+        weekId,
+        baselineAtMs: week.baselineAtMs,
+        alreadyCaptured,
+      });
+    }
+
+    const raw = fs.readFileSync(STATS_FILE, "utf8");
+    const statsJson = JSON.parse(raw);
+
+    const byPlayerId = statsJson?.byPlayerId && typeof statsJson.byPlayerId === "object"
+      ? statsJson.byPlayerId
+      : {};
+
+    // Compute cumulative fantasy points (FP) using your canonical rule:
+    // FP = goals * 1.25 + assists
+    const snapshotByPlayerId = {};
+    let count = 0;
+
+    for (const [playerId, s] of Object.entries(byPlayerId)) {
+      const goals = Number(s?.goals) || 0;
+      const assists = Number(s?.assists) || 0;
+      const gamesPlayed = Number(s?.gamesPlayed) || 0;
+
+      const fp = goals * 1.25 + assists;
+
+      snapshotByPlayerId[playerId] = {
+        goals,
+        assists,
+        gamesPlayed,
+        fp,
+      };
+      count++;
+    }
+
+    // Small sample so the response isn't enormous
+    const sample = Object.entries(snapshotByPlayerId).slice(0, 5).map(([playerId, v]) => ({
+      playerId,
+      ...v,
+    }));
+
+    return res.json({
+      ok: true,
+      serverNowMs: nowMs,
+      currentWeekIndex: idx,
+      weekId,
+      weekWindow: {
+        weekStartAtMs: week.weekStartAtMs,
+        baselineAtMs: week.baselineAtMs,
+        lockAtMs: week.lockAtMs,
+        weekEndAtMs: week.weekEndAtMs,
+        rolloverAtMs: week.rolloverAtMs,
+      },
+      alreadyCaptured,
+      statsMeta: {
+        seasonId: statsJson?.seasonId ?? null,
+        lastUpdatedAt: statsJson?.lastUpdatedAt ?? null,
+        playerCount: count,
+      },
+      preview: {
+        playerCount: count,
+        sample,
+      },
+      // NOTE: We are NOT returning the full snapshotByPlayerId
+      // because it's large. This endpoint is just a preview.
+    });
+  } catch (err) {
+    console.error("[BASELINE PREVIEW] failed:", err);
+    return res.status(500).json({ ok: false, error: "Baseline preview failed." });
+  }
+});
+
+// ===============================
+// Phase 3 — Session 4: Baseline capture gate status (read-only, NO WRITES)
+// Tells you exactly why capture would or would not run right now.
+// ===============================
+app.get("/api/matchups/baseline/status", (req, res) => {
+  try {
+    const st = leagueStore.loadLeague();
+    const m = st.matchups || {};
+    const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+    const idx = Number(m.currentWeekIndex || 0);
+    const week = weeks[idx] || null;
+
+    const nowMs = Date.now();
+
+    if (!week) {
+      return res.json({ ok: true, canCapture: false, reason: "noCurrentWeek", nowMs, currentWeekIndex: idx });
+    }
+    if (!week.weekId) {
+      return res.json({ ok: true, canCapture: false, reason: "missingWeekId", nowMs, currentWeekIndex: idx });
+    }
+    if (!Number.isFinite(week.baselineAtMs)) {
+      return res.json({
+        ok: true,
+        canCapture: false,
+        reason: "missingBaselineAtMs",
+        nowMs,
+        currentWeekIndex: idx,
+        weekId: week.weekId,
+        baselineAtMs: week.baselineAtMs ?? null,
+      });
+    }
+
+    const weekId = week.weekId;
+    const baselineByWeekId = m.baselineByWeekId || {};
+    const alreadyCaptured = Boolean(baselineByWeekId[weekId]);
+
+    if (alreadyCaptured) {
+      const entry = baselineByWeekId[weekId];
+      return res.json({
+        ok: true,
+        canCapture: false,
+        reason: "alreadyCaptured",
+        nowMs,
+        currentWeekIndex: idx,
+        weekId,
+        baselineAtMs: week.baselineAtMs,
+        capturedAtMs: entry?.capturedAtMs ?? null,
+        playerCount: entry?.byPlayerId ? Object.keys(entry.byPlayerId).length : 0,
+      });
+    }
+
+    if (nowMs < week.baselineAtMs) {
+      return res.json({
+        ok: true,
+        canCapture: false,
+        reason: "beforeBaselineTime",
+        nowMs,
+        currentWeekIndex: idx,
+        weekId,
+        baselineAtMs: week.baselineAtMs,
+        msUntilBaseline: week.baselineAtMs - nowMs,
+      });
+    }
+
+    const statsExists = fs.existsSync(STATS_FILE);
+    if (!statsExists) {
+      return res.json({
+        ok: true,
+        canCapture: false,
+        reason: "statsCacheMissing",
+        nowMs,
+        currentWeekIndex: idx,
+        weekId,
+        baselineAtMs: week.baselineAtMs,
+        STATS_FILE,
+      });
+    }
+
+    // If we reached here, capture SHOULD run.
+    return res.json({
+      ok: true,
+      canCapture: true,
+      reason: "readyToCapture",
+      nowMs,
+      currentWeekIndex: idx,
+      weekId,
+      baselineAtMs: week.baselineAtMs,
+      STATS_FILE,
+    });
+  } catch (err) {
+    console.error("[BASELINE STATUS] failed:", err);
+    return res.status(500).json({ ok: false, error: "Baseline status failed." });
+  }
+});
+
+// --- Phase 3 Session 5: Weekly scoring preview (read-only, no writes) ---
+// GET /api/matchups/scoring/preview
+// Read-only: computes current-week weekly FP per team using baseline delta + lock rule.
+app.get("/api/matchups/scoring/preview", async (req, res) => {
+  try {
+    const nowMs = Date.now();
+
+    // ✅ IMPORTANT: Use the SAME "get state" call that the baseline endpoints use.
+    // Replace the next line with whatever you already do above (baseline/status).
+    const state = leagueStore.loadLeague();
+
+    if (!state || !state.matchups) {
+      return res.status(500).json({ ok: false, error: "Matchups state not available." });
+    }
+
+    const m = state.matchups;
+    const idx = Number(m.currentWeekIndex ?? -1);
+    const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+    const week = weeks[idx];
+
+    if (!week || !week.weekId) {
+      return res.json({
+        ok: true,
+        nowMs,
+        weekId: null,
+        baselineCaptured: false,
+        teams: [],
+        note: "No current week configured.",
+      });
+    }
+
+    const weekId = String(week.weekId);
+    const baseline = m.baselineByWeekId?.[weekId] || null;
+    const baselineCaptured = !!baseline;
+    const baselineCapturedAtMs = baseline?.capturedAtMs ?? null;
+const baselineStatsLastUpdatedAt = baseline?.statsLastUpdatedAt ?? null;
+
+
+    // Read current cumulative stats from disk (same data source as /api/stats)
+    let statsJson = null;
+    try {
+      const raw = await fs.promises.readFile(STATS_FILE, "utf8");
+      statsJson = JSON.parse(raw);
+    } catch (e) {
+      statsJson = null;
+    }
+
+    const currentStatsLastUpdatedAt = statsJson?.lastUpdatedAt ?? null;
+
+    const currentByPlayerId = statsJson?.byPlayerId || {};
+    const fpNow = (pid) => {
+      const row = currentByPlayerId?.[pid];
+      if (!row) return 0;
+      const g = Number(row.goals || 0);
+      const a = Number(row.assists || 0);
+      return g * 1.25 + a;
+    };
+
+    // Baseline FP getter (supports a couple shapes, safely)
+    const fpBase = (pid) => {
+      if (!baseline) return 0;
+
+      // Option A: baseline.fpByPlayerId
+      if (baseline.fpByPlayerId && baseline.fpByPlayerId[pid] != null) {
+        return Number(baseline.fpByPlayerId[pid] || 0);
+      }
+
+      // Option B: baseline.byPlayerId (your real shape)
+const row = baseline.byPlayerId?.[pid];
+if (!row) return 0;
+
+// Prefer stored fp if present (it is in your capture job)
+if (row.fp != null) return Number(row.fp || 0);
+
+// Fallback: compute from goals/assists
+const g = Number(row.goals || 0);
+const a = Number(row.assists || 0);
+return g * 1.25 + a;
+
+    };
+
+    // Extract playerId from whatever roster entry shape we have (defensive)
+    const getPlayerId = (p) => {
+  if (!p) return null;
+
+  // 1) direct numeric ids
+  if (p.playerId != null) return String(p.playerId);
+  if (p.id != null) return String(p.id);
+  if (p.pid != null) return String(p.pid);
+
+  // 2) nested player object
+  if (p.player && p.player.playerId != null) return String(p.player.playerId);
+  if (p.player && p.player.id != null) return String(p.player.id);
+
+  // 3) tokens like "id:8478402" (your canonical auctionKey format)
+  const token =
+    p.auctionKey != null ? String(p.auctionKey) :
+    p.player != null ? String(p.player) :
+    p.key != null ? String(p.key) :
+    null;
+
+  if (token) {
+    const m = token.match(/^id:(\d+)$/i);
+    if (m) return m[1];
+  }
+
+  return null;
+};
+
+
+    const locksByTeam = m.locksByTeam || {};
+    const teams = Array.isArray(state.teams) ? state.teams : [];
+
+    const perTeam = teams.map((t) => {
+  const teamName = String(t?.name || "");
+  const lock = locksByTeam?.[teamName] || {};
+
+  // ✅ define roster FIRST so you can safely use roster.length anywhere below
+  const roster = Array.isArray(t?.roster) ? t.roster : [];
+
+  const locked =
+    Number.isFinite(Number(lock.lockedAtMs)) &&
+    Number(lock.weekIndex) === idx;
+
+  // Unlocked teams score 0
+  if (!locked) {
+    return {
+      teamName,
+      locked: false,
+      lockedAtMs: lock.lockedAtMs ?? null,
+      baselineCaptured,
+      weeklyFP: 0,
+      playersCount: roster.length,
+    };
+  }
+
+  // Locked but baseline missing: weeklyFP = null (can't compute deltas yet)
+  if (!baselineCaptured) {
+    return {
+      teamName,
+      locked: true,
+      lockedAtMs: lock.lockedAtMs ?? null,
+      baselineCaptured: false,
+      weeklyFP: null,
+      playersCount: roster.length,
+    };
+  }
+
+  // Locked + baseline captured: sum deltas
+  let sum = 0;
+  let countedPlayers = 0;
+  let missingIdCount = 0;
+
+  for (const p of roster) {
+    const pid = getPlayerId(p);
+    if (!pid) {
+      missingIdCount++;
+      continue;
+    }
+
+    let delta = fpNow(pid) - fpBase(pid);
+    if (delta < 0) delta = 0; // safety clamp
+    sum += delta;
+
+    countedPlayers++;
+  }
+
+  const weeklyFP = Math.round(sum * 100) / 100;
+
+  return {
+    teamName,
+    locked: true,
+    lockedAtMs: lock.lockedAtMs ?? null,
+    baselineCaptured: true,
+    weeklyFP,
+    playersCount: roster.length,
+
+    // DEBUG
+    countedPlayers,
+    missingIdCount,
+  };
+});
+
+
+    // DEBUG: compare baseline vs now for 1 player from the first non-empty roster
+let sample = null;
+for (const t of teams) {
+  const roster = Array.isArray(t?.roster) ? t.roster : [];
+  const first = roster.find((p) => getPlayerId(p));
+  if (!first) continue;
+  const pid = getPlayerId(first);
+  sample = {
+    playerId: pid,
+    fpBaseline: fpBase(pid),
+    fpNow: fpNow(pid),
+delta: (() => {
+  let d = fpNow(pid) - fpBase(pid);
+  if (d < 0) d = 0;
+  return Math.round(d * 100) / 100;
+})(),
+  };
+  break;
+}
+
+    return res.json({
+      ok: true,
+      nowMs,
+      weekId,
+      weekWindow: {
+        weekStartAtMs: week.weekStartAtMs,
+        baselineAtMs: week.baselineAtMs,
+        lockAtMs: week.lockAtMs,
+        weekEndAtMs: week.weekEndAtMs,
+        rolloverAtMs: week.rolloverAtMs,
+      },
+      sample,
+      baselineMeta: {
+  baselineCapturedAtMs,
+  baselineStatsLastUpdatedAt,
+  currentStatsLastUpdatedAt,
+  statsChangedSinceBaseline:
+    baselineStatsLastUpdatedAt != null &&
+    currentStatsLastUpdatedAt != null &&
+    Number(currentStatsLastUpdatedAt) !== Number(baselineStatsLastUpdatedAt),
+},
+
+      baselineCaptured,
+      statsReady: !!statsJson?.ok && statsJson?.ready !== false,
+      teams: perTeam,
+      note: !baselineCaptured
+  ? "Baseline not captured yet; locked teams return weeklyFP=null until captured."
+  : undefined,
+
+    });
+  } catch (err) {
+    console.error("[SCORING PREVIEW] failed:", err);
+    return res.status(500).json({ ok: false, error: "Scoring preview failed." });
+  }
+});
+
+// ===============================
+// Phase 3 — Session 5: Rollover status (read-only)
+// ===============================
+app.get("/api/matchups/rollover/status", (req, res) => {
+  const st = leagueStore.loadLeague();
+  const m = st.matchups || {};
+  const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+  const idx = Number(m.currentWeekIndex ?? -1);
+  const week = weeks[idx] || null;
+
+  const nowMs = Date.now();
+  const weekId = week?.weekId ?? null;
+
+  const resultsExists =
+    weekId != null && Boolean(m.resultsByWeek?.[String(weekId)]);
+
+  const canRollover =
+    !!week &&
+    Number.isFinite(Number(week.rolloverAtMs)) &&
+    nowMs >= Number(week.rolloverAtMs) &&
+    !resultsExists &&
+    String(m.lastRolloverWeekId || "") !== String(weekId);
+
+  res.json({
+    ok: true,
+    nowMs,
+    currentWeekIndex: idx,
+    currentWeekId: weekId,
+    rolloverAtMs: week?.rolloverAtMs ?? null,
+    lastRolloverWeekId: m.lastRolloverWeekId ?? null,
+    resultsExists,
+    canRollover,
+  });
+});
+
+
+const DEBUG_MATCHUPS = process.env.MATCHUPS_DEBUG === "true";
+const MATCHUPS_ENABLED = process.env.MATCHUPS_ENABLED === "true";
+
+if (DEBUG_MATCHUPS) {
+app.get("/api/matchups/debug/stateSummary", (req, res) => {
+  const st = leagueStore.loadLeague();
+  const m = st.matchups || {};
+  res.json({
+    ok: true,
+    currentWeekIndex: m.currentWeekIndex ?? null,
+    currentWeekId: m.currentWeekId ?? null,
+    resultsKeys: Object.keys(m.resultsByWeek || {}),
+    lastRolloverWeekId: m.lastRolloverWeekId ?? null,
+  });
+});
+
+
+// ===============================
+// Phase 3 — Session 3 DEBUG: Reset locks (commissioner-only, local testing)
+// ===============================
+app.post("/api/matchups/debug/resetLocks", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const meta = body.meta || {};
+
+    const role = String(meta?.actorRole || "").toLowerCase();
+    if (role !== "commissioner") {
+      return res.status(403).json({ ok: false, error: "Commissioner only." });
+    }
+
+    const prev = leagueStore.loadLeague();
+    const m = prev.matchups || {};
+
+    const next = {
+      ...prev,
+      matchups: {
+        ...m,
+        locksByTeam: {},
+      },
+    };
+
+    await leagueStore.saveLeague(next, { savedBy: "commissioner:debugResetLocks" });
+
+    const ioRef = req.app.get("io");
+    if (ioRef) ioRef.emit("league:updated", { reason: "matchups:debugResetLocks" });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[DEBUG] resetLocks failed:", err);
+    return res.status(500).json({ ok: false, error: "Failed to reset locks." });
+  }
+});
+
+// ===============================
+// Phase 3 — DEBUG: Reset baseline for current weekId (commissioner-only)
+// Local testing only.
+// ===============================
+app.post("/api/matchups/debug/resetBaselineForWeek", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const meta = body.meta || {};
+
+    const role = String(meta?.actorRole || "").toLowerCase();
+    if (role !== "commissioner") {
+      return res.status(403).json({ ok: false, error: "Commissioner only." });
+    }
+
+    const prev = leagueStore.loadLeague();
+    const m = prev.matchups || {};
+    const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+    const idx = Number(m.currentWeekIndex || 0);
+    const week = weeks[idx] || null;
+    const weekId = week?.weekId || null;
+
+    if (!weekId) {
+      return res.status(400).json({ ok: false, error: "No current weekId." });
+    }
+
+    const baselineByWeekId = { ...(m.baselineByWeekId || {}) };
+    const existed = Boolean(baselineByWeekId[weekId]);
+    delete baselineByWeekId[weekId];
+
+    const next = {
+      ...prev,
+      matchups: {
+        ...m,
+        baselineByWeekId,
+      },
+    };
+
+    await leagueStore.saveLeague(next, { savedBy: "commissioner:debugResetBaselineForWeek" });
+
+    const ioRef = req.app.get("io");
+    if (ioRef) ioRef.emit("league:updated", { reason: "matchups:debugResetBaselineForWeek", weekId });
+
+    return res.json({ ok: true, weekId, existed });
+  } catch (err) {
+    console.error("[DEBUG] resetBaselineForWeek failed:", err);
+    return res.status(500).json({ ok: false, error: "Failed to reset baseline." });
+  }
+});
+
+// ===============================
+// Phase 3 — Session 4 DEBUG: Run baseline capture once (commissioner-only)
+// Local/testing only.
+// ===============================
+console.log("REGISTERING MATCHUPS DEBUG ROUTES");
+
+app.post("/api/matchups/debug/captureBaselineNow", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const meta = body.meta || {};
+
+    const role = String(meta?.actorRole || "").toLowerCase();
+    if (role !== "commissioner") {
+      return res.status(403).json({ ok: false, error: "Commissioner only." });
+    }
+
+    // Run capture (idempotent; will no-op if already captured or before baseline time)
+    await Promise.resolve(tryCaptureWeeklyBaseline());
+
+
+    // Reload to show result
+    const st = leagueStore.loadLeague();
+    const m = st.matchups || {};
+    const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+    const idx = Number(m.currentWeekIndex || 0);
+    const week = weeks[idx] || null;
+    const weekId = week?.weekId || null;
+
+    const entry = weekId ? (m.baselineByWeekId || {})[weekId] : null;
+
+    return res.json({
+      ok: true,
+      currentWeekIndex: idx,
+      weekId,
+      captured: Boolean(entry),
+      capturedAtMs: entry?.capturedAtMs ?? null,
+      statsLastUpdatedAt: entry?.statsLastUpdatedAt ?? null,
+      playerCount: entry?.byPlayerId ? Object.keys(entry.byPlayerId).length : 0,
+    });
+  } catch (err) {
+    console.error("[DEBUG] captureBaselineNow failed:", err);
+    return res.status(500).json({ ok: false, error: "Failed to capture baseline." });
+  }
+});
+
+// ===============================
+// Phase 3 — Step 1 DEBUG: Run roster lock once (commissioner-only)
+// Local/testing only.
+// ===============================
+app.post("/api/matchups/debug/runLockNow", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const meta = body.meta || {};
+
+    const role = String(meta?.actorRole || "").toLowerCase();
+    if (role !== "commissioner") {
+      return res.status(403).json({ ok: false, error: "Commissioner only." });
+    }
+
+    // Run lock attempt (idempotent; will no-op if before lock time or already locked)
+await Promise.resolve(tryApplyRosterLocks());
+
+    // Reload to show result
+    const st = leagueStore.loadLeague();
+    const m = st.matchups || {};
+    const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+    const idx = Number(m.currentWeekIndex || 0);
+    const week = weeks[idx] || null;
+    const weekId = week?.weekId || null;
+
+    const locksByTeam = m.locksByTeam || {};
+    const lockKeys = Object.keys(locksByTeam);
+
+    return res.json({
+      ok: true,
+      currentWeekIndex: idx,
+      weekId,
+      serverNowMs: Date.now(),
+      lockAtMs: week?.lockAtMs ?? null,
+      lockedTeams: lockKeys,
+      lockedCount: lockKeys.length,
+    });
+  } catch (err) {
+    console.error("[DEBUG] runLockNow failed:", err);
+    return res.status(500).json({ ok: false, error: "Failed to run lock." });
+  }
+});
+
+// ===============================
+// Phase 3 — Session 3 DEBUG: Set a team's roster empty/non-empty (commissioner-only)
+// Local testing only.
+// ===============================
+app.post("/api/matchups/debug/setTeamRosterEmpty", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const meta = body.meta || {};
+
+    const role = String(meta?.actorRole || "").toLowerCase();
+    if (role !== "commissioner") {
+      return res.status(403).json({ ok: false, error: "Commissioner only." });
+    }
+
+    const teamName = String(body.teamName || "").trim();
+    if (!teamName) {
+      return res.status(400).json({ ok: false, error: "teamName is required." });
+    }
+
+    const empty = Boolean(body.empty);
+
+    const prev = leagueStore.loadLeague();
+    const teams = Array.isArray(prev.teams) ? prev.teams : [];
+
+    const idx = teams.findIndex((t) => t?.name === teamName);
+    if (idx === -1) {
+      return res.status(404).json({ ok: false, error: "Team not found." });
+    }
+
+    const nextTeams = [...teams];
+    const t = { ...nextTeams[idx] };
+
+    if (empty) {
+      // Make illegal: empty roster
+      t.roster = [];
+    } else {
+      // Make legal again: restore ONE placeholder player if empty
+      // (keeps it minimal; we only need roster.length > 0 for current legality check)
+      const roster = Array.isArray(t.roster) ? t.roster : [];
+      if (roster.length === 0) {
+        t.roster = [{ name: "__TEST_PLAYER__", salary: 1, position: "F" }];
+      }
+    }
+
+    nextTeams[idx] = t;
+
+    const next = { ...prev, teams: nextTeams };
+
+    await leagueStore.saveLeague(next, { savedBy: "commissioner:debugSetTeamRosterEmpty" });
+
+    const ioRef = req.app.get("io");
+    if (ioRef) ioRef.emit("league:updated", { reason: "matchups:debugSetTeamRosterEmpty", teamName, empty });
+
+    return res.json({ ok: true, teamName, empty, rosterCount: (nextTeams[idx].roster || []).length });
+  } catch (err) {
+    console.error("[DEBUG] setTeamRosterEmpty failed:", err);
+    return res.status(500).json({ ok: false, error: "Failed to update team roster." });
+  }
+});
+}
 
 app.get("/api/league", (req, res) => {
   const state = leagueStore.loadLeague();
@@ -835,16 +1809,22 @@ app.post("/api/matchups/schedule/generate", async (req, res) => {
     const next = {
       ...prev,
       matchups: {
-        ...(prev.matchups || {}),
-        seasonId,
-        scheduleWeeks,
-        currentWeekIndex: 0,
-        currentWeekId: scheduleWeeks?.[0]?.weekId || null,
-        // Keep these for later sessions (don’t wipe if already present)
-        locksByTeam: prev?.matchups?.locksByTeam || {},
-        baselineByPlayerId: prev?.matchups?.baselineByPlayerId || {},
-        resultsByWeek: prev?.matchups?.resultsByWeek || {},
-      },
+  ...(prev.matchups || {}),
+  seasonId,
+  scheduleWeeks,
+  currentWeekIndex: 0,
+  currentWeekId: scheduleWeeks?.[0]?.weekId || null,
+
+  // ✅ Fresh start when generating a new schedule (prevents “testing ghosts”)
+  locksByTeam: {},
+  baselineByWeekId: {},
+  resultsByWeek: {},
+  lastRolloverWeekId: null,
+
+  // (Optional) keep if you still use it elsewhere; otherwise you can remove later
+  baselineByPlayerId: prev?.matchups?.baselineByPlayerId || {},
+},
+
     };
 
     await leagueStore.saveLeague(next, { savedBy: "commissioner:generateSchedule" });
@@ -893,7 +1873,9 @@ app.post("/api/matchups/schedule/updateWeek", async (req, res) => {
       return res.status(404).json({ ok: false, error: "Week not found in scheduleWeeks." });
     }
 
-    const force = Boolean(body.force);
+    const forceRequested = Boolean(body.force);
+const force = process.env.NODE_ENV !== "production" && forceRequested;
+
 
     const cur = weeks[weekIndex];
     const nowMs = Date.now();
@@ -1281,6 +2263,22 @@ app.get("/api/players/debug", (req, res) => {
   }
 });
 
+// DEV DEBUG: show where server.js thinks it is, and whether local stats-cache.json exists
+app.get("/api/stats/debug-localpath", (req, res) => {
+  try {
+    const localPath = path.join(__dirname, "stats-cache.json");
+    return res.json({
+      ok: true,
+      __dirname,
+      localPath,
+      localExists: fs.existsSync(localPath),
+      STATS_FILE,
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 // TEMP DEBUG: verify stats file path + existence + size
 app.get("/api/stats/debug", (req, res) => {
   try {
@@ -1563,14 +2561,472 @@ const restored = { ...leagueStore.emptyState(), ...restoredRaw };
   }
 });
 
+function getCurrentWeekSafe(st) {
+  const m = st?.matchups || {};
+  const weeks = Array.isArray(m.scheduleWeeks) ? m.scheduleWeeks : [];
+  const idx = Number(m.currentWeekIndex || 0);
+  const week = weeks[idx] || null;
+  if (!week) return { m, weeks, idx, week: null, reason: "noWeek" };
+
+  const nowMs = Date.now();
+  // ✅ don’t run any Phase 3 jobs before the week actually starts
+  if (Number.isFinite(week.weekStartAtMs) && nowMs < Number(week.weekStartAtMs)) {
+    return { m, weeks, idx, week, reason: "beforeWeekStart" };
+  }
+
+  return { m, weeks, idx, week, reason: "ok" };
+}
+
+// -------------------------------
+// Phase 3 — Session 3: Apply roster locks (idempotent)
+// -------------------------------
+function tryApplyRosterLocks() {
+  try {
+    const st = leagueStore.loadLeague();
+const { m, weeks, idx, week, reason } = getCurrentWeekSafe(st);
+if (!week || reason !== "ok") return;
+if (!Number.isFinite(week.lockAtMs)) return;
+
+const nowMs = Date.now();
+
+    if (nowMs < week.lockAtMs) return;
+
+    const teams = Array.isArray(st.teams) ? st.teams : [];
+    const locksByTeam = { ...(m.locksByTeam || {}) };
+
+    let changed = false;
+
+    for (const t of teams) {
+      const name = t?.name;
+      if (!name) continue;
+
+      // already locked → skip
+      const existing = locksByTeam[name];
+if (existing && Number(existing.weekIndex) === idx) continue; // already locked for THIS week
+// else allow overwrite for new week
+
+
+      // illegal → skip (grace period)
+      if (!isTeamLegalNow(t)) continue;
+
+      // ✅ lock immediately
+      locksByTeam[name] = {
+        lockedAtMs: nowMs,
+        weekIndex: idx,
+      };
+      changed = true;
+    }
+
+    if (!changed) return;
+
+    const next = {
+      ...st,
+      matchups: {
+        ...m,
+        locksByTeam,
+      },
+    };
+
+    leagueStore
+      .saveLeague(next, { savedBy: "system:rosterLock" })
+      .catch((e) => console.error("[LOCKS] save failed:", e));
+
+    const ioRef = app.get("io");
+    if (ioRef) ioRef.emit("league:updated", { reason: "matchups:rosterLocked" });
+  } catch (err) {
+    console.error("[LOCKS] Failed to apply roster locks:", err);
+  }
+}
+
+// -------------------------------
+// Phase 3 — Session 4: Capture baseline (idempotent, per-week, never overwrite)
+// -------------------------------
+function tryCaptureWeeklyBaseline() {
+  try {
+    const st = leagueStore.loadLeague();
+const { m, weeks, idx, week, reason } = getCurrentWeekSafe(st);
+if (!week || reason !== "ok") return null; // (or just return; depending on the function)
+
+
+    if (!week || !week.weekId || !Number.isFinite(week.baselineAtMs)) return null;
+
+    const nowMs = Date.now();
+
+    if (nowMs < week.baselineAtMs) return null;
+
+    const weekId = week.weekId;
+
+    const baselineByWeekId = { ...(m.baselineByWeekId || {}) };
+
+    if (baselineByWeekId[weekId]) return null;
+
+    if (!fs.existsSync(STATS_FILE)) return null;
+
+    const raw = fs.readFileSync(STATS_FILE, "utf8");
+    const statsJson = JSON.parse(raw);
+
+    const byPlayerId =
+      statsJson?.byPlayerId && typeof statsJson.byPlayerId === "object"
+        ? statsJson.byPlayerId
+        : null;
+
+    if (!byPlayerId) return null;
+
+    const snap = {};
+    for (const [playerId, s] of Object.entries(byPlayerId)) {
+      const goals = Number(s?.goals) || 0;
+      const assists = Number(s?.assists) || 0;
+      const gamesPlayed = Number(s?.gamesPlayed) || 0;
+      const fp = goals * 1.25 + assists;
+      snap[playerId] = { goals, assists, gamesPlayed, fp };
+    }
+
+    baselineByWeekId[weekId] = {
+      weekId,
+      capturedAtMs: nowMs,
+      statsSeasonId: statsJson?.seasonId ?? null,
+      statsLastUpdatedAt: statsJson?.lastUpdatedAt ?? null,
+      byPlayerId: snap,
+    };
+
+    const next = {
+      ...st,
+      matchups: {
+        ...m,
+        baselineByWeekId,
+      },
+    };
+
+    leagueStore
+      .saveLeague(next, { savedBy: "system:baselineCapture" })
+      .catch((e) => console.error("[BASELINE] save failed:", e));
+
+    const ioRef = app.get("io");
+    if (ioRef) ioRef.emit("league:updated", { reason: "matchups:baselineCaptured", weekId });
+
+    return null;
+  } catch (err) {
+    console.error("[BASELINE] Failed to capture baseline:", err);
+    return null;
+  }
+}
+
+// -------------------------------
+// Phase 3 — Session 5: Rollover (idempotent)
+// - finalize current week results (if not already)
+// - advance currentWeekIndex
+// - set currentWeekId
+// - capture baseline for NEXT week (if time is >= next baselineAtMs)
+// - record lastRolloverWeekId so we never double-advance
+// -------------------------------
+function tryRolloverMatchupWeek() {
+  try {
+    const st = leagueStore.loadLeague();
+const { m, weeks, idx, week, reason } = getCurrentWeekSafe(st);
+if (!week || reason !== "ok") return;
+
+
+    if (!week || !week.weekId || !Number.isFinite(week.rolloverAtMs)) return;
+
+    const nowMs = Date.now();
+
+    // Only run at/after rollover time
+    if (nowMs < week.rolloverAtMs) return;
+
+    const weekId = String(week.weekId);
+
+    // ✅ Idempotent: never roll over the same week twice
+    if (m.lastRolloverWeekId && String(m.lastRolloverWeekId) === weekId) return;
+
+    // We should have finalized results already (Session 5). If not, we can attempt it:
+    // (safe: tryFinalizeWeeklyResults is idempotent)
+    tryFinalizeWeeklyResults();
+
+    // Reload so we see any results that just got written
+    const st2 = leagueStore.loadLeague();
+    const m2 = st2.matchups || {};
+    const resultsByWeek = m2.resultsByWeek || {};
+
+    // Safety: only advance if results exist for this week
+    if (!resultsByWeek[weekId]) {
+      // If results didn't get written yet, do not advance.
+      return;
+    }
+
+    const nextIndex = idx + 1;
+    const nextWeek = weeks[nextIndex];
+
+    // If there is no next week, we can still mark rollover as done (prevents loops),
+    // but we cannot advance further.
+    if (!nextWeek || !nextWeek.weekId) {
+      const nextState = {
+        ...st2,
+        matchups: {
+          ...m2,
+          lastRolloverWeekId: weekId,
+        },
+      };
+
+      leagueStore
+        .saveLeague(nextState, { savedBy: "system:matchupRollover:endOfSchedule" })
+        .catch((e) => console.error("[ROLLOVER] save failed:", e));
+
+      const ioRef = app.get("io");
+      if (ioRef) ioRef.emit("league:updated", { reason: "matchups:rollover:endOfSchedule", weekId });
+
+      return;
+    }
+
+    // Advance week pointer
+    const advancedMatchups = {
+      ...m2,
+      currentWeekIndex: nextIndex,
+      currentWeekId: String(nextWeek.weekId),
+      lastRolloverWeekId: weekId,
+      // NOTE: locksByTeam is NOT cleared here yet (Session 5/7 decision).
+      // We will keep it (it’s per-team history). Our "locked for current week" check already uses weekIndex.
+    };
+
+    // Optional: capture baseline for NEXT week if we are at/after its baselineAtMs
+    // (This matches the roadmap “Capture new baseline for next week at rollover”.)
+    const baselineByWeekId = { ...(advancedMatchups.baselineByWeekId || {}) };
+
+    if (
+      nextWeek.baselineAtMs != null &&
+      Number.isFinite(Number(nextWeek.baselineAtMs)) &&
+      nowMs >= Number(nextWeek.baselineAtMs) &&
+      !baselineByWeekId[String(nextWeek.weekId)]
+    ) {
+      if (fs.existsSync(STATS_FILE)) {
+        const raw = fs.readFileSync(STATS_FILE, "utf8");
+        const statsJson = JSON.parse(raw);
+
+        const byPlayerId =
+          statsJson?.byPlayerId && typeof statsJson.byPlayerId === "object"
+            ? statsJson.byPlayerId
+            : null;
+
+        if (byPlayerId) {
+          const snap = {};
+          for (const [playerId, s] of Object.entries(byPlayerId)) {
+            const goals = Number(s?.goals) || 0;
+            const assists = Number(s?.assists) || 0;
+            const gamesPlayed = Number(s?.gamesPlayed) || 0;
+            const fp = goals * 1.25 + assists;
+            snap[playerId] = { goals, assists, gamesPlayed, fp };
+          }
+
+          baselineByWeekId[String(nextWeek.weekId)] = {
+            weekId: String(nextWeek.weekId),
+            capturedAtMs: nowMs,
+            statsSeasonId: statsJson?.seasonId ?? null,
+            statsLastUpdatedAt: statsJson?.lastUpdatedAt ?? null,
+            byPlayerId: snap,
+          };
+
+          advancedMatchups.baselineByWeekId = baselineByWeekId;
+        }
+      }
+    }
+
+    const nextState = {
+      ...st2,
+      matchups: advancedMatchups,
+    };
+
+    leagueStore
+      .saveLeague(nextState, { savedBy: "system:matchupRollover" })
+      .catch((e) => console.error("[ROLLOVER] save failed:", e));
+
+    const ioRef = app.get("io");
+    if (ioRef) {
+      ioRef.emit("league:updated", {
+        reason: "matchups:rollover",
+        fromWeekId: weekId,
+        toWeekId: String(nextWeek.weekId),
+        fromWeekIndex: idx,
+        toWeekIndex: nextIndex,
+      });
+    }
+  } catch (err) {
+    console.error("[ROLLOVER] Failed:", err);
+  }
+}
+
+// -------------------------------
+// Phase 3 — Session 5: Finalize weekly results (idempotent, never overwrite)
+// Stores matchups.resultsByWeek[weekId] after weekEndAtMs
+// -------------------------------
+function tryFinalizeWeeklyResults() {
+  try {
+    const st = leagueStore.loadLeague();
+const { m, weeks, idx, week, reason } = getCurrentWeekSafe(st);
+if (!week || reason !== "ok") return;
+
+
+    if (!week || !week.weekId || !Number.isFinite(week.weekEndAtMs)) return;
+
+    const nowMs = Date.now();
+
+    // Only finalize at/after week end
+    if (nowMs < week.weekEndAtMs) return;
+
+    const weekId = String(week.weekId);
+
+    const resultsByWeek = { ...(m.resultsByWeek || {}) };
+
+    // Idempotent: never overwrite
+    if (resultsByWeek[weekId]) return;
+
+    // Need baseline for deltas (safety)
+    const baseline = m.baselineByWeekId?.[weekId] || null;
+    if (!baseline || !baseline.byPlayerId) return;
+
+    // Need current stats cache
+    if (!fs.existsSync(STATS_FILE)) return;
+
+    const raw = fs.readFileSync(STATS_FILE, "utf8");
+    const statsJson = JSON.parse(raw);
+    const currentByPlayerId =
+      statsJson?.byPlayerId && typeof statsJson.byPlayerId === "object"
+        ? statsJson.byPlayerId
+        : {};
+
+    const fpNow = (pid) => {
+      const row = currentByPlayerId?.[pid];
+      if (!row) return 0;
+      const g = Number(row.goals || 0);
+      const a = Number(row.assists || 0);
+      return g * 1.25 + a;
+    };
+
+    const fpBase = (pid) => {
+      const row = baseline.byPlayerId?.[pid];
+      if (!row) return 0;
+      if (row.fp != null) return Number(row.fp || 0);
+      const g = Number(row.goals || 0);
+      const a = Number(row.assists || 0);
+      return g * 1.25 + a;
+    };
+
+    const getPlayerId = (p) => {
+      if (!p) return null;
+      if (p.playerId != null) return String(p.playerId);
+      if (p.id != null) return String(p.id);
+      if (p.pid != null) return String(p.pid);
+
+      if (p.player && p.player.playerId != null) return String(p.player.playerId);
+      if (p.player && p.player.id != null) return String(p.player.id);
+
+      const token =
+        p.auctionKey != null ? String(p.auctionKey) :
+        p.player != null ? String(p.player) :
+        p.key != null ? String(p.key) :
+        null;
+
+      if (token) {
+        const mm = token.match(/^id:(\d+)$/i);
+        if (mm) return mm[1];
+      }
+      return null;
+    };
+
+    const locksByTeam = m.locksByTeam || {};
+    const teams = Array.isArray(st.teams) ? st.teams : [];
+
+    const perTeam = {};
+    for (const t of teams) {
+      const teamName = String(t?.name || "");
+      if (!teamName) continue;
+
+      const lock = locksByTeam?.[teamName] || {};
+      const locked =
+        Number.isFinite(Number(lock.lockedAtMs)) &&
+        Number(lock.weekIndex) === idx;
+
+      // Rule: unlocked teams score 0
+      if (!locked) {
+        perTeam[teamName] = { weeklyFP: 0, locked: false, lockedAtMs: lock.lockedAtMs ?? null };
+        continue;
+      }
+
+      const roster = Array.isArray(t?.roster) ? t.roster : [];
+      let sum = 0;
+
+      for (const p of roster) {
+        const pid = getPlayerId(p);
+        if (!pid) continue;
+
+        let delta = fpNow(pid) - fpBase(pid);
+        if (delta < 0) delta = 0; // safety clamp
+        sum += delta;
+      }
+
+      perTeam[teamName] = {
+        weeklyFP: Math.round(sum * 100) / 100,
+        locked: true,
+        lockedAtMs: lock.lockedAtMs ?? null,
+      };
+    }
+
+    // Store a compact, auditable result object
+    resultsByWeek[weekId] = {
+      weekId,
+      finalizedAtMs: nowMs,
+      weekIndex: idx,
+      weekEndAtMs: week.weekEndAtMs,
+      baselineCapturedAtMs: baseline?.capturedAtMs ?? null,
+      baselineStatsLastUpdatedAt: baseline?.statsLastUpdatedAt ?? null,
+      statsLastUpdatedAt: statsJson?.lastUpdatedAt ?? null,
+      perTeam,
+    };
+
+    const next = {
+      ...st,
+      matchups: {
+        ...m,
+        resultsByWeek,
+      },
+    };
+
+    leagueStore
+      .saveLeague(next, { savedBy: "system:finalizeWeeklyResults" })
+      .catch((e) => console.error("[RESULTS] save failed:", e));
+
+    const ioRef = app.get("io");
+    if (ioRef) ioRef.emit("league:updated", { reason: "matchups:weekFinalized", weekId });
+  } catch (err) {
+    console.error("[RESULTS] Failed to finalize weekly results:", err);
+  }
+}
+
 // ===============================
 // BOOT: auto jobs + server listen
 // ===============================
+
+if (MATCHUPS_ENABLED) {
+  console.log("[MATCHUPS] enabled: Phase 3 auto-jobs ON");
 tryAutoWeeklySnapshot();
 setInterval(tryAutoWeeklySnapshot, 60 * 1000);
 
 tryAutoAuctionRollover();
 setInterval(tryAutoAuctionRollover, 60 * 1000);
+
+tryApplyRosterLocks();
+setInterval(tryApplyRosterLocks, 60 * 1000);
+
+tryCaptureWeeklyBaseline();
+setInterval(tryCaptureWeeklyBaseline, 60 * 1000);
+
+tryFinalizeWeeklyResults();
+setInterval(tryFinalizeWeeklyResults, 60 * 1000);
+
+tryRolloverMatchupWeek();
+setInterval(tryRolloverMatchupWeek, 60 * 1000);
+} else {
+  console.log("[MATCHUPS] disabled: Phase 3 auto-jobs OFF");
+}
+
 
 server.listen(PORT, () => {
   console.log(`Hundo Leago backend + WebSocket listening on port ${PORT}`);

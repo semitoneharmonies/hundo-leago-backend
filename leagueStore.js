@@ -38,7 +38,9 @@ function emptyState() {
   currentWeekId: null,
   locksByTeam: {},
   baselineByPlayerId: {},
+  baselineByWeekId: {}, 
   resultsByWeek: {},
+   lastRolloverWeekId: null,
 },
 
 
@@ -83,8 +85,10 @@ function normalizeMatchups(m) {
     currentWeekId: obj.currentWeekId == null ? null : toStr(obj.currentWeekId, "").trim(),
     locksByTeam: toObj(obj.locksByTeam, {}),
     baselineByPlayerId: toObj(obj.baselineByPlayerId, {}),
+    baselineByWeekId: toObj(obj.baselineByWeekId, {}),
     resultsByWeek: toObj(obj.resultsByWeek, {}),
-    
+    lastRolloverWeekId:
+    obj.lastRolloverWeekId == null ? null : toStr(obj.lastRolloverWeekId, "").trim(),
   };
 }
 
