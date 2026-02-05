@@ -553,13 +553,10 @@ function tryAutoWeeklySnapshot() {
 
     const hour = Number(partsPT.hour);
     const minute = Number(partsPT.minute);
-    const inWindow = hour === 16 && minute >= 0 && minute <= 10;
-    if (!inWindow) return;
+    const afterDeadline = hour > 16 || (hour === 16 && minute >= 0);
+    if (!afterDeadline) return;
 
-    const snapshotId = buildAutoSnapshotId({
-      ...partsPT,
-      minute: "00",
-    });
+    const snapshotId = buildAutoSnapshotId({ ...partsPT, hour: "16", minute: "00" });
 
     const state = leagueStore.loadLeague();
     if (state.lastAutoWeeklySnapshotId === snapshotId) return;
@@ -696,14 +693,12 @@ function tryAutoAuctionRollover() {
     if (partsPT.weekday !== "Sun") return;
 
     const hour = Number(partsPT.hour);
-    const minute = Number(partsPT.minute);
-    const inWindow = hour === 16 && minute >= 0 && minute <= 10;
-    if (!inWindow) return;
+const minute = Number(partsPT.minute);
+const afterDeadline = hour > 16 || (hour === 16 && minute >= 0);
+if (!afterDeadline) return;
 
-    const rolloverId = buildAutoAuctionRolloverId({
-      ...partsPT,
-      minute: "00",
-    });
+
+    const rolloverId = buildAutoAuctionRolloverId({ ...partsPT, hour: "16", minute: "00" });
 
     const state = leagueStore.loadLeague();
     if (state.lastAutoAuctionRolloverId === rolloverId) return;
@@ -775,6 +770,9 @@ app.get("/health", (req, res) => {
     lastSavedAt: st?.meta?.lastSavedAt || null,
     lastSavedBy: st?.meta?.lastSavedBy || null,
     hasLoadError: Boolean(st?.meta?.loadError),
+    lastAutoWeeklySnapshotId: st?.lastAutoWeeklySnapshotId ?? null,
+lastAutoAuctionRolloverId: st?.lastAutoAuctionRolloverId ?? null,
+
         backupsDir: leagueStore.backupsDir || BACKUPS_DIR,
     backupsCount: (() => {
       try {
@@ -1527,6 +1525,7 @@ app.get("/api/matchups/debug/stateSummary", (req, res) => {
     currentWeekId: m.currentWeekId ?? null,
     resultsKeys: Object.keys(m.resultsByWeek || {}),
     lastRolloverWeekId: m.lastRolloverWeekId ?? null,
+  
   });
 });
 
@@ -2120,7 +2119,6 @@ app.post("/api/league", async (req, res) => {
   try {
     const prev = leagueStore.loadLeague();
 
-
     // ----------------------------
     // Phase 0 write-safety guards
     // ----------------------------
@@ -2157,12 +2155,20 @@ app.post("/api/league", async (req, res) => {
     }
 
     // Optional: matchups must be an object if provided
-if (body.matchups !== undefined && !isPlainObject(body.matchups)) {
-  return res.status(400).json({
-    ok: false,
-    error: "Refusing save: matchups must be an object if provided.",
-  });
-}
+    if (body.matchups !== undefined && !isPlainObject(body.matchups)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Refusing save: matchups must be an object if provided.",
+      });
+    }
+
+    // ✅ Matchups are backend-owned: only commissioner can overwrite matchups,
+    // and only if they actually include a matchups object in the request.
+    const role = String(meta?.actorRole || "").toLowerCase();
+    const nextMatchups =
+      role === "commissioner" && isPlainObject(body.matchups)
+        ? body.matchups
+        : prev.matchups;
 
     const next = {
       ...prev,
@@ -2171,36 +2177,39 @@ if (body.matchups !== undefined && !isPlainObject(body.matchups)) {
       leagueLog: Array.isArray(body.leagueLog) ? body.leagueLog : [],
       tradeProposals: Array.isArray(body.tradeProposals) ? body.tradeProposals : [],
       tradeBlock: Array.isArray(body.tradeBlock) ? body.tradeBlock : [],
-      matchups: isPlainObject(body.matchups) ? body.matchups : prev.matchups,
+
+      // ✅ crucial line
+      matchups: nextMatchups,
 
       settings:
         body.settings && typeof body.settings === "object"
           ? body.settings
           : prev.settings || { frozen: false },
+
       nextAuctionDeadline: body.nextAuctionDeadline || prev.nextAuctionDeadline || null,
 
       // preserve auto markers
-     lastAutoWeeklySnapshotId: prev.lastAutoWeeklySnapshotId,
-lastAutoAuctionRolloverId: prev.lastAutoAuctionRolloverId,
+      lastAutoWeeklySnapshotId: prev.lastAutoWeeklySnapshotId,
+      lastAutoAuctionRolloverId: prev.lastAutoAuctionRolloverId,
     };
 
     await leagueStore.saveLeague(next, {
-  savedBy:
-    String(meta?.actorRole || "").toLowerCase() === "commissioner"
-      ? "commissioner"
-      : (meta?.actorTeam || "manager"),
-});
-
+      savedBy:
+        role === "commissioner"
+          ? "commissioner"
+          : (meta?.actorTeam || "manager"),
+    });
 
     const ioRef = req.app.get("io");
     if (ioRef) ioRef.emit("league:updated", { reason: "saveLeague" });
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (err) {
     console.error("[BACKEND] Error writing league-state.json:", err);
-    res.status(500).json({ ok: false, error: "Failed to save state" });
+    return res.status(500).json({ ok: false, error: "Failed to save state" });
   }
 });
+
 // ===============================
 // Phase 2A — Player API
 // ===============================
