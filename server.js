@@ -1508,7 +1508,14 @@ app.get("/api/matchups/rollover/status", (req, res) => {
 
 
 const DEBUG_MATCHUPS = process.env.MATCHUPS_DEBUG === "true";
+
+// ✅ separate switches
 const MATCHUPS_ENABLED = process.env.MATCHUPS_ENABLED === "true";
+
+// ✅ default ON if not set (safer for live league ops)
+const SNAPSHOTS_ENABLED = process.env.SNAPSHOTS_ENABLED !== "false";
+const AUCTIONS_ENABLED = process.env.AUCTIONS_ENABLED !== "false";
+
 
 if (DEBUG_MATCHUPS) {
 app.get("/api/matchups/debug/stateSummary", (req, res) => {
@@ -3004,28 +3011,47 @@ if (!week || reason !== "ok") return;
 // BOOT: auto jobs + server listen
 // ===============================
 
-if (MATCHUPS_ENABLED) {
-  console.log("[MATCHUPS] enabled: Phase 3 auto-jobs ON");
-tryAutoWeeklySnapshot();
-setInterval(tryAutoWeeklySnapshot, 60 * 1000);
+// ===============================
+// BOOT: auto jobs + server listen
+// ===============================
 
-tryAutoAuctionRollover();
-setInterval(tryAutoAuctionRollover, 60 * 1000);
-
-tryApplyRosterLocks();
-setInterval(tryApplyRosterLocks, 60 * 1000);
-
-tryCaptureWeeklyBaseline();
-setInterval(tryCaptureWeeklyBaseline, 60 * 1000);
-
-tryFinalizeWeeklyResults();
-setInterval(tryFinalizeWeeklyResults, 60 * 1000);
-
-tryRolloverMatchupWeek();
-setInterval(tryRolloverMatchupWeek, 60 * 1000);
+// ✅ Always-on league ops (unless explicitly disabled)
+if (SNAPSHOTS_ENABLED) {
+  console.log("[SNAPSHOTS] enabled: auto-weekly snapshots ON");
+  tryAutoWeeklySnapshot();
+  setInterval(tryAutoWeeklySnapshot, 60 * 1000);
 } else {
-  console.log("[MATCHUPS] disabled: Phase 3 auto-jobs OFF");
+  console.log("[SNAPSHOTS] disabled");
 }
+
+if (AUCTIONS_ENABLED) {
+  console.log("[AUCTIONS] enabled: auto auction rollover ON");
+  tryAutoAuctionRollover();
+  setInterval(tryAutoAuctionRollover, 60 * 1000);
+} else {
+  console.log("[AUCTIONS] disabled");
+}
+
+// ✅ Matchups jobs are separate + optional
+if (MATCHUPS_ENABLED) {
+  console.log("[MATCHUPS] enabled: matchup auto-jobs ON");
+
+  tryApplyRosterLocks();
+  setInterval(tryApplyRosterLocks, 60 * 1000);
+
+  tryCaptureWeeklyBaseline();
+  setInterval(tryCaptureWeeklyBaseline, 60 * 1000);
+
+  tryFinalizeWeeklyResults();
+  setInterval(tryFinalizeWeeklyResults, 60 * 1000);
+
+  tryRolloverMatchupWeek();
+  setInterval(tryRolloverMatchupWeek, 60 * 1000);
+} else {
+  console.log("[MATCHUPS] disabled: matchup auto-jobs OFF");
+}
+
+
 
 
 server.listen(PORT, () => {
