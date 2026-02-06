@@ -8,6 +8,8 @@ const http = require("http");
 const { Server } = require("socket.io");
 const { createLeagueStore } = require("./leagueStore");
 const { registerHealthRoutes } = require("./routes/healthRoutes");
+const { registerLeagueReadRoutes } = require("./routes/leagueReadRoutes");
+
 
 
 const app = express();
@@ -164,6 +166,8 @@ const leagueStore = createLeagueStore({
 });
 
 registerHealthRoutes({ app, leagueStore, DATA_FILE, BACKUPS_DIR });
+registerLeagueReadRoutes({ app, leagueStore });
+
 
 // ===============================
 // Phase 2A — Player DB (file-backed)
@@ -1740,10 +1744,7 @@ app.post("/api/matchups/debug/setTeamRosterEmpty", async (req, res) => {
 });
 }
 
-app.get("/api/league", (req, res) => {
-  const state = leagueStore.loadLeague();
-  res.json(state);
-});
+
 // ===============================
 // Phase 3 — Matchups: Generate schedule (commissioner-only)
 // ===============================
