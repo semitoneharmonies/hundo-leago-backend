@@ -7,6 +7,8 @@ const path = require("path");
 const http = require("http");
 const { Server } = require("socket.io");
 const { createLeagueStore } = require("./leagueStore");
+const { registerHealthRoutes } = require("./routes/healthRoutes");
+
 
 const app = express();
 console.log("SERVER ENTRY LOADED: server.js", new Date().toISOString());
@@ -160,6 +162,8 @@ const leagueStore = createLeagueStore({
   backupsDirPath: BACKUPS_DIR,
   maxBackups: Number(process.env.MAX_BACKUPS || 200) || 200,
 });
+
+registerHealthRoutes({ app, leagueStore, DATA_FILE, BACKUPS_DIR });
 
 // ===============================
 // Phase 2A — Player DB (file-backed)
@@ -756,35 +760,7 @@ function isManagerWriteBlockedByFreeze(prevState, meta) {
 // ===============================
 // ROUTES
 // ===============================
-app.get("/", (req, res) => {
-  res.send("Hundo Leago backend is running.");
-});
 
-app.get("/health", (req, res) => {
-  const st = leagueStore.loadLeague();
-  res.json({
-    ok: true,
-    schemaVersion: st.schemaVersion ?? null,
-    loadedFromDisk: Boolean(st?.meta?.loadedFromDisk),
-    dataFilePath: st?.meta?.dataFilePath || DATA_FILE,
-    lastSavedAt: st?.meta?.lastSavedAt || null,
-    lastSavedBy: st?.meta?.lastSavedBy || null,
-    hasLoadError: Boolean(st?.meta?.loadError),
-    lastAutoWeeklySnapshotId: st?.lastAutoWeeklySnapshotId ?? null,
-lastAutoAuctionRolloverId: st?.lastAutoAuctionRolloverId ?? null,
-
-        backupsDir: leagueStore.backupsDir || BACKUPS_DIR,
-    backupsCount: (() => {
-      try {
-        return leagueStore.listBackups({ limit: 999999 }).length;
-      } catch (_) {
-        return null;
-      }
-    })(),
-
-  });
-  
-});
 
 // -------------------------------
 // Phase 3 — Session 6: Standings (Read-Only)
