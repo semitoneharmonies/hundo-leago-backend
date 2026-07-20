@@ -48,6 +48,11 @@ const PROTECTED_JSON_FILES = [
   "league_with_meta.json",
   "players.json",
 ];
+const REQUIRED_REPOSITORY_JSON_FILES = [
+  "league.json",
+  "league_with_meta.json",
+  "players.json",
+];
 
 function createTemporaryRoot(t, prefix) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -271,6 +276,26 @@ function sha256File(relativePath) {
       fs.readFileSync(path.join(ROOT_DIRECTORY, relativePath))
     )
     .digest("hex");
+}
+
+function protectedFingerprints() {
+  for (const relativePath of REQUIRED_REPOSITORY_JSON_FILES) {
+    assert.equal(
+      fs.existsSync(path.join(ROOT_DIRECTORY, relativePath)),
+      true,
+      `${relativePath} must exist in every repository checkout`
+    );
+  }
+  const presentFiles = PROTECTED_JSON_FILES.filter(
+    (relativePath) =>
+      fs.existsSync(path.join(ROOT_DIRECTORY, relativePath))
+  );
+  return Object.fromEntries(
+    presentFiles.map((relativePath) => [
+      relativePath,
+      sha256File(relativePath),
+    ])
+  );
 }
 
 describe("M2-09 JSON import dry-run", () => {
@@ -697,12 +722,7 @@ describe("M2-09 JSON import dry-run", () => {
   });
 
   test("safe reject/quarantine rendering and dry-runs leave protected repository data unchanged", (t) => {
-    const hashesBefore = Object.fromEntries(
-      PROTECTED_JSON_FILES.map((relativePath) => [
-        relativePath,
-        sha256File(relativePath),
-      ])
-    );
+    const hashesBefore = protectedFingerprints();
     const bundle = createSyntheticBundle(t);
     const paths = runPaths(bundle.root, "safe-report");
     runJsonImportDryRun(runOptions(bundle, paths));
@@ -741,12 +761,7 @@ describe("M2-09 JSON import dry-run", () => {
       /must-not-appear|Player One|Goalie Two|password/
     );
     assert.deepEqual(
-      Object.fromEntries(
-        PROTECTED_JSON_FILES.map((relativePath) => [
-          relativePath,
-          sha256File(relativePath),
-        ])
-      ),
+      protectedFingerprints(),
       hashesBefore
     );
   });

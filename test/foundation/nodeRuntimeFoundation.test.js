@@ -38,3 +38,15 @@ test("package metadata and dependency declarations remain synchronized", () => {
   assert.deepEqual(rootLockPackage.dependencies, packageJson.dependencies);
   assert.deepEqual(rootLockPackage.devDependencies, packageJson.devDependencies);
 });
+
+test("canonical M2 deployment inputs use platform-independent LF bytes", () => {
+  assert.deepEqual(
+    readRootFile(".gitattributes").trim().split(/\r?\n/),
+    [
+      "database/migrations/*.sql text eol=lf",
+      "database/reset-manifests/*.json text eol=lf",
+      "database/staging-environment.example.json text eol=lf",
+      "render.yaml text eol=lf",
+    ]
+  );
+});

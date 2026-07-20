@@ -45,6 +45,11 @@ const PROTECTED_JSON_FILES = [
   "league_with_meta.json",
   "players.json",
 ];
+const REQUIRED_REPOSITORY_JSON_FILES = [
+  "league.json",
+  "league_with_meta.json",
+  "players.json",
+];
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -64,6 +69,21 @@ function fingerprintFiles(relativePaths) {
       sha256File(path.join(ROOT_DIRECTORY, relativePath)),
     ])
   );
+}
+
+function presentProtectedJsonFiles() {
+  for (const relativePath of REQUIRED_REPOSITORY_JSON_FILES) {
+    assert.equal(
+      fs.existsSync(path.join(ROOT_DIRECTORY, relativePath)),
+      true,
+      `${relativePath} must exist in every repository checkout`
+    );
+  }
+  const presentFiles = PROTECTED_JSON_FILES.filter(
+    (relativePath) =>
+      fs.existsSync(path.join(ROOT_DIRECTORY, relativePath))
+  );
+  return presentFiles;
 }
 
 function createTemporaryRoot(t, prefix) {
@@ -444,7 +464,7 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
 
   test("validation leaves protected JSON and repository data artifacts unchanged", () => {
     const filesToFingerprint = [
-      ...PROTECTED_JSON_FILES,
+      ...presentProtectedJsonFiles(),
       path.relative(ROOT_DIRECTORY, MANIFEST_PATH),
     ];
     const hashesBefore = fingerprintFiles(filesToFingerprint);

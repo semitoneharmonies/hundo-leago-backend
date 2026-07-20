@@ -1,8 +1,8 @@
 
 # local runtime state
 league-state.json
-backups/
-snapshots/
+/backups/
+/snapshots/
 
 # node stuff
 node_modules/

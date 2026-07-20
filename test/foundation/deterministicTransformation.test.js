@@ -37,6 +37,11 @@ const PROTECTED_JSON_FILES = [
   "league_with_meta.json",
   "players.json",
 ];
+const REQUIRED_REPOSITORY_JSON_FILES = [
+  "league.json",
+  "league_with_meta.json",
+  "players.json",
+];
 
 function assertErrorCode(code) {
   return (error) => error?.code === code;
@@ -61,8 +66,19 @@ function sha256File(relativePath) {
 }
 
 function protectedFingerprints() {
+  for (const relativePath of REQUIRED_REPOSITORY_JSON_FILES) {
+    assert.equal(
+      fs.existsSync(path.join(ROOT_DIRECTORY, relativePath)),
+      true,
+      `${relativePath} must exist in every repository checkout`
+    );
+  }
+  const presentFiles = PROTECTED_JSON_FILES.filter(
+    (relativePath) =>
+      fs.existsSync(path.join(ROOT_DIRECTORY, relativePath))
+  );
   return Object.fromEntries(
-    PROTECTED_JSON_FILES.map((relativePath) => [
+    presentFiles.map((relativePath) => [
       relativePath,
       sha256File(relativePath),
     ])
