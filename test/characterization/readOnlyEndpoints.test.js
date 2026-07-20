@@ -31,8 +31,8 @@ const CASES = [
   },
   {
     path: "/api/players/1001",
-    status: 404,
-    keys: ["ok", "error"],
+    status: 200,
+    keys: ["ok", "player"],
   },
   {
     path: "/api/players/not-a-number",

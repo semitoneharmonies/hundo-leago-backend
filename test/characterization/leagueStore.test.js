@@ -30,6 +30,15 @@ function createStore(runtime) {
 }
 
 describe("current leagueStore behavior", { concurrency: false }, () => {
+  test("preserves the legacy missing-path constructor error", () => {
+    const createLeagueStore = loadCreateLeagueStore();
+
+    assert.throws(
+      () => createLeagueStore(),
+      /createLeagueStore requires dataFilePath/
+    );
+  });
+
   test("loads and normalizes valid JSON without writing it", async (t) => {
     const runtime = await withRuntime(t);
     const before = await hashFile(runtime.leagueFile);
@@ -160,6 +169,85 @@ describe("current leagueStore behavior", { concurrency: false }, () => {
     );
 
     assert.equal(await hashFile(runtime.leagueFile), before);
+  });
+
+  test("delegates backup persistence while retaining store normalization and queueing", async (t) => {
+    const runtime = await withRuntime(t);
+    const calls = [];
+    const backupState = JSON.parse(
+      await fs.promises.readFile(runtime.leagueFile, "utf8")
+    );
+    let liveState = null;
+    const fakeRepository = {
+      listBackups(options) {
+        calls.push(["list", options]);
+        return [{ id: "fake.json" }];
+      },
+      pruneBackupsBestEffort() {
+        calls.push(["prune"]);
+      },
+      readBackup(id) {
+        calls.push(["read", id]);
+        return backupState;
+      },
+      writeBackupSync(state, options) {
+        calls.push([
+          "writeBackup",
+          state.teams[0].name,
+          options,
+        ]);
+        return "fake.json";
+      },
+      writeLiveStateAtomicSync(state) {
+        calls.push(["writeLive", state.teams[0].name]);
+        liveState = structuredClone(state);
+      },
+    };
+    const createLeagueStore = loadCreateLeagueStore();
+    const store = createLeagueStore({
+      dataFilePath: runtime.leagueFile,
+      backupsDirPath: runtime.backupsDir,
+      maxBackups: 10,
+      createBackupRepositoryFactory(options) {
+        calls.push([
+          "create",
+          options.backupsDir,
+          options.dataFilePath,
+          options.maxBackups,
+        ]);
+        return fakeRepository;
+      },
+    });
+
+    assert.deepEqual(store.listBackups({ limit: 3 }), [
+      { id: "fake.json" },
+    ]);
+    const restored = await store.restoreBackup("fake.json", {
+      restoredBy: "test:repository",
+    });
+
+    assert.equal(
+      restored.meta.lastRestoredBy,
+      "test:repository"
+    );
+    assert.equal(
+      liveState.meta.lastRestoredBy,
+      "test:repository"
+    );
+    assert.deepEqual(calls[0], [
+      "create",
+      runtime.backupsDir,
+      runtime.leagueFile,
+      10,
+    ]);
+    assert.equal(
+      calls.some(
+        (call) =>
+          call[0] === "writeBackup" &&
+          call[2].savedBy === "restore_test:repository"
+      ),
+      true
+    );
   });
 
   test("queues overlapping saves in call order", async (t) => {

@@ -11,3 +11,10 @@ yarn-debug.log*
 yarn-error.log*
 .DS_Store
 league_dump.json
+
+# local SQLite databases and sidecars
+.data/
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*

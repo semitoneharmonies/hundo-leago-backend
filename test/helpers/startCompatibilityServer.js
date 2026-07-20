@@ -10,6 +10,8 @@ const STORAGE_ENV_KEYS = [
   "LEAGUE_FILE",
   "PLAYERS_FILE",
   "STATS_FILE",
+  "DATA_DIR",
+  "STATS_LOCK_FILE",
   "SNAPSHOT_DIR",
   "BACKUPS_DIR",
 ];
@@ -58,6 +60,10 @@ async function startCompatibilityServer(
   const backendRoot = path.resolve(__dirname, "..", "..");
   const port = await findAvailablePort();
   const baseUrl = `http://127.0.0.1:${port}`;
+  const statisticsRefreshDir = path.join(
+    runtime.root,
+    "stats-refresh"
+  );
   const env = {
     ...process.env,
     NODE_ENV: "test",
@@ -65,6 +71,12 @@ async function startCompatibilityServer(
     LEAGUE_FILE: runtime.leagueFile,
     PLAYERS_FILE: runtime.playersFile,
     STATS_FILE: runtime.statsFile,
+    DATA_DIR: statisticsRefreshDir,
+    STATS_LOCK_FILE: path.join(
+      statisticsRefreshDir,
+      "stats-refresh.lock"
+    ),
+    STATS_SEASON_ID: "20262027",
     SNAPSHOT_DIR: runtime.snapshotsDir,
     BACKUPS_DIR: runtime.backupsDir,
     MAX_BACKUPS: "10",
@@ -101,6 +113,7 @@ async function startCompatibilityServer(
   let stdout = "";
   let stderr = "";
   let stopped = false;
+  let stopSignal = null;
 
   child.stdout.on("data", (chunk) => {
     stdout = appendBounded(stdout, chunk);
@@ -169,12 +182,16 @@ async function startCompatibilityServer(
     get stderr() {
       return stderr;
     },
-    async stop() {
+    get stopSignal() {
+      return stopSignal;
+    },
+    async stop({ signal = "SIGTERM" } = {}) {
       if (stopped) return;
       stopped = true;
+      stopSignal = signal;
 
       if (child.exitCode === null && child.signalCode === null) {
-        child.kill();
+        child.kill(signal);
         const exited = await waitForExit(child, 2000);
         if (!exited) {
           child.kill("SIGKILL");

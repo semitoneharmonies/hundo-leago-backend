@@ -1,0 +1,290 @@
+{
+  "manifestId": "2026-season-1-reset-v1",
+  "manifestVersion": 1,
+  "applicableSourceBundleManifestVersion": 1,
+  "requiredOperatingMode": "OFFSEASON_RESET",
+  "approval": {
+    "authority": "Grae",
+    "reference": "docs/01-project/OPERATING_MODE.md",
+    "date": "2026-07-14"
+  },
+  "omissionFamilies": [
+    {
+      "familyId": "season_1_season_containers",
+      "targetTables": [
+        "seasons"
+      ],
+      "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
+      "countTreatment": "source_count_equals_reported_omitted_count",
+      "targetTreatment": "do_not_insert",
+      "reason": "Season 1 competition containers are omitted to establish the clean Season 2 competition boundary."
+    },
+    {
+      "familyId": "season_1_teams",
+      "targetTables": [
+        "teams",
+        "team_manager_assignments",
+        "team_events"
+      ],
+      "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
+      "countTreatment": "source_count_equals_reported_omitted_count",
+      "targetTreatment": "do_not_insert",
+      "reason": "Existing Season 1 team records are within the approved clean Season 2 reset scope."
+    },
+    {
+      "familyId": "season_1_rosters",
+      "targetTables": [
+        "player_ownerships",
+        "ownership_events"
+      ],
+      "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
+      "countTreatment": "source_count_equals_reported_omitted_count",
+      "targetTreatment": "do_not_insert",
+      "reason": "Existing Season 1 roster and ownership records are within the approved clean Season 2 reset scope."
+    },
+    {
+      "familyId": "season_1_contracts",
+      "targetTables": [
+        "contracts",
+        "contract_years",
+        "contract_events"
+      ],
+      "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
+      "countTreatment": "source_count_equals_reported_omitted_count",
+      "targetTreatment": "do_not_insert",
+      "reason": "Existing Season 1 contract records are within the approved clean Season 2 reset scope."
+    },
+    {
+      "familyId": "season_1_retention",
+      "targetTables": [
+        "retention_obligations",
+        "retention_years"
+      ],
+      "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
+      "countTreatment": "source_count_equals_reported_omitted_count",
+      "targetTreatment": "do_not_insert",
+      "reason": "Existing Season 1 retained-salary records are within the approved clean Season 2 reset scope."
+    },
+    {
+      "familyId": "season_1_buyouts",
+      "targetTables": [
+        "buyout_obligations",
+        "buyout_years"
+      ],
+      "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
+      "countTreatment": "source_count_equals_reported_omitted_count",
+      "targetTreatment": "do_not_insert",
+      "reason": "Existing Season 1 buyout records are within the approved clean Season 2 reset scope."
+    },
+    {
+      "familyId": "season_1_trades",
+      "targetTables": [
+        "trades",
+        "trade_assets",
+        "trade_events",
+        "future_considerations"
+      ],
+      "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
+      "countTreatment": "source_count_equals_reported_omitted_count",
+      "targetTreatment": "do_not_insert",
+      "reason": "Existing Season 1 trade records are within the approved clean Season 2 reset scope."
+    },
+    {
+      "familyId": "season_1_auctions",
+      "targetTables": [
+        "auctions",
+        "auction_bids",
+        "auction_events",
+        "auction_resolutions"
+      ],
+      "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
+      "countTreatment": "source_count_equals_reported_omitted_count",
+      "targetTreatment": "do_not_insert",
+      "reason": "Existing Season 1 auction history is within the approved clean Season 2 reset scope."
+    },
+    {
+      "familyId": "season_1_matchups",
+      "targetTables": [
+        "matchup_weeks",
+        "matchups",
+        "matchup_byes",
+        "matchup_roster_locks",
+        "matchup_roster_players",
+        "matchup_results",
+        "matchup_result_versions",
+        "matchup_operations",
+        "stat_snapshots",
+        "stat_snapshot_players"
+      ],
+      "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
+      "countTreatment": "source_count_equals_reported_omitted_count",
+      "targetTreatment": "do_not_insert",
+      "reason": "Existing Season 1 matchup and competition-stat snapshot records are within the approved clean Season 2 reset scope."
+    },
+    {
+      "familyId": "season_1_standings",
+      "targetTables": [
+        "standings_snapshots",
+        "standings_rows",
+        "standings_operations"
+      ],
+      "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
+      "countTreatment": "source_count_equals_reported_omitted_count",
+      "targetTreatment": "do_not_insert",
+      "reason": "Existing Season 1 standings records are within the approved clean Season 2 reset scope."
+    },
+    {
+      "familyId": "season_1_competition_activity",
+      "targetTables": [
+        "league_activity"
+      ],
+      "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
+      "countTreatment": "source_count_equals_reported_omitted_count",
+      "targetTreatment": "do_not_insert",
+      "reason": "Season 1 competition activity tied to reset teams is omitted with the approved Season 1 records."
+    },
+    {
+      "familyId": "season_1_competition_operations",
+      "targetTables": [
+        "idempotency_requests",
+        "job_runs",
+        "outbox_events",
+        "notifications",
+        "operational_events"
+      ],
+      "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
+      "countTreatment": "source_count_equals_reported_omitted_count",
+      "targetTreatment": "do_not_insert",
+      "reason": "Season 1-only operational records tied to omitted competition activity are omitted while Season 2 records remain protected."
+    }
+  ],
+  "protectedFamilies": [
+    {
+      "familyId": "player_identity",
+      "targetTables": [
+        "players",
+        "player_external_ids",
+        "player_names",
+        "player_source_state"
+      ],
+      "treatment": "preserve_or_stop",
+      "externalEvidence": [],
+      "reason": "Player records and stable player identifiers are protected project data."
+    },
+    {
+      "familyId": "league_identity_and_configuration",
+      "targetTables": [
+        "leagues",
+        "league_settings"
+      ],
+      "treatment": "preserve_or_stop",
+      "externalEvidence": [],
+      "reason": "League identity and configuration are not approved Season 1 competition omissions."
+    },
+    {
+      "familyId": "player_position_corrections",
+      "targetTables": [
+        "league_player_positions"
+      ],
+      "treatment": "preserve_or_stop",
+      "externalEvidence": [],
+      "reason": "Approved player-position corrections must remain attached to stable player identities."
+    },
+    {
+      "familyId": "draft_assets_and_rights",
+      "targetTables": [
+        "draft_eligibility_snapshots",
+        "draft_eligible_players",
+        "draft_events",
+        "draft_lottery_results",
+        "draft_lottery_runs",
+        "draft_pick_ownership_events",
+        "draft_picks",
+        "draft_queue_items",
+        "draft_selections",
+        "entry_drafts"
+      ],
+      "treatment": "preserve_or_stop",
+      "externalEvidence": [],
+      "reason": "Draft assets and rights are not listed in the approved Season 1 reset scope."
+    },
+    {
+      "familyId": "global_statistics",
+      "targetTables": [
+        "stat_sources",
+        "stat_refreshes",
+        "player_stat_totals"
+      ],
+      "treatment": "preserve_or_stop",
+      "externalEvidence": [],
+      "reason": "Global player-stat sources, refresh evidence, and totals remain reusable across seasons."
+    },
+    {
+      "familyId": "season_2_accounts_and_security",
+      "targetTables": [
+        "account_action_tokens",
+        "account_events",
+        "authentication_rate_limits",
+        "platform_roles",
+        "security_audit_events",
+        "sessions",
+        "user_credentials",
+        "users"
+      ],
+      "treatment": "preserve_or_stop",
+      "externalEvidence": [],
+      "reason": "New Season 2 accounts, credentials, sessions, roles, tokens, limits, and security evidence are protected."
+    },
+    {
+      "familyId": "season_2_league_access_and_controls",
+      "targetTables": [
+        "administrator_requests",
+        "commissioner_corrections",
+        "league_freezes",
+        "league_invitations",
+        "league_memberships"
+      ],
+      "treatment": "preserve_or_stop",
+      "externalEvidence": [],
+      "reason": "Season 2 access and commissioner-control records are outside the approved Season 1 reset scope."
+    },
+    {
+      "familyId": "recovery_and_migration_evidence",
+      "targetTables": [
+        "application_metadata",
+        "backup_catalog",
+        "migration_reports"
+      ],
+      "treatment": "preserve_or_stop",
+      "externalEvidence": [
+        "source_bundles",
+        "backups",
+        "snapshots",
+        "documentation",
+        "migration_records",
+        "recovery_information"
+      ],
+      "reason": "Migration and recovery evidence must be preserved for audit and rollback."
+    },
+    {
+      "familyId": "unlisted_data",
+      "targetTables": [],
+      "treatment": "preserve_or_stop",
+      "externalEvidence": [],
+      "reason": "Every source record and target table not explicitly allowed by an omission family is preserved or stops the import."
+    }
+  ],
+  "neverImportFamilies": [
+    {
+      "familyId": "hard_coded_frontend_credentials",
+      "sourceMaterial": [
+        "hard_coded_frontend_names",
+        "hard_coded_frontend_roles",
+        "plaintext_frontend_passwords"
+      ],
+      "treatment": "never_import",
+      "reason": "Hard-coded frontend identity and plaintext credential material is not an account source and must never be migrated."
+    }
+  ],
+  "checksum": "55b4a039cb7ff6c9070822fe05c56dcb71d20508e111a14ca20c978ff2d34ffc"
+}

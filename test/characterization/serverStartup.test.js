@@ -48,6 +48,10 @@ test("current server starts against isolated copied state and stops cleanly", as
   assert.equal(health.json.backupsCount, 0);
   assert.equal(path.resolve(health.json.dataFilePath), runtime.leagueFile);
   assert.equal(path.resolve(health.json.backupsDir), runtime.backupsDir);
+  assert.match(
+    server.stdout,
+    /Hundo Leago backend \+ WebSocket listening on port/
+  );
 
   const runtimeAfterRequests = await hashTree(runtime.root);
   const sourceAfter = await hashTree(FIXTURE_SOURCE);
@@ -56,9 +60,10 @@ test("current server starts against isolated copied state and stops cleanly", as
   assert.deepEqual(sourceAfter, sourceBefore);
 
   const childPid = server.child.pid;
-  await server.stop();
+  await server.stop({ signal: "SIGTERM" });
 
   assert.ok(Number.isInteger(childPid));
+  assert.equal(server.stopSignal, "SIGTERM");
   assert.ok(
     server.child.exitCode !== null || server.child.signalCode !== null,
     "the compatibility server process should have exited"

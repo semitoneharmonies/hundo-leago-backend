@@ -2,17 +2,35 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const ROUTE_PATTERN =
-  /app\.(get|post|put|patch|delete)\(\s*["']([^"']+)["']/g;
+  /\b(?:app|router)\.(get|post|put|patch|delete)\(\s*["']([^"']+)["']/g;
+
+function listJavaScriptFiles(directoryPath) {
+  if (!fs.existsSync(directoryPath)) return [];
+
+  const files = [];
+  const entries = fs.readdirSync(directoryPath, {
+    withFileTypes: true,
+  });
+
+  for (const entry of entries) {
+    const fullPath = path.join(directoryPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listJavaScriptFiles(fullPath));
+    } else if (entry.isFile() && entry.name.endsWith(".js")) {
+      files.push(fullPath);
+    }
+  }
+
+  return files;
+}
 
 function readEndpointManifest(backendRoot) {
   const sourceFiles = [
     path.join(backendRoot, "server.js"),
-    ...fs
-      .readdirSync(path.join(backendRoot, "routes"), {
-        withFileTypes: true,
-      })
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
-      .map((entry) => path.join(backendRoot, "routes", entry.name)),
+    ...listJavaScriptFiles(path.join(backendRoot, "routes")),
+    ...listJavaScriptFiles(
+      path.join(backendRoot, "src", "transport", "http", "routes")
+    ),
   ];
 
   const endpoints = [];
@@ -41,15 +59,46 @@ function readEndpointManifest(backendRoot) {
 }
 
 function debugRoutesAreGuarded(backendRoot) {
-  const source = fs.readFileSync(path.join(backendRoot, "server.js"), "utf8");
-  const guardIndex = source.indexOf("if (DEBUG_MATCHUPS) {");
-  const nextNormalRouteIndex = source.indexOf(
-    'app.post("/api/matchups/schedule/generate"'
+  const runtimeSource = fs.readFileSync(
+    path.join(
+      backendRoot,
+      "src",
+      "bootstrap",
+      "createCompatibilityRuntime.js"
+    ),
+    "utf8"
+  );
+  const routerSource = fs.readFileSync(
+    path.join(
+      backendRoot,
+      "src",
+      "transport",
+      "http",
+      "routes",
+      "matchupsDebugCompatibilityRouter.js"
+    ),
+    "utf8"
+  );
+  const guardIndex = runtimeSource.indexOf(
+    "if (config.debugMatchups) {"
+  );
+  const routerUseIndex = runtimeSource.indexOf(
+    "createMatchupsDebugCompatibilityRouter({",
+    guardIndex
+  );
+  const nextRouteIndex = runtimeSource.indexOf(
+    "const generateScheduleService =",
+    guardIndex
   );
 
-  if (guardIndex < 0 || nextNormalRouteIndex <= guardIndex) return false;
+  if (
+    guardIndex < 0 ||
+    routerUseIndex < guardIndex ||
+    nextRouteIndex < routerUseIndex
+  ) {
+    return false;
+  }
 
-  const debugBlock = source.slice(guardIndex, nextNormalRouteIndex);
   const debugPaths = [
     "/api/matchups/debug/stateSummary",
     "/api/matchups/debug/resetLocks",
@@ -59,7 +108,9 @@ function debugRoutesAreGuarded(backendRoot) {
     "/api/matchups/debug/setTeamRosterEmpty",
   ];
 
-  return debugPaths.every((routePath) => debugBlock.includes(routePath));
+  return debugPaths.every((routePath) =>
+    routerSource.includes(routePath)
+  );
 }
 
 module.exports = { debugRoutesAreGuarded, readEndpointManifest };

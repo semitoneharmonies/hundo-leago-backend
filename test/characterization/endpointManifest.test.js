@@ -74,13 +74,136 @@ describe("current compatibility endpoint manifest", () => {
 
     assert.ok(playerDebug);
     assert.ok(playerById);
-    assert.equal(playerDebug.sourceFile, "routes/playersReadRoutes.js");
-    assert.equal(playerById.sourceFile, "routes/playersReadRoutes.js");
+    assert.equal(
+      playerDebug.sourceFile,
+      "src/transport/http/routes/playersCompatibilityRouter.js"
+    );
+    assert.equal(
+      playerById.sourceFile,
+      "src/transport/http/routes/playersCompatibilityRouter.js"
+    );
     assert.ok(playerDebug.sourceIndex < playerById.sourceIndex);
   });
 
   test("keeps all matchup debug routes inside the current debug guard", () => {
+    const manifest = readEndpointManifest(BACKEND_ROOT);
+    const debugRoutes = manifest.filter(
+      (entry) => entry.debug
+    );
+
     assert.equal(debugRoutesAreGuarded(BACKEND_ROOT), true);
+    assert.equal(
+      debugRoutes.every(
+        (entry) =>
+          entry.sourceFile ===
+          "src/transport/http/routes/matchupsDebugCompatibilityRouter.js"
+      ),
+      true
+    );
+  });
+
+  test("locates statistics compatibility routes in the statistics router", () => {
+    const manifest = readEndpointManifest(BACKEND_ROOT);
+    const statisticsRoutes = manifest.filter((entry) =>
+      entry.path.startsWith("/api/stats")
+    );
+
+    assert.equal(statisticsRoutes.length, 4);
+    assert.equal(
+      statisticsRoutes.every(
+        (entry) =>
+          entry.sourceFile ===
+          "src/transport/http/routes/statisticsCompatibilityRouter.js"
+      ),
+      true
+    );
+  });
+
+  test("locates recovery compatibility routes in the recovery router", () => {
+    const manifest = readEndpointManifest(BACKEND_ROOT);
+    const recoveryPaths = new Set([
+      "/api/snapshots",
+      "/api/snapshots/create",
+      "/api/snapshots/restore",
+      "/api/backups",
+      "/api/backups/restore",
+    ]);
+    const recoveryRoutes = manifest.filter((entry) =>
+      recoveryPaths.has(entry.path)
+    );
+
+    assert.equal(recoveryRoutes.length, 5);
+    assert.equal(
+      recoveryRoutes.every(
+        (entry) =>
+          entry.sourceFile ===
+          "src/transport/http/routes/recoveryCompatibilityRouter.js"
+      ),
+      true
+    );
+  });
+
+  test("locates non-debug matchup reads in the matchup read router", () => {
+    const manifest = readEndpointManifest(BACKEND_ROOT);
+    const readPaths = new Set([
+      "/api/matchups/standings",
+      "/api/matchups/current",
+      "/api/matchups/locks",
+      "/api/matchups/locks/preview",
+      "/api/matchups/baseline/preview",
+      "/api/matchups/baseline/status",
+      "/api/matchups/scoring/preview",
+      "/api/matchups/rollover/status",
+    ]);
+    const matchupReads = manifest.filter((entry) =>
+      readPaths.has(entry.path)
+    );
+
+    assert.equal(matchupReads.length, 8);
+    assert.equal(
+      matchupReads.every(
+        (entry) =>
+          entry.sourceFile ===
+          "src/transport/http/routes/matchupsReadCompatibilityRouter.js"
+      ),
+      true
+    );
+  });
+
+  test("locates matchup schedule commands in the schedule router", () => {
+    const manifest = readEndpointManifest(BACKEND_ROOT);
+    const schedulePaths = new Set([
+      "/api/matchups/schedule/generate",
+      "/api/matchups/schedule/updateWeek",
+      "/api/matchups/schedule/shiftFrom",
+    ]);
+    const scheduleCommands = manifest.filter((entry) =>
+      schedulePaths.has(entry.path)
+    );
+
+    assert.equal(scheduleCommands.length, 3);
+    assert.equal(
+      scheduleCommands.every(
+        (entry) =>
+          entry.sourceFile ===
+          "src/transport/http/routes/matchupsScheduleCompatibilityRouter.js"
+      ),
+      true
+    );
+  });
+
+  test("locates the broad league write in its compatibility router", () => {
+    const manifest = readEndpointManifest(BACKEND_ROOT);
+    const leagueWrite = manifest.find(
+      (entry) =>
+        entry.key === "POST /api/league"
+    );
+
+    assert.ok(leagueWrite);
+    assert.equal(
+      leagueWrite.sourceFile,
+      "src/transport/http/routes/leagueWriteCompatibilityRouter.js"
+    );
   });
 });
 
