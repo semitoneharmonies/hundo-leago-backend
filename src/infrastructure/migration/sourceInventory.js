@@ -96,6 +96,11 @@ function normalizePathForComparison(filePath) {
     : normalized;
 }
 
+function isPortableAbsolutePath(filePath) {
+  return path.posix.isAbsolute(filePath) ||
+    path.win32.isAbsolute(filePath);
+}
+
 function isPathInside(parentPath, candidatePath) {
   const relative = path.relative(parentPath, candidatePath);
   return (
@@ -945,7 +950,7 @@ function verifySourceBundle({
       !SOURCE_LABEL_PATTERN.test(source.label || "") ||
       !["file", "directory"].includes(source.kind) ||
       typeof source.absolutePath !== "string" ||
-      !path.isAbsolute(source.absolutePath) ||
+      !isPortableAbsolutePath(source.absolutePath) ||
       !Array.isArray(source.files)
     ) {
       throw inventoryError(

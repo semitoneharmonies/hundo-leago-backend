@@ -389,6 +389,30 @@ describe("M2-06 source inventory and bundle hashing", () => {
     );
   });
 
+  test("verifies provenance paths captured on either operating-system path style", (t) => {
+    const temporaryRoot = createTemporaryRoot(
+      t,
+      "hundo-leago-m2-06-portable-path-"
+    );
+    const bundle = createSimpleBundle(
+      temporaryRoot,
+      "portable-path"
+    );
+    const manifest = readManifest(bundle.bundleDirectory);
+    manifest.sources[0].absolutePath =
+      process.platform === "win32"
+        ? "/srv/hundo-leago/source.json"
+        : "C:\\hundo-leago\\source.json";
+    refreshManifestIdentifiers(manifest);
+    writeManifest(bundle.bundleDirectory, manifest);
+
+    assert.doesNotThrow(() => {
+      verifySourceBundle({
+        bundleDirectory: bundle.bundleDirectory,
+      });
+    });
+  });
+
   test("fails closed for copied-byte, manifest, size, shape, ID, checksum, and extra-file tampering", (t) => {
     const temporaryRoot = createTemporaryRoot(
       t,
