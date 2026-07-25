@@ -7,6 +7,9 @@ const {
   fixtureId,
 } = require("./releaseQaFixtureContract");
 
+const SESSION_COOKIE_PATTERN =
+  /^(?:__Host-)?hl_session=[A-Za-z0-9_-]{43}$/;
+
 class ReleaseQaRuntimeVerificationError extends Error {
   constructor(checkId, message) {
     super(message);
@@ -130,7 +133,7 @@ async function signIn(baseUrl, frontendOrigin, alias, password) {
   const cookie = response.setCookie?.split(";", 1)[0];
   if (
     typeof cookie !== "string" ||
-    !/^hl_session=[A-Za-z0-9_-]{43}$/.test(cookie) ||
+    !SESSION_COOKIE_PATTERN.test(cookie) ||
     typeof json?.data?.csrfToken !== "string"
   ) {
     fail(`sign-in:${alias}`, "Release-QA sign-in returned an invalid session contract.");
@@ -590,6 +593,7 @@ async function verifyReleaseQaRuntime({
 
 module.exports = {
   ReleaseQaRuntimeVerificationError,
+  SESSION_COOKIE_PATTERN,
   browserHeaders,
   runtimeBinding,
   verifyReleaseQaRuntime,

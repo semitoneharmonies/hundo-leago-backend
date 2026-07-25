@@ -10,6 +10,7 @@ const {
 const {
   browserHeaders,
   runtimeBinding,
+  SESSION_COOKIE_PATTERN,
   verifyReleaseQaRuntime,
 } = require("../../src/operations/release/verifyReleaseQaRuntime");
 const {
@@ -54,6 +55,14 @@ test("M7 release-QA verifier accepts only exact loopback or staging provider ori
         "https://hundoleago.netlify.app"
       ),
     { code: "RELEASE_QA_RUNTIME_VERIFICATION_FAILED" }
+  );
+  assert.equal(
+    SESSION_COOKIE_PATTERN.test(`hl_session=${"a".repeat(43)}`),
+    true
+  );
+  assert.equal(
+    SESSION_COOKIE_PATTERN.test(`__Host-hl_session=${"a".repeat(43)}`),
+    true
   );
 });
 
