@@ -92,7 +92,7 @@
         },
         {
           "key": "SPORTSDATAIO_NHL_API_ORIGIN",
-          "value": "https://api.sportsdata.io/v3/nhl"
+          "value": "https://api.sportsdata.io/api/nhl/fantasy"
         },
         {
           "key": "SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR",

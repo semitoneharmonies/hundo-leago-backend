@@ -98,7 +98,7 @@ function currentSeason(env) {
 
 function approvedSportsDataIoOrigin(env) {
   const value = env.SPORTSDATAIO_NHL_API_ORIGIN === undefined
-    ? "https://api.sportsdata.io/v3/nhl"
+    ? "https://api.sportsdata.io/api/nhl/fantasy"
     : requiredString(env, "SPORTSDATAIO_NHL_API_ORIGIN");
   let parsed;
   try {
@@ -114,7 +114,7 @@ function approvedSportsDataIoOrigin(env) {
     parsed.origin !== "https://api.sportsdata.io" ||
     parsed.username ||
     parsed.password ||
-    parsed.pathname !== "/v3/nhl" ||
+    parsed.pathname !== "/api/nhl/fantasy" ||
     parsed.search ||
     parsed.hash
   ) {

@@ -101,7 +101,8 @@ test("SportsDataIO staging import persists a complete synthetic catalog before i
     Games: 10,
     Goals: 2,
     Assists: 3,
-    Season: 2025,
+    Season: 2026,
+    SeasonType: 1,
     Updated: "2025-04-18T12:00:00Z",
   }));
   const calls = [];
@@ -121,7 +122,7 @@ test("SportsDataIO staging import persists a complete synthetic catalog before i
         apiKey: "test-key",
         enabled: true,
         nhlSeasonKey: "20252026",
-        origin: "https://api.sportsdata.io/v3/nhl",
+        origin: "https://api.sportsdata.io/api/nhl/fantasy",
         seasonStartYear: "2025",
       },
     }),

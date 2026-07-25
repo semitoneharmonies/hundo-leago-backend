@@ -16,6 +16,21 @@ function response(body, { ok = true } = {}) {
   return { ok, async json() { return body; } };
 }
 
+test("SportsDataIO NHL adapter pins the Discovery Lab NHL fantasy origin", () => {
+  assert.equal(
+    DEFAULT_ORIGIN,
+    "https://api.sportsdata.io/api/nhl/fantasy"
+  );
+  assert.throws(
+    () => createSportsDataIoNhlAdapter({
+      apiKey: "test-key",
+      origin: "https://api.sportsdata.io/v3/nhl",
+    }),
+    (error) => error instanceof SportsDataIoNhlAdapterError &&
+      error.code === "SPORTSDATAIO_NHL_ORIGIN_INVALID"
+  );
+});
+
 test("SportsDataIO NHL adapter imports current, free-agent, and statistics-only players without exposing its key", async () => {
   const calls = [];
   const adapter = createSportsDataIoNhlAdapter({
@@ -25,7 +40,7 @@ test("SportsDataIO NHL adapter imports current, free-agent, and statistics-only 
     nowMs: () => 1_700_000_000_000,
     fetchImpl: async (url, options) => {
       calls.push({ url, options });
-      if (url.endsWith("/scores/json/Players")) {
+      if (url.endsWith("/json/Players")) {
         return response([{
           PlayerID: 11,
           FirstName: "Ada",
@@ -37,7 +52,7 @@ test("SportsDataIO NHL adapter imports current, free-agent, and statistics-only 
           Updated: "2025-04-18T12:00:00",
         }]);
       }
-      if (url.endsWith("/scores/json/FreeAgents")) {
+      if (url.endsWith("/json/FreeAgents")) {
         return response([{
           PlayerID: 12,
           FirstName: "Bea",
@@ -55,7 +70,8 @@ test("SportsDataIO NHL adapter imports current, free-agent, and statistics-only 
           Games: 82,
           Goals: 40,
           Assists: 50,
-          Season: 2024,
+          Season: 2025,
+          SeasonType: 1,
         },
         {
           PlayerID: 13,
@@ -65,7 +81,8 @@ test("SportsDataIO NHL adapter imports current, free-agent, and statistics-only 
           Games: 40,
           Goals: 10,
           Assists: 20,
-          Season: 2024,
+          Season: 2025,
+          SeasonType: 1,
         },
       ]);
     },
@@ -73,11 +90,11 @@ test("SportsDataIO NHL adapter imports current, free-agent, and statistics-only 
 
   const catalog = await adapter.fetchCatalog("2024");
 
-  assert.equal(calls[0].url, `${DEFAULT_ORIGIN}/scores/json/Players`);
-  assert.equal(calls[1].url, `${DEFAULT_ORIGIN}/scores/json/FreeAgents`);
+  assert.equal(calls[0].url, `${DEFAULT_ORIGIN}/json/Players`);
+  assert.equal(calls[1].url, `${DEFAULT_ORIGIN}/json/FreeAgents`);
   assert.equal(
     calls[2].url,
-    `${DEFAULT_ORIGIN}/stats/json/PlayerSeasonStats/2024`
+    `${DEFAULT_ORIGIN}/json/PlayerSeasonStats/2025REG`
   );
   for (const call of calls) {
     assert.deepEqual(call.options, {
@@ -119,14 +136,15 @@ test("SportsDataIO NHL adapter normalizes last-season totals without a live requ
       Games: 82,
       Goals: 40,
       Assists: 50,
-      Season: 2024,
+      Season: 2025,
+      SeasonType: 1,
       Updated: "2025-04-18T12:00:00",
     }]),
   });
 
   const statistics = await adapter.fetchLastSeasonStatistics(2024);
 
-  assert.equal(adapter.buildSeasonStatisticsUrl("2024"), `${DEFAULT_ORIGIN}/stats/json/PlayerSeasonStats/2024`);
+  assert.equal(adapter.buildSeasonStatisticsUrl("2024"), `${DEFAULT_ORIGIN}/json/PlayerSeasonStats/2025REG`);
   assert.deepEqual(statistics, {
     provider: PROVIDER_NAME,
     seasonStart: "2024",
@@ -207,7 +225,29 @@ test("SportsDataIO NHL adapter rejects exposed statistics for another season", a
       Games: 82,
       Goals: 40,
       Assists: 50,
-      Season: 2023,
+      Season: 2024,
+      SeasonType: 1,
+    }]),
+  });
+
+  await assert.rejects(
+    adapter.fetchLastSeasonStatistics("2024"),
+    (error) => error instanceof SportsDataIoNhlAdapterError &&
+      error.code === "SPORTSDATAIO_NHL_STATISTICS_INVALID"
+  );
+});
+
+test("SportsDataIO NHL adapter rejects postseason statistics", async () => {
+  const adapter = createSportsDataIoNhlAdapter({
+    apiKey: "test-key",
+    minimumLastSeasonStatisticsPlayerCount: 1,
+    fetchImpl: async () => response([{
+      PlayerID: 11,
+      Games: 20,
+      Goals: 10,
+      Assists: 12,
+      Season: 2025,
+      SeasonType: 3,
     }]),
   });
 
@@ -223,7 +263,7 @@ test("SportsDataIO NHL adapter refuses a truncated catalog before persistence", 
     apiKey: "test-key",
     minimumLastSeasonStatisticsPlayerCount: 1,
     fetchImpl: async (url) => {
-      if (url.endsWith("/scores/json/Players")) {
+      if (url.endsWith("/json/Players")) {
         return response([{
           PlayerID: 11,
           FirstName: "Ada",
@@ -231,14 +271,15 @@ test("SportsDataIO NHL adapter refuses a truncated catalog before persistence", 
           Status: "Active",
         }]);
       }
-      if (url.endsWith("/scores/json/FreeAgents")) return response([]);
+      if (url.endsWith("/json/FreeAgents")) return response([]);
       return response([{
         PlayerID: 11,
         Name: "Ada Skater",
         Games: 82,
         Goals: 40,
         Assists: 50,
-        Season: 2024,
+        Season: 2025,
+        SeasonType: 1,
       }]);
     },
   });
@@ -258,7 +299,8 @@ test("SportsDataIO NHL adapter refuses truncated last-season statistics", async 
       Games: 82,
       Goals: 40,
       Assists: 50,
-      Season: 2024,
+      Season: 2025,
+      SeasonType: 1,
     }]),
   });
 

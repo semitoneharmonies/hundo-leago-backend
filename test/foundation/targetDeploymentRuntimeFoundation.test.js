@@ -698,7 +698,8 @@ describe("M7-01 deployed target runtime configuration", () => {
       Games: 82,
       Goals: 20,
       Assists: 30,
-      Season: 2025,
+      Season: 2026,
+      SeasonType: 1,
       Updated: "2026-04-18T12:00:00Z",
     }));
     const providerCalls = [];

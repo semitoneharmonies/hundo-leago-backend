@@ -1,4 +1,4 @@
-const DEFAULT_ORIGIN = "https://api.sportsdata.io/v3/nhl";
+const DEFAULT_ORIGIN = "https://api.sportsdata.io/api/nhl/fantasy";
 const MINIMUM_CATALOG_PLAYER_COUNT = 800;
 const MINIMUM_LAST_SEASON_STATISTICS_PLAYER_COUNT = 800;
 const PROVIDER_NAME = "sportsdataio-discovery-lab";
@@ -55,7 +55,7 @@ function httpsOrigin(value) {
     parsed.origin !== "https://api.sportsdata.io" ||
     parsed.username ||
     parsed.password ||
-    parsed.pathname !== "/v3/nhl" ||
+    parsed.pathname !== "/api/nhl/fantasy" ||
     parsed.search ||
     parsed.hash
   ) {
@@ -76,6 +76,21 @@ function seasonStartYear(value) {
     );
   }
   return normalized;
+}
+
+function providerRegularSeason(seasonStart) {
+  const start = seasonStartYear(seasonStart);
+  const end = String(Number(start) + 1);
+  if (!/^\d{4}$/.test(end)) {
+    fail(
+      "SPORTSDATAIO_NHL_SEASON_INVALID",
+      "SportsDataIO NHL import requires a supported season start year."
+    );
+  }
+  return Object.freeze({
+    end,
+    apiSeason: `${end}REG`,
+  });
 }
 
 function apiPath(value, field) {
@@ -187,7 +202,7 @@ function normalizedCatalogRow(row, index, nowMs, { currentFeed = false } = {}) {
   });
 }
 
-function normalizedStatisticsRow(row, nowMs, expectedSeasonStart) {
+function normalizedStatisticsRow(row, nowMs, expectedProviderSeason) {
   if (!row || typeof row !== "object" || Array.isArray(row)) {
     fail(
       "SPORTSDATAIO_NHL_STATISTICS_INVALID",
@@ -199,13 +214,23 @@ function normalizedStatisticsRow(row, nowMs, expectedSeasonStart) {
       typeof row.Season === "number" ? String(row.Season) : row.Season;
     if (
       !/^\d{4}$/.test(exposedSeason) ||
-      exposedSeason !== expectedSeasonStart
+      exposedSeason !== expectedProviderSeason
     ) {
       fail(
         "SPORTSDATAIO_NHL_STATISTICS_INVALID",
         "SportsDataIO NHL statistics response does not match the requested season."
       );
     }
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(row, "SeasonType") &&
+    row.SeasonType !== null &&
+    Number(row.SeasonType) !== 1
+  ) {
+    fail(
+      "SPORTSDATAIO_NHL_STATISTICS_INVALID",
+      "SportsDataIO NHL statistics response is not regular-season data."
+    );
   }
   const providerPlayerId = Number(row.PlayerID);
   const gamesPlayed = Number(row.Games);
@@ -235,9 +260,9 @@ function createSportsDataIoNhlAdapter({
   apiKey,
   fetchImpl = fetch,
   origin = DEFAULT_ORIGIN,
-  catalogPath = "scores/json/Players",
-  freeAgentCatalogPath = "scores/json/FreeAgents",
-  seasonStatisticsPath = "stats/json/PlayerSeasonStats",
+  catalogPath = "json/Players",
+  freeAgentCatalogPath = "json/FreeAgents",
+  seasonStatisticsPath = "json/PlayerSeasonStats",
   minimumCatalogPlayerCount = MINIMUM_CATALOG_PLAYER_COUNT,
   minimumLastSeasonStatisticsPlayerCount =
     MINIMUM_LAST_SEASON_STATISTICS_PLAYER_COUNT,
@@ -278,7 +303,8 @@ function createSportsDataIoNhlAdapter({
   }
 
   function buildSeasonStatisticsUrl(season) {
-    return `${apiOrigin}/${canonicalSeasonStatisticsPath}/${seasonStartYear(season)}`;
+    const { apiSeason } = providerRegularSeason(season);
+    return `${apiOrigin}/${canonicalSeasonStatisticsPath}/${apiSeason}`;
   }
 
   async function fetchRows(url, code) {
@@ -315,8 +341,10 @@ function createSportsDataIoNhlAdapter({
   }
 
   function normalizedStatisticsRows(rows, capturedAt, seasonStart) {
+    const { end: expectedProviderSeason } =
+      providerRegularSeason(seasonStart);
     const statistics = rows.map((row) =>
-      normalizedStatisticsRow(row, capturedAt, seasonStart)
+      normalizedStatisticsRow(row, capturedAt, expectedProviderSeason)
     );
     if (statistics.length < statisticsMinimum) {
       fail(

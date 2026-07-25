@@ -187,7 +187,7 @@ describe("M2 gate staging Render blueprint", () => {
     );
     assert.equal(
       environment.get("SPORTSDATAIO_NHL_API_ORIGIN")?.value,
-      "https://api.sportsdata.io/v3/nhl"
+      "https://api.sportsdata.io/api/nhl/fantasy"
     );
     assert.equal(
       environment.get(
