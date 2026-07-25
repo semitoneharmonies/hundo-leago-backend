@@ -40,6 +40,11 @@ const MIGRATIONS_DIRECTORY = path.join(
 );
 const NOW_MS = Date.parse("2026-07-22T12:00:00.000Z");
 const PUBLIC_FRONTEND_ORIGIN = "https://staging-hundo.netlify.app";
+const TRACKED_COMPATIBILITY_FILES = Object.freeze([
+  "league.json",
+  "league_with_meta.json",
+  "players.json",
+]);
 
 function securityEnv({ configured = true } = {}) {
   return {
@@ -749,13 +754,7 @@ describe("M3-19 composed target HTTP boundary", () => {
     const database = createDatabase(t);
     const runtime = createTargetRuntime(runtimeOptions(database));
     const baseUrl = await startRuntimeApp(t, runtime);
-    const protectedPaths = [
-      "league-state.json",
-      "league.json",
-      "league_dump.json",
-      "league_with_meta.json",
-      "players.json",
-    ];
+    const protectedPaths = TRACKED_COMPATIBILITY_FILES;
     const before = new Map(
       protectedPaths.map((file) => [
         file,
@@ -988,13 +987,7 @@ describe("M3-19 composed target HTTP boundary", () => {
     const runtime = createTargetRuntime(runtimeOptions(database));
     const scenario = seedTwoLeagueProfileScenario(runtime);
     const baseUrl = await startRuntimeApp(t, runtime);
-    const compatibilityFiles = [
-      "league-state.json",
-      "league.json",
-      "league_dump.json",
-      "league_with_meta.json",
-      "players.json",
-    ];
+    const compatibilityFiles = TRACKED_COMPATIBILITY_FILES;
     const compatibilityBefore = new Map(
       compatibilityFiles.map((file) => [
         file,
@@ -1107,13 +1100,7 @@ describe("M3-19 composed target HTTP boundary", () => {
     const runtime = createTargetRuntime(runtimeOptions(database));
     const scenario = seedCommissionerInvitationScenario(runtime);
     const baseUrl = await startRuntimeApp(t, runtime);
-    const compatibilityFiles = [
-      "league-state.json",
-      "league.json",
-      "league_dump.json",
-      "league_with_meta.json",
-      "players.json",
-    ];
+    const compatibilityFiles = TRACKED_COMPATIBILITY_FILES;
     const compatibilityBefore = new Map(
       compatibilityFiles.map((file) => [
         file,
