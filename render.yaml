@@ -36,11 +36,11 @@
         },
         {
           "key": "APP_ENVIRONMENT_ID",
-          "value": "hundo-leago-staging-environment-v1"
+          "value": "test:release-qa"
         },
         {
           "key": "DATABASE_ID",
-          "sync": false
+          "value": "m7-release-qa-fixture"
         },
         {
           "key": "DATABASE_PATH",
@@ -76,7 +76,7 @@
         },
         {
           "key": "LEAGUE_WRITE_MODE",
-          "value": "closed"
+          "value": "open"
         },
         {
           "key": "DEBUG_ROUTES_ENABLED",
@@ -87,8 +87,16 @@
           "value": "capture"
         },
         {
-          "key": "NHL_API_ORIGIN",
-          "value": "https://api.nhle.com"
+          "key": "SPORTSDATAIO_NHL_API_KEY",
+          "sync": false
+        },
+        {
+          "key": "SPORTSDATAIO_NHL_API_ORIGIN",
+          "value": "https://api.sportsdata.io/v3/nhl"
+        },
+        {
+          "key": "SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR",
+          "value": "2025"
         },
         {
           "key": "RATE_LIMIT_KEY_SECRET",

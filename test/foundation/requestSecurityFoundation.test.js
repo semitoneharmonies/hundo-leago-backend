@@ -229,6 +229,42 @@ function assertSecurityHeaders(response) {
 }
 
 describe("M3-05 exact credentialed request security", () => {
+  test("reuses one immutable request ID across composed routers", () => {
+    let factoryCalls = 0;
+    const security = createTargetRequestSecurity({
+      isAllowedOrigin: (origin) => origin === ALLOWED_ORIGIN,
+      requestIdFactory() {
+        factoryCalls += 1;
+        return `request-${factoryCalls}`;
+      },
+      sessionCookie: createSessionCookie({
+        appEnv: "local",
+        publicFrontendOrigin: ALLOWED_ORIGIN,
+        sameSite: "lax",
+      }),
+      sessionService: {
+        bootstrap() {},
+        resolveWithCsrf() {},
+      },
+    });
+    const request = {};
+    const response = {
+      status() {
+        assert.fail("request-ID assignment must not fail");
+      },
+    };
+    let nextCalls = 0;
+    security.assignRequestId(request, response, () => {
+      nextCalls += 1;
+    });
+    security.assignRequestId(request, response, () => {
+      nextCalls += 1;
+    });
+    assert.equal(security.getRequestId(request), "request-1");
+    assert.equal(factoryCalls, 1);
+    assert.equal(nextCalls, 2);
+  });
+
   test("allows only the exact configured Origin and emits required headers", async (t) => {
     const runtime = await startProbe(t);
     const allowed = await request(

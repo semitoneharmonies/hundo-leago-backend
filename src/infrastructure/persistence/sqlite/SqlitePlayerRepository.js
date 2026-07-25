@@ -30,6 +30,8 @@ const PLAYER_COLUMNS = Object.freeze([
   "version",
 ]);
 const PLAYER_STATUSES = new Set(["active", "historical", "all"]);
+const SPORTSDATAIO_PROVIDER = "sportsdataio-discovery-lab";
+const RELEASE_QA_FIXTURE_PROVIDER = "release_qa_fixture";
 const PLAYER_READ_COLUMNS = Object.freeze([
   "players.id",
   "players.first_name",
@@ -48,6 +50,14 @@ const PLAYER_READ_COLUMNS = Object.freeze([
   "source.active AS source_active",
   "source.source_version",
   "source.effective_at_ms AS source_effective_at_ms",
+  "statistics.nhl_season_key AS statistics_nhl_season_key",
+  "statistics_source.provider AS statistics_provider",
+  "statistics.games_played AS statistics_games_played",
+  "statistics.goals AS statistics_goals",
+  "statistics.assists AS statistics_assists",
+  "statistics.nhl_points AS statistics_nhl_points",
+  "statistics.fantasy_points_hundredths AS statistics_fantasy_points_hundredths",
+  "statistics.source_updated_at_ms AS statistics_source_updated_at_ms",
 ]);
 
 function assertExactObject(value, expectedKeys, message) {
@@ -114,11 +124,26 @@ function createSqlitePlayerRepository({ database } = {}) {
       "SELECT candidate.id FROM player_source_state AS candidate " +
       "WHERE candidate.player_id = players.id " +
       "AND candidate.ended_at_ms IS NULL " +
-      "ORDER BY candidate.effective_at_ms DESC, candidate.provider ASC, candidate.id ASC " +
+      `ORDER BY (candidate.provider = '${SPORTSDATAIO_PROVIDER}') DESC, ` +
+      "candidate.effective_at_ms DESC, candidate.provider ASC, candidate.id ASC " +
       "LIMIT 1)";
+    const currentStatisticsJoin =
+      "LEFT JOIN player_stat_totals AS statistics ON statistics.id = (" +
+      "SELECT totals.id FROM player_stat_totals AS totals " +
+      "JOIN stat_refreshes AS refresh ON refresh.id = totals.refresh_id " +
+      "JOIN stat_sources AS statistics_source ON statistics_source.id = totals.stat_source_id " +
+      "WHERE totals.player_id = players.id " +
+      `AND statistics_source.provider IN ('${SPORTSDATAIO_PROVIDER}', '${RELEASE_QA_FIXTURE_PROVIDER}') ` +
+      "AND refresh.status = 'succeeded' " +
+      `ORDER BY (statistics_source.provider = '${SPORTSDATAIO_PROVIDER}') DESC, ` +
+      `((statistics_source.provider = '${RELEASE_QA_FIXTURE_PROVIDER}')) DESC, ` +
+      "refresh.completed_at_ms DESC, totals.created_at_ms DESC, totals.id DESC " +
+      "LIMIT 1) " +
+      "LEFT JOIN stat_sources AS statistics_source ON statistics_source.id = statistics.stat_source_id";
     findDetailByIdStatement = database.prepare(
       `SELECT ${PLAYER_READ_COLUMNS.join(", ")} FROM players ` +
-        `${currentSourceJoin} WHERE players.id = @playerId LIMIT 1`
+        `${currentSourceJoin} ${currentStatisticsJoin} ` +
+        "WHERE players.id = @playerId LIMIT 1"
     );
     findPageCursorStatement = database.prepare(
       "SELECT id, full_name, lower(full_name) AS sort_name, status " +
@@ -131,7 +156,7 @@ function createSqlitePlayerRepository({ database } = {}) {
     );
     listPageStatement = database.prepare(
       `SELECT ${PLAYER_READ_COLUMNS.join(", ")} FROM players ` +
-        `${currentSourceJoin} ` +
+        `${currentSourceJoin} ${currentStatisticsJoin} ` +
         "WHERE (@status = 'all' OR players.status = @status) " +
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
         "AND (@auctionEligible = 0 OR (" +

@@ -63,6 +63,7 @@ function createMatchupScoringService({ repository } = {}) {
       matchupId: context.matchup.id,
       status: context.matchup.status,
       source: Object.freeze({
+        provider: context.refresh.provider,
         refreshId: context.refresh.id,
         completedAtMs: context.refresh.completed_at_ms,
         ...source,

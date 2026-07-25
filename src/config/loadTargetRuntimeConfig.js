@@ -96,23 +96,80 @@ function currentSeason(env) {
   return Object.freeze({ label, nhlSeasonKey });
 }
 
-function approvedNhlOrigin(env) {
-  const value = requiredString(env, "NHL_API_ORIGIN");
+function approvedSportsDataIoOrigin(env) {
+  const value = env.SPORTSDATAIO_NHL_API_ORIGIN === undefined
+    ? "https://api.sportsdata.io/v3/nhl"
+    : requiredString(env, "SPORTSDATAIO_NHL_API_ORIGIN");
   let parsed;
   try {
     parsed = new URL(value);
   } catch {
-    fail("NHL_API_ORIGIN", "a canonical HTTPS origin is required");
+    fail(
+      "SPORTSDATAIO_NHL_API_ORIGIN",
+      "a canonical SportsDataIO NHL HTTPS origin is required"
+    );
   }
   if (
     parsed.protocol !== "https:" ||
-    parsed.origin !== value ||
+    parsed.origin !== "https://api.sportsdata.io" ||
     parsed.username ||
-    parsed.password
+    parsed.password ||
+    parsed.pathname !== "/v3/nhl" ||
+    parsed.search ||
+    parsed.hash
   ) {
-    fail("NHL_API_ORIGIN", "a canonical HTTPS origin is required");
+    fail(
+      "SPORTSDATAIO_NHL_API_ORIGIN",
+      "a canonical SportsDataIO NHL HTTPS origin is required"
+    );
   }
-  return value;
+  return parsed.toString().replace(/\/$/, "");
+}
+
+function sportsDataIoNhlImport(env, appEnv) {
+  const apiKey = env.SPORTSDATAIO_NHL_API_KEY;
+  if (apiKey === undefined || apiKey === null || apiKey === "") {
+    return Object.freeze({ enabled: false });
+  }
+  if (appEnv !== "staging") {
+    fail(
+      "SPORTSDATAIO_NHL_API_KEY",
+      "SportsDataIO NHL import is authorized only for staging"
+    );
+  }
+  if (
+    typeof apiKey !== "string" ||
+    apiKey !== apiKey.trim() ||
+    /[\u0000-\u001f\u007f-\u009f]/u.test(apiKey)
+  ) {
+    fail(
+      "SPORTSDATAIO_NHL_API_KEY",
+      "a non-empty trimmed server-side secret is required"
+    );
+  }
+  const seasonStartYear = requiredString(
+    env,
+    "SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR"
+  );
+  if (!/^\d{4}$/.test(seasonStartYear)) {
+    fail(
+      "SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR",
+      "a four-digit last-season start year is required"
+    );
+  }
+  const result = {
+    enabled: true,
+    origin: approvedSportsDataIoOrigin(env),
+    seasonStartYear,
+    nhlSeasonKey: `${seasonStartYear}${Number(seasonStartYear) + 1}`,
+  };
+  Object.defineProperty(result, "apiKey", {
+    configurable: false,
+    enumerable: false,
+    value: apiKey,
+    writable: false,
+  });
+  return Object.freeze(result);
 }
 
 function loadTargetRuntimeConfig({
@@ -153,6 +210,7 @@ function loadTargetRuntimeConfig({
     );
   }
 
+  const sportsDataIoNhl = sportsDataIoNhlImport(env, security.appEnv);
   return Object.freeze({
     appEnv: security.appEnv,
     buildId: security.buildId,
@@ -168,7 +226,6 @@ function loadTargetRuntimeConfig({
       "database",
       "migrations"
     ),
-    nhlApiOrigin: approvedNhlOrigin(env),
     persistentRoot,
     port: parsePort(env),
     scheduledJobsEnabled: exactBoolean(
@@ -176,6 +233,7 @@ function loadTargetRuntimeConfig({
       "SCHEDULED_JOBS_ENABLED"
     ),
     security,
+    sportsDataIoNhl,
   });
 }
 
@@ -184,4 +242,5 @@ module.exports = {
   IDENTITY_PATTERN,
   TargetRuntimeConfigError,
   loadTargetRuntimeConfig,
+  sportsDataIoNhlImport,
 };

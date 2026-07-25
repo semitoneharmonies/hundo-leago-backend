@@ -12,17 +12,49 @@ const {
   createScryptPasswordHasher,
 } = require("../../infrastructure/security/createScryptPasswordHasher");
 const {
+  createTradeProposalService,
+} = require("../../application/services/trades/createTradeProposalService");
+const {
+  createRespondToTradeProposalService,
+} = require("../../application/services/trades/respondToTradeProposalService");
+const {
+  createPreviewTradeAcceptanceService,
+} = require("../../application/services/trades/previewTradeAcceptanceService");
+const {
+  createAcceptTradeProposalService,
+} = require("../../application/services/trades/acceptTradeProposalService");
+const {
+  createLeagueAuthorizationService,
+} = require("../../application/services/authorization/requireLeagueAuthority");
+const {
+  createTeamAuthorizationService,
+} = require("../../application/services/authorization/requireTeamManagerAuthority");
+const {
+  createSqliteLeagueAccessRepository,
+} = require("../../infrastructure/persistence/sqlite/SqliteLeagueAccessRepository");
+const {
+  createSqliteTeamAuthorityRepository,
+} = require("../../infrastructure/persistence/sqlite/SqliteTeamAuthorityRepository");
+const {
+  createSqliteTradeProposalRepository,
+} = require("../../infrastructure/persistence/sqlite/SqliteTradeProposalRepository");
+const {
+  createSqliteUserRepository,
+} = require("../../infrastructure/persistence/sqlite/SqliteUserRepository");
+const {
   assertReleaseQaPassword,
 } = require("./releaseQaPasswordPolicy");
 const {
+  BETA_PLAYER_TEAM_NUMBERS,
   FIXTURE_BUILD_ID,
   FIXTURE_CREATED_AT,
   FIXTURE_DATABASE_ID,
   FIXTURE_ENVIRONMENT_ID,
   FIXTURE_NOW_MS,
+  INVALID_CAP_BUYOUT_PENALTY_CENTS,
   LEAGUE_ALIASES,
   PLAYER_BLUEPRINTS,
-  TEAM_NAMES,
+  TEAM_NAMES_BY_LEAGUE,
   fixtureEmail,
   fixtureId,
 } = require("./releaseQaFixtureContract");
@@ -311,7 +343,14 @@ function insertLeagueBase(database, leagueAlias, accounts) {
     memberships[accountAlias] = Object.freeze({ id });
   }
 
-  const teams = TEAM_NAMES.map((name, index) => {
+  const teamNames = TEAM_NAMES_BY_LEAGUE[leagueAlias];
+  if (!teamNames) {
+    fail(
+      "RELEASE_QA_TEAM_NAMES_REQUIRED",
+      `The release-QA fixture has no team names for ${leagueAlias}.`
+    );
+  }
+  const teams = teamNames.map((name, index) => {
     const id = fixtureId(`team:${leagueAlias}:${index + 1}`);
     database.prepare(`
       INSERT INTO teams (
@@ -363,6 +402,22 @@ function insertLeagueBase(database, leagueAlias, accounts) {
     FIXTURE_NOW_MS,
     leagueId
   );
+  database.prepare(`
+    INSERT INTO entry_drafts (
+      id, league_id, season_id, status, rounds, pick_clock_seconds,
+      starts_at_ms, completed_at_ms, created_by_user_id,
+      created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, 'completed', 4, 300, ?, ?, ?, ?, ?, 1)
+  `).run(
+    fixtureId(`entry-draft:${leagueAlias}`),
+    leagueId,
+    seasons[0].id,
+    FIXTURE_NOW_MS - 8 * 86_400_000,
+    FIXTURE_NOW_MS - 7 * 86_400_000,
+    accounts[commissionerAlias].id,
+    FIXTURE_NOW_MS - 8 * 86_400_000,
+    FIXTURE_NOW_MS - 7 * 86_400_000
+  );
 
   return Object.freeze({
     alias: leagueAlias,
@@ -405,9 +460,21 @@ function insertLeaguePlayerState(database, league, players, accounts) {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
   `);
   const contracts = {};
+  const rosteredPlayersByTeam = new Map(
+    league.teams.map((team) => [team.id, []])
+  );
 
   PLAYER_BLUEPRINTS.forEach((blueprint, index) => {
     const player = players[blueprint.alias];
+    const assignedTeamNumber =
+      league.alias === "leagueB"
+        ? BETA_PLAYER_TEAM_NUMBERS[blueprint.alias]
+        : undefined;
+    const assignedTeam = league.teams[
+      assignedTeamNumber === undefined
+        ? index % league.teams.length
+        : assignedTeamNumber - 1
+    ];
     insertPosition.run(
       fixtureId(`position:${league.alias}:${blueprint.alias}`),
       league.leagueId,
@@ -422,7 +489,7 @@ function insertLeaguePlayerState(database, league, players, accounts) {
         league.leagueId,
         league.seasons[0].id,
         player.id,
-        league.teams[0].id,
+        assignedTeam.id,
         blueprint.ownershipKind,
         blueprint.rosterCategory,
         blueprint.position,
@@ -430,6 +497,12 @@ function insertLeaguePlayerState(database, league, players, accounts) {
         FIXTURE_NOW_MS,
         FIXTURE_NOW_MS
       );
+      rosteredPlayersByTeam.get(assignedTeam.id).push(Object.freeze({
+        playerId: player.id,
+        positionGroup: blueprint.position,
+        rosterCategory: blueprint.rosterCategory,
+        slotNumber: blueprint.slotNumber,
+      }));
     }
     if (!blueprint.contract && blueprint.alias !== "boughtOutForward") return;
 
@@ -443,7 +516,7 @@ function insertLeaguePlayerState(database, league, players, accounts) {
       contractId,
       league.leagueId,
       player.id,
-      league.teams[0].id,
+      assignedTeam.id,
       blueprint.contractType || "normal",
       aavCents * termYears,
       termYears,
@@ -465,7 +538,12 @@ function insertLeaguePlayerState(database, league, players, accounts) {
         FIXTURE_NOW_MS
       );
     }
-    contracts[blueprint.alias] = Object.freeze({ id: contractId, aavCents, termYears });
+    contracts[blueprint.alias] = Object.freeze({
+      id: contractId,
+      aavCents,
+      teamId: assignedTeam.id,
+      termYears,
+    });
   });
 
   const retentionId = fixtureId(`retention:${league.alias}`);
@@ -480,7 +558,7 @@ function insertLeaguePlayerState(database, league, players, accounts) {
     league.leagueId,
     contracts.activeForward1.id,
     players.activeForward1.id,
-    league.teams[0].id,
+    contracts.activeForward1.teamId,
     league.teams[1].id,
     FIXTURE_NOW_MS,
     FIXTURE_NOW_MS
@@ -504,14 +582,15 @@ function insertLeaguePlayerState(database, league, players, accounts) {
       id, league_id, contract_id, player_id, originating_team_id,
       responsible_team_id, annual_penalty_basis_cents,
       buyout_transaction_id, status, created_at_ms, updated_at_ms, version
-    ) VALUES (?, ?, ?, ?, ?, ?, 150, ?, 'active', ?, ?, 1)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, 1)
   `).run(
     buyoutId,
     league.leagueId,
     contracts.boughtOutForward.id,
     players.boughtOutForward.id,
-    league.teams[0].id,
-    league.teams[0].id,
+    contracts.boughtOutForward.teamId,
+    contracts.boughtOutForward.teamId,
+    INVALID_CAP_BUYOUT_PENALTY_CENTS,
     `release-qa-buyout-${league.alias}`,
     FIXTURE_NOW_MS,
     FIXTURE_NOW_MS
@@ -520,22 +599,32 @@ function insertLeaguePlayerState(database, league, players, accounts) {
     INSERT INTO buyout_years (
       id, league_id, buyout_obligation_id, season_id,
       penalty_cents, status, created_at_ms
-    ) VALUES (?, ?, ?, ?, 150, 'current', ?)
+    ) VALUES (?, ?, ?, ?, ?, 'current', ?)
   `).run(
     fixtureId(`buyout-year:${league.alias}`),
     league.leagueId,
     buyoutId,
     league.seasons[0].id,
+    INVALID_CAP_BUYOUT_PENALTY_CENTS,
     FIXTURE_NOW_MS
   );
-  return Object.freeze({ contracts, retentionId, buyoutId });
+  return Object.freeze({
+    contracts,
+    retentionId,
+    buyoutId,
+    rosteredPlayersByTeam: Object.freeze(Object.fromEntries(
+      [...rosteredPlayersByTeam.entries()].map(([teamId, rosteredPlayers]) => [
+        teamId,
+        Object.freeze(rosteredPlayers),
+      ])
+    )),
+  });
 }
 
 function insertAuctionAndTrades(database, league, leagueState, players, accounts) {
   const managerAlias = league.alias === "leagueA"
     ? "leagueAManagerOne"
     : "leagueBManagerOne";
-  const managerMembershipId = league.memberships[managerAlias].id;
   const auctionId = fixtureId(`auction:${league.alias}`);
   database.prepare(`
     INSERT INTO auctions (
@@ -571,60 +660,208 @@ function insertAuctionAndTrades(database, league, leagueState, players, accounts
     FIXTURE_NOW_MS - 1_800_000
   );
 
-  for (let tradeNumber = 1; tradeNumber <= 2; tradeNumber += 1) {
-    const tradeId = fixtureId(`trade:${league.alias}:${tradeNumber}`);
-    const destination = league.teams[tradeNumber].id;
-    database.prepare(`
-      INSERT INTO trades (
-        id, league_id, season_id, proposing_team_id, receiving_team_id,
-        proposing_user_id, creating_membership_id, creating_authority,
-        status, created_at_ms, expires_at_ms, effective_deadline_at_ms,
-        responded_at_ms, completed_at_ms, commissioner_completion_reference,
-        proposal_model_version, updated_at_ms, version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'manager', 'proposed', ?, ?, ?,
-        NULL, NULL, NULL, 2, ?, 1)
-    `).run(
-      tradeId,
-      league.leagueId,
-      league.seasons[0].id,
-      league.teams[0].id,
-      destination,
-      accounts[managerAlias].id,
-      managerMembershipId,
-      FIXTURE_NOW_MS - tradeNumber * 1_000,
-      FIXTURE_NOW_MS + 7 * 86_400_000,
-      FIXTURE_NOW_MS + 6 * 86_400_000,
-      FIXTURE_NOW_MS - tradeNumber * 1_000
-    );
-    database.prepare(`
-      INSERT INTO trade_assets (
-        id, league_id, trade_id, direction, source_team_id,
-        destination_team_id, asset_type, contract_id, player_id,
-        draft_pick_id, retention_obligation_id, buyout_obligation_id,
-        future_consideration_id, requested_retention_contract_id,
-        requested_retention_cents, future_consideration_description,
-        proposal_snapshot_json, asset_model_version, sequence, created_at_ms
-      ) VALUES (?, ?, ?, 'proposing_to_receiving', ?, ?, 'contract', ?, NULL,
-        NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, 2, 1, ?)
-    `).run(
-      fixtureId(`trade-asset:${league.alias}:${tradeNumber}`),
-      league.leagueId,
-      tradeId,
-      league.teams[0].id,
-      destination,
-      leagueState.contracts.activeForward2.id,
-      JSON.stringify({
-        fixture: true,
-        sharedAssetAlias: "activeForward2Contract",
-        sourceTeamAlias: "team1",
-        destinationTeamAlias: `team${tradeNumber + 1}`,
-      }),
-      FIXTURE_NOW_MS - tradeNumber * 1_000
+  const leagueAuthorization = createLeagueAuthorizationService({
+    userRepository: createSqliteUserRepository({ database }),
+    leagueAccessRepository: createSqliteLeagueAccessRepository({ database }),
+  });
+  const teamAuthorization = createTeamAuthorizationService({
+    leagueAuthorization,
+    teamAuthorityRepository: createSqliteTeamAuthorityRepository({ database }),
+  });
+  const tradeRepository = createSqliteTradeProposalRepository({ database });
+  let scenarioAlias = "uninitialized";
+  let scenarioIdSequence = 0;
+  let nowMs = FIXTURE_NOW_MS;
+  const clock = Object.freeze({ nowMs: () => nowMs });
+  const secureRandom = Object.freeze({
+    id() {
+      scenarioIdSequence += 1;
+      return fixtureId(
+        `trade-scenario:${league.alias}:${scenarioAlias}:${scenarioIdSequence}`
+      );
+    },
+  });
+  const createService = createTradeProposalService({
+    leagueAuthorization,
+    teamAuthorization,
+    repository: tradeRepository,
+    clock,
+    secureRandom,
+  });
+  const lifecycleService = createRespondToTradeProposalService({
+    leagueAuthorization,
+    teamAuthorization,
+    repository: tradeRepository,
+    clock,
+    secureRandom,
+  });
+  const previewService = createPreviewTradeAcceptanceService({
+    leagueAuthorization,
+    teamAuthorization,
+    repository: tradeRepository,
+    clock,
+  });
+  const acceptanceService = createAcceptTradeProposalService({
+    leagueAuthorization,
+    teamAuthorization,
+    repository: tradeRepository,
+    clock,
+    secureRandom,
+  });
+  const authenticated = Object.freeze({
+    valid: true,
+    user: Object.freeze({ id: accounts[league.commissionerAlias].id }),
+    session: Object.freeze({ userId: accounts[league.commissionerAlias].id }),
+  });
+
+  function beginScenario(alias, occurredAtMs) {
+    scenarioAlias = alias;
+    scenarioIdSequence = 0;
+    nowMs = occurredAtMs;
+  }
+
+  function createScenario(alias, occurredAtMs, input) {
+    beginScenario(alias, occurredAtMs);
+    return createService.create({
+      leagueId: league.leagueId,
+      input,
+      idempotencyKey: `release-qa:${league.alias}:${alias}:create`,
+      authenticated,
+    });
+  }
+
+  const completed = createScenario(
+    "accepted",
+    FIXTURE_NOW_MS + 10_000,
+    {
+      proposingTeamId: league.teams[0].id,
+      receivingTeamId: league.teams[1].id,
+      proposingAssets: [{
+        type: "contract",
+        contractId: leagueState.contracts.activeForward7.id,
+      }],
+      receivingAssets: [{
+        type: "contract",
+        contractId: leagueState.contracts.activeForward8.id,
+      }],
+    }
+  );
+  nowMs = FIXTURE_NOW_MS + 11_000;
+  const accepted = acceptanceService.accept({
+    leagueId: league.leagueId,
+    input: { tradeId: completed.proposal.id },
+    idempotencyKey: `release-qa:${league.alias}:accepted:execute`,
+    authenticated,
+  });
+  if (accepted.proposal.storageStatus !== "completed" || accepted.generallyIllegal) {
+    fail(
+      "RELEASE_QA_COMPLETED_TRADE_REQUIRED",
+      `The ${league.alias} accepted trade did not complete legally.`
     );
   }
+
+  const rejected = createScenario(
+    "rejected",
+    FIXTURE_NOW_MS + 20_000,
+    {
+      proposingTeamId: league.teams[2].id,
+      receivingTeamId: league.teams[3].id,
+      proposingAssets: [{
+        type: "contract",
+        contractId: leagueState.contracts.activeForward3.id,
+      }],
+      receivingAssets: [{
+        type: "contract",
+        contractId: leagueState.contracts.activeForward4.id,
+      }],
+    }
+  );
+  nowMs = FIXTURE_NOW_MS + 21_000;
+  const rejectedResult = lifecycleService.respond({
+    leagueId: league.leagueId,
+    input: { tradeId: rejected.proposal.id, action: "reject" },
+    idempotencyKey: `release-qa:${league.alias}:rejected:respond`,
+    authenticated,
+  });
+  if (rejectedResult.proposal.storageStatus !== "declined") {
+    fail(
+      "RELEASE_QA_REJECTED_TRADE_REQUIRED",
+      `The ${league.alias} rejected trade did not persist as declined.`
+    );
+  }
+
+  const invalidCap = createScenario(
+    "invalid-cap",
+    FIXTURE_NOW_MS + 30_000,
+    {
+      proposingTeamId: league.teams[1].id,
+      receivingTeamId: league.teams[2].id,
+      proposingAssets: [
+        {
+          type: "contract",
+          contractId: leagueState.contracts.activeForward7.id,
+        },
+        {
+          type: "buyout_obligation",
+          buyoutObligationId: leagueState.buyoutId,
+        },
+      ],
+      receivingAssets: [{
+        type: "contract",
+        contractId: leagueState.contracts.injuredReserveForward.id,
+      }],
+    }
+  );
+  const invalidCapPreview = previewService.preview({
+    leagueId: league.leagueId,
+    input: { tradeId: invalidCap.proposal.id },
+    authenticated,
+  });
+  const receivingCapIssue = invalidCapPreview.teams
+    .find(({ teamId }) => teamId === league.teams[2].id)
+    ?.issues.some(({ code }) => code === "SALARY_CAP_EXCEEDED");
+  if (!invalidCapPreview.generallyIllegal || !receivingCapIssue) {
+    fail(
+      "RELEASE_QA_INVALID_CAP_PREFLIGHT_REQUIRED",
+      `The ${league.alias} invalid-cap trade did not fail real cap preflight.`
+    );
+  }
+
+  createScenario(
+    "simultaneous-one",
+    FIXTURE_NOW_MS + 40_000,
+    {
+      proposingTeamId: league.teams[1].id,
+      receivingTeamId: league.teams[0].id,
+      proposingAssets: [{
+        type: "contract",
+        contractId: leagueState.contracts.activeForward2.id,
+      }],
+      receivingAssets: [{
+        type: "contract",
+        contractId: leagueState.contracts.activeForward1.id,
+      }],
+    }
+  );
+  createScenario(
+    "simultaneous-two",
+    FIXTURE_NOW_MS + 50_000,
+    {
+      proposingTeamId: league.teams[1].id,
+      receivingTeamId: league.teams[2].id,
+      proposingAssets: [{
+        type: "contract",
+        contractId: leagueState.contracts.activeForward2.id,
+      }],
+      receivingAssets: [{
+        type: "contract",
+        contractId: leagueState.contracts.activeForward9.id,
+      }],
+    }
+  );
 }
 
-function insertMatchupAndReleaseSignals(database, league, accounts, statSourceId) {
+function insertMatchupAndReleaseSignals(database, league, leagueState, players, accounts, statSourceId) {
   const day = 86_400_000;
   const priorWeekId = fixtureId(`matchup-week:${league.alias}:prior`);
   const currentWeekId = fixtureId(`matchup-week:${league.alias}:current`);
@@ -695,27 +932,171 @@ function insertMatchupAndReleaseSignals(database, league, accounts, statSourceId
       id, stat_source_id, nhl_season_key, source_version, status,
       started_at_ms, completed_at_ms, player_count, error_code,
       metadata_json, version
-    ) VALUES (?, ?, '20262027', 'release-qa-v1', 'succeeded',
+    ) VALUES (?, ?, '20262027', 'release-qa-v3', 'succeeded',
       ?, ?, 26, NULL, ?, 1)
   `).run(
     refreshId,
     statSourceId,
     FIXTURE_NOW_MS - 7 * day,
     FIXTURE_NOW_MS - 7 * day,
-    JSON.stringify({ fixture: true, leagueAlias: league.alias })
+    JSON.stringify({
+      fixture: true,
+      leagueAlias: league.alias,
+      sourceKind: "synthetic_release_qa",
+    })
   );
-  const snapshotId = fixtureId(`stat-snapshot:${league.alias}`);
-  database.prepare(`
+  const insertTotal = database.prepare(`
+    INSERT INTO player_stat_totals (
+      id, stat_source_id, refresh_id, nhl_season_key, player_id,
+      games_played, goals, assists, nhl_points, fantasy_points_hundredths,
+      source_updated_at_ms, created_at_ms
+    ) VALUES (?, ?, ?, '20262027', ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const totalsByPlayerId = new Map();
+  PLAYER_BLUEPRINTS.forEach((blueprint, index) => {
+    const gamesPlayed = 48 + index;
+    const goals = 6 + (index % 11);
+    const assists = 9 + ((index * 2) % 13);
+    const fantasyPointsHundredths = goals * 125 + assists * 100;
+    const total = Object.freeze({
+      gamesPlayed,
+      goals,
+      assists,
+      fantasyPointsHundredths,
+    });
+    const playerId = players[blueprint.alias].id;
+    insertTotal.run(
+      fixtureId(`stat-total:${league.alias}:${blueprint.alias}`),
+      statSourceId,
+      refreshId,
+      playerId,
+      total.gamesPlayed,
+      total.goals,
+      total.assists,
+      total.goals + total.assists,
+      total.fantasyPointsHundredths,
+      FIXTURE_NOW_MS - 7 * day,
+      FIXTURE_NOW_MS - 7 * day
+    );
+    totalsByPlayerId.set(playerId, total);
+  });
+
+  const insertSnapshot = database.prepare(`
     INSERT INTO stat_snapshots (
       id, stat_source_id, source_refresh_id, league_id, season_id,
       matchup_week_id, intended_use, completeness_status,
       freshness_status, captured_at_ms, committed, created_at_ms
-    ) VALUES (?, ?, ?, ?, ?, ?, 'matchup_final', 'complete', 'fresh', ?, 1, ?)
-  `).run(
-    snapshotId, statSourceId, refreshId, league.leagueId,
-    league.seasons[0].id, priorWeekId,
-    FIXTURE_NOW_MS - 7 * day, FIXTURE_NOW_MS - 7 * day
-  );
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'complete', 'fresh', ?, 1, ?)
+  `);
+  const insertSnapshotPlayer = database.prepare(`
+    INSERT INTO stat_snapshot_players (
+      id, league_id, stat_snapshot_id, player_id, games_played, goals,
+      assists, nhl_points, fantasy_points_hundredths, created_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertLock = database.prepare(`
+    INSERT INTO matchup_roster_locks (
+      id, league_id, season_id, matchup_week_id, team_id, lock_type, legal,
+      legality_reason_code, locked_at_ms, baseline_snapshot_id,
+      source_freshness_status, created_at_ms, version
+    ) VALUES (?, ?, ?, ?, ?, 'normal', 1, NULL, ?, ?, 'fresh', ?, 1)
+  `);
+  const insertLockPlayer = database.prepare(`
+    INSERT INTO matchup_roster_players (
+      id, league_id, season_id, matchup_roster_lock_id, player_id,
+      position_group, slot_number, baseline_games_played, baseline_goals,
+      baseline_assists, baseline_fantasy_points_hundredths, created_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  function insertWeekLocks({ weekAlias, weekId, intendedUse, capturedAtMs, lockedAtMs }) {
+    const snapshotIds = new Map();
+    league.teams.forEach((team, teamIndex) => {
+      const snapshotId = fixtureId(
+        `stat-snapshot:${league.alias}:${weekAlias}:${teamIndex + 1}`
+      );
+      const lockId = fixtureId(
+        `matchup-lock:${league.alias}:${weekAlias}:${teamIndex + 1}`
+      );
+      const activeRoster = leagueState.rosteredPlayersByTeam[team.id]
+        .filter(({ rosterCategory }) => rosterCategory === "Active");
+      insertSnapshot.run(
+        snapshotId,
+        statSourceId,
+        refreshId,
+        league.leagueId,
+        league.seasons[0].id,
+        weekId,
+        intendedUse,
+        capturedAtMs,
+        capturedAtMs
+      );
+      insertLock.run(
+        lockId,
+        league.leagueId,
+        league.seasons[0].id,
+        weekId,
+        team.id,
+        lockedAtMs,
+        snapshotId,
+        lockedAtMs
+      );
+      activeRoster.forEach((rosteredPlayer, rosterIndex) => {
+        const total = totalsByPlayerId.get(rosteredPlayer.playerId);
+        const goalDelta = 1 + (rosterIndex % 2);
+        const assistDelta = 1 + ((rosterIndex + teamIndex) % 2);
+        const baselineGoals = total.goals - goalDelta;
+        const baselineAssists = total.assists - assistDelta;
+        const baselineFantasyPointsHundredths =
+          baselineGoals * 125 + baselineAssists * 100;
+        insertSnapshotPlayer.run(
+          fixtureId(
+            `stat-snapshot-player:${league.alias}:${weekAlias}:${teamIndex + 1}:${rosteredPlayer.playerId}`
+          ),
+          league.leagueId,
+          snapshotId,
+          rosteredPlayer.playerId,
+          total.gamesPlayed - 1,
+          baselineGoals,
+          baselineAssists,
+          baselineGoals + baselineAssists,
+          baselineFantasyPointsHundredths,
+          capturedAtMs
+        );
+        insertLockPlayer.run(
+          fixtureId(
+            `matchup-lock-player:${league.alias}:${weekAlias}:${teamIndex + 1}:${rosteredPlayer.playerId}`
+          ),
+          league.leagueId,
+          league.seasons[0].id,
+          lockId,
+          rosteredPlayer.playerId,
+          rosteredPlayer.positionGroup,
+          rosteredPlayer.slotNumber,
+          total.gamesPlayed - 1,
+          baselineGoals,
+          baselineAssists,
+          baselineFantasyPointsHundredths,
+          lockedAtMs
+        );
+      });
+      snapshotIds.set(team.id, snapshotId);
+    });
+    return snapshotIds;
+  }
+  const priorSnapshotIds = insertWeekLocks({
+    weekAlias: "prior",
+    weekId: priorWeekId,
+    intendedUse: "matchup_final",
+    capturedAtMs: FIXTURE_NOW_MS - 7 * day,
+    lockedAtMs: FIXTURE_NOW_MS - 13 * day,
+  });
+  insertWeekLocks({
+    weekAlias: "current",
+    weekId: currentWeekId,
+    intendedUse: "matchup_baseline",
+    capturedAtMs: FIXTURE_NOW_MS - day,
+    lockedAtMs: FIXTURE_NOW_MS - 12 * 3_600_000,
+  });
 
   const resultId = fixtureId(`matchup-result:${league.alias}`);
   const resultVersionId = fixtureId(`matchup-result-version:${league.alias}`);
@@ -739,7 +1120,7 @@ function insertMatchupAndReleaseSignals(database, league, accounts, statSourceId
       'calculated', NULL, NULL, NULL, ?)
   `).run(
     resultVersionId, league.leagueId, league.seasons[0].id, resultId,
-    league.teams[0].id, league.teams[1].id, snapshotId,
+    league.teams[0].id, league.teams[1].id, priorSnapshotIds.get(league.teams[0].id),
     FIXTURE_NOW_MS - 7 * day
   );
   database.prepare(`
@@ -839,15 +1220,21 @@ function insertMatchupAndReleaseSignals(database, league, accounts, statSourceId
   );
 }
 
-function seedFixture(database, passwordHash) {
-  const insertMetadata = database.prepare(`
-    INSERT INTO application_metadata (
-      metadata_key, metadata_value, created_at_ms, updated_at_ms
-    ) VALUES (?, ?, ?, ?)
-  `);
-  insertMetadata.run("database_created_at", FIXTURE_CREATED_AT, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
-  insertMetadata.run("database_id", FIXTURE_DATABASE_ID, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
-  insertMetadata.run("environment_id", FIXTURE_ENVIRONMENT_ID, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
+function seedFixture(
+  database,
+  passwordHash,
+  { includeIdentityMetadata = true } = {}
+) {
+  if (includeIdentityMetadata) {
+    const insertMetadata = database.prepare(`
+      INSERT INTO application_metadata (
+        metadata_key, metadata_value, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?)
+    `);
+    insertMetadata.run("database_created_at", FIXTURE_CREATED_AT, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
+    insertMetadata.run("database_id", FIXTURE_DATABASE_ID, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
+    insertMetadata.run("environment_id", FIXTURE_ENVIRONMENT_ID, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
+  }
 
   const accounts = insertAccounts(database, passwordHash);
   const players = insertGlobalPlayers(database);
@@ -862,7 +1249,7 @@ function seedFixture(database, passwordHash) {
     const league = insertLeagueBase(database, leagueAlias, accounts);
     const leagueState = insertLeaguePlayerState(database, league, players, accounts);
     insertAuctionAndTrades(database, league, leagueState, players, accounts);
-    insertMatchupAndReleaseSignals(database, league, accounts, statSourceId);
+    insertMatchupAndReleaseSignals(database, league, leagueState, players, accounts, statSourceId);
   }
 }
 
@@ -930,4 +1317,5 @@ module.exports = {
   ReleaseQaFixtureError,
   assertSafeFixturePath,
   createReleaseQaFixture,
+  seedFixture,
 };

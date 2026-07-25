@@ -4,15 +4,21 @@ const {
   openReadonlyDatabase,
 } = require("../../infrastructure/database/connection");
 const {
+  createSqliteTradeProposalRepository,
+} = require("../../infrastructure/persistence/sqlite/SqliteTradeProposalRepository");
+const {
   ACCOUNT_ALIASES,
+  BETA_PLAYER_TEAM_NUMBERS,
   FIXTURE_BUILD_ID,
   FIXTURE_CREATED_AT,
   FIXTURE_DATABASE_ID,
   FIXTURE_ENVIRONMENT_ID,
+  FIXTURE_NOW_MS,
   FIXTURE_VERSION,
+  INVALID_CAP_BUYOUT_PENALTY_CENTS,
   LEAGUE_ALIASES,
   PLAYER_BLUEPRINTS,
-  TEAM_NAMES,
+  TEAM_NAMES_BY_LEAGUE,
   checksumManifest,
   fixtureId,
 } = require("./releaseQaFixtureContract");
@@ -42,6 +48,199 @@ function assertEqual(actual, expected, description) {
 
 function count(database, sql, ...parameters) {
   return database.prepare(sql).get(...parameters).count;
+}
+
+function verifyTradeScenarios(database, alias, leagueId) {
+  const scenarioId = (scenarioAlias) =>
+    fixtureId(`trade-scenario:${alias}:${scenarioAlias}:1`);
+  const completedTradeId = scenarioId("accepted");
+  const rejectedTradeId = scenarioId("rejected");
+  const invalidCapTradeId = scenarioId("invalid-cap");
+  const completed = database.prepare(`
+    SELECT status, responded_at_ms, completed_at_ms,
+      commissioner_completion_reference
+    FROM trades
+    WHERE league_id=? AND id=?
+  `).get(leagueId, completedTradeId);
+  assertEqual(completed?.status, "completed", `${alias} accepted storage status`);
+  assertEqual(
+    Number.isSafeInteger(completed?.responded_at_ms),
+    true,
+    `${alias} accepted response timestamp`
+  );
+  assertEqual(
+    Number.isSafeInteger(completed?.completed_at_ms),
+    true,
+    `${alias} accepted completion timestamp`
+  );
+  assertEqual(
+    typeof completed?.commissioner_completion_reference,
+    "string",
+    `${alias} commissioner completion reference`
+  );
+  assertEqual(
+    count(database, `
+      SELECT COUNT(*) AS count
+      FROM trade_events
+      WHERE league_id=? AND trade_id=? AND event_type='proposal_accepted'
+    `, leagueId, completedTradeId),
+    1,
+    `${alias} accepted lifecycle evidence`
+  );
+  assertEqual(
+    count(database, `
+      SELECT COUNT(*) AS count
+      FROM ownership_events
+      WHERE league_id=? AND source_type='trade' AND source_id=?
+        AND event_type='trade_transfer'
+    `, leagueId, completedTradeId),
+    2,
+    `${alias} accepted ownership history`
+  );
+  assertEqual(
+    count(database, `
+      SELECT COUNT(*) AS count
+      FROM contract_events
+      WHERE league_id=? AND source_type='trade' AND source_id=?
+        AND event_type='trade_transfer'
+    `, leagueId, completedTradeId),
+    2,
+    `${alias} accepted contract history`
+  );
+  for (const [playerAlias, destinationTeamNumber] of [
+    ["activeForward7", 2],
+    ["activeForward8", 1],
+  ]) {
+    const executedAsset = database.prepare(`
+      SELECT contracts.current_team_id AS contractTeamId,
+        player_ownerships.team_id AS ownershipTeamId,
+        player_ownerships.acquired_transaction_type AS acquisitionType,
+        player_ownerships.acquired_transaction_id AS acquisitionId
+      FROM contracts
+      JOIN player_ownerships
+        ON player_ownerships.league_id=contracts.league_id
+       AND player_ownerships.player_id=contracts.player_id
+      WHERE contracts.league_id=? AND contracts.player_id=?
+    `).get(leagueId, fixtureId(`player:${playerAlias}`));
+    const destinationTeamId = fixtureId(`team:${alias}:${destinationTeamNumber}`);
+    assertEqual(
+      executedAsset?.contractTeamId,
+      destinationTeamId,
+      `${alias} ${playerAlias} executed contract destination`
+    );
+    assertEqual(
+      executedAsset?.ownershipTeamId,
+      destinationTeamId,
+      `${alias} ${playerAlias} executed ownership destination`
+    );
+    assertEqual(
+      executedAsset?.acquisitionType,
+      "trade_execution",
+      `${alias} ${playerAlias} executed acquisition type`
+    );
+    assertEqual(
+      executedAsset?.acquisitionId,
+      completedTradeId,
+      `${alias} ${playerAlias} executed transaction identity`
+    );
+  }
+
+  const rejected = database.prepare(`
+    SELECT status, responded_at_ms, completed_at_ms
+    FROM trades
+    WHERE league_id=? AND id=?
+  `).get(leagueId, rejectedTradeId);
+  assertEqual(rejected?.status, "declined", `${alias} rejected storage status`);
+  assertEqual(
+    Number.isSafeInteger(rejected?.responded_at_ms),
+    true,
+    `${alias} rejected response timestamp`
+  );
+  assertEqual(rejected?.completed_at_ms, null, `${alias} rejected completion absence`);
+  assertEqual(
+    count(database, `
+      SELECT COUNT(*) AS count
+      FROM trade_events
+      WHERE league_id=? AND trade_id=? AND event_type='proposal_rejected'
+    `, leagueId, rejectedTradeId),
+    1,
+    `${alias} rejected lifecycle evidence`
+  );
+
+  assertEqual(
+    count(database, `
+      SELECT COUNT(*) AS count
+      FROM (
+        SELECT trades.id
+        FROM trades
+        JOIN trade_assets
+          ON trade_assets.league_id=trades.league_id
+         AND trade_assets.trade_id=trades.id
+        WHERE trades.league_id=?
+        GROUP BY trades.id
+        HAVING COUNT(*) >= 2 AND COUNT(DISTINCT trade_assets.direction)=2
+      )
+    `, leagueId),
+    5,
+    `${alias} two-sided trade scenario count`
+  );
+  assertEqual(
+    count(database, `
+      SELECT COUNT(*) AS count
+      FROM buyout_years
+      WHERE league_id=? AND buyout_obligation_id=? AND season_id=?
+        AND status='current' AND penalty_cents=?
+    `, leagueId, fixtureId(`buyout:${alias}`),
+    fixtureId(`season:${alias}:current`),
+    INVALID_CAP_BUYOUT_PENALTY_CENTS),
+    1,
+    `${alias} invalid-cap obligation amount`
+  );
+
+  const invalidCapTrade = database.prepare(`
+    SELECT id, season_id, proposing_team_id, receiving_team_id,
+      effective_deadline_at_ms, version
+    FROM trades
+    WHERE league_id=? AND id=?
+  `).get(leagueId, invalidCapTradeId);
+  assertEqual(invalidCapTrade?.id, invalidCapTradeId, `${alias} invalid-cap trade`);
+  const invalidCapPreview = createSqliteTradeProposalRepository({
+    database,
+  }).previewAcceptance({
+    tradeId: invalidCapTrade.id,
+    leagueId,
+    seasonId: invalidCapTrade.season_id,
+    proposingTeamId: invalidCapTrade.proposing_team_id,
+    receivingTeamId: invalidCapTrade.receiving_team_id,
+    expectedVersion: invalidCapTrade.version,
+    actorUserId: fixtureId(`account:${alias === "leagueA"
+      ? "leagueACommissioner"
+      : "leagueBCommissioner"}`),
+    actorMembershipId: fixtureId(`membership:${alias}:${alias === "leagueA"
+      ? "leagueACommissioner"
+      : "leagueBCommissioner"}`),
+    actorAuthority: "commissioner",
+    occurredAtMs: FIXTURE_NOW_MS + 60_000,
+    effectiveDeadlineAtMs: invalidCapTrade.effective_deadline_at_ms,
+  });
+  const receivingTeam = invalidCapPreview.teams.find(
+    ({ teamId }) => teamId === invalidCapTrade.receiving_team_id
+  );
+  assertEqual(
+    invalidCapPreview.generallyIllegal,
+    true,
+    `${alias} invalid-cap real preflight result`
+  );
+  assertEqual(
+    receivingTeam?.issues.some(({ code }) => code === "SALARY_CAP_EXCEEDED"),
+    true,
+    `${alias} invalid-cap salary issue`
+  );
+  assertEqual(
+    receivingTeam?.cap.usageCents > receivingTeam?.cap.salaryCapCents,
+    true,
+    `${alias} invalid-cap projected usage`
+  );
 }
 
 function verifyAccounts(database) {
@@ -119,7 +318,7 @@ function verifyLeague(database, alias) {
   assertEqual(teamNames.length, 6, `${alias} team count`);
   assertEqual(
     JSON.stringify(teamNames),
-    JSON.stringify([...TEAM_NAMES].sort()),
+    JSON.stringify([...TEAM_NAMES_BY_LEAGUE[alias]].sort()),
     `${alias} team names`
   );
   assertEqual(
@@ -187,9 +386,27 @@ function verifyLeague(database, alias) {
       JOIN contracts c ON c.league_id=o.league_id AND c.player_id=o.player_id
       WHERE o.league_id=? AND o.player_id=? AND o.roster_category='Prospect'
         AND c.contract_type='fantasy_elc' AND c.status='active'
+        AND c.original_total_value_cents=300
+        AND c.original_term_years=3
+        AND c.aav_cents=100
+        AND (
+          SELECT COUNT(*) FROM contract_years cy
+          WHERE cy.league_id=c.league_id AND cy.contract_id=c.id
+            AND cy.aav_cents=100
+            AND cy.year_number BETWEEN 1 AND 3
+        )=3
     `, leagueId, fixtureId("player:signedProspect")),
     1,
     `${alias} signed prospect coverage`
+  );
+  assertEqual(
+    count(database, `
+      SELECT COUNT(DISTINCT team_id) AS count
+      FROM player_ownerships
+      WHERE league_id=?
+    `, leagueId),
+    6,
+    `${alias} populated-roster team coverage`
   );
   for (const playerAlias of ["freeAgentForward", "freeAgentDefence"]) {
     assertEqual(
@@ -201,17 +418,40 @@ function verifyLeague(database, alias) {
 
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM auctions WHERE league_id=? AND status='open'", leagueId), 1, `${alias} open auction count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM auction_bids WHERE league_id=? AND status='active'", leagueId), 1, `${alias} own-bid scenario count`);
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM trades WHERE league_id=? AND status='proposed'", leagueId), 2, `${alias} simultaneous trade count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM trades WHERE league_id=? AND status='proposed'", leagueId), 3, `${alias} pending trade count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM trades WHERE league_id=? AND status='completed'", leagueId), 1, `${alias} completed trade count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM trades WHERE league_id=? AND status='accepted'", leagueId), 0, `${alias} legacy accepted storage count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM trades WHERE league_id=? AND status='declined'", leagueId), 1, `${alias} declined trade count`);
+  verifyTradeScenarios(database, alias, leagueId);
   assertEqual(count(database, `
-    SELECT COUNT(DISTINCT contract_id) AS count
-    FROM trade_assets WHERE league_id=? AND asset_type='contract'
-  `, leagueId), 1, `${alias} simultaneous shared-asset coverage`);
+    SELECT COUNT(*) AS count
+    FROM trade_assets
+    WHERE league_id=? AND contract_id=?
+  `, leagueId, fixtureId(`contract:${alias}:activeForward2`)), 2, `${alias} simultaneous shared-asset coverage`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchup_weeks WHERE league_id=?", leagueId), 2, `${alias} matchup-week count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchups WHERE league_id=? AND status='live'", leagueId), 3, `${alias} live matchup count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchups WHERE league_id=? AND status='final'", leagueId), 3, `${alias} final matchup count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchup_results WHERE league_id=? AND status='official'", leagueId), 1, `${alias} official result count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM player_stat_totals WHERE refresh_id=?", fixtureId(`stat-refresh:${alias}`)), PLAYER_BLUEPRINTS.length, `${alias} synthetic player-stat total count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM stat_snapshots WHERE league_id=?", leagueId), 12, `${alias} matchup snapshot count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchup_roster_locks WHERE league_id=?", leagueId), 12, `${alias} matchup lock count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchup_roster_players WHERE league_id=?", leagueId), 36, `${alias} locked-player row count`);
+  const syntheticRefresh = database.prepare(`
+    SELECT stat_sources.provider, stat_refreshes.metadata_json
+    FROM stat_refreshes
+    JOIN stat_sources ON stat_sources.id=stat_refreshes.stat_source_id
+    WHERE stat_refreshes.id=?
+  `).get(fixtureId(`stat-refresh:${alias}`));
+  assertEqual(syntheticRefresh?.provider, "release_qa_fixture", `${alias} synthetic statistics provider`);
+  let metadata;
+  try {
+    metadata = JSON.parse(syntheticRefresh?.metadata_json || "");
+  } catch {
+    fail("RELEASE_QA_FIXTURE_MISMATCH", `Release-QA fixture mismatch: ${alias} synthetic statistics metadata.`);
+  }
+  assertEqual(metadata?.sourceKind, "synthetic_release_qa", `${alias} synthetic statistics label`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM standings_rows WHERE league_id=?", leagueId), 6, `${alias} standings row count`);
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM league_activity WHERE league_id=?", leagueId), 1, `${alias} activity count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM league_activity WHERE league_id=?", leagueId), 8, `${alias} activity count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM notifications WHERE league_id=?", leagueId), 1, `${alias} notification count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM outbox_events WHERE league_id=? AND event_type='release_qa.email_captured' AND status='published'", leagueId), 1, `${alias} captured-email envelope count`);
 
@@ -224,7 +464,7 @@ function verifyLeague(database, alias) {
     maximumBenchAavCents: 400,
     salaryCapCents: 10_000,
     counts: Object.freeze({
-      activity: 1,
+      activity: 8,
       activeContracts: 22,
       activeRoster: 18,
       auctions: 1,
@@ -237,8 +477,13 @@ function verifyLeague(database, alias) {
       prospects: 2,
       retentions: 1,
       standingsRows: 6,
+      statSnapshots: 12,
+      syntheticPlayerTotals: PLAYER_BLUEPRINTS.length,
+      matchupLocks: 12,
+      matchupPlayers: 36,
       teams: 6,
-      trades: 2,
+      populatedRosterTeams: 6,
+      trades: 5,
     }),
   });
 }
@@ -281,7 +526,7 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
         GROUP BY name_normalized HAVING COUNT(DISTINCT league_id)=2
       )
     `);
-    assertEqual(overlappingTeamNames, TEAM_NAMES.length, "overlapping team-name count");
+    assertEqual(overlappingTeamNames, 0, "overlapping team-name count");
     assertEqual(
       count(database, `
         SELECT COUNT(*) AS count
@@ -292,6 +537,44 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
       0,
       "league-scoped ownership identity separation"
     );
+    for (
+      const [playerAlias, betaTeamNumber]
+      of Object.entries(BETA_PLAYER_TEAM_NUMBERS)
+    ) {
+      const alphaTeamNumber =
+        PLAYER_BLUEPRINTS.findIndex(
+          (blueprint) => blueprint.alias === playerAlias
+        ) % TEAM_NAMES_BY_LEAGUE.leagueA.length + 1;
+      assertEqual(
+        database.prepare(`
+          SELECT team_id AS teamId
+          FROM player_ownerships
+          WHERE league_id=? AND player_id=?
+        `).get(
+          fixtureId("league:leagueA"),
+          fixtureId(`player:${playerAlias}`)
+        )?.teamId,
+        fixtureId(`team:leagueA:${alphaTeamNumber}`),
+        `leagueA ${playerAlias} deliberate roster assignment`
+      );
+      assertEqual(
+        database.prepare(`
+          SELECT team_id AS teamId
+          FROM player_ownerships
+          WHERE league_id=? AND player_id=?
+        `).get(
+          fixtureId("league:leagueB"),
+          fixtureId(`player:${playerAlias}`)
+        )?.teamId,
+        fixtureId(`team:leagueB:${betaTeamNumber}`),
+        `leagueB ${playerAlias} deliberate roster assignment`
+      );
+      assertEqual(
+        alphaTeamNumber === betaTeamNumber,
+        false,
+        `${playerAlias} must differ across Alpha and Beta rosters`
+      );
+    }
 
     const manifestWithoutChecksum = Object.freeze({
       manifestVersion: FIXTURE_VERSION,
@@ -310,7 +593,10 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
       scenarios: Object.freeze({
         capturedEmailEnvelope: true,
         finalizedPriorResult: true,
+        matchupPlayerStatistics: true,
         openAuctionWithOwnBid: true,
+        distinctLeagueRosters: true,
+        distinctLeagueTeamNames: true,
         simultaneousTradesForOneAsset: true,
         twoLeagueIdentityIsolation: true,
       }),

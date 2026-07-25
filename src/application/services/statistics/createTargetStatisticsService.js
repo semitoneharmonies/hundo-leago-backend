@@ -51,7 +51,16 @@ function createTargetStatisticsService({
     throw new TypeError("target statistics requires clock and ID factories");
   }
 
-  async function refresh() {
+  async function refresh({ authorizePersist = null } = {}) {
+    if (
+      authorizePersist !== null &&
+      typeof authorizePersist !== "function"
+    ) {
+      throw new TypeError(
+        "target statistics persistence authorization must be callable"
+      );
+    }
+    if (authorizePersist) await authorizePersist();
     const startedAtMs = nowMs();
     const source = repository.ensureSource({
       id: createId(),
@@ -112,6 +121,20 @@ function createTargetStatisticsService({
         completedAtMs: nowMs(),
       });
       throw error;
+    }
+
+    if (authorizePersist) {
+      try {
+        await authorizePersist();
+      } catch (error) {
+        repository.rejectRefresh({
+          refreshId,
+          status: "rejected",
+          errorCode: TARGET_STATISTICS_CODES.persistenceFailed,
+          completedAtMs: nowMs(),
+        });
+        throw error;
+      }
     }
 
     try {

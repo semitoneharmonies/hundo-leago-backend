@@ -231,6 +231,42 @@ function createRuntime(t) {
   ]) {
     insertSource.run(sourceId, playerId, NOW_MS, NOW_MS);
   }
+  connection.database.prepare(`
+    INSERT INTO player_external_ids (id, player_id, provider, external_value, created_at_ms)
+    VALUES (?, ?, 'sportsdataio-discovery-lab', '1001', ?)
+  `).run(uuid(306), PLAYER_ONE_ID, NOW_MS);
+  connection.database.prepare(`
+    INSERT INTO stat_sources (id, provider, status, created_at_ms, updated_at_ms, version)
+    VALUES (?, 'sportsdataio-discovery-lab', 'active', ?, ?, 1)
+  `).run(uuid(307), NOW_MS, NOW_MS);
+  connection.database.prepare(`
+    INSERT INTO stat_refreshes (
+      id, stat_source_id, nhl_season_key, source_version, status, started_at_ms,
+      completed_at_ms, player_count, error_code, metadata_json, version
+    ) VALUES (?, ?, '20252026', 'last-season-2025', 'succeeded', ?, ?, 1, NULL, NULL, 1)
+  `).run(uuid(308), uuid(307), NOW_MS, NOW_MS);
+  connection.database.prepare(`
+    INSERT INTO player_stat_totals (
+      id, stat_source_id, refresh_id, nhl_season_key, player_id, games_played,
+      goals, assists, nhl_points, fantasy_points_hundredths, source_updated_at_ms, created_at_ms
+    ) VALUES (?, ?, ?, '20252026', ?, 82, 40, 50, 90, 10000, ?, ?)
+  `).run(uuid(309), uuid(307), uuid(308), PLAYER_ONE_ID, NOW_MS, NOW_MS);
+  connection.database.prepare(`
+    INSERT INTO stat_sources (id, provider, status, created_at_ms, updated_at_ms, version)
+    VALUES (?, 'release_qa_fixture', 'active', ?, ?, 1)
+  `).run(uuid(310), NOW_MS, NOW_MS);
+  connection.database.prepare(`
+    INSERT INTO stat_refreshes (
+      id, stat_source_id, nhl_season_key, source_version, status, started_at_ms,
+      completed_at_ms, player_count, error_code, metadata_json, version
+    ) VALUES (?, ?, '20262027', 'synthetic-release-qa', 'succeeded', ?, ?, 1, NULL, ?, 1)
+  `).run(uuid(311), uuid(310), NOW_MS, NOW_MS, JSON.stringify({ sourceKind: "synthetic_release_qa" }));
+  connection.database.prepare(`
+    INSERT INTO player_stat_totals (
+      id, stat_source_id, refresh_id, nhl_season_key, player_id, games_played,
+      goals, assists, nhl_points, fantasy_points_hundredths, source_updated_at_ms, created_at_ms
+    ) VALUES (?, ?, ?, '20262027', ?, 60, 20, 30, 50, 5500, ?, ?)
+  `).run(uuid(312), uuid(310), uuid(311), PLAYER_TWO_ID, NOW_MS, NOW_MS);
   context.repositories.player_ownerships.insert({
     id: uuid(401),
     league_id: LEAGUE_ID,
@@ -398,6 +434,16 @@ describe("authenticated player reads", () => {
     });
     assert.equal(detail.id, PLAYER_ONE_ID);
     assert.equal(detail.externalIds[0].externalValue, "1001");
+    assert.deepEqual(detail.statistics, {
+      provider: "sportsdataio-discovery-lab",
+      nhlSeasonKey: "20252026",
+      gamesPlayed: 82,
+      goals: 40,
+      assists: 50,
+      nhlPoints: 90,
+      fantasyPointsHundredths: 10000,
+      sourceUpdatedAtMs: NOW_MS,
+    });
     assert.throws(
       () =>
         runtime.service.list({
@@ -422,6 +468,26 @@ describe("authenticated player reads", () => {
         }),
       PlayerNotFoundError
     );
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
+  test("uses explicitly labelled synthetic fixture statistics only when SportsDataIO data is absent", (t) => {
+    const runtime = createRuntime(t);
+    const before = runtime.database.serialize();
+    const detail = runtime.service.read({
+      authenticated: authenticated(),
+      playerId: PLAYER_TWO_ID,
+    });
+    assert.deepEqual(detail.statistics, {
+      provider: "release_qa_fixture",
+      nhlSeasonKey: "20262027",
+      gamesPlayed: 60,
+      goals: 20,
+      assists: 30,
+      nhlPoints: 50,
+      fantasyPointsHundredths: 5500,
+      sourceUpdatedAtMs: NOW_MS,
+    });
     assert.equal(before.equals(runtime.database.serialize()), true);
   });
 

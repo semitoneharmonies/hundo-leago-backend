@@ -119,6 +119,22 @@ function projectResult(row) {
   });
 }
 
+function statisticsProviders(value) {
+  const providers = value === undefined ? ["nhl"] : value;
+  if (
+    !Array.isArray(providers) ||
+    providers.length < 1 ||
+    providers.some((provider) =>
+      typeof provider !== "string" ||
+      !/^[a-z0-9][a-z0-9_-]{0,99}$/.test(provider)
+    ) ||
+    new Set(providers).size !== providers.length
+  ) {
+    throw new TypeError("matchup integration requires ordered statistics providers");
+  }
+  return Object.freeze([...providers]);
+}
+
 function createMatchupIntegrationService({
   leagueAuthorization,
   readRepository,
@@ -128,6 +144,7 @@ function createMatchupIntegrationService({
   resultService,
   standingsService,
   recoveryService,
+  statisticsProviders: configuredStatisticsProviders,
   clock,
   createId,
 } = {}) {
@@ -161,6 +178,7 @@ function createMatchupIntegrationService({
   if (!clock || typeof clock.nowMs !== "function" || typeof createId !== "function") {
     throw new TypeError("matchup integration requires clock and ID boundaries");
   }
+  const scoringProviders = statisticsProviders(configuredStatisticsProviders);
 
   function member(input) {
     return leagueAuthorization.requireActiveMembership(
@@ -282,7 +300,7 @@ function createMatchupIntegrationService({
           seasonId: input.seasonId,
           weekId: input.weekId,
           matchupId: input.matchupId,
-          provider: "nhl",
+          providers: scoringProviders,
           nowMs: clock.nowMs(),
         });
         scoreHealth = Object.freeze({
@@ -309,7 +327,7 @@ function createMatchupIntegrationService({
           seasonId: input.seasonId,
           weekId: input.weekId,
           matchupId: input.matchupId,
-          provider: "nhl",
+          providers: scoringProviders,
           refreshId: context.result.result_source_refresh_id,
           nowMs: clock.nowMs(),
         });

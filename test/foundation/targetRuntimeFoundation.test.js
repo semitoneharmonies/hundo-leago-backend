@@ -31,6 +31,12 @@ const {
 const {
   createTestAccount,
 } = require("../helpers/createTestAccount");
+const {
+  seedFixture,
+} = require("../../src/operations/release/createReleaseQaFixture");
+const {
+  fixtureId,
+} = require("../../src/operations/release/releaseQaFixtureContract");
 
 const ROOT_DIRECTORY = path.resolve(__dirname, "..", "..");
 const MIGRATIONS_DIRECTORY = path.join(
@@ -469,12 +475,12 @@ function installedTargetEndpoints(routers) {
 }
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 68 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 68);
+  test("declares 79 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 79);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      68
+      79
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountRegistration",
@@ -482,6 +488,7 @@ describe("M3-19 exact target endpoint dispatch", () => {
       "activityNotification",
       "auction",
       "commissionerAssignment",
+      "commissionerCorrection",
       "leagueInvitation",
       "leagueRead",
       "matchup",
@@ -628,10 +635,16 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(typeof runtime.services.league.publicRoster.read, "function");
     assert.equal(typeof runtime.services.players.list, "function");
     assert.equal(typeof runtime.services.players.read, "function");
+    assert.equal(typeof runtime.services.leaguePlayers.list, "function");
+    assert.equal(typeof runtime.services.leaguePlayers.read, "function");
     assert.equal(typeof runtime.services.league.matchup.listWeeks, "function");
     assert.equal(typeof runtime.services.league.matchup.rebuildStandings, "function");
     assert.equal(typeof runtime.repositories.matchupRead.readSchedule, "function");
     assert.equal(typeof runtime.repositories.players.listPage, "function");
+    assert.equal(
+      typeof runtime.repositories.leaguePlayers.listByPlayerIds,
+      "function"
+    );
     assert.equal(
       runtime.securityConfig,
       options.securityFoundations.config
@@ -913,6 +926,236 @@ describe("M3-19 composed target HTTP boundary", () => {
     });
     assert.equal(rejected.status, 401);
     assert.equal((await rejected.json()).error.code, "SESSION_REQUIRED");
+  });
+
+  test("previews and applies an audited commissioner roster addition through the composed routers", async (t) => {
+    const database = createDatabase(t);
+    const securityFoundations = foundations();
+    const passwordHash = await createScryptPasswordHasher({
+      secureRandom: securityFoundations.secureRandom,
+    }).hash("correct horse battery staple");
+    database.transaction(() => {
+      seedFixture(database, passwordHash, {
+        includeIdentityMetadata: false,
+      });
+    }).immediate();
+    const runtime = createTargetRuntime(
+      runtimeOptions(database, { securityFoundations })
+    );
+    const baseUrl = await startRuntimeApp(t, runtime);
+    const leagueId = fixtureId("league:leagueA");
+    const playerId = fixtureId("player:freeAgentForward");
+    const session = runtime.services.sessionService.issueForUser({
+      userId: fixtureId("account:leagueACommissioner"),
+    });
+    const headers = browserHeaders({
+      Cookie:
+        `${runtime.transport.sessionCookie.name}=` +
+        session.rawSessionToken,
+      "X-CSRF-Token": session.rawCsrfToken,
+    });
+    const workspaceResponse = await fetch(
+      new URL(
+        `/api/v1/leagues/${leagueId}/commissioner/roster-workspace`,
+        baseUrl
+      ),
+      { headers }
+    );
+    const workspaceBody = await workspaceResponse.json();
+    assert.equal(workspaceResponse.status, 200);
+    const workspace = workspaceBody.data.workspace;
+    assert.equal(workspace.league.id, leagueId);
+    assert.equal(
+      workspace.freeAgents.some((player) => player.playerId === playerId),
+      true
+    );
+    const teamId = fixtureId("team:leagueA:1");
+    const occupiedForwardSlots = new Set(
+      workspace.roster
+        .filter((player) =>
+          player.teamId === teamId &&
+          player.rosterCategory === "Active" &&
+          player.positionGroup === "F"
+        )
+        .map((player) => player.slotNumber)
+    );
+    const slotNumber = Array.from(
+      { length: 12 },
+      (_, index) => index + 1
+    ).find((slot) => !occupiedForwardSlots.has(slot));
+    assert.equal(Number.isSafeInteger(slotNumber), true);
+    const request = {
+      seasonId: workspace.league.currentSeasonId,
+      playerId,
+      teamId,
+      rosterCategory: "Active",
+      positionGroup: "F",
+      slotNumber,
+      contractType: "normal",
+      originalTotalValueCents: 200,
+      termYears: 1,
+      reason: "Restore a missing staging roster assignment.",
+    };
+    const previewUrl = new URL(
+      `/api/v1/leagues/${leagueId}/commissioner/roster-additions/previews`,
+      baseUrl
+    );
+    const beforePreview = database.serialize();
+    const previewResponse = await fetch(previewUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(request),
+    });
+    const previewBody = await previewResponse.json();
+    assert.equal(
+      previewResponse.status,
+      200,
+      JSON.stringify(previewBody)
+    );
+    assert.equal(
+      previewBody.data.code,
+      "COMMISSIONER_ROSTER_ADD_CORRECTION_PREVIEWED"
+    );
+    assert.equal(previewBody.data.preview, true);
+    assert.equal(beforePreview.equals(database.serialize()), true);
+
+    const applyUrl = new URL(
+      `/api/v1/leagues/${leagueId}/commissioner/roster-additions`,
+      baseUrl
+    );
+    const applyHeaders = {
+      ...headers,
+      "Idempotency-Key": "m7-10-composed-roster-addition",
+    };
+    const applyResponse = await fetch(applyUrl, {
+      method: "POST",
+      headers: applyHeaders,
+      body: JSON.stringify({ ...request, confirmWarnings: false }),
+    });
+    const applyBody = await applyResponse.json();
+    assert.equal(applyResponse.status, 200);
+    assert.equal(
+      applyBody.data.code,
+      "COMMISSIONER_ROSTER_ADD_CORRECTION_APPLIED"
+    );
+    assert.equal(applyBody.data.evidence.activityType, "commissioner_player_added");
+    const replayResponse = await fetch(applyUrl, {
+      method: "POST",
+      headers: applyHeaders,
+      body: JSON.stringify({ ...request, confirmWarnings: false }),
+    });
+    assert.equal(replayResponse.status, 200);
+    assert.deepEqual((await replayResponse.json()).data, applyBody.data);
+    assert.equal(
+      database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM player_ownerships
+        WHERE league_id = ? AND player_id = ?
+      `).get(leagueId, playerId).count,
+      1
+    );
+    assert.equal(
+      database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM commissioner_corrections
+        WHERE league_id = ? AND feature = 'roster_add'
+      `).get(leagueId).count,
+      1
+    );
+  });
+
+  test("serves isolated read-only league player context through the composed player router", async (t) => {
+    const database = createDatabase(t);
+    const securityFoundations = foundations();
+    const passwordHash = await createScryptPasswordHasher({
+      secureRandom: securityFoundations.secureRandom,
+    }).hash("correct horse battery staple");
+    database.transaction(() => {
+      seedFixture(database, passwordHash, {
+        includeIdentityMetadata: false,
+      });
+    }).immediate();
+    const runtime = createTargetRuntime(
+      runtimeOptions(database, { securityFoundations })
+    );
+    const baseUrl = await startRuntimeApp(t, runtime);
+    const leagueId = fixtureId("league:leagueA");
+    const hiddenLeagueId = fixtureId("league:leagueB");
+    const playerId = fixtureId("player:activeForward3");
+    const session = runtime.services.sessionService.issueForUser({
+      userId: fixtureId("account:leagueACommissioner"),
+    });
+    const headers = browserHeaders({
+      Cookie:
+        `${runtime.transport.sessionCookie.name}=` +
+        session.rawSessionToken,
+    });
+    const before = database.serialize();
+
+    const collection = await fetch(
+      new URL(
+        `/api/v1/leagues/${leagueId}/players?query=Fixture%20Player%2003`,
+        baseUrl
+      ),
+      { headers }
+    );
+    const collectionBody = await collection.json();
+    assert.equal(collection.status, 200);
+    assert.equal(collectionBody.data.length, 1);
+    assert.equal(collectionBody.data[0].id, playerId);
+    assert.equal(collectionBody.data[0].league.id, leagueId);
+
+    const detail = await fetch(
+      new URL(
+        `/api/v1/leagues/${leagueId}/players/${playerId}`,
+        baseUrl
+      ),
+      { headers }
+    );
+    const detailBody = await detail.json();
+    assert.equal(detail.status, 200);
+    assert.deepEqual(detailBody.data.league, {
+      id: leagueId,
+      ownership: {
+        kind: "Rostered",
+        category: "Active",
+        team: {
+          id: fixtureId("team:leagueA:3"),
+          name: "Alpha Wolves",
+        },
+      },
+      activeContract: {
+        originalTotalValueCents: 750,
+        originalTermYears: 3,
+        aavCents: 250,
+        remainingYears: 3,
+      },
+    });
+
+    const globalDetail = await fetch(
+      new URL(`/api/v1/players/${playerId}`, baseUrl),
+      { headers }
+    );
+    const globalBody = await globalDetail.json();
+    assert.equal(globalDetail.status, 200);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(globalBody.data, "league"),
+      false
+    );
+
+    const crossLeague = await fetch(
+      new URL(
+        `/api/v1/leagues/${hiddenLeagueId}/players/${playerId}`,
+        baseUrl
+      ),
+      { headers }
+    );
+    assert.equal(crossLeague.status, 404);
+    assert.equal(
+      (await crossLeague.json()).error.code,
+      "LEAGUE_NOT_FOUND"
+    );
+    assert.equal(before.equals(database.serialize()), true);
   });
 
   test("rate-limits repeated failed sign-ins through the composed session router", async (t) => {

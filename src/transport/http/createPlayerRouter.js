@@ -1,6 +1,7 @@
 const express = require("express");
 
 const SAFE_MESSAGES = Object.freeze({
+  LEAGUE_ID_INVALID: "The league identifier is invalid.",
   LEAGUE_NOT_FOUND: "The league was not found.",
   PLAYER_NOT_FOUND: "The player was not found.",
   PLAYER_READ_FAILED: "The player request could not be completed.",
@@ -13,7 +14,11 @@ function assertMethod(value, method, description) {
   }
 }
 
-function createPlayerRouter({ requestSecurity, playerReadService } = {}) {
+function createPlayerRouter({
+  requestSecurity,
+  playerReadService,
+  leaguePlayerReadService,
+} = {}) {
   for (const method of [
     "assignRequestId",
     "authenticateBootstrap",
@@ -32,6 +37,15 @@ function createPlayerRouter({ requestSecurity, playerReadService } = {}) {
   }
   for (const method of ["list", "read"]) {
     assertMethod(playerReadService, method, "a player read service");
+  }
+  if (leaguePlayerReadService !== undefined) {
+    for (const method of ["list", "read"]) {
+      assertMethod(
+        leaguePlayerReadService,
+        method,
+        "a league-player read service"
+      );
+    }
   }
 
   function requestId(request) {
@@ -54,6 +68,9 @@ function createPlayerRouter({ requestSecurity, playerReadService } = {}) {
     }
     if (error?.code === "PLAYER_NOT_FOUND") {
       return failure(request, response, 404, error.code);
+    }
+    if (error?.code === "LEAGUE_ID_INVALID") {
+      return failure(request, response, 400, error.code);
     }
     if (error?.code === "LEAGUE_NOT_FOUND") {
       return failure(request, response, 404, error.code);
@@ -110,6 +127,49 @@ function createPlayerRouter({ requestSecurity, playerReadService } = {}) {
       }
     }
   );
+  if (leaguePlayerReadService) {
+    router.get(
+      "/api/v1/leagues/:leagueId/players",
+      requestSecurity.authenticateBootstrap,
+      (request, response) => {
+        try {
+          const result = leaguePlayerReadService.list({
+            authenticated: requestSecurity.getSessionBootstrap(request),
+            leagueId: request.params.leagueId,
+            query: request.query.query,
+            status: request.query.status,
+            limit: request.query.limit,
+            cursor: request.query.cursor,
+          });
+          return response.status(200).json({
+            data: result.players,
+            page: result.page,
+            meta: { requestId: requestId(request) },
+          });
+        } catch (error) {
+          return mapError(request, response, error);
+        }
+      }
+    );
+    router.get(
+      "/api/v1/leagues/:leagueId/players/:playerId",
+      requestSecurity.authenticateBootstrap,
+      (request, response) => {
+        try {
+          return response.status(200).json({
+            data: leaguePlayerReadService.read({
+              authenticated: requestSecurity.getSessionBootstrap(request),
+              leagueId: request.params.leagueId,
+              playerId: request.params.playerId,
+            }),
+            meta: { requestId: requestId(request) },
+          });
+        } catch (error) {
+          return mapError(request, response, error);
+        }
+      }
+    );
+  }
 
   return router;
 }

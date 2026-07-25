@@ -27,6 +27,7 @@
     "db:verify-staging-import": "node scripts/db-verify-staging-import.js",
     "db:validate-reset": "node scripts/db-validate-reset.js",
     "db:validate-staging": "node scripts/db-validate-staging.js",
+    "data:import:sportsdataio:staging": "node scripts/import-sportsdataio-staging.js",
     "release:qa:fixture": "node scripts/create-release-qa-fixture.js",
     "release:qa:local": "node scripts/rehearse-m7-integrated-local.js",
     "release:qa:site": "node scripts/start-m7-manual-qa.js",

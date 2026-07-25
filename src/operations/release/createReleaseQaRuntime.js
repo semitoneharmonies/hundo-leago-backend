@@ -37,6 +37,9 @@ const {
   createReleaseQaFixture,
 } = require("./createReleaseQaFixture");
 const {
+  FIXTURE_NOW_MS,
+} = require("./releaseQaFixtureContract");
+const {
   assertReleaseQaPassword,
   inspectReleaseQaPassword,
 } = require("./releaseQaPasswordPolicy");
@@ -160,6 +163,7 @@ async function createReleaseQaRuntime({
     });
     const securityFoundations = createSecurityFoundations({
       env: securityEnvironment(frontendOrigin),
+      now: () => FIXTURE_NOW_MS,
       loggerSink() {},
     });
     const passwordHasher = createScryptPasswordHasher({

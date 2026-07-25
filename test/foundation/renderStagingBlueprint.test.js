@@ -87,7 +87,7 @@ describe("M2 gate staging Render blueprint", () => {
     assert.equal(environment.get("NODE_ENV")?.value, "production");
   });
 
-  test("keeps jobs and authority-changing compatibility behavior disabled", () => {
+  test("keeps jobs disabled and league writes open for manual staging acceptance", () => {
     const [service] = loadBlueprint().services;
     const environment = environmentByKey(service);
 
@@ -103,7 +103,7 @@ describe("M2 gate staging Render blueprint", () => {
       assert.equal(environment.get(key)?.value, "false", `${key} must be false`);
     }
 
-    assert.equal(environment.get("LEAGUE_WRITE_MODE")?.value, "closed");
+    assert.equal(environment.get("LEAGUE_WRITE_MODE")?.value, "open");
 
     assert.equal(environment.get("EMAIL_DELIVERY_MODE")?.value, "capture");
   });
@@ -118,6 +118,7 @@ describe("M2 gate staging Render blueprint", () => {
       "STATS_REFRESH_TOKEN",
     ];
     const providerSecretKeys = [
+      "SPORTSDATAIO_NHL_API_KEY",
       "BACKUP_OBJECT_ACCESS_KEY_ID",
       "BACKUP_OBJECT_SECRET_ACCESS_KEY",
       "BACKUP_ENCRYPTION_KEY",
@@ -154,7 +155,6 @@ describe("M2 gate staging Render blueprint", () => {
     for (const key of [
       "APP_BUILD_ID",
       "FRONTEND_BUILD_ID",
-      "DATABASE_ID",
       "PUBLIC_FRONTEND_ORIGIN",
       "FRONTEND_ORIGINS",
       "EMAIL_FROM",
@@ -170,7 +170,11 @@ describe("M2 gate staging Render blueprint", () => {
     }
     assert.equal(
       environment.get("APP_ENVIRONMENT_ID")?.value,
-      "hundo-leago-staging-environment-v1"
+      "test:release-qa"
+    );
+    assert.equal(
+      environment.get("DATABASE_ID")?.value,
+      "m7-release-qa-fixture"
     );
     assert.equal(
       environment.get("PERSISTENT_DATA_ROOT")?.value,
@@ -181,5 +185,16 @@ describe("M2 gate staging Render blueprint", () => {
       environment.get("CURRENT_NHL_SEASON_KEY")?.value,
       "20262027"
     );
+    assert.equal(
+      environment.get("SPORTSDATAIO_NHL_API_ORIGIN")?.value,
+      "https://api.sportsdata.io/v3/nhl"
+    );
+    assert.equal(
+      environment.get(
+        "SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR"
+      )?.value,
+      "2025"
+    );
+    assert.equal(environment.has("NHL_API_ORIGIN"), false);
   });
 });

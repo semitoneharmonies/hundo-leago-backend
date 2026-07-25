@@ -52,6 +52,7 @@ const IDS = Object.freeze({
   league: uuid(10),
   commissionerMembership: uuid(11),
   managerMembership: uuid(12),
+  platformRole: uuid(13),
   season1: uuid(20),
   season2: uuid(21),
   season3: uuid(22),
@@ -59,18 +60,32 @@ const IDS = Object.freeze({
   team2: uuid(31),
   player: uuid(40),
   source: uuid(41),
+  freePlayer: uuid(42),
+  freeSource: uuid(43),
   ownership: uuid(50),
+  addedOwnership: uuid(51),
   contract: uuid(60),
+  addedContract: uuid(64),
   contractYear1: uuid(61),
   contractYear2: uuid(62),
   contractYear3: uuid(63),
+  addedContractYear: uuid(65),
   correction: uuid(70),
   correction2: uuid(71),
+  addCorrection: uuid(75),
+  removeCorrection: uuid(76),
   ownershipEvent: uuid(72),
+  addedOwnershipEvent: uuid(77),
+  removedOwnershipEvent: uuid(78),
   contractEvent: uuid(73),
+  addedContractEvent: uuid(79),
+  removedContractEvent: uuid(82),
   activity: uuid(74),
+  addActivity: uuid(83),
+  removeActivity: uuid(84),
   trade: uuid(80),
   tradeAsset: uuid(81),
+  retention: uuid(85),
 });
 
 function createConnection(t, prefix = "hundo-m4-11-") {
@@ -298,6 +313,97 @@ function createRuntime(t) {
   };
 }
 
+function seedFreeAgent(runtime) {
+  runtime.context.repositories.players.insert({
+    id: IDS.freePlayer,
+    first_name: "Free",
+    last_name: "Agent",
+    full_name: "Free Agent",
+    birth_date: null,
+    status: "active",
+    created_at_ms: NOW_MS,
+    updated_at_ms: NOW_MS,
+    version: 1,
+  });
+  runtime.context.repositories.player_source_state.insert({
+    id: IDS.freeSource,
+    player_id: IDS.freePlayer,
+    provider: "test",
+    source_position: "C",
+    normalized_position: "F",
+    nhl_team_abbreviation: "BBB",
+    active: 1,
+    source_version: "one",
+    source_payload_json: null,
+    effective_at_ms: NOW_MS,
+    ended_at_ms: null,
+    created_at_ms: NOW_MS,
+  });
+}
+
+function additionInput(overrides = {}) {
+  return {
+    correctionId: IDS.addCorrection,
+    ownershipId: IDS.addedOwnership,
+    ownershipEventId: IDS.addedOwnershipEvent,
+    contractId: IDS.addedContract,
+    contractEventId: IDS.addedContractEvent,
+    contractYearIds: [IDS.addedContractYear],
+    activityId: IDS.addActivity,
+    leagueId: IDS.league,
+    seasonId: IDS.season1,
+    playerId: IDS.freePlayer,
+    actorUserId: IDS.commissioner,
+    actorMembershipId: IDS.commissionerMembership,
+    actorAuthority: "commissioner",
+    teamId: IDS.team1,
+    rosterCategory: "Active",
+    positionGroup: "F",
+    slotNumber: 2,
+    contractType: "normal",
+    originalTotalValueCents: 200,
+    termYears: 1,
+    confirmWarnings: false,
+    reason: "Correct a missing roster assignment.",
+    occurredAtMs: NOW_MS + 1,
+    ...overrides,
+  };
+}
+
+function removalInput(overrides = {}) {
+  return {
+    correctionId: IDS.removeCorrection,
+    ownershipEventId: IDS.removedOwnershipEvent,
+    contractEventId: IDS.removedContractEvent,
+    activityId: IDS.removeActivity,
+    leagueId: IDS.league,
+    seasonId: IDS.season1,
+    ownershipId: IDS.ownership,
+    playerId: IDS.player,
+    expectedVersion: 1,
+    contractId: IDS.contract,
+    expectedContractVersion: 1,
+    actorUserId: IDS.commissioner,
+    actorMembershipId: IDS.commissionerMembership,
+    actorAuthority: "commissioner",
+    confirmWarnings: false,
+    reason: "Correct an ownership assignment.",
+    occurredAtMs: NOW_MS + 1,
+    ...overrides,
+  };
+}
+
+function correctionIdempotency(operation, idValue, overrides = {}) {
+  return {
+    id: uuid(idValue),
+    key: `m7-10-${operation}`,
+    operation,
+    requestHash: "a".repeat(64),
+    expiresAtMs: NOW_MS + 86_400_000,
+    ...overrides,
+  };
+}
+
 function rosterInput(overrides = {}) {
   return {
     correctionId: IDS.correction,
@@ -385,6 +491,12 @@ function assertPolicyError(callback, reasonCode) {
 describe("M4-11 commissioner correction policy", () => {
   test("requires explicit commissioner authority and exact roster shapes", () => {
     assert.equal(Object.isFrozen(validateRosterCorrection(rosterInput())), true);
+    assert.equal(
+      validateRosterCorrection(
+        rosterInput({ actorAuthority: "platform_administrator" })
+      ).actorAuthority,
+      "platform_administrator"
+    );
     assertPolicyError(
       () => validateRosterCorrection(rosterInput({ actorAuthority: "manager" })),
       COMMISSIONER_CORRECTION_CODES.authorityInvalid
@@ -511,6 +623,172 @@ describe("M4-11 optional-reason migration", () => {
 });
 
 describe("M4-11 atomic SQLite commissioner corrections", () => {
+  test("previews and applies an audited free-agent roster addition atomically", (t) => {
+    const runtime = createRuntime(t);
+    seedFreeAgent(runtime);
+    const before = runtime.database.serialize();
+    const preview = runtime.repository.previewAdd(additionInput());
+    assert.equal(preview.preview, true);
+    assert.equal(preview.authoritative.ownership.playerId, IDS.freePlayer);
+    assert.equal(preview.authoritative.contract.aavCents, 200);
+    assert.deepEqual(runtime.database.serialize(), before);
+
+    const applied = runtime.repository.applyAdd(
+      additionInput(),
+      correctionIdempotency("commissioner_roster_add", 90)
+    );
+    assert.equal(applied.preview, false);
+    assert.equal(applied.correction.feature, "roster_add");
+    assert.equal(applied.activity.event_type, "commissioner_player_added");
+    assert.equal(
+      runtime.context.repositories.player_ownerships.findByKey({
+        key: IDS.addedOwnership,
+        leagueId: IDS.league,
+      }).player_id,
+      IDS.freePlayer
+    );
+    assert.equal(
+      runtime.context.repositories.contracts.findByKey({
+        key: IDS.addedContract,
+        leagueId: IDS.league,
+      }).aav_cents,
+      200
+    );
+    const replay = runtime.repository.applyAdd(
+      additionInput({
+        correctionId: uuid(100),
+        ownershipId: uuid(101),
+        ownershipEventId: uuid(102),
+        contractId: uuid(103),
+        contractEventId: uuid(104),
+        contractYearIds: [uuid(105)],
+        activityId: uuid(106),
+        occurredAtMs: NOW_MS + 2,
+      }),
+      correctionIdempotency(
+        "commissioner_roster_add",
+        107,
+        { expiresAtMs: NOW_MS + 86_400_001 }
+      )
+    );
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.correction.id, IDS.addCorrection);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM idempotency_requests")
+        .get().count,
+      1
+    );
+  });
+
+  test("keeps unresolved or goalie-source players out of commissioner roster additions", (t) => {
+    const runtime = createRuntime(t);
+    seedFreeAgent(runtime);
+    runtime.database.prepare(`
+      UPDATE player_source_state
+      SET source_position = 'G', normalized_position = NULL
+      WHERE id = ?
+    `).run(IDS.freeSource);
+
+    const before = runtime.database.serialize();
+    const workspace = runtime.repository.readWorkspace({
+      leagueId: IDS.league,
+      actorUserId: IDS.commissioner,
+      actorMembershipId: IDS.commissionerMembership,
+      actorAuthority: "commissioner",
+      observedAtMs: NOW_MS,
+    });
+    assert.equal(
+      workspace.freeAgents.some(
+        ({ playerId }) => playerId === IDS.freePlayer
+      ),
+      false
+    );
+    assertPolicyError(
+      () => runtime.repository.previewAdd(additionInput()),
+      COMMISSIONER_CORRECTION_CODES.rosterInvalid
+    );
+    assert.deepEqual(runtime.database.serialize(), before);
+  });
+
+  test("previews and applies an audited roster removal with contract cancellation", (t) => {
+    const runtime = createRuntime(t);
+    const before = runtime.database.serialize();
+    const preview = runtime.repository.previewRemove(removalInput());
+    assert.equal(preview.preview, true);
+    assert.equal(preview.authoritative.ownership, null);
+    assert.equal(preview.authoritative.contract.status, "cancelled");
+    assert.deepEqual(runtime.database.serialize(), before);
+
+    const applied = runtime.repository.applyRemove(
+      removalInput(),
+      correctionIdempotency("commissioner_roster_remove", 91)
+    );
+    assert.equal(applied.correction.feature, "roster_remove");
+    assert.equal(applied.activity.event_type, "commissioner_player_removed");
+    assert.equal(
+      runtime.context.repositories.player_ownerships.findByKey({
+        key: IDS.ownership,
+        leagueId: IDS.league,
+      }),
+      null
+    );
+    assert.equal(
+      runtime.context.repositories.contracts.findByKey({
+        key: IDS.contract,
+        leagueId: IDS.league,
+      }).status,
+      "cancelled"
+    );
+  });
+
+  test("reads authoritative correction inputs and honors inherited platform-admin authority", (t) => {
+    const runtime = createRuntime(t);
+    const workspace = runtime.repository.readWorkspace({
+      leagueId: IDS.league,
+      actorUserId: IDS.commissioner,
+      actorMembershipId: IDS.commissionerMembership,
+      actorAuthority: "commissioner",
+      observedAtMs: NOW_MS,
+    });
+    assert.equal(workspace.league.currentSeasonId, IDS.season1);
+    assert.equal(workspace.teams.length, 2);
+    assert.equal(workspace.seasons.length, 3);
+    assert.deepEqual(workspace.seasons[0], {
+      id: IDS.season1,
+      label: "2026-27",
+      nhlSeasonKey: "20262027",
+      status: "active",
+      sequence: 1,
+    });
+    assert.equal(workspace.roster.length, 1);
+    assert.equal(workspace.roster[0].ownershipId, IDS.ownership);
+    assert.equal(workspace.roster[0].contract.id, IDS.contract);
+    assert.equal(workspace.roster[0].contract.years.length, 1);
+    assert.equal(workspace.freeAgents.length, 0);
+    assert.equal(workspace.providerHealth.stale, true);
+    assert.equal(workspace.providerHealth.catalogPlayerCount, 0);
+
+    runtime.context.repositories.platform_roles.insert({
+      id: IDS.platformRole,
+      user_id: IDS.manager,
+      role: "platform_administrator",
+      status: "active",
+      granted_by_user_id: IDS.commissioner,
+      granted_at_ms: NOW_MS,
+      ended_at_ms: null,
+      version: 1,
+    });
+    const preview = runtime.repository.previewRoster(
+      rosterInput({
+        actorUserId: IDS.manager,
+        actorMembershipId: IDS.managerMembership,
+        actorAuthority: "platform_administrator",
+      })
+    );
+    assert.equal(preview.preview, true);
+  });
+
   test("previews roster illegality without writing any state", (t) => {
     const runtime = createRuntime(t);
     const before = runtime.database.serialize();
@@ -536,7 +814,14 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
   test("requires warning confirmation, then records all roster evidence atomically", (t) => {
     const runtime = createRuntime(t);
     assertPolicyError(
-      () => runtime.repository.applyRoster(rosterInput()),
+      () =>
+        runtime.repository.applyRoster(
+          rosterInput(),
+          correctionIdempotency(
+            "commissioner_roster_correction",
+            92
+          )
+        ),
       COMMISSIONER_CORRECTION_CODES.confirmationRequired
     );
     assert.equal(
@@ -548,7 +833,11 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
     );
 
     const result = runtime.repository.applyRoster(
-      rosterInput({ confirmWarnings: true })
+      rosterInput({ confirmWarnings: true }),
+      correctionIdempotency(
+        "commissioner_roster_correction",
+        92
+      )
     );
     assert.equal(result.preview, false);
     assert.equal(result.authoritative.rosterCategory, "Bench");
@@ -578,7 +867,13 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
       1
     );
 
-    const result = runtime.repository.applyContract(contractInput());
+    const result = runtime.repository.applyContract(
+      contractInput(),
+      correctionIdempotency(
+        "commissioner_contract_correction",
+        93
+      )
+    );
     assert.equal(result.authoritative.id, IDS.contract);
     assert.equal(result.authoritative.version, 2);
     assert.equal(result.authoritative.aavCents, 333);
@@ -599,13 +894,82 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
           rosterInput({
             actorUserId: IDS.manager,
             actorMembershipId: IDS.managerMembership,
-          })
+          }),
+          correctionIdempotency(
+            "commissioner_roster_correction",
+            92
+          )
         ),
       COMMISSIONER_CORRECTION_CODES.authorityInvalid
     );
     assertPolicyError(
-      () => runtime.repository.applyRoster(rosterInput({ expectedVersion: 2 })),
+      () =>
+        runtime.repository.applyRoster(
+          rosterInput({ expectedVersion: 2 }),
+          correctionIdempotency(
+            "commissioner_roster_correction",
+            92
+          )
+        ),
       COMMISSIONER_CORRECTION_CODES.sourceChanged
+    );
+    assertPolicyError(
+      () =>
+        runtime.repository.previewRoster(
+          rosterInput({ correctedTeamId: IDS.team2 })
+        ),
+      COMMISSIONER_CORRECTION_CODES.scopeMismatch
+    );
+    assertPolicyError(
+      () =>
+        runtime.repository.previewContract(
+          contractInput({ correctedTeamId: IDS.team2 })
+        ),
+      COMMISSIONER_CORRECTION_CODES.scopeMismatch
+    );
+    assertPolicyError(
+      () =>
+        runtime.repository.previewContract(
+          contractInput({
+            correctedContractType: "fantasy_elc",
+            correctedOriginalTotalValueCents: 300,
+          })
+        ),
+      COMMISSIONER_CORRECTION_CODES.scopeMismatch
+    );
+    assertPolicyError(
+      () =>
+        runtime.repository.previewContract(
+          contractInput({
+            correctedAuctionBuyoutLockExpiresAtMs: NOW_MS + 1000,
+          })
+        ),
+      COMMISSIONER_CORRECTION_CODES.scopeMismatch
+    );
+    assertPolicyError(
+      () =>
+        runtime.repository.previewRoster(
+          rosterInput({
+            correctedOwnershipKind: "Prospect Right",
+            correctedRosterCategory: "Prospect",
+            correctedSlotNumber: null,
+          })
+        ),
+      COMMISSIONER_CORRECTION_CODES.rosterInvalid
+    );
+    assert.equal(
+      runtime.repository.previewRoster(
+        rosterInput({
+          correctedOwnershipKind: "Rostered",
+          correctedRosterCategory: "Prospect",
+          correctedSlotNumber: null,
+        })
+      ).warnings.some(
+        ({ code }) =>
+          code ===
+          "PROSPECT_STATUS_REQUIRES_CORRECTION_CONFIRMATION"
+      ),
+      true
     );
     assert.equal(
       runtime.database.prepare("SELECT COUNT(*) AS count FROM commissioner_corrections").get().count,
@@ -663,6 +1027,36 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
     );
   });
 
+  test("fails closed when active salary retention depends on the corrected contract", (t) => {
+    const runtime = createRuntime(t);
+    runtime.context.repositories.retention_obligations.insert({
+      id: IDS.retention,
+      league_id: IDS.league,
+      contract_id: IDS.contract,
+      player_id: IDS.player,
+      originating_team_id: IDS.team1,
+      responsible_team_id: IDS.team2,
+      retained_aav_cents: 100,
+      creation_trade_id: null,
+      status: "active",
+      created_at_ms: NOW_MS,
+      updated_at_ms: NOW_MS,
+      version: 1,
+    });
+
+    assertPolicyError(
+      () => runtime.repository.previewContract(contractInput()),
+      COMMISSIONER_CORRECTION_CODES.dependencyConflict
+    );
+    assert.equal(
+      runtime.context.repositories.contracts.findByKey({
+        key: IDS.contract,
+        leagueId: IDS.league,
+      }).version,
+      1
+    );
+  });
+
   test("rolls back state and earlier evidence when a final history insert fails", (t) => {
     const runtime = createRuntime(t);
     runtime.context.repositories.league_activity.insert({
@@ -683,7 +1077,11 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
     });
     assert.throws(() =>
       runtime.repository.applyRoster(
-        rosterInput({ confirmWarnings: true })
+        rosterInput({ confirmWarnings: true }),
+        correctionIdempotency(
+          "commissioner_roster_correction",
+          92
+        )
       )
     );
     const ownership = runtime.context.repositories.player_ownerships.findByKey({

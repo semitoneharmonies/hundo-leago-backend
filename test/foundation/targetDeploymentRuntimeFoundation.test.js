@@ -22,6 +22,7 @@ const {
 const {
   TargetRuntimeConfigError,
   loadTargetRuntimeConfig,
+  sportsDataIoNhlImport,
 } = require("../../src/config/loadTargetRuntimeConfig");
 const {
   openDatabase,
@@ -30,6 +31,15 @@ const {
 const {
   migrateDatabase,
 } = require("../../src/infrastructure/database/migrate");
+const {
+  createReleaseQaFixture,
+} = require("../../src/operations/release/createReleaseQaFixture");
+const {
+  FIXTURE_DATABASE_ID,
+  FIXTURE_ENVIRONMENT_ID,
+  fixtureEmail,
+  fixtureId,
+} = require("../../src/operations/release/releaseQaFixtureContract");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 const PERSISTENT_ROOT = path.join(ROOT, ".target-runtime-test-data");
@@ -54,7 +64,6 @@ function deployedEnvironment(overrides = {}) {
     LEAGUE_WRITE_MODE: "closed",
     DEBUG_ROUTES_ENABLED: "false",
     EMAIL_DELIVERY_MODE: "capture",
-    NHL_API_ORIGIN: "https://api.nhle.com",
     RATE_LIMIT_KEY_SECRET:
       "m7-runtime-rate-limit-secret-material-0123456789",
     AUDIT_METADATA_SECRET:
@@ -119,6 +128,40 @@ function deployedRuntimeInput(t, options) {
   return { config, persistentRoot: paths.persistentRoot, securityFoundations };
 }
 
+async function deployedFixtureRuntimeInput(overrides = {}) {
+  const persistentRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "hundo-m7-deployed-fixture-")
+  );
+  const databaseDirectory = path.join(persistentRoot, "sqlite");
+  fs.mkdirSync(databaseDirectory);
+  const databasePath = path.join(
+    databaseDirectory,
+    "m7-release-qa.sqlite3"
+  );
+  await createReleaseQaFixture({
+    databasePath,
+    environment: "test",
+    migrationsDirectory: path.join(ROOT, "database", "migrations"),
+    password: "hundo",
+    temporaryRoot: persistentRoot,
+  });
+  const env = deployedEnvironment({
+    APP_ENVIRONMENT_ID: FIXTURE_ENVIRONMENT_ID,
+    DATABASE_ID: FIXTURE_DATABASE_ID,
+    DATABASE_PATH: databasePath,
+    PERSISTENT_DATA_ROOT: persistentRoot,
+    ...overrides,
+  });
+  const config = loadTargetRuntimeConfig({ env, backendRoot: ROOT });
+  const securityFoundations = createSecurityFoundations({
+    env,
+    loadConfig: () => config.security,
+    now: () => Date.parse("2026-07-25T12:30:00.000Z"),
+    loggerSink() {},
+  });
+  return { config, persistentRoot, securityFoundations };
+}
+
 function assertConfigError(env, field) {
   assert.throws(
     () => loadTargetRuntimeConfig({ env, backendRoot: ROOT }),
@@ -160,6 +203,7 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.equal(config.scheduledJobsEnabled, false);
     assert.equal(config.debugRoutesEnabled, false);
     assert.equal(config.leagueWriteMode, "closed");
+    assert.deepEqual(config.sportsDataIoNhl, { enabled: false });
     assert.equal(
       config.frontendBuildId,
       "frontend-candidate-0123456789abcdef"
@@ -173,6 +217,43 @@ describe("M7-01 deployed target runtime configuration", () => {
       path.join(ROOT, "database", "migrations")
     );
     assert.equal(JSON.stringify(config).includes("secret-material"), false);
+  });
+
+  test("keeps the SportsDataIO staging key non-enumerable and rejects unsafe provider configuration", () => {
+    const config = loadTargetRuntimeConfig({
+      env: deployedEnvironment({
+        SPORTSDATAIO_NHL_API_KEY: "test-staging-provider-key",
+        SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR: "2025",
+      }),
+      backendRoot: ROOT,
+    });
+    assert.equal(config.sportsDataIoNhl.enabled, true);
+    assert.equal(config.sportsDataIoNhl.apiKey, "test-staging-provider-key");
+    assert.equal(JSON.stringify(config).includes("provider-key"), false);
+    assertConfigError(
+      deployedEnvironment({
+        SPORTSDATAIO_NHL_API_KEY: "test-staging-provider-key",
+      }),
+      "SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR"
+    );
+    assertConfigError(
+      deployedEnvironment({
+        SPORTSDATAIO_NHL_API_KEY: "test-staging-provider-key",
+        SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR: "2025",
+        SPORTSDATAIO_NHL_API_ORIGIN:
+          "https://credential-capture.example/v3/nhl",
+      }),
+      "SPORTSDATAIO_NHL_API_ORIGIN"
+    );
+    assert.throws(
+      () => sportsDataIoNhlImport({
+        SPORTSDATAIO_NHL_API_KEY: "test-staging-provider-key",
+        SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR: "2025",
+      }, "production"),
+      (error) =>
+        error instanceof TargetRuntimeConfigError &&
+        error.field === "SPORTSDATAIO_NHL_API_KEY"
+    );
   });
 
   test("rejects local/test startup, missing identities, unsafe paths, and coercive booleans", () => {
@@ -471,12 +552,21 @@ describe("M7-01 deployed target runtime configuration", () => {
         "outbox",
         "scheduler",
         "schemaVersion",
+        "sportsDataIoNhl",
       ].sort()
     );
     assert.equal(body.data.environment, "staging");
     assert.equal(body.data.schemaVersion, 18);
     assert.equal(body.data.scheduler.state, "disabled");
     assert.deepEqual(body.data.maintenance, { state: "closed" });
+    assert.deepEqual(body.data.sportsDataIoNhl, {
+      provider: "sportsdataio-discovery-lab",
+      enabled: false,
+      dataScope: "last-season-only",
+      staleAfterMs: 259200000,
+      lastSuccessfulImport: null,
+      stale: true,
+    });
     assert.deepEqual(body.data.outbox, {
       pending: 0,
       publishing: 0,
@@ -494,6 +584,262 @@ describe("M7-01 deployed target runtime configuration", () => {
       assert.equal(serialized.includes(forbidden), false, forbidden);
     }
     assert.deepEqual(runtime.database.serialize(), before);
+  });
+
+  test("executes the exact composed staging-fixture reset route with administrator session and CSRF checks", async (t) => {
+    const input = await deployedFixtureRuntimeInput();
+    const runtime = openDeployedTargetRuntime(input);
+    t.after(() => {
+      if (runtime.database.open) runtime.close();
+      fs.rmSync(input.persistentRoot, { recursive: true, force: true });
+    });
+    const baseUrl = await startApplication(t, runtime);
+    const teamId = fixtureId("team:leagueA:1");
+    runtime.database
+      .prepare(`
+        UPDATE teams
+        SET name = 'Changed Through Deployed Runtime',
+          name_normalized = 'changed through deployed runtime',
+          version = version + 1
+        WHERE id = ?
+      `)
+      .run(teamId);
+    const administratorId = fixtureId("account:platformAdmin");
+    assert.equal(
+      runtime.database
+        .prepare("SELECT email_display FROM users WHERE id = ?")
+        .get(administratorId).email_display,
+      fixtureEmail("platformAdmin")
+    );
+    const session = runtime.services.sessionService.issueForUser({
+      userId: administratorId,
+    });
+
+    const response = await fetch(
+      new URL(
+        "/api/v1/operations/staging-fixture-reset",
+        baseUrl
+      ),
+      {
+        method: "POST",
+        headers: {
+          Origin: "https://staging-hundo.netlify.app",
+          "Content-Type": "application/json",
+          Cookie:
+            `${runtime.transport.sessionCookie.name}=` +
+            session.rawSessionToken,
+          "Idempotency-Key": "deployed-runtime-reset-one",
+          "X-CSRF-Token": session.rawCsrfToken,
+          "Sec-Fetch-Site": "cross-site",
+          "Sec-Fetch-Mode": "cors",
+          "Sec-Fetch-Dest": "empty",
+        },
+        body: JSON.stringify({
+          confirmation: "RESET STAGING TEST LEAGUES",
+          reason: "Verify the fully composed deployed reset route.",
+        }),
+      }
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(
+      body.data.code,
+      "STAGING_FIXTURE_RESET_COMPLETED"
+    );
+    assert.equal(body.data.sessionInvalidated, true);
+    assert.match(body.meta.requestId, /^[0-9a-f-]{36}$/);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT name FROM teams WHERE id = ?")
+        .get(teamId).name,
+      "Alpha Owls"
+    );
+    assert.equal(
+      runtime.database
+        .prepare(`
+          SELECT COUNT(*) AS count
+          FROM operational_events
+          WHERE event_type = 'staging_fixture_reset'
+            AND actor_user_id = ?
+        `)
+        .get(administratorId).count,
+      1
+    );
+    assert.deepEqual(
+      runtime.services.sessionService.resolveWithoutActivity(
+        session.rawSessionToken
+      ),
+      { valid: false, code: "SESSION_INVALID" }
+    );
+  });
+
+  test("executes the exact composed staging provider import and replays it without another provider request", async (t) => {
+    const providerRows = Array.from(
+      { length: 800 },
+      (_, index) => ({
+        PlayerID: index + 10_000,
+        FirstName: "Provider",
+        LastName: `Player ${String(index + 1).padStart(3, "0")}`,
+        Name:
+          `Provider Player ${String(index + 1).padStart(3, "0")}`,
+        Status: "Active",
+        Team: "TST",
+        Position: index % 5 === 0 ? "D" : "C",
+        BirthDate: "1998-02-03T00:00:00Z",
+        Updated: "2026-04-18T12:00:00Z",
+      })
+    );
+    const statisticsRows = providerRows.map((player) => ({
+      PlayerID: player.PlayerID,
+      Name: player.Name,
+      Team: player.Team,
+      Position: player.Position,
+      Games: 82,
+      Goals: 20,
+      Assists: 30,
+      Season: 2025,
+      Updated: "2026-04-18T12:00:00Z",
+    }));
+    const providerCalls = [];
+    const input = await deployedFixtureRuntimeInput({
+      SPORTSDATAIO_NHL_API_KEY: "test-staging-provider-key",
+      SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR: "2025",
+    });
+    const runtime = openDeployedTargetRuntime({
+      ...input,
+      sportsDataIoFetchImplementation: async (url, options) => {
+        providerCalls.push({ url, options });
+        return {
+          ok: true,
+          async json() {
+            if (url.endsWith("/Players")) return providerRows;
+            if (url.endsWith("/FreeAgents")) return [];
+            return statisticsRows;
+          },
+        };
+      },
+    });
+    t.after(() => {
+      if (runtime.database.open) runtime.close();
+      fs.rmSync(input.persistentRoot, {
+        recursive: true,
+        force: true,
+      });
+    });
+    const baseUrl = await startApplication(t, runtime);
+    const administratorId =
+      fixtureId("account:platformAdmin");
+    const session = runtime.services.sessionService.issueForUser({
+      userId: administratorId,
+    });
+    const requestOptions = {
+      method: "POST",
+      headers: {
+        Origin: "https://staging-hundo.netlify.app",
+        "Content-Type": "application/json",
+        Cookie:
+          `${runtime.transport.sessionCookie.name}=` +
+          session.rawSessionToken,
+        "Idempotency-Key":
+          "deployed-runtime-provider-import-one",
+        "X-CSRF-Token": session.rawCsrfToken,
+        "Sec-Fetch-Site": "cross-site",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Dest": "empty",
+      },
+      body: JSON.stringify({
+        confirmation: "IMPORT SPORTSDATAIO STAGING DATA",
+        reason:
+          "Populate hosted staging for release acceptance.",
+      }),
+    };
+    const importUrl = new URL(
+      "/api/v1/operations/staging-sportsdataio-import",
+      baseUrl
+    );
+
+    const response = await fetch(importUrl, requestOptions);
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(
+      body.data.code,
+      "STAGING_SPORTSDATAIO_IMPORT_COMPLETED"
+    );
+    assert.equal(body.data.catalog.createdPlayerCount, 800);
+    assert.equal(body.data.statistics.playerCount, 800);
+    assert.equal(providerCalls.length, 4);
+    assert.equal(
+      providerCalls.every(
+        ({ url }) => !url.includes("test-staging-provider-key")
+      ),
+      true
+    );
+    assert.equal(
+      runtime.database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM player_external_ids
+        WHERE provider = 'sportsdataio-discovery-lab'
+      `).get().count,
+      800
+    );
+    assert.equal(
+      runtime.database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM player_stat_totals AS total
+        JOIN stat_sources AS source
+          ON source.id = total.stat_source_id
+        WHERE source.provider = 'sportsdataio-discovery-lab'
+      `).get().count,
+      800
+    );
+    assert.equal(
+      runtime.database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM operational_events
+        WHERE event_type = 'staging_sportsdataio_import'
+          AND outcome = 'succeeded'
+          AND actor_user_id = ?
+      `).get(administratorId).count,
+      1
+    );
+
+    const replay = await fetch(importUrl, requestOptions);
+    const replayBody = await replay.json();
+    assert.equal(replay.status, 200);
+    assert.equal(replayBody.data.replayed, true);
+    assert.equal(providerCalls.length, 4);
+
+    const matchupHealthResponse = await fetch(
+      new URL(
+        `/api/v1/leagues/${fixtureId("league:leagueA")}` +
+          `/seasons/${fixtureId("season:leagueA:current")}` +
+          "/matchup-weeks",
+        baseUrl
+      ),
+      {
+        headers: {
+          Origin: "https://staging-hundo.netlify.app",
+          Cookie:
+            `${runtime.transport.sessionCookie.name}=` +
+            session.rawSessionToken,
+          "Sec-Fetch-Site": "cross-site",
+          "Sec-Fetch-Mode": "cors",
+          "Sec-Fetch-Dest": "empty",
+        },
+      }
+    );
+    const matchupHealthBody =
+      await matchupHealthResponse.json();
+    assert.equal(matchupHealthResponse.status, 200);
+    assert.equal(
+      matchupHealthBody.data.health.statistics.status,
+      "stale"
+    );
+    assert.notEqual(
+      matchupHealthBody.data.health.statistics.status,
+      "unavailable"
+    );
   });
 
   test("makes readiness true only after listen and false before closing resources", async (t) => {

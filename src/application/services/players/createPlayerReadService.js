@@ -117,6 +117,20 @@ function safeProvider(row) {
   });
 }
 
+function safeStatistics(row) {
+  if (!row.statistics_nhl_season_key) return null;
+  return Object.freeze({
+    provider: row.statistics_provider,
+    nhlSeasonKey: row.statistics_nhl_season_key,
+    gamesPlayed: row.statistics_games_played,
+    goals: row.statistics_goals,
+    assists: row.statistics_assists,
+    nhlPoints: row.statistics_nhl_points,
+    fantasyPointsHundredths: row.statistics_fantasy_points_hundredths,
+    sourceUpdatedAtMs: row.statistics_source_updated_at_ms,
+  });
+}
+
 function safePlayer(row) {
   return Object.freeze({
     id: row.id,
@@ -126,6 +140,7 @@ function safePlayer(row) {
     birthDate: row.birth_date ?? null,
     status: row.status,
     provider: safeProvider(row),
+    statistics: safeStatistics(row),
     version: row.version,
   });
 }

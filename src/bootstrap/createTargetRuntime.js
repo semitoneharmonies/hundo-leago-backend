@@ -107,6 +107,9 @@ const {
   createPlayerReadService,
 } = require("../application/services/players/createPlayerReadService");
 const {
+  createLeaguePlayerReadService,
+} = require("../application/services/players/createLeaguePlayerReadService");
+const {
   createTargetStatisticsService,
 } = require("../application/services/statistics/createTargetStatisticsService");
 const {
@@ -161,6 +164,9 @@ const {
   createCommissionerAssignmentService,
 } = require("../application/services/leagues/createCommissionerAssignmentService");
 const {
+  createCommissionerCorrectionService,
+} = require("../application/services/leagues/createCommissionerCorrectionService");
+const {
   createLeagueInvitationService,
 } = require("../application/services/leagues/createLeagueInvitationService");
 const {
@@ -192,8 +198,11 @@ const {
   createConfiguredAccountEmailAdapter,
 } = require("../infrastructure/email/createConfiguredAccountEmailAdapter");
 const {
-  createNhlStatisticsAdapter,
-} = require("../infrastructure/nhl/NhlStatisticsAdapter");
+  PROVIDER_NAME: SPORTSDATAIO_PROVIDER_NAME,
+  MINIMUM_LAST_SEASON_STATISTICS_PLAYER_COUNT,
+  createSportsDataIoLastSeasonStatisticsProvider,
+  createSportsDataIoNhlAdapter,
+} = require("../infrastructure/sportsdataio/SportsDataIoNhlAdapter");
 const {
   createSqliteAccountActionTokenRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteAccountActionTokenRepository");
@@ -212,6 +221,9 @@ const {
 const {
   createSqliteCommissionerAssignmentRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteCommissionerAssignmentRepository");
+const {
+  createSqliteCommissionerCorrectionRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteCommissionerCorrectionRepository");
 const {
   createSqliteCredentialRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteCredentialRepository");
@@ -269,6 +281,9 @@ const {
 const {
   createSqlitePlayerRepository,
 } = require("../infrastructure/persistence/sqlite/SqlitePlayerRepository");
+const {
+  createSqliteLeaguePlayerReadRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteLeaguePlayerReadRepository");
 const {
   createSqlitePublicRosterRepository,
 } = require("../infrastructure/persistence/sqlite/SqlitePublicRosterRepository");
@@ -345,6 +360,9 @@ const {
   createCommissionerAssignmentRouter,
 } = require("../transport/http/createCommissionerAssignmentRouter");
 const {
+  createCommissionerCorrectionRouter,
+} = require("../transport/http/createCommissionerCorrectionRouter");
+const {
   createLeagueInvitationRouter,
 } = require("../transport/http/createLeagueInvitationRouter");
 const {
@@ -403,6 +421,8 @@ const TARGET_ENDPOINTS = Object.freeze([
   ["POST", "/api/v1/account/reactivations", "accountSession"],
   ["GET", "/api/v1/players", "player"],
   ["GET", "/api/v1/players/:playerId", "player"],
+  ["GET", "/api/v1/leagues/:leagueId/players", "player"],
+  ["GET", "/api/v1/leagues/:leagueId/players/:playerId", "player"],
   ["POST", "/api/v1/admin/leagues", "platformAdministration"],
   [
     "POST",
@@ -442,6 +462,51 @@ const TARGET_ENDPOINTS = Object.freeze([
   ],
   ["POST", "/api/v1/notifications/read-all", "activityNotification"],
   ["GET", "/api/v1/leagues/:leagueId/auctions", "auction"],
+  [
+    "GET",
+    "/api/v1/leagues/:leagueId/commissioner/roster-workspace",
+    "commissionerCorrection",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/commissioner/roster-additions/previews",
+    "commissionerCorrection",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/commissioner/roster-additions",
+    "commissionerCorrection",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/commissioner/roster-removals/previews",
+    "commissionerCorrection",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/commissioner/roster-removals",
+    "commissionerCorrection",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/commissioner/roster-corrections/previews",
+    "commissionerCorrection",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/commissioner/roster-corrections",
+    "commissionerCorrection",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/commissioner/contract-corrections/previews",
+    "commissionerCorrection",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/commissioner/contract-corrections",
+    "commissionerCorrection",
+  ],
   ["POST", "/api/v1/leagues/:leagueId/auctions", "auction"],
   ["GET", "/api/v1/leagues/:leagueId/auctions/:auctionId", "auction"],
   [
@@ -718,6 +783,9 @@ function createTargetRepositories({ database } = {}) {
     commissionerAssignments: createSqliteCommissionerAssignmentRepository({
       database,
     }),
+    commissionerCorrections: createSqliteCommissionerCorrectionRepository({
+      database,
+    }),
     credentials: createSqliteCredentialRepository({ database }),
     leagueActivity: createSqliteLeagueActivityRepository({ database }),
     leagueAccess: createSqliteLeagueAccessRepository({ database }),
@@ -735,6 +803,7 @@ function createTargetRepositories({ database } = {}) {
     matchupWeeks: createSqliteMatchupWeekRepository({ database }),
     notifications: createSqliteNotificationRepository({ database }),
     outbox: createSqliteOutboxEventRepository({ database }),
+    leaguePlayers: createSqliteLeaguePlayerReadRepository({ database }),
     players: createSqlitePlayerRepository({ database }),
     platformRoles: createSqlitePlatformRoleRepository({ database }),
     publicRoster: createSqlitePublicRosterRepository({ database }),
@@ -765,8 +834,8 @@ function createTargetServices({
   emailAdapter,
   emailFetchImplementation,
   emailJobOptions,
-  nhlApiOrigin = "https://api.nhle.com",
-  nhlFetchImplementation,
+  sportsDataIoNhl = Object.freeze({ enabled: false }),
+  sportsDataIoFetchImplementation,
 } = {}) {
   const { config, clock, secureRandom, logger } = securityFoundations || {};
   if (!config || !clock || !secureRandom || !logger) {
@@ -908,21 +977,43 @@ function createTargetServices({
     service: leagueOutboxPublication,
     logger,
   });
-  const statisticsProvider = createNhlStatisticsAdapter({
-    fetchImpl: nhlFetchImplementation,
-    seasonId: currentSeason.nhlSeasonKey,
-    origin: nhlApiOrigin,
-  });
+  const statisticsProvider = sportsDataIoNhl.enabled
+    ? createSportsDataIoLastSeasonStatisticsProvider({
+      adapter: createSportsDataIoNhlAdapter({
+        apiKey: sportsDataIoNhl.apiKey,
+        fetchImpl: sportsDataIoFetchImplementation,
+        origin: sportsDataIoNhl.origin,
+      }),
+      seasonStart: sportsDataIoNhl.seasonStartYear,
+    })
+    : Object.freeze({
+      async fetchRows() {
+        const error = new Error(
+          "SportsDataIO NHL import is disabled until staging configuration is complete."
+        );
+        error.code = "SPORTSDATAIO_NHL_IMPORT_DISABLED";
+        throw error;
+      },
+    });
   const statistics = createTargetStatisticsService({
     repository: repositories.statistics,
     provider: statisticsProvider,
-    nhlSeasonKey: currentSeason.nhlSeasonKey,
+    nhlSeasonKey: sportsDataIoNhl.enabled
+      ? sportsDataIoNhl.nhlSeasonKey
+      : currentSeason.nhlSeasonKey,
+    providerName: SPORTSDATAIO_PROVIDER_NAME,
+    minimumPlayerCount: MINIMUM_LAST_SEASON_STATISTICS_PLAYER_COUNT,
     nowMs: () => clock.nowMs(),
     createId: () => secureRandom.id(),
   });
   const players = createPlayerReadService({
     activeUserAuthorization: leagueAuthorization,
     repository: repositories.players,
+  });
+  const leaguePlayers = createLeaguePlayerReadService({
+    leagueAuthorization,
+    playerRepository: repositories.players,
+    leaguePlayerRepository: repositories.leaguePlayers,
   });
   const matchupSchedule = createMatchupScheduleService({
     repository: repositories.matchupSchedule,
@@ -966,6 +1057,10 @@ function createTargetServices({
     resultService: matchupResults,
     standingsService: matchupStandings,
     recoveryService: matchupRecovery,
+    statisticsProviders: Object.freeze([
+      SPORTSDATAIO_PROVIDER_NAME,
+      "release_qa_fixture",
+    ]),
     clock,
     createId: () => secureRandom.id(),
   });
@@ -1222,6 +1317,13 @@ function createTargetServices({
       clock,
       secureRandom,
     }),
+    commissionerCorrection: createCommissionerCorrectionService({
+      leagueAuthorization,
+      repository: repositories.commissionerCorrections,
+      clock,
+      secureRandom,
+      providerEnabled: sportsDataIoNhl.enabled === true,
+    }),
     read: createLeagueReadService({
       leagueAuthorization,
       leagueAccessRepository: repositories.leagueAccess,
@@ -1281,6 +1383,7 @@ function createTargetServices({
     actionTokenService,
     auditPrivacyDigest,
     league,
+    leaguePlayers,
     players,
     rateLimiter,
     sessionService,
@@ -1354,6 +1457,10 @@ function createTargetRouters({
       ...sharedAudit,
       commissionerAssignmentService: services.league.commissionerAssignment,
     }),
+    commissionerCorrection: createCommissionerCorrectionRouter({
+      requestSecurity,
+      commissionerCorrectionService: services.league.commissionerCorrection,
+    }),
     leagueInvitation: createLeagueInvitationRouter({
       ...sharedAudit,
       leagueInvitationService: services.league.invitation,
@@ -1369,6 +1476,7 @@ function createTargetRouters({
     player: createPlayerRouter({
       requestSecurity,
       playerReadService: services.players,
+      leaguePlayerReadService: services.leaguePlayers,
     }),
     platformAdministration: createPlatformAdministrationRouter({
       ...sharedAudit,
@@ -1422,8 +1530,8 @@ function createTargetRuntime({
   emailJobOptions,
   leagueInvalidationPublisher,
   leagueWriteMode = "open",
-  nhlApiOrigin = "https://api.nhle.com",
-  nhlFetchImplementation,
+  sportsDataIoNhl,
+  sportsDataIoFetchImplementation,
 } = {}) {
   const migrations = discoverMigrations({ migrationsDirectory });
   const migrationState = assertMigrationCompatibility(database, migrations);
@@ -1444,8 +1552,8 @@ function createTargetRuntime({
     emailAdapter,
     emailFetchImplementation,
     emailJobOptions,
-    nhlApiOrigin,
-    nhlFetchImplementation,
+    sportsDataIoNhl,
+    sportsDataIoFetchImplementation,
   });
   const transport = createTargetRouters({
     services,
@@ -1500,8 +1608,8 @@ function openTargetRuntime({
   emailFetchImplementation,
   emailJobOptions,
   leagueInvalidationPublisher,
-  nhlApiOrigin = "https://api.nhle.com",
-  nhlFetchImplementation,
+  sportsDataIoNhl,
+  sportsDataIoFetchImplementation,
   openDatabaseFunction = openDatabase,
 } = {}) {
   if (environment !== "local" && environment !== "test") {
@@ -1530,8 +1638,8 @@ function openTargetRuntime({
       emailAdapter,
       emailFetchImplementation,
       emailJobOptions,
-      nhlApiOrigin,
-      nhlFetchImplementation,
+      sportsDataIoNhl,
+      sportsDataIoFetchImplementation,
       leagueInvalidationPublisher,
     });
     let closed = false;

@@ -27,6 +27,37 @@ const {
 const {
   createPublicHealthRouter,
 } = require("../transport/http/createPublicHealthRouter");
+const {
+  createStagingFixtureResetService,
+} = require("../application/services/operations/createStagingFixtureResetService");
+const {
+  createStagingSportsDataIoImportService,
+} = require("../application/services/operations/createStagingSportsDataIoImportService");
+const {
+  createSportsDataIoCatalogImportService,
+} = require("../application/services/players/createSportsDataIoCatalogImportService");
+const {
+  createTargetStatisticsService,
+} = require("../application/services/statistics/createTargetStatisticsService");
+const {
+  createStagingFixtureResetRouter,
+} = require("../transport/http/createStagingFixtureResetRouter");
+const {
+  createStagingSportsDataIoImportRouter,
+} = require("../transport/http/createStagingSportsDataIoImportRouter");
+const {
+  MINIMUM_LAST_SEASON_STATISTICS_PLAYER_COUNT,
+  PROVIDER_NAME,
+  createSportsDataIoLastSeasonStatisticsProvider,
+  createSportsDataIoNhlAdapter,
+} = require("../infrastructure/sportsdataio/SportsDataIoNhlAdapter");
+const {
+  createSqlitePlayerCatalogRepository,
+} = require("../infrastructure/persistence/sqlite/SqlitePlayerCatalogRepository");
+const {
+  FIXTURE_DATABASE_ID,
+  FIXTURE_ENVIRONMENT_ID,
+} = require("../operations/release/releaseQaFixtureContract");
 
 class DeployedTargetRuntimeError extends Error {
   constructor(code, message, options = {}) {
@@ -76,7 +107,7 @@ function openDeployedTargetRuntime({
   emailAdapter,
   emailFetchImplementation,
   emailJobOptions,
-  nhlFetchImplementation,
+  sportsDataIoFetchImplementation,
   leagueInvalidationPublisher,
   fsModule = fs,
   openDatabaseFunction = openDatabase,
@@ -124,8 +155,8 @@ function openDeployedTargetRuntime({
       emailAdapter,
       emailFetchImplementation,
       emailJobOptions,
-      nhlApiOrigin: config.nhlApiOrigin,
-      nhlFetchImplementation,
+      sportsDataIoNhl: config.sportsDataIoNhl,
+      sportsDataIoFetchImplementation,
       leagueInvalidationPublisher,
       leagueWriteMode: config.leagueWriteMode,
     });
@@ -151,6 +182,99 @@ function openDeployedTargetRuntime({
         healthService: health,
       })
     );
+    if (
+      config.appEnv === "staging" &&
+      config.environmentId === FIXTURE_ENVIRONMENT_ID &&
+      config.databaseId === FIXTURE_DATABASE_ID
+    ) {
+      const stagingFixtureResetService =
+        createStagingFixtureResetService({
+          database: connection.database,
+          databasePath: connection.databasePath,
+          persistentRoot: config.persistentRoot,
+          appEnv: config.appEnv,
+          environmentId: config.environmentId,
+          databaseId: config.databaseId,
+          platformAuthorization:
+            runtime.services.authorizations.platform,
+          clock: securityFoundations.clock,
+          createId: () => securityFoundations.secureRandom.id(),
+        });
+      runtime.app.use(
+        createStagingFixtureResetRouter({
+          requestSecurity: runtime.transport.requestSecurity,
+          stagingFixtureResetService,
+        })
+      );
+      if (
+        config.sportsDataIoNhl.enabled === true &&
+        config.leagueWriteMode === "closed" &&
+        config.scheduledJobsEnabled === false
+      ) {
+        const providerAdapter = createSportsDataIoNhlAdapter({
+          apiKey: config.sportsDataIoNhl.apiKey,
+          fetchImpl: sportsDataIoFetchImplementation,
+          origin: config.sportsDataIoNhl.origin,
+          nowMs: () => securityFoundations.clock.nowMs(),
+        });
+        const providerStatistics =
+          createTargetStatisticsService({
+            repository: runtime.repositories.statistics,
+            provider:
+              createSportsDataIoLastSeasonStatisticsProvider({
+                adapter: providerAdapter,
+                seasonStart:
+                  config.sportsDataIoNhl.seasonStartYear,
+              }),
+            nhlSeasonKey:
+              config.sportsDataIoNhl.nhlSeasonKey,
+            providerName: PROVIDER_NAME,
+            minimumPlayerCount:
+              MINIMUM_LAST_SEASON_STATISTICS_PLAYER_COUNT,
+            nowMs: () => securityFoundations.clock.nowMs(),
+            createId: () =>
+              securityFoundations.secureRandom.id(),
+          });
+        const catalogImport =
+          createSportsDataIoCatalogImportService({
+            catalogRepository:
+              createSqlitePlayerCatalogRepository({
+                database: connection.database,
+                createId: () =>
+                  securityFoundations.secureRandom.id(),
+              }),
+            provider: providerAdapter,
+            statisticsService: providerStatistics,
+            seasonStart:
+              config.sportsDataIoNhl.seasonStartYear,
+          });
+        const stagingSportsDataIoImportService =
+          createStagingSportsDataIoImportService({
+            database: connection.database,
+            appEnv: config.appEnv,
+            environmentId: config.environmentId,
+            databaseId: config.databaseId,
+            leagueWriteMode: config.leagueWriteMode,
+            scheduledJobsEnabled:
+              config.scheduledJobsEnabled,
+            providerEnabled:
+              config.sportsDataIoNhl.enabled,
+            platformAuthorization:
+              runtime.services.authorizations.platform,
+            importService: catalogImport,
+            clock: securityFoundations.clock,
+            createId: () =>
+              securityFoundations.secureRandom.id(),
+          });
+        runtime.app.use(
+          createStagingSportsDataIoImportRouter({
+            requestSecurity:
+              runtime.transport.requestSecurity,
+            stagingSportsDataIoImportService,
+          })
+        );
+      }
+    }
 
     let closed = false;
     function close() {

@@ -1,11 +1,13 @@
 const crypto = require("node:crypto");
 
-const FIXTURE_VERSION = 1;
-const FIXTURE_BUILD_ID = "m7-release-qa-fixture-v1";
-const FIXTURE_CREATED_AT = "2026-07-21T12:00:00.000Z";
+const FIXTURE_VERSION = 6;
+const FIXTURE_BUILD_ID = "m7-release-qa-fixture-v6";
+const FIXTURE_ID_NAMESPACE = "m7-release-qa-fixture-v1";
+const FIXTURE_CREATED_AT = "2026-07-25T12:00:00.000Z";
 const FIXTURE_NOW_MS = Date.parse(FIXTURE_CREATED_AT);
 const FIXTURE_ENVIRONMENT_ID = "test:release-qa";
 const FIXTURE_DATABASE_ID = "m7-release-qa-fixture";
+const INVALID_CAP_BUYOUT_PENALTY_CENTS = 9_250;
 
 const ACCOUNT_ALIASES = Object.freeze([
   "platformAdmin",
@@ -32,14 +34,30 @@ const ACCOUNT_EMAILS = Object.freeze({
 });
 
 const LEAGUE_ALIASES = Object.freeze(["leagueA", "leagueB"]);
-const TEAM_NAMES = Object.freeze([
-  "Owls",
-  "Ravens",
-  "Wolves",
-  "Orcas",
-  "Bears",
-  "Foxes",
-]);
+const TEAM_NAMES_BY_LEAGUE = Object.freeze({
+  leagueA: Object.freeze([
+    "Alpha Owls",
+    "Alpha Ravens",
+    "Alpha Wolves",
+    "Alpha Orcas",
+    "Alpha Bears",
+    "Alpha Foxes",
+  ]),
+  leagueB: Object.freeze([
+    "Beta Comets",
+    "Beta Vipers",
+    "Beta Falcons",
+    "Beta Kraken",
+    "Beta Lynx",
+    "Beta Mustangs",
+  ]),
+});
+const BETA_PLAYER_TEAM_NUMBERS = Object.freeze({
+  benchForward: 2,
+  benchDefence: 3,
+  unsignedProspect: 5,
+  signedProspect: 6,
+});
 
 const PLAYER_BLUEPRINTS = Object.freeze([
   ...Array.from({ length: 12 }, (_, index) => Object.freeze({
@@ -101,7 +119,7 @@ const PLAYER_BLUEPRINTS = Object.freeze([
     ownershipKind: "Rostered",
     contract: true,
     contractType: "fantasy_elc",
-    aavCents: 250,
+    aavCents: 100,
   }),
   Object.freeze({ alias: "freeAgentForward", position: "F" }),
   Object.freeze({ alias: "freeAgentDefence", position: "D" }),
@@ -110,7 +128,7 @@ const PLAYER_BLUEPRINTS = Object.freeze([
 
 function fixtureId(label) {
   const bytes = crypto.createHash("sha256")
-    .update(`hundo-leago:${FIXTURE_BUILD_ID}:${label}`)
+    .update(`hundo-leago:${FIXTURE_ID_NAMESPACE}:${label}`)
     .digest()
     .subarray(0, 16);
   bytes[6] = (bytes[6] & 0x0f) | 0x40;
@@ -148,15 +166,18 @@ function checksumManifest(manifest) {
 
 module.exports = {
   ACCOUNT_ALIASES,
+  BETA_PLAYER_TEAM_NUMBERS,
   FIXTURE_BUILD_ID,
   FIXTURE_CREATED_AT,
   FIXTURE_DATABASE_ID,
   FIXTURE_ENVIRONMENT_ID,
+  FIXTURE_ID_NAMESPACE,
   FIXTURE_NOW_MS,
   FIXTURE_VERSION,
+  INVALID_CAP_BUYOUT_PENALTY_CENTS,
   LEAGUE_ALIASES,
   PLAYER_BLUEPRINTS,
-  TEAM_NAMES,
+  TEAM_NAMES_BY_LEAGUE,
   canonicalize,
   checksumManifest,
   fixtureEmail,

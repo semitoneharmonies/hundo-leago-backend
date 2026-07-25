@@ -231,4 +231,55 @@ describe("M6-01 SQLite target statistics refresh", () => {
     assert.equal(latest.refresh.id, uuid(301));
     assert.equal(before.equals(runtime.database.serialize()), true);
   });
+
+  test("revalidates persistence authority before starting and after provider retrieval", async (t) => {
+    const runtime = createRuntime(t);
+    insertPlayer(runtime.players, 1, "8478402");
+    insertPlayer(runtime.players, 2, "8478403");
+    const target = service(runtime.repository, {
+      fetchRows: async () => validRows,
+    });
+    let authorizationChecks = 0;
+    const authorityError = Object.assign(
+      new Error("authority changed"),
+      { code: "STAGING_SPORTSDATAIO_IMPORT_AUTHORITY_CHANGED" }
+    );
+
+    await assert.rejects(
+      target.refresh({
+        authorizePersist: async () => {
+          authorizationChecks += 1;
+          if (authorizationChecks === 2) throw authorityError;
+        },
+      }),
+      authorityError
+    );
+    assert.equal(authorizationChecks, 2);
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT COUNT(*) AS count FROM player_stat_totals"
+      ).get().count,
+      0
+    );
+    assert.deepEqual(
+      runtime.database.prepare(
+        "SELECT status, error_code FROM stat_refreshes"
+      ).get(),
+      {
+        status: "rejected",
+        error_code: TARGET_STATISTICS_CODES.persistenceFailed,
+      }
+    );
+
+    const before = runtime.database.serialize();
+    await assert.rejects(
+      target.refresh({
+        authorizePersist: async () => {
+          throw authorityError;
+        },
+      }),
+      authorityError
+    );
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
 });

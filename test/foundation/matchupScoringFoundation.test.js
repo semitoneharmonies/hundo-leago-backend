@@ -69,7 +69,7 @@ function seed(database, { baselineGoals = 1 } = {}) {
   ).run(IDS.player);
   database.prepare(
     "INSERT INTO stat_sources (id, provider, status, created_at_ms, updated_at_ms, version) " +
-      "VALUES (?, 'nhl', 'active', 1, 1, 1)"
+    "VALUES (?, 'sportsdataio-discovery-lab', 'active', 1, 1, 1)"
   ).run(IDS.source);
   const insertRefresh = database.prepare(
     "INSERT INTO stat_refreshes (id, stat_source_id, nhl_season_key, source_version, status, started_at_ms, " +
@@ -143,7 +143,7 @@ function input(nowMs = NOW_MS) {
     seasonId: IDS.season,
     weekId: IDS.week,
     matchupId: IDS.matchup,
-    provider: "nhl",
+    provider: "sportsdataio-discovery-lab",
     nowMs,
   };
 }

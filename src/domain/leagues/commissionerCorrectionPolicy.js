@@ -36,6 +36,7 @@ const COMMISSIONER_CORRECTION_CODES = Object.freeze({
   sourceChanged: "COMMISSIONER_CORRECTION_SOURCE_CHANGED",
   noChange: "COMMISSIONER_CORRECTION_NO_CHANGE",
   dependencyConflict: "COMMISSIONER_CORRECTION_DEPENDENCY_CONFLICT",
+  idempotencyConflict: "COMMISSIONER_CORRECTION_IDEMPOTENCY_CONFLICT",
   confirmationRequired: "COMMISSIONER_CORRECTION_CONFIRMATION_REQUIRED",
 });
 
@@ -105,6 +106,10 @@ function optionalReason(value) {
   return value;
 }
 
+function optionalStableId(value) {
+  return value === null ? null : stableId(value);
+}
+
 function calculateRoundedAavCents(totalValueCents, termYears) {
   const quotient = Math.floor(totalValueCents / termYears);
   const remainder = totalValueCents % termYears;
@@ -124,7 +129,11 @@ function confirmation(value) {
 }
 
 function commonCorrection(input) {
-  if (input.actorAuthority !== "commissioner") {
+  if (
+    !["commissioner", "platform_administrator"].includes(
+      input.actorAuthority
+    )
+  ) {
     fail(COMMISSIONER_CORRECTION_CODES.authorityInvalid);
   }
   return {
@@ -134,7 +143,7 @@ function commonCorrection(input) {
     seasonId: stableId(input.seasonId),
     actorUserId: stableId(input.actorUserId),
     actorMembershipId: stableId(input.actorMembershipId),
-    actorAuthority: "commissioner",
+    actorAuthority: input.actorAuthority,
     expectedVersion: positiveVersion(input.expectedVersion),
     confirmWarnings: confirmation(input.confirmWarnings),
     reason: optionalReason(input.reason),
@@ -221,6 +230,169 @@ function validateRosterCorrection(input) {
       correctedPositionGroup,
       input.correctedSlotNumber
     ),
+  });
+}
+
+function validateRosterAddition(input) {
+  assertExactObject(input, [
+    "correctionId",
+    "ownershipId",
+    "ownershipEventId",
+    "contractId",
+    "contractEventId",
+    "contractYearIds",
+    "activityId",
+    "leagueId",
+    "seasonId",
+    "playerId",
+    "actorUserId",
+    "actorMembershipId",
+    "actorAuthority",
+    "teamId",
+    "rosterCategory",
+    "positionGroup",
+    "slotNumber",
+    "contractType",
+    "originalTotalValueCents",
+    "termYears",
+    "confirmWarnings",
+    "reason",
+    "occurredAtMs",
+  ]);
+  if (
+    !["commissioner", "platform_administrator"].includes(
+      input.actorAuthority
+    )
+  ) {
+    fail(COMMISSIONER_CORRECTION_CODES.authorityInvalid);
+  }
+  const rosterCategory = approved(
+    input.rosterCategory,
+    ROSTER_CATEGORIES,
+    COMMISSIONER_CORRECTION_CODES.rosterInvalid
+  );
+  const positionGroup = approved(
+    input.positionGroup,
+    ["F", "D"],
+    COMMISSIONER_CORRECTION_CODES.rosterInvalid
+  );
+  const prospect = rosterCategory === "Prospect";
+  const contractType = prospect
+    ? input.contractType
+    : approved(
+        input.contractType,
+        ["normal", "fantasy_elc"],
+        COMMISSIONER_CORRECTION_CODES.contractInvalid
+      );
+  const termYears = input.termYears;
+  const totalValueCents = input.originalTotalValueCents;
+  if (prospect) {
+    if (
+      contractType !== null ||
+      totalValueCents !== null ||
+      termYears !== null ||
+      input.contractId !== null ||
+      input.contractEventId !== null ||
+      !Array.isArray(input.contractYearIds) ||
+      input.contractYearIds.length !== 0
+    ) {
+      fail(COMMISSIONER_CORRECTION_CODES.contractInvalid);
+    }
+  } else if (
+    !Number.isSafeInteger(termYears) ||
+    termYears < 1 ||
+    termYears > 3 ||
+    !Number.isSafeInteger(totalValueCents) ||
+    totalValueCents < termYears * 100 ||
+    (termYears > 1 && totalValueCents % 100 !== 0) ||
+    !Array.isArray(input.contractYearIds) ||
+    input.contractYearIds.length !== termYears ||
+    (
+      contractType === "fantasy_elc" &&
+      (totalValueCents !== 300 || termYears !== 3)
+    )
+  ) {
+    fail(COMMISSIONER_CORRECTION_CODES.contractInvalid);
+  }
+  const contractYearIds = prospect
+    ? Object.freeze([])
+    : Object.freeze(input.contractYearIds.map(stableId));
+  if (new Set(contractYearIds).size !== contractYearIds.length) {
+    fail(COMMISSIONER_CORRECTION_CODES.scheduleInvalid);
+  }
+  return Object.freeze({
+    correctionId: stableId(input.correctionId),
+    ownershipId: stableId(input.ownershipId),
+    ownershipEventId: stableId(input.ownershipEventId),
+    contractId: prospect ? null : stableId(input.contractId),
+    contractEventId: prospect ? null : stableId(input.contractEventId),
+    contractYearIds,
+    activityId: stableId(input.activityId),
+    leagueId: stableId(input.leagueId),
+    seasonId: stableId(input.seasonId),
+    playerId: stableId(input.playerId),
+    actorUserId: stableId(input.actorUserId),
+    actorMembershipId: stableId(input.actorMembershipId),
+    actorAuthority: input.actorAuthority,
+    teamId: stableId(input.teamId),
+    ownershipKind: prospect ? "Prospect Right" : "Rostered",
+    rosterCategory,
+    positionGroup,
+    slotNumber: rosterSlot(
+      rosterCategory,
+      positionGroup,
+      input.slotNumber
+    ),
+    contractType,
+    originalTotalValueCents: totalValueCents,
+    termYears,
+    aavCents: prospect
+      ? null
+      : calculateRoundedAavCents(totalValueCents, termYears),
+    confirmWarnings: confirmation(input.confirmWarnings),
+    reason: optionalReason(input.reason),
+    occurredAtMs: safeTimestamp(input.occurredAtMs),
+  });
+}
+
+function validateRosterRemoval(input) {
+  assertExactObject(input, [
+    "correctionId",
+    "ownershipEventId",
+    "contractEventId",
+    "activityId",
+    "leagueId",
+    "seasonId",
+    "ownershipId",
+    "playerId",
+    "expectedVersion",
+    "contractId",
+    "expectedContractVersion",
+    "actorUserId",
+    "actorMembershipId",
+    "actorAuthority",
+    "confirmWarnings",
+    "reason",
+    "occurredAtMs",
+  ]);
+  const common = commonCorrection(input);
+  const contractId = optionalStableId(input.contractId);
+  const expectedContractVersion =
+    input.expectedContractVersion === null
+      ? null
+      : positiveVersion(input.expectedContractVersion);
+  if ((contractId === null) !== (expectedContractVersion === null)) {
+    fail(COMMISSIONER_CORRECTION_CODES.contractInvalid);
+  }
+  return Object.freeze({
+    ...common,
+    type: "roster_removal",
+    ownershipEventId: stableId(input.ownershipEventId),
+    contractEventId: stableId(input.contractEventId),
+    ownershipId: stableId(input.ownershipId),
+    playerId: stableId(input.playerId),
+    contractId,
+    expectedContractVersion,
   });
 }
 
@@ -418,8 +590,11 @@ function assertCommissionerAuthority(membership, correction) {
     membership.id !== correction.actorMembershipId ||
     membership.league_id !== correction.leagueId ||
     membership.user_id !== correction.actorUserId ||
-    membership.permission_category !== "commissioner" ||
-    membership.status !== "active"
+    membership.status !== "active" ||
+    (
+      correction.actorAuthority === "commissioner" &&
+      membership.permission_category !== "commissioner"
+    )
   ) {
     fail(COMMISSIONER_CORRECTION_CODES.authorityInvalid);
   }
@@ -456,5 +631,7 @@ module.exports = {
   assertNoDependentTransactions,
   assertWarningsConfirmed,
   validateContractCorrection,
+  validateRosterAddition,
   validateRosterCorrection,
+  validateRosterRemoval,
 };

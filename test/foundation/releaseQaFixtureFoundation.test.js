@@ -15,6 +15,7 @@ const {
 } = require("../../src/operations/release/verifyReleaseQaFixture");
 const {
   ACCOUNT_ALIASES,
+  FIXTURE_ID_NAMESPACE,
   checksumManifest,
   fixtureEmail,
   fixtureId,
@@ -23,6 +24,15 @@ const {
   openDatabase,
   openReadonlyDatabase,
 } = require("../../src/infrastructure/database/connection");
+const {
+  createMatchupScoringService,
+} = require("../../src/application/services/matchups/createMatchupScoringService");
+const {
+  createSqliteMatchupScoringRepository,
+} = require("../../src/infrastructure/persistence/sqlite/SqliteMatchupScoringRepository");
+const {
+  FIXTURE_NOW_MS,
+} = require("../../src/operations/release/releaseQaFixtureContract");
 const {
   createScryptPasswordHasher,
 } = require("../../src/infrastructure/security/createScryptPasswordHasher");
@@ -47,6 +57,14 @@ const EXPECTED_IDENTITIES = Object.freeze({
   verifiedWithoutMembership: Object.freeze({ displayName: "No League", email: "no.league@release-qa.example.test" }),
   pendingVerification: Object.freeze({ displayName: "Pending", email: "pending@release-qa.example.test" }),
   deactivated: Object.freeze({ displayName: "Deactivated", email: "deactivated@release-qa.example.test" }),
+});
+
+test("release-QA fixture keeps the deployed v1 identity namespace stable", () => {
+  assert.equal(FIXTURE_ID_NAMESPACE, "m7-release-qa-fixture-v1");
+  assert.equal(
+    fixtureId("league:leagueA"),
+    "a55151f1-7af1-4773-a907-8e4b27d4d04d"
+  );
 });
 
 function temporaryRoot(t) {
@@ -106,10 +124,14 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
   assert.equal(first.manifest.global.leagueCount, 2);
   assert.equal(first.manifest.global.playerCount, 26);
   assert.equal(first.manifest.global.overlappingPlayerCount, 26);
-  assert.equal(first.manifest.global.overlappingTeamNameCount, 6);
+  assert.equal(first.manifest.global.overlappingTeamNameCount, 0);
   assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.teams), [6, 6]);
-  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.trades), [2, 2]);
+  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.populatedRosterTeams), [6, 6]);
+  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.syntheticPlayerTotals), [26, 26]);
+  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.matchupPlayers), [36, 36]);
+  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.trades), [5, 5]);
   assert.equal(first.manifest.scenarios.twoLeagueIdentityIsolation, true);
+  assert.equal(first.manifest.scenarios.distinctLeagueRosters, true);
 
   const serializedManifest = JSON.stringify(first.manifest);
   assert.equal(serializedManifest.includes("@release-qa.example.test"), false);
@@ -127,8 +149,107 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
     assert.equal(database.prepare(`
       SELECT COUNT(*) AS count FROM teams a JOIN teams b
       ON b.name_normalized=a.name_normalized
-      WHERE a.league_id=? AND b.league_id=? AND a.id=b.id
+      WHERE a.league_id=? AND b.league_id=?
     `).get(leagueA, leagueB).count, 0);
+    assert.equal(
+      database.prepare(`
+        SELECT team_id AS teamId
+        FROM player_ownerships
+        WHERE league_id=? AND player_id=?
+      `).get(
+        leagueA,
+        fixtureId("player:benchForward")
+      ).teamId,
+      fixtureId("team:leagueA:1")
+    );
+    assert.equal(
+      database.prepare(`
+        SELECT team_id AS teamId
+        FROM player_ownerships
+        WHERE league_id=? AND player_id=?
+      `).get(
+        leagueB,
+        fixtureId("player:benchForward")
+      ).teamId,
+      fixtureId("team:leagueB:2")
+    );
+    const completedTradeId = fixtureId("trade-scenario:leagueA:accepted:1");
+    const completedTrade = database.prepare(`
+      SELECT status, completed_at_ms, commissioner_completion_reference
+      FROM trades
+      WHERE league_id=? AND id=?
+    `).get(leagueA, completedTradeId);
+    assert.equal(completedTrade.status, "completed");
+    assert.equal(Number.isSafeInteger(completedTrade.completed_at_ms), true);
+    assert.equal(
+      typeof completedTrade.commissioner_completion_reference,
+      "string"
+    );
+    assert.equal(database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM trade_events
+      WHERE league_id=? AND trade_id=? AND event_type='proposal_accepted'
+    `).get(leagueA, completedTradeId).count, 1);
+    assert.equal(database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM ownership_events
+      WHERE league_id=? AND source_type='trade' AND source_id=?
+        AND event_type='trade_transfer'
+    `).get(leagueA, completedTradeId).count, 2);
+    assert.equal(database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM contract_events
+      WHERE league_id=? AND source_type='trade' AND source_id=?
+        AND event_type='trade_transfer'
+    `).get(leagueA, completedTradeId).count, 2);
+    assert.deepEqual(database.prepare(`
+      SELECT status, completed_at_ms
+      FROM trades
+      WHERE league_id=? AND id=?
+    `).get(
+      leagueA,
+      fixtureId("trade-scenario:leagueA:rejected:1")
+    ), {
+      status: "declined",
+      completed_at_ms: null,
+    });
+    assert.equal(database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM (
+        SELECT trades.id
+        FROM trades
+        JOIN trade_assets
+          ON trade_assets.league_id=trades.league_id
+         AND trade_assets.trade_id=trades.id
+        WHERE trades.league_id=?
+        GROUP BY trades.id
+        HAVING COUNT(*) >= 2 AND COUNT(DISTINCT trade_assets.direction)=2
+      )
+    `).get(leagueA).count, 5);
+    assert.equal(database.prepare(`
+      SELECT status
+      FROM trades
+      WHERE league_id=? AND id=?
+    `).get(
+      leagueA,
+      fixtureId("trade-scenario:leagueA:invalid-cap:1")
+    ).status, "proposed");
+    const scoring = createMatchupScoringService({
+      repository: createSqliteMatchupScoringRepository({ database }),
+    });
+    const liveScore = scoring.readLive({
+      leagueId: leagueA,
+      seasonId: fixtureId("season:leagueA:current"),
+      weekId: fixtureId("matchup-week:leagueA:current"),
+      matchupId: fixtureId("matchup:leagueA:current"),
+      providers: ["sportsdataio-discovery-lab", "release_qa_fixture"],
+      nowMs: FIXTURE_NOW_MS,
+    });
+    assert.equal(liveScore.source.provider, "release_qa_fixture");
+    assert.equal(liveScore.home.players.length > 0, true);
+    assert.equal(liveScore.away.players.length > 0, true);
+    assert.equal(liveScore.home.players.every(({ dataStatus }) => dataStatus === "available"), true);
+    assert.equal(liveScore.away.players.every(({ dataStatus }) => dataStatus === "available"), true);
     for (const alias of ACCOUNT_ALIASES) {
       const user = database.prepare(`
         SELECT display_name, email_normalized

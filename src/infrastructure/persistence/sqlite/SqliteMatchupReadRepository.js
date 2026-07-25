@@ -86,19 +86,19 @@ function createSqliteMatchupReadRepository({ database } = {}) {
       "AND matchup_results.id = @resultId LIMIT 2"
   );
   const latestSuccessfulRefreshStatement = database.prepare(
-    "SELECT stat_refreshes.id, stat_refreshes.status, stat_refreshes.completed_at_ms " +
+      "SELECT stat_refreshes.id, stat_refreshes.status, stat_refreshes.completed_at_ms " +
       "FROM stat_refreshes JOIN stat_sources " +
       "ON stat_sources.id = stat_refreshes.stat_source_id " +
-      "WHERE stat_sources.provider = 'nhl' AND stat_sources.status = 'active' " +
+      "WHERE stat_sources.status = 'active' " +
       "AND stat_refreshes.nhl_season_key = @nhlSeasonKey " +
       "AND stat_refreshes.status = 'succeeded' " +
       "ORDER BY stat_refreshes.completed_at_ms DESC, stat_refreshes.id DESC LIMIT 1"
   );
   const latestRefreshStatement = database.prepare(
-    "SELECT stat_refreshes.id, stat_refreshes.status, stat_refreshes.started_at_ms, " +
+      "SELECT stat_refreshes.id, stat_refreshes.status, stat_refreshes.started_at_ms, " +
       "stat_refreshes.completed_at_ms FROM stat_refreshes JOIN stat_sources " +
       "ON stat_sources.id = stat_refreshes.stat_source_id " +
-      "WHERE stat_sources.provider = 'nhl' AND stat_sources.status = 'active' " +
+      "WHERE stat_sources.status = 'active' " +
       "AND stat_refreshes.nhl_season_key = @nhlSeasonKey " +
       "ORDER BY stat_refreshes.started_at_ms DESC, stat_refreshes.id DESC LIMIT 1"
   );

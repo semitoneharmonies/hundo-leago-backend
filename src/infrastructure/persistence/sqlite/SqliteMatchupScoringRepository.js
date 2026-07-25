@@ -47,25 +47,62 @@ function createSqliteMatchupScoringRepository({ database } = {}) {
       "ORDER BY matchup_roster_locks.team_id, matchup_roster_players.position_group, " +
       "matchup_roster_players.slot_number"
   );
-  const refreshStatement = database.prepare(
-    "SELECT stat_refreshes.*, stat_sources.provider FROM stat_refreshes " +
-      "JOIN stat_sources ON stat_sources.id = stat_refreshes.stat_source_id " +
-      "WHERE stat_sources.provider = @provider AND stat_sources.status = 'active' " +
-      "AND stat_refreshes.nhl_season_key = @nhlSeasonKey AND stat_refreshes.status = 'succeeded' " +
-      "ORDER BY stat_refreshes.completed_at_ms DESC, stat_refreshes.id DESC LIMIT 1"
-  );
-  const refreshByIdStatement = database.prepare(
-    "SELECT stat_refreshes.*, stat_sources.provider FROM stat_refreshes " +
-      "JOIN stat_sources ON stat_sources.id = stat_refreshes.stat_source_id " +
-      "WHERE stat_refreshes.id = @refreshId AND stat_sources.provider = @provider " +
-      "AND stat_sources.status = 'active' " +
-      "AND stat_refreshes.nhl_season_key = @nhlSeasonKey " +
-      "AND stat_refreshes.status = 'succeeded' LIMIT 2"
-  );
+  const refreshStatements = new Map();
   const totalsStatement = database.prepare(
     "SELECT player_id, games_played, goals, assists, fantasy_points_hundredths " +
       "FROM player_stat_totals WHERE refresh_id = @refreshId ORDER BY player_id"
   );
+
+  function sourceProviders(input) {
+    const values = Array.isArray(input?.providers)
+      ? input.providers
+      : [input?.provider];
+    if (
+      values.length < 1 ||
+      values.some((value) =>
+        typeof value !== "string" ||
+        !/^[a-z0-9][a-z0-9_-]{0,99}$/.test(value)
+      ) ||
+      new Set(values).size !== values.length
+    ) {
+      throw repositoryError(
+        REPOSITORY_ERROR_CODES.argumentInvalid,
+        "An ordered list of statistics providers is required."
+      );
+    }
+    return values;
+  }
+
+  function statementsForProviders(providers) {
+    const key = providers.join("\u0000");
+    const cached = refreshStatements.get(key);
+    if (cached) return cached;
+    const placeholders = providers.map((_, index) => `@provider${index}`);
+    const priority = providers
+      .map((_, index) => `WHEN @provider${index} THEN ${index}`)
+      .join(" ");
+    const providerFilter = `stat_sources.provider IN (${placeholders.join(", ")})`;
+    const statements = Object.freeze({
+      latest: database.prepare(
+        "SELECT stat_refreshes.*, stat_sources.provider FROM stat_refreshes " +
+          "JOIN stat_sources ON stat_sources.id = stat_refreshes.stat_source_id " +
+          `WHERE ${providerFilter} AND stat_sources.status = 'active' ` +
+          "AND stat_refreshes.nhl_season_key = @nhlSeasonKey AND stat_refreshes.status = 'succeeded' " +
+          `ORDER BY CASE stat_sources.provider ${priority} ELSE 999 END, ` +
+          "stat_refreshes.completed_at_ms DESC, stat_refreshes.id DESC LIMIT 1"
+      ),
+      byId: database.prepare(
+        "SELECT stat_refreshes.*, stat_sources.provider FROM stat_refreshes " +
+          "JOIN stat_sources ON stat_sources.id = stat_refreshes.stat_source_id " +
+          `WHERE stat_refreshes.id = @refreshId AND ${providerFilter} ` +
+          "AND stat_sources.status = 'active' " +
+          "AND stat_refreshes.nhl_season_key = @nhlSeasonKey " +
+          "AND stat_refreshes.status = 'succeeded' LIMIT 2"
+      ),
+    });
+    refreshStatements.set(key, statements);
+    return statements;
+  }
 
   function readContext(input) {
     try {
@@ -81,6 +118,12 @@ function createSqliteMatchupScoringRepository({ database } = {}) {
       }
       if (rows.length === 0) return null;
       const matchup = Object.freeze({ ...rows[0] });
+      const providers = sourceProviders(input);
+      const sourceInput = Object.assign(
+        { nhlSeasonKey: matchup.nhl_season_key },
+        Object.fromEntries(providers.map((provider, index) => [`provider${index}`, provider]))
+      );
+      const sourceStatements = statementsForProviders(providers);
       const teams = {
         ...scope,
         homeTeamId: matchup.home_team_id,
@@ -88,15 +131,11 @@ function createSqliteMatchupScoringRepository({ database } = {}) {
       };
       let refresh = null;
       if (input.refreshId === undefined) {
-        refresh = refreshStatement.get({
-          provider: input.provider,
-          nhlSeasonKey: matchup.nhl_season_key,
-        }) || null;
+        refresh = sourceStatements.latest.get(sourceInput) || null;
       } else {
-        const refreshRows = refreshByIdStatement.all({
+        const refreshRows = sourceStatements.byId.all({
+          ...sourceInput,
           refreshId: stableId(input.refreshId),
-          provider: input.provider,
-          nhlSeasonKey: matchup.nhl_season_key,
         });
         if (refreshRows.length > 1) {
           throw repositoryError(

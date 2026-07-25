@@ -1,5 +1,8 @@
 const crypto = require("node:crypto");
 
+const SPORTSDATAIO_PROVIDER = "sportsdataio-discovery-lab";
+const SPORTSDATAIO_STALE_AFTER_MS = 72 * 60 * 60 * 1000;
+
 function assertDatabase(database) {
   if (
     !database ||
@@ -35,6 +38,7 @@ function createRuntimeHealthService({
   migrationState,
   databaseIdentity,
   runtimeConfig,
+  nowMs = Date.now,
 } = {}) {
   assertDatabase(database);
   if (
@@ -48,6 +52,9 @@ function createRuntimeHealthService({
     throw new TypeError(
       "runtime health requires validated deployment configuration"
     );
+  }
+  if (typeof nowMs !== "function") {
+    throw new TypeError("runtime health requires a clock");
   }
   const checksumSetId = migrationChecksumSetId(migrationState);
   const databaseIdSuffix = identitySuffix(databaseIdentity?.databaseId);
@@ -72,6 +79,17 @@ function createRuntimeHealthService({
     FROM stat_refreshes
     WHERE status = 'succeeded'
     ORDER BY completed_at_ms DESC, started_at_ms DESC, id DESC
+    LIMIT 1
+  `);
+  const latestSportsDataIoImportQuery = database.prepare(`
+    SELECT stat_refreshes.id, stat_refreshes.nhl_season_key AS nhlSeasonKey,
+      stat_refreshes.started_at_ms AS startedAtMs,
+      stat_refreshes.completed_at_ms AS completedAtMs
+    FROM stat_refreshes
+    JOIN stat_sources ON stat_sources.id = stat_refreshes.stat_source_id
+    WHERE stat_sources.provider = ? AND stat_refreshes.status = 'succeeded'
+    ORDER BY stat_refreshes.completed_at_ms DESC, stat_refreshes.started_at_ms DESC,
+      stat_refreshes.id DESC
     LIMIT 1
   `);
   const outboxQuery = database.prepare(`
@@ -149,6 +167,13 @@ function createRuntimeHealthService({
     }
     const backup = latestBackupQuery.get() || null;
     const statistics = latestStatisticsQuery.get() || null;
+    const sportsDataIoImport = latestSportsDataIoImportQuery.get(
+      SPORTSDATAIO_PROVIDER
+    ) || null;
+    const now = nowMs();
+    if (!Number.isSafeInteger(now) || now < 0) {
+      throw new Error("runtime health clock returned an invalid timestamp");
+    }
     const outbox = outboxQuery.get();
     return Object.freeze({
       environment: runtimeConfig.appEnv,
@@ -168,6 +193,18 @@ function createRuntimeHealthService({
       lastValidStatisticsRefresh: statistics
         ? Object.freeze({ ...statistics })
         : null,
+      sportsDataIoNhl: Object.freeze({
+        provider: SPORTSDATAIO_PROVIDER,
+        enabled: runtimeConfig.sportsDataIoNhl?.enabled === true,
+        dataScope: "last-season-only",
+        staleAfterMs: SPORTSDATAIO_STALE_AFTER_MS,
+        lastSuccessfulImport: sportsDataIoImport
+          ? Object.freeze({ ...sportsDataIoImport })
+          : null,
+        stale:
+          !sportsDataIoImport ||
+          now - sportsDataIoImport.completedAtMs > SPORTSDATAIO_STALE_AFTER_MS,
+      }),
       outbox: Object.freeze({
         pending: outbox?.pending || 0,
         publishing: outbox?.publishing || 0,
@@ -188,6 +225,8 @@ function createRuntimeHealthService({
 }
 
 module.exports = {
+  SPORTSDATAIO_PROVIDER,
+  SPORTSDATAIO_STALE_AFTER_MS,
   createRuntimeHealthService,
   identitySuffix,
   migrationChecksumSetId,

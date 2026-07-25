@@ -153,6 +153,9 @@ function createTargetRequestSecurity({
   }
 
   function assignRequestId(request, response, next) {
+    if (Object.hasOwn(request, REQUEST_ID_STATE)) {
+      return next();
+    }
     let requestId;
     try {
       requestId = requestIdFactory();
