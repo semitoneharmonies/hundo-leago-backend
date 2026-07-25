@@ -22,6 +22,10 @@ function reportTargetStartupFailure(error, sink = process.stderr) {
         ? error.code
         : "TARGET_RUNTIME_START_FAILED",
     message: "The target runtime failed to start safely.",
+    ...(typeof error?.field === "string" &&
+    /^[A-Z][A-Z0-9_]{0,63}$/.test(error.field)
+      ? { field: error.field }
+      : {}),
   };
   sink.write(`${JSON.stringify(record)}\n`);
 }

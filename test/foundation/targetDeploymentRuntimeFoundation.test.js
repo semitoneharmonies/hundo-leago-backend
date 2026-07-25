@@ -679,5 +679,23 @@ describe("M7-01 deployed target runtime configuration", () => {
     });
     assert.equal(output.includes("private"), false);
     assert.equal(output.includes("do-not-print"), false);
+
+    output = "";
+    const configError = new Error("must not be printed");
+    configError.code = "SECURITY_CONFIG_INVALID";
+    configError.field = "FRONTEND_ORIGINS";
+    reportTargetStartupFailure(configError, {
+      write(value) {
+        output += value;
+      },
+    });
+    assert.deepEqual(JSON.parse(output), {
+      severity: "error",
+      event: "target_runtime.start_failed",
+      code: "SECURITY_CONFIG_INVALID",
+      message: "The target runtime failed to start safely.",
+      field: "FRONTEND_ORIGINS",
+    });
+    assert.equal(output.includes("must not be printed"), false);
   });
 });

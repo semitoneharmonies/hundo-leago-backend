@@ -8,6 +8,8 @@ const {
   createReleaseQaRuntime,
 } = require("../../src/operations/release/createReleaseQaRuntime");
 const {
+  browserHeaders,
+  runtimeBinding,
   verifyReleaseQaRuntime,
 } = require("../../src/operations/release/verifyReleaseQaRuntime");
 const {
@@ -28,6 +30,32 @@ const MIGRATIONS_DIRECTORY = path.join(ROOT_DIRECTORY, "database", "migrations")
 const FRONTEND_ORIGIN = "http://127.0.0.1:5173";
 const PASSWORD = "hundo";
 const REGISTRATION_PASSWORD = "M7 Runtime Fixture Password 2026!";
+
+test("M7 release-QA verifier accepts only exact loopback or staging provider origins", () => {
+  assert.equal(
+    runtimeBinding(
+      "https://hundo-leago-backend-staging.onrender.com",
+      "https://hundoleago-staging.netlify.app"
+    ),
+    "hosted"
+  );
+  assert.equal(
+    browserHeaders(
+      "https://hundoleago-staging.netlify.app",
+      {},
+      "hosted"
+    )["Sec-Fetch-Site"],
+    "cross-site"
+  );
+  assert.throws(
+    () =>
+      runtimeBinding(
+        "https://hundo-leago-backend.onrender.com",
+        "https://hundoleago.netlify.app"
+      ),
+    { code: "RELEASE_QA_RUNTIME_VERIFICATION_FAILED" }
+  );
+});
 
 function headers(extra = {}) {
   return {

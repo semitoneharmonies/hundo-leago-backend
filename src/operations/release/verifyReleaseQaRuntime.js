@@ -20,33 +20,54 @@ function fail(checkId, message) {
   throw new ReleaseQaRuntimeVerificationError(checkId, message);
 }
 
-function validateInput({ baseUrl, frontendOrigin, password }) {
+function runtimeBinding(baseUrl, frontendOrigin) {
   let parsed;
+  let parsedFrontend;
   try {
     parsed = new URL(baseUrl);
+    parsedFrontend = new URL(frontendOrigin);
   } catch {
     fail("input", "The release-QA runtime URL is invalid.");
   }
-  if (
+  const loopback =
     parsed.origin !== baseUrl ||
-    parsed.protocol !== "http:" ||
-    parsed.hostname !== "127.0.0.1"
-  ) {
-    fail("input", "The release-QA runtime must use an exact loopback origin.");
-  }
-  if (typeof frontendOrigin !== "string" || !/^http:\/\/(?:127\.0\.0\.1|localhost):517[34]$/.test(frontendOrigin)) {
-    fail("input", "The release-QA frontend origin is invalid.");
-  }
+    parsedFrontend.origin !== frontendOrigin
+      ? false
+      : parsed.protocol === "http:" &&
+        parsed.hostname === "127.0.0.1" &&
+        /^http:\/\/(?:127\.0\.0\.1|localhost):517[34]$/.test(frontendOrigin);
+  if (loopback) return "loopback";
+
+  const hosted =
+    parsed.origin === baseUrl &&
+    parsed.protocol === "https:" &&
+    parsed.hostname.endsWith(".onrender.com") &&
+    parsed.hostname.includes("staging") &&
+    parsedFrontend.origin === frontendOrigin &&
+    parsedFrontend.protocol === "https:" &&
+    parsedFrontend.hostname.endsWith(".netlify.app") &&
+    parsedFrontend.hostname.includes("staging");
+  if (hosted) return "hosted";
+
+  fail(
+    "input",
+    "The release-QA runtime must use exact approved loopback or staging origins."
+  );
+}
+
+function validateInput({ baseUrl, frontendOrigin, password }) {
+  const binding = runtimeBinding(baseUrl, frontendOrigin);
   if (typeof password !== "string" || password === "") {
     fail("input", "The release-QA password is required.");
   }
+  return binding;
 }
 
-function browserHeaders(frontendOrigin, extra = {}) {
+function browserHeaders(frontendOrigin, extra = {}, binding = "loopback") {
   return {
     Accept: "application/json",
     Origin: frontendOrigin,
-    "Sec-Fetch-Site": "same-site",
+    "Sec-Fetch-Site": binding === "hosted" ? "cross-site" : "same-site",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Dest": "empty",
     ...extra,
@@ -79,6 +100,7 @@ async function request(baseUrl, frontendOrigin, requestPath, {
   origin = frontendOrigin,
 } = {}) {
   const hasBody = body !== undefined;
+  const binding = runtimeBinding(baseUrl, frontendOrigin);
   const response = await fetch(new URL(requestPath, baseUrl), {
     method,
     headers: browserHeaders(origin, {
@@ -86,7 +108,7 @@ async function request(baseUrl, frontendOrigin, requestPath, {
       ...(cookie ? { Cookie: cookie } : {}),
       ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
       ...headers,
-    }),
+    }, binding),
     ...(hasBody ? { body: JSON.stringify(body) } : {}),
   });
   return readResponse(response);
@@ -471,7 +493,7 @@ async function verifyReleaseQaRuntime({
   frontendOrigin,
   password,
 } = {}) {
-  validateInput({ baseUrl, frontendOrigin, password });
+  const binding = validateInput({ baseUrl, frontendOrigin, password });
   if (!new Set(["closed", "open"]).has(expectedWriteMode)) {
     fail("input", "The expected release-QA write mode is invalid.");
   }
@@ -551,9 +573,9 @@ async function verifyReleaseQaRuntime({
       twoLeagueIsolation: "passed",
     }),
     controls: Object.freeze({
-      backendBinding: "loopback",
+      backendBinding: binding,
       email: "capture-only",
-      providerNetwork: "disabled",
+      providerNetwork: binding === "hosted" ? "not-exercised" : "disabled",
       scheduledJobs: "disabled",
       writeMode: expectedWriteMode,
     }),
@@ -569,5 +591,6 @@ async function verifyReleaseQaRuntime({
 module.exports = {
   ReleaseQaRuntimeVerificationError,
   browserHeaders,
+  runtimeBinding,
   verifyReleaseQaRuntime,
 };
