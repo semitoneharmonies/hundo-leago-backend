@@ -39,7 +39,7 @@ describe("M2 gate staging Render blueprint", () => {
       "npm ci && npm run check && npm test"
     );
     assert.equal(service.startCommand, "npm start");
-    assert.equal(service.healthCheckPath, "/health");
+    assert.equal(service.healthCheckPath, "/api/v1/health/ready");
     assert.deepEqual(service.disk, {
       name: "hundo-leago-staging-disk",
       mountPath: "/opt/render/project/data",
@@ -81,7 +81,7 @@ describe("M2 gate staging Render blueprint", () => {
 
     assert.equal(
       environment.get("BACKUP_OBJECT_PREFIX")?.value,
-      "hundo-leago/staging"
+      "hundo-leago/staging/"
     );
     assert.equal(environment.get("APP_ENV")?.value, "staging");
     assert.equal(environment.get("NODE_ENV")?.value, "production");
@@ -103,6 +103,8 @@ describe("M2 gate staging Render blueprint", () => {
       assert.equal(environment.get(key)?.value, "false", `${key} must be false`);
     }
 
+    assert.equal(environment.get("LEAGUE_WRITE_MODE")?.value, "closed");
+
     assert.equal(environment.get("EMAIL_DELIVERY_MODE")?.value, "capture");
   });
 
@@ -112,12 +114,13 @@ describe("M2 gate staging Render blueprint", () => {
     const generatedSecretKeys = [
       "RATE_LIMIT_KEY_SECRET",
       "AUDIT_METADATA_SECRET",
-      "BACKUP_ENCRYPTION_KEY",
+      "ACTION_TOKEN_DELIVERY_KEY",
       "STATS_REFRESH_TOKEN",
     ];
     const providerSecretKeys = [
       "BACKUP_OBJECT_ACCESS_KEY_ID",
       "BACKUP_OBJECT_SECRET_ACCESS_KEY",
+      "BACKUP_ENCRYPTION_KEY",
     ];
 
     for (const key of generatedSecretKeys) {
@@ -150,6 +153,8 @@ describe("M2 gate staging Render blueprint", () => {
 
     for (const key of [
       "APP_BUILD_ID",
+      "FRONTEND_BUILD_ID",
+      "DATABASE_ID",
       "PUBLIC_FRONTEND_ORIGIN",
       "FRONTEND_ORIGINS",
       "EMAIL_FROM",
@@ -163,5 +168,18 @@ describe("M2 gate staging Render blueprint", () => {
         sync: false,
       });
     }
+    assert.equal(
+      environment.get("APP_ENVIRONMENT_ID")?.value,
+      "hundo-leago-staging-environment-v1"
+    );
+    assert.equal(
+      environment.get("PERSISTENT_DATA_ROOT")?.value,
+      "/opt/render/project/data/hundo-staging"
+    );
+    assert.equal(environment.get("CURRENT_SEASON_LABEL")?.value, "2026");
+    assert.equal(
+      environment.get("CURRENT_NHL_SEASON_KEY")?.value,
+      "20262027"
+    );
   });
 });

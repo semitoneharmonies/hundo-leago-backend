@@ -1,0 +1,2437 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { describe, test } = require("node:test");
+
+const {
+  TRADE_ASSET_CODES,
+  TradeAssetPolicyError,
+} = require("../../src/domain/trades/tradeAssetPolicy");
+const {
+  TradeLifecyclePolicyError,
+} = require("../../src/domain/trades/tradeLifecyclePolicy");
+const {
+  TRADE_EXECUTION_CODES,
+  TradeExecutionPolicyError,
+} = require("../../src/domain/trades/tradeExecutionPolicy");
+const {
+  TRADE_REVERSAL_CODES,
+  TRADE_REVERSAL_REASON_CODES,
+  TradeReversalPolicyError,
+  validateTradeRecoveryWriteInput,
+  validateTradeReversalPreviewInput,
+} = require("../../src/domain/trades/tradeReversalPolicy");
+const {
+  createTradeProposalService,
+} = require("../../src/application/services/trades/createTradeProposalService");
+const {
+  createTradeReadService,
+} = require("../../src/application/services/trades/createTradeReadService");
+const {
+  createRespondToTradeProposalService,
+} = require("../../src/application/services/trades/respondToTradeProposalService");
+const {
+  createPreviewTradeAcceptanceService,
+} = require("../../src/application/services/trades/previewTradeAcceptanceService");
+const {
+  createAcceptTradeProposalService,
+} = require("../../src/application/services/trades/acceptTradeProposalService");
+const {
+  createTradeReversalService,
+} = require("../../src/application/services/trades/createTradeReversalService");
+const {
+  createLeagueAuthorizationService,
+} = require("../../src/application/services/authorization/requireLeagueAuthority");
+const {
+  createTeamAuthorizationService,
+} = require("../../src/application/services/authorization/requireTeamManagerAuthority");
+const {
+  openDatabase,
+} = require("../../src/infrastructure/database/connection");
+const {
+  migrateDatabase,
+} = require("../../src/infrastructure/database/migrate");
+const {
+  createSqliteLeagueAccessRepository,
+} = require("../../src/infrastructure/persistence/sqlite/SqliteLeagueAccessRepository");
+const {
+  createSqliteTeamAuthorityRepository,
+} = require("../../src/infrastructure/persistence/sqlite/SqliteTeamAuthorityRepository");
+const {
+  createSqliteTradeProposalRepository,
+} = require("../../src/infrastructure/persistence/sqlite/SqliteTradeProposalRepository");
+const {
+  createSqliteTradeReversalRepository,
+} = require("../../src/infrastructure/persistence/sqlite/SqliteTradeReversalRepository");
+const {
+  createSqliteTradeExpiryRepository,
+} = require("../../src/infrastructure/persistence/sqlite/SqliteTradeExpiryRepository");
+const {
+  createSqliteUserRepository,
+} = require("../../src/infrastructure/persistence/sqlite/SqliteUserRepository");
+const {
+  createSqliteRepositoryContext,
+} = require("../../src/infrastructure/persistence/sqlite/createSqliteRepositoryContext");
+const {
+  createExpireTradeProposalsJob,
+} = require("../../src/jobs/definitions/expireTradeProposals");
+
+const ROOT_DIRECTORY = path.resolve(__dirname, "..", "..");
+const MIGRATIONS_DIRECTORY = path.join(ROOT_DIRECTORY, "database", "migrations");
+const NOW_MS = Date.parse("2026-07-21T19:00:00.000Z");
+const TRADE_DEADLINE_MS = NOW_MS + 2 * 24 * 60 * 60 * 1000;
+
+function uuid(value) {
+  return `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
+}
+
+const IDS = Object.freeze({
+  manager: uuid(1),
+  receivingManager: uuid(50),
+  commissioner: uuid(51),
+  league: uuid(2),
+  currentSeason: uuid(3),
+  futureSeason: uuid(4),
+  teamA: uuid(5),
+  teamB: uuid(6),
+  membership: uuid(7),
+  assignment: uuid(8),
+  receivingMembership: uuid(52),
+  commissionerMembership: uuid(53),
+  receivingAssignment: uuid(54),
+  entryDraft: uuid(9),
+  contractPlayer: uuid(10),
+  prospectPlayer: uuid(11),
+  boughtOutPlayer: uuid(12),
+  retentionAssetPlayer: uuid(13),
+  contract: uuid(20),
+  contractYear: uuid(21),
+  ownership: uuid(22),
+  prospectOwnership: uuid(23),
+  eliminatedContract: uuid(24),
+  eliminatedContractYear: uuid(25),
+  retentionAssetContract: uuid(26),
+  retentionAssetContractYear: uuid(27),
+  prospectContract: uuid(60),
+  prospectContractYear: uuid(61),
+  draftPick: uuid(30),
+  retention: uuid(31),
+  retentionYear: uuid(32),
+  buyout: uuid(33),
+  buyoutYear: uuid(34),
+  assetRetention: uuid(35),
+  assetRetentionYear: uuid(36),
+  priorTrade: uuid(40),
+  futureConsideration: uuid(41),
+});
+
+function authenticated(userId = IDS.manager) {
+  return Object.freeze({
+    valid: true,
+    user: Object.freeze({ id: userId }),
+    session: Object.freeze({ userId }),
+  });
+}
+
+function insertPlayer(repositories, id, lastName) {
+  repositories.players.insert({
+    id,
+    first_name: "Player",
+    last_name: lastName,
+    full_name: `Player ${lastName}`,
+    birth_date: null,
+    status: "active",
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+}
+
+function insertContract(repositories, {
+  id,
+  yearId,
+  playerId,
+  teamId,
+  aavCents,
+  status,
+}) {
+  repositories.contracts.insert({
+    id,
+    league_id: IDS.league,
+    player_id: playerId,
+    current_team_id: teamId,
+    contract_type: "normal",
+    original_total_value_cents: aavCents,
+    original_term_years: 1,
+    aav_cents: aavCents,
+    start_season_id: IDS.currentSeason,
+    status,
+    acquisition_source_type: "migration",
+    acquisition_source_id: null,
+    auction_buyout_lock_expires_at_ms: null,
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  repositories.contract_years.insert({
+    id: yearId,
+    league_id: IDS.league,
+    contract_id: id,
+    season_id: IDS.currentSeason,
+    year_number: 1,
+    aav_cents: aavCents,
+    status: status === "active" ? "current" : "eliminated",
+    rollover_at_ms: status === "active" ? null : NOW_MS - 10_000,
+    created_at_ms: NOW_MS - 20_000,
+  });
+}
+
+function seed(repositories) {
+  for (const [id, email, name] of [
+    [IDS.manager, "manager@example.test", "Manager"],
+    [IDS.receivingManager, "receiver@example.test", "Receiver"],
+    [IDS.commissioner, "commissioner@example.test", "Commissioner"],
+  ]) {
+    repositories.users.insert({
+      id,
+      email_normalized: email,
+      email_display: email,
+      display_name: name,
+      display_name_normalized: name.toLowerCase(),
+      status: "active",
+      created_at_ms: NOW_MS - 20_000,
+      updated_at_ms: NOW_MS - 20_000,
+      version: 1,
+    });
+  }
+  repositories.leagues.insert({
+    id: IDS.league,
+    name: "League",
+    name_normalized: "league",
+    status: "active",
+    timezone: "America/Vancouver",
+    commissioner_membership_id: null,
+    current_season_id: null,
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  repositories.seasons.insert({
+    id: IDS.currentSeason,
+    league_id: IDS.league,
+    label: "2026-27",
+    nhl_season_key: "20262027",
+    status: "active",
+    regular_season_starts_at_ms: NOW_MS - 20_000,
+    regular_season_ends_at_ms: NOW_MS + 300_000_000,
+    fantasy_playoffs_start_at_ms: NOW_MS + 200_000_000,
+    fantasy_playoffs_end_at_ms: NOW_MS + 300_000_000,
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+    free_agent_draft_completed_at_ms: NOW_MS - 15_000,
+  });
+  repositories.seasons.insert({
+    id: IDS.futureSeason,
+    league_id: IDS.league,
+    label: "2027-28",
+    nhl_season_key: "20272028",
+    status: "planned",
+    regular_season_starts_at_ms: null,
+    regular_season_ends_at_ms: null,
+    fantasy_playoffs_start_at_ms: null,
+    fantasy_playoffs_end_at_ms: null,
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+    free_agent_draft_completed_at_ms: null,
+  });
+  repositories.league_settings.insert({
+    league_id: IDS.league,
+    salary_cap_cents: 10_000,
+    trade_deadline_at_ms: TRADE_DEADLINE_MS,
+    maximum_teams: 20,
+    active_forward_slots: 12,
+    active_defence_slots: 6,
+    bench_slots: 4,
+    maximum_bench_aav_cents: 400,
+    injured_reserve_slots: 4,
+    prospect_slots_unlimited: 1,
+    scoring_rule_version: 1,
+    standings_rule_version: 1,
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  for (const [id, name] of [
+    [IDS.teamA, "Alpha"],
+    [IDS.teamB, "Bravo"],
+  ]) {
+    repositories.teams.insert({
+      id,
+      league_id: IDS.league,
+      name,
+      name_normalized: name.toLowerCase(),
+      status: "active",
+      primary_colour: null,
+      secondary_colour: null,
+      logo_reference: null,
+      created_at_ms: NOW_MS - 20_000,
+      updated_at_ms: NOW_MS - 20_000,
+      version: 1,
+    });
+  }
+  repositories.league_memberships.insert({
+    id: IDS.membership,
+    league_id: IDS.league,
+    user_id: IDS.manager,
+    permission_category: "manager",
+    status: "active",
+    joined_at_ms: NOW_MS - 20_000,
+    ended_at_ms: null,
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  repositories.league_memberships.insert({
+    id: IDS.receivingMembership,
+    league_id: IDS.league,
+    user_id: IDS.receivingManager,
+    permission_category: "manager",
+    status: "active",
+    joined_at_ms: NOW_MS - 20_000,
+    ended_at_ms: null,
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  repositories.league_memberships.insert({
+    id: IDS.commissionerMembership,
+    league_id: IDS.league,
+    user_id: IDS.commissioner,
+    permission_category: "commissioner",
+    status: "active",
+    joined_at_ms: NOW_MS - 20_000,
+    ended_at_ms: null,
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  repositories.team_manager_assignments.insert({
+    id: IDS.assignment,
+    league_id: IDS.league,
+    team_id: IDS.teamA,
+    user_id: IDS.manager,
+    membership_id: IDS.membership,
+    assigned_by_user_id: IDS.manager,
+    status: "accepted",
+    assigned_at_ms: NOW_MS - 20_000,
+    accepted_at_ms: NOW_MS - 19_000,
+    ended_at_ms: null,
+    version: 1,
+  });
+  repositories.team_manager_assignments.insert({
+    id: IDS.receivingAssignment,
+    league_id: IDS.league,
+    team_id: IDS.teamB,
+    user_id: IDS.receivingManager,
+    membership_id: IDS.receivingMembership,
+    assigned_by_user_id: IDS.commissioner,
+    status: "accepted",
+    assigned_at_ms: NOW_MS - 20_000,
+    accepted_at_ms: NOW_MS - 19_000,
+    ended_at_ms: null,
+    version: 1,
+  });
+  repositories.leagues.updateVersioned({
+    key: IDS.league,
+    expectedVersion: 1,
+    changes: {
+      current_season_id: IDS.currentSeason,
+      commissioner_membership_id: IDS.commissionerMembership,
+      updated_at_ms: NOW_MS - 10_000,
+    },
+  });
+  repositories.entry_drafts.insert({
+    id: IDS.entryDraft,
+    league_id: IDS.league,
+    season_id: IDS.currentSeason,
+    status: "completed",
+    rounds: 4,
+    pick_clock_seconds: 300,
+    starts_at_ms: NOW_MS - 18_000,
+    completed_at_ms: NOW_MS - 17_000,
+    created_by_user_id: IDS.manager,
+    created_at_ms: NOW_MS - 19_000,
+    updated_at_ms: NOW_MS - 17_000,
+    version: 1,
+  });
+
+  insertPlayer(repositories, IDS.contractPlayer, "Contract");
+  insertPlayer(repositories, IDS.prospectPlayer, "Prospect");
+  insertPlayer(repositories, IDS.boughtOutPlayer, "BoughtOut");
+  insertPlayer(repositories, IDS.retentionAssetPlayer, "RetainedAsset");
+  insertContract(repositories, {
+    id: IDS.contract,
+    yearId: IDS.contractYear,
+    playerId: IDS.contractPlayer,
+    teamId: IDS.teamA,
+    aavCents: 1_000,
+    status: "active",
+  });
+  repositories.player_ownerships.insert({
+    id: IDS.ownership,
+    league_id: IDS.league,
+    season_id: IDS.currentSeason,
+    player_id: IDS.contractPlayer,
+    team_id: IDS.teamA,
+    ownership_kind: "Rostered",
+    roster_category: "Active",
+    position_group: "F",
+    slot_number: 1,
+    acquired_transaction_type: "migration",
+    acquired_transaction_id: null,
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  repositories.player_ownerships.insert({
+    id: IDS.prospectOwnership,
+    league_id: IDS.league,
+    season_id: IDS.currentSeason,
+    player_id: IDS.prospectPlayer,
+    team_id: IDS.teamA,
+    ownership_kind: "Prospect Right",
+    roster_category: "Prospect",
+    position_group: "F",
+    slot_number: null,
+    acquired_transaction_type: "entry_draft",
+    acquired_transaction_id: null,
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  insertContract(repositories, {
+    id: IDS.eliminatedContract,
+    yearId: IDS.eliminatedContractYear,
+    playerId: IDS.boughtOutPlayer,
+    teamId: IDS.teamB,
+    aavCents: 300,
+    status: "eliminated",
+  });
+  insertContract(repositories, {
+    id: IDS.retentionAssetContract,
+    yearId: IDS.retentionAssetContractYear,
+    playerId: IDS.retentionAssetPlayer,
+    teamId: IDS.teamA,
+    aavCents: 200,
+    status: "active",
+  });
+  repositories.draft_picks.insert({
+    id: IDS.draftPick,
+    league_id: IDS.league,
+    draft_id: IDS.entryDraft,
+    target_season_id: IDS.futureSeason,
+    round_number: 4,
+    position_number: 1,
+    original_team_id: IDS.teamA,
+    current_owner_team_id: IDS.teamA,
+    status: "unused",
+    selection_id: null,
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  repositories.retention_obligations.insert({
+    id: IDS.retention,
+    league_id: IDS.league,
+    contract_id: IDS.contract,
+    player_id: IDS.contractPlayer,
+    originating_team_id: IDS.teamA,
+    responsible_team_id: IDS.teamB,
+    retained_aav_cents: 100,
+    creation_trade_id: null,
+    status: "active",
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  repositories.retention_years.insert({
+    id: IDS.retentionYear,
+    league_id: IDS.league,
+    retention_obligation_id: IDS.retention,
+    season_id: IDS.currentSeason,
+    retained_aav_cents: 100,
+    status: "current",
+    created_at_ms: NOW_MS - 20_000,
+  });
+  repositories.retention_obligations.insert({
+    id: IDS.assetRetention,
+    league_id: IDS.league,
+    contract_id: IDS.retentionAssetContract,
+    player_id: IDS.retentionAssetPlayer,
+    originating_team_id: IDS.teamA,
+    responsible_team_id: IDS.teamB,
+    retained_aav_cents: 100,
+    creation_trade_id: null,
+    status: "active",
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  repositories.retention_years.insert({
+    id: IDS.assetRetentionYear,
+    league_id: IDS.league,
+    retention_obligation_id: IDS.assetRetention,
+    season_id: IDS.currentSeason,
+    retained_aav_cents: 100,
+    status: "current",
+    created_at_ms: NOW_MS - 20_000,
+  });
+  repositories.buyout_obligations.insert({
+    id: IDS.buyout,
+    league_id: IDS.league,
+    contract_id: IDS.eliminatedContract,
+    player_id: IDS.boughtOutPlayer,
+    originating_team_id: IDS.teamB,
+    responsible_team_id: IDS.teamB,
+    annual_penalty_basis_cents: 75,
+    buyout_transaction_id: "seed-buyout",
+    status: "active",
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  repositories.buyout_years.insert({
+    id: IDS.buyoutYear,
+    league_id: IDS.league,
+    buyout_obligation_id: IDS.buyout,
+    season_id: IDS.currentSeason,
+    penalty_cents: 75,
+    status: "current",
+    created_at_ms: NOW_MS - 20_000,
+  });
+  repositories.trades.insert({
+    id: IDS.priorTrade,
+    league_id: IDS.league,
+    season_id: IDS.currentSeason,
+    proposing_team_id: IDS.teamA,
+    receiving_team_id: IDS.teamB,
+    proposing_user_id: IDS.manager,
+    status: "completed",
+    created_at_ms: NOW_MS - 30_000,
+    expires_at_ms: NOW_MS - 20_000,
+    responded_at_ms: NOW_MS - 25_000,
+    completed_at_ms: NOW_MS - 25_000,
+    commissioner_completion_reference: null,
+    updated_at_ms: NOW_MS - 25_000,
+    version: 1,
+  });
+  repositories.future_considerations.insert({
+    id: IDS.futureConsideration,
+    league_id: IDS.league,
+    season_id: IDS.currentSeason,
+    originating_trade_id: IDS.priorTrade,
+    owing_team_id: IDS.teamA,
+    receiving_team_id: IDS.teamB,
+    description: "Conditional future pick",
+    status: "outstanding",
+    created_at_ms: NOW_MS - 25_000,
+    resolved_at_ms: null,
+    updated_at_ms: NOW_MS - 25_000,
+    version: 1,
+  });
+}
+
+function creationInput(overrides = {}) {
+  return {
+    proposingTeamId: IDS.teamA,
+    receivingTeamId: IDS.teamB,
+    proposingAssets: [
+      { type: "contract", contractId: IDS.contract },
+      {
+        type: "requested_retention",
+        contractId: IDS.contract,
+        retainedAavCents: 400,
+      },
+      { type: "prospect_right", playerId: IDS.prospectPlayer },
+      { type: "draft_pick", draftPickId: IDS.draftPick },
+    ],
+    receivingAssets: [
+      {
+        type: "retention_obligation",
+        retentionObligationId: IDS.assetRetention,
+      },
+      { type: "buyout_obligation", buyoutObligationId: IDS.buyout },
+      {
+        type: "future_consideration",
+        futureConsiderationId: IDS.futureConsideration,
+      },
+      {
+        type: "future_consideration_instruction",
+        description: "Conditional 2028 fourth-round pick",
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function sourceState(database) {
+  return JSON.stringify(
+    [
+      "contracts",
+      "contract_years",
+      "player_ownerships",
+      "draft_picks",
+      "retention_obligations",
+      "retention_years",
+      "buyout_obligations",
+      "buyout_years",
+      "future_considerations",
+    ].map((tableName) => ({
+      tableName,
+      rows: database.prepare(`SELECT * FROM ${tableName} ORDER BY id`).all(),
+    }))
+  );
+}
+
+function count(database, tableName, where = "") {
+  return database
+    .prepare(`SELECT COUNT(*) AS count FROM ${tableName} ${where}`)
+    .get().count;
+}
+
+function createRuntime(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m5-06-create-"));
+  const connection = openDatabase({
+    databasePath: path.join(root, "league.sqlite3"),
+    environment: "test",
+  });
+  migrateDatabase({
+    database: connection.database,
+    migrationsDirectory: MIGRATIONS_DIRECTORY,
+    applicationBuildId: "m5-06-test",
+    now: () => NOW_MS,
+  });
+  const context = createSqliteRepositoryContext({ database: connection.database });
+  seed(context.repositories);
+  const leagueAuthorization = createLeagueAuthorizationService({
+    userRepository: createSqliteUserRepository({ database: connection.database }),
+    leagueAccessRepository: createSqliteLeagueAccessRepository({
+      database: connection.database,
+    }),
+  });
+  const teamAuthorization = createTeamAuthorizationService({
+    leagueAuthorization,
+    teamAuthorityRepository: createSqliteTeamAuthorityRepository({
+      database: connection.database,
+    }),
+  });
+  const repository = createSqliteTradeProposalRepository({
+    database: connection.database,
+  });
+  let nextId = 1_000;
+  let nowMs = NOW_MS;
+  const clock = Object.freeze({ nowMs: () => nowMs });
+  const secureRandom = Object.freeze({ id: () => uuid(nextId++) });
+  const service = createTradeProposalService({
+    leagueAuthorization,
+    teamAuthorization,
+    repository,
+    clock,
+    secureRandom,
+  });
+  const readService = createTradeReadService({
+    leagueAuthorization,
+    repository,
+  });
+  const lifecycleService = createRespondToTradeProposalService({
+    leagueAuthorization,
+    teamAuthorization,
+    repository,
+    clock,
+    secureRandom,
+  });
+  const acceptancePreviewService = createPreviewTradeAcceptanceService({
+    leagueAuthorization,
+    teamAuthorization,
+    repository,
+    clock,
+  });
+  const acceptanceService = createAcceptTradeProposalService({
+    leagueAuthorization,
+    teamAuthorization,
+    repository,
+    clock,
+    secureRandom,
+  });
+  const recoveryRepository = createSqliteTradeReversalRepository({
+    database: connection.database,
+  });
+  const recoveryService = createTradeReversalService({
+    leagueAuthorization,
+    repository: recoveryRepository,
+    clock,
+    secureRandom,
+  });
+  const expiryRepository = createSqliteTradeExpiryRepository({
+    database: connection.database,
+  });
+  const expiryJob = createExpireTradeProposalsJob({
+    repository: expiryRepository,
+    clock,
+    secureRandom,
+    leaseOwner: "m5-07-test",
+    logger: Object.freeze({ error() {} }),
+  });
+  t.after(() => {
+    if (connection.database.open) connection.database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  return Object.freeze({
+    database: connection.database,
+    repositories: context.repositories,
+    repository,
+    service,
+    readService,
+    lifecycleService,
+    acceptancePreviewService,
+    acceptanceService,
+    recoveryRepository,
+    recoveryService,
+    expiryRepository,
+    expiryJob,
+    setNow(value) {
+      nowMs = value;
+    },
+  });
+}
+
+function create(runtime, idempotencyKey, input = creationInput()) {
+  return runtime.service.create({
+    leagueId: IDS.league,
+    input,
+    idempotencyKey,
+    authenticated: authenticated(),
+  });
+}
+
+function respond(runtime, {
+  userId,
+  tradeId,
+  action,
+  idempotencyKey,
+}) {
+  return runtime.lifecycleService.respond({
+    leagueId: IDS.league,
+    input: { tradeId, action },
+    idempotencyKey,
+    authenticated: authenticated(userId),
+  });
+}
+
+function preview(runtime, tradeId, userId = IDS.receivingManager) {
+  return runtime.acceptancePreviewService.preview({
+    leagueId: IDS.league,
+    input: { tradeId },
+    authenticated: authenticated(userId),
+  });
+}
+
+function accept(
+  runtime,
+  tradeId,
+  idempotencyKey,
+  userId = IDS.receivingManager
+) {
+  return runtime.acceptanceService.accept({
+    leagueId: IDS.league,
+    input: { tradeId },
+    idempotencyKey,
+    authenticated: authenticated(userId),
+  });
+}
+
+function assertAssetReason(action, reasonCode) {
+  assert.throws(action, (error) => {
+    assert.ok(error instanceof TradeAssetPolicyError);
+    assert.equal(error.reasonCode, reasonCode);
+    return true;
+  });
+}
+
+function assertLifecycleReason(action, reasonCode) {
+  assert.throws(action, (error) => {
+    assert.ok(error instanceof TradeLifecyclePolicyError);
+    assert.equal(error.reasonCode, reasonCode);
+    return true;
+  });
+}
+
+function assertExecutionReason(action, reasonCode) {
+  assert.throws(action, (error) => {
+    assert.ok(error instanceof TradeExecutionPolicyError);
+    assert.equal(error.reasonCode, reasonCode);
+    return true;
+  });
+}
+
+describe("M5-06 atomic pending trade-proposal creation", () => {
+  test("snapshots every approved asset and writes only proposal evidence atomically", (t) => {
+    const runtime = createRuntime(t);
+    const beforeSources = sourceState(runtime.database);
+
+    const result = create(runtime, "mixed-proposal-1");
+
+    assert.equal(result.code, "TRADE_PROPOSAL_CREATED");
+    assert.equal(result.replayed, false);
+    assert.equal(result.proposal.status, "Pending");
+    assert.equal(result.proposal.creatingActor.authority, "manager");
+    assert.equal(result.proposal.effectiveDeadlineAtMs, TRADE_DEADLINE_MS);
+    assert.deepEqual(
+      result.proposal.assets.map(({ type }) => type),
+      [
+        "contract",
+        "requested_retention",
+        "prospect_right",
+        "draft_pick",
+        "retention_obligation",
+        "buyout_obligation",
+        "future_consideration",
+        "future_consideration_instruction",
+      ]
+    );
+    assert.deepEqual(
+      result.proposal.assets.map(({ snapshot }) => snapshot.type),
+      [
+        "contract",
+        "requested_retention",
+        "prospect_right",
+        "draft_pick",
+        "retention_obligation",
+        "buyout_obligation",
+        "future_consideration",
+        "future_consideration_instruction",
+      ]
+    );
+    const requestedRetention = result.proposal.assets[1].snapshot;
+    assert.equal(requestedRetention.retainedAavCents, 400);
+    assert.equal(requestedRetention.cumulativeRetainedAavCents, 100);
+    assert.equal(requestedRetention.retentionCeilingCents, 500);
+    assert.equal(sourceState(runtime.database), beforeSources);
+    assert.equal(count(runtime.database, "trades"), 2);
+    assert.equal(count(runtime.database, "trade_assets"), 8);
+    assert.equal(count(runtime.database, "trade_events"), 1);
+    assert.equal(count(runtime.database, "idempotency_requests"), 1);
+    assert.equal(count(runtime.database, "league_activity"), 1);
+    assert.equal(count(runtime.database, "outbox_events"), 1);
+    const activity = runtime.database
+      .prepare("SELECT * FROM league_activity WHERE related_id = ?")
+      .get(result.proposal.id);
+    assert.equal(activity.event_type, "trade_proposal_created");
+    assert.equal(JSON.parse(activity.metadata_json).assets.length, 8);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT event_type FROM outbox_events WHERE aggregate_id = ?")
+        .get(result.proposal.id).event_type,
+      "trade.changed"
+    );
+    const persistedTrade = runtime.database
+      .prepare("SELECT * FROM trades WHERE id = ?")
+      .get(result.proposal.id);
+    assert.equal(persistedTrade.proposal_model_version, 2);
+    assert.equal(persistedTrade.creating_membership_id, IDS.membership);
+    assert.equal(persistedTrade.effective_deadline_at_ms, TRADE_DEADLINE_MS);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT status FROM idempotency_requests WHERE result_id = ?")
+        .get(result.proposal.id).status,
+      "completed"
+    );
+    const beforeRead = runtime.database.serialize();
+    const detail = runtime.readService.read({
+      leagueId: IDS.league,
+      tradeId: result.proposal.id,
+      authenticated: authenticated(),
+    });
+    assert.equal(detail.code, "TRADE_PROPOSAL_FOUND");
+    assert.equal(detail.proposal.id, result.proposal.id);
+    assert.deepEqual(
+      detail.proposal.assets.map(({ type }) => type),
+      result.proposal.assets.map(({ type }) => type)
+    );
+    assert.deepEqual(
+      detail.proposal.assets.map(({ snapshot }) => snapshot.type),
+      result.proposal.assets.map(({ snapshot }) => snapshot.type)
+    );
+    assert.deepEqual(
+      detail.proposal.history.map(({ type }) => type),
+      ["proposal_created"]
+    );
+    assert.equal(beforeRead.equals(runtime.database.serialize()), true);
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+  });
+
+  test("replays exactly and permits independent simultaneous proposals", (t) => {
+    const runtime = createRuntime(t);
+    const first = create(runtime, "same-request");
+    const replay = create(runtime, "same-request");
+    assert.equal(replay.code, "TRADE_PROPOSAL_REPLAYED");
+    assert.equal(replay.proposal.id, first.proposal.id);
+    assert.equal(count(runtime.database, "trades"), 2);
+    assert.equal(count(runtime.database, "trade_assets"), 8);
+    assert.equal(count(runtime.database, "trade_events"), 1);
+    assert.equal(count(runtime.database, "league_activity"), 1);
+    assert.equal(count(runtime.database, "outbox_events"), 1);
+
+    const simultaneous = create(runtime, "independent-request");
+    assert.notEqual(simultaneous.proposal.id, first.proposal.id);
+    assert.equal(count(runtime.database, "trades"), 3);
+    assert.equal(count(runtime.database, "trade_assets"), 16);
+    assert.equal(count(runtime.database, "trade_events"), 2);
+    assert.equal(count(runtime.database, "league_activity"), 2);
+    assert.equal(count(runtime.database, "outbox_events"), 2);
+    assert.equal(sourceState(runtime.database).includes("reserved"), false);
+  });
+
+  test("rejects idempotency conflicts without partial writes", (t) => {
+    const runtime = createRuntime(t);
+    create(runtime, "conflict-key");
+    const countsBefore = [
+      count(runtime.database, "trades"),
+      count(runtime.database, "trade_assets"),
+      count(runtime.database, "trade_events"),
+      count(runtime.database, "idempotency_requests"),
+    ];
+    const changed = creationInput({
+      receivingAssets: [
+        {
+          type: "future_consideration_instruction",
+          description: "A different instruction",
+        },
+      ],
+    });
+    assertAssetReason(
+      () => create(runtime, "conflict-key", changed),
+      TRADE_ASSET_CODES.idempotencyConflict
+    );
+    assert.deepEqual(
+      [
+        count(runtime.database, "trades"),
+        count(runtime.database, "trade_assets"),
+        count(runtime.database, "trade_events"),
+        count(runtime.database, "idempotency_requests"),
+      ],
+      countsBefore
+    );
+  });
+
+  test("rejects stale ownership and retention above the cumulative ceiling", (t) => {
+    const stale = createRuntime(t);
+    stale.repositories.contracts.updateVersioned({
+      key: IDS.contract,
+      leagueId: IDS.league,
+      expectedVersion: 1,
+      changes: {
+        current_team_id: IDS.teamB,
+        updated_at_ms: NOW_MS,
+      },
+    });
+    assertAssetReason(
+      () => create(stale, "stale-contract"),
+      TRADE_ASSET_CODES.ineligible
+    );
+    assert.equal(count(stale.database, "trades"), 1);
+    assert.equal(count(stale.database, "idempotency_requests"), 0);
+
+    const overCeiling = createRuntime(t);
+    const input = creationInput();
+    input.proposingAssets[1].retainedAavCents = 401;
+    assertAssetReason(
+      () => create(overCeiling, "over-ceiling", input),
+      TRADE_ASSET_CODES.retentionInvalid
+    );
+    assert.equal(count(overCeiling.database, "trades"), 1);
+    assert.equal(count(overCeiling.database, "trade_assets"), 0);
+    assert.equal(count(overCeiling.database, "idempotency_requests"), 0);
+  });
+
+  test("rolls back the trade, assets, history, outbox, and idempotency row after a late failure", (t) => {
+    const runtime = createRuntime(t);
+    runtime.database.exec(`
+      CREATE TRIGGER reject_m5_09_creation_outbox
+      BEFORE INSERT ON outbox_events
+      WHEN NEW.event_type = 'trade.changed'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced late creation-outbox failure');
+      END;
+    `);
+    const beforeSources = sourceState(runtime.database);
+    assert.throws(
+      () => create(runtime, "late-failure"),
+      (error) =>
+        error?.code === "REPOSITORY_CONSTRAINT" &&
+        error?.cause?.code === "SQLITE_CONSTRAINT_TRIGGER"
+    );
+    assert.equal(count(runtime.database, "trades"), 1);
+    assert.equal(count(runtime.database, "trade_assets"), 0);
+    assert.equal(count(runtime.database, "trade_events"), 0);
+    assert.equal(count(runtime.database, "league_activity"), 0);
+    assert.equal(count(runtime.database, "outbox_events"), 0);
+    assert.equal(count(runtime.database, "idempotency_requests"), 0);
+    assert.equal(sourceState(runtime.database), beforeSources);
+  });
+});
+
+describe("M5-07 read-only trade acceptance preview", () => {
+  test("revalidates every typed asset and projects a legal result without writes", (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "acceptance-preview-legal");
+    const before = runtime.database.serialize();
+
+    const result = preview(runtime, proposal.proposal.id);
+
+    assert.equal(result.code, "TRADE_ACCEPTANCE_PREVIEWED");
+    assert.equal(result.proposal.status, "Pending");
+    assert.equal(result.proposal.effectiveDeadlineAtMs, TRADE_DEADLINE_MS);
+    assert.deepEqual(
+      result.assets.map((asset) => asset.type),
+      [
+        "contract",
+        "requested_retention",
+        "prospect_right",
+        "draft_pick",
+        "retention_obligation",
+        "buyout_obligation",
+        "future_consideration",
+        "future_consideration_instruction",
+      ]
+    );
+    assert.deepEqual(
+      result.assets.map((asset) => asset.currentSnapshot.type),
+      result.assets.map((asset) => asset.type)
+    );
+    assert.equal(result.generallyIllegal, false);
+    const proposing = result.teams.find((team) => team.teamId === IDS.teamA);
+    const receiving = result.teams.find((team) => team.teamId === IDS.teamB);
+    assert.equal(proposing.cap.usageCents, 575);
+    assert.equal(proposing.retentionSlots, 2);
+    assert.equal(receiving.cap.usageCents, 600);
+    assert.equal(receiving.retentionSlots, 1);
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
+  test("uses current roster evidence and reports general illegality without mutating", (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "acceptance-preview-illegal");
+    runtime.database
+      .prepare(
+        `UPDATE league_settings
+         SET salary_cap_cents = 499, updated_at_ms = ?, version = version + 1
+         WHERE league_id = ?`
+      )
+      .run(NOW_MS, IDS.league);
+    runtime.database
+      .prepare(
+        `UPDATE player_ownerships
+         SET roster_category = 'Bench', slot_number = 1,
+           updated_at_ms = ?, version = version + 1
+         WHERE id = ?`
+      )
+      .run(NOW_MS, IDS.ownership);
+    const before = runtime.database.serialize();
+
+    const result = preview(runtime, proposal.proposal.id);
+
+    assert.equal(result.assets[0].proposalSnapshot.ownership.rosterCategory, "Active");
+    assert.equal(result.assets[0].currentSnapshot.ownership.rosterCategory, "Bench");
+    assert.equal(result.generallyIllegal, true);
+    assert.ok(
+      result.teams.some((team) =>
+        team.issues.some((issue) => issue.code === "BENCH_AAV_LIMIT_EXCEEDED")
+      )
+    );
+    assert.ok(
+      result.teams.some((team) =>
+        team.issues.some((issue) => issue.code === "SALARY_CAP_EXCEEDED")
+      )
+    );
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
+  test("enforces receiving-manager, commissioner, public, and deadline authority", (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "acceptance-preview-authority");
+    assert.throws(
+      () => preview(runtime, proposal.proposal.id, IDS.manager),
+      (error) => error?.code === "TEAM_MANAGER_REQUIRED"
+    );
+    assert.throws(
+      () =>
+        runtime.acceptancePreviewService.preview({
+          leagueId: IDS.league,
+          input: { tradeId: proposal.proposal.id },
+          authenticated: null,
+        }),
+      (error) => error?.code === "LEAGUE_NOT_FOUND"
+    );
+    runtime.database
+      .prepare(
+        `UPDATE leagues SET status = 'frozen', updated_at_ms = ?,
+           version = version + 1 WHERE id = ?`
+      )
+      .run(NOW_MS, IDS.league);
+    assert.equal(
+      preview(runtime, proposal.proposal.id, IDS.commissioner).code,
+      "TRADE_ACCEPTANCE_PREVIEWED"
+    );
+    assertLifecycleReason(
+      () => preview(runtime, proposal.proposal.id, IDS.receivingManager),
+      "TRADE_LIFECYCLE_ROLE_DENIED"
+    );
+    runtime.setNow(TRADE_DEADLINE_MS);
+    assertLifecycleReason(
+      () => preview(runtime, proposal.proposal.id, IDS.commissioner),
+      "TRADE_LIFECYCLE_WINDOW_CLOSED"
+    );
+  });
+
+  test("rejects stale authoritative state for each mutable asset family", (t) => {
+    const cases = [
+      ["contract", (database) => database.prepare(
+        "UPDATE contracts SET current_team_id = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+      ).run(IDS.teamB, NOW_MS, IDS.contract), TRADE_ASSET_CODES.ineligible],
+      ["prospect", (database) => database.prepare(
+        "UPDATE player_ownerships SET team_id = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+      ).run(IDS.teamB, NOW_MS, IDS.prospectOwnership), TRADE_ASSET_CODES.ineligible],
+      ["draft pick", (database) => database.prepare(
+        "UPDATE draft_picks SET current_owner_team_id = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+      ).run(IDS.teamB, NOW_MS, IDS.draftPick), TRADE_ASSET_CODES.ineligible],
+      ["retention", (database) => database.prepare(
+        "UPDATE retention_obligations SET responsible_team_id = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+      ).run(IDS.teamA, NOW_MS, IDS.assetRetention), TRADE_ASSET_CODES.ineligible],
+      ["buyout", (database) => database.prepare(
+        "UPDATE buyout_obligations SET responsible_team_id = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+      ).run(IDS.teamA, NOW_MS, IDS.buyout), TRADE_ASSET_CODES.ineligible],
+      ["Future Considerations", (database) => database.prepare(
+        "UPDATE future_considerations SET status = 'fulfilled', resolved_at_ms = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+      ).run(NOW_MS, NOW_MS, IDS.futureConsideration), TRADE_ASSET_CODES.ineligible],
+      ["requested retention", (database) => {
+        database.prepare(
+          "UPDATE retention_obligations SET retained_aav_cents = 101, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+        ).run(NOW_MS, IDS.retention);
+        database.prepare(
+          "UPDATE retention_years SET retained_aav_cents = 101 WHERE id = ?"
+        ).run(IDS.retentionYear);
+      }, TRADE_ASSET_CODES.retentionInvalid],
+    ];
+    for (const [label, mutate, reasonCode] of cases) {
+      const runtime = createRuntime(t);
+      const proposal = create(runtime, `stale-${label}`);
+      mutate(runtime.database);
+      const before = runtime.database.serialize();
+      assertAssetReason(
+        () => preview(runtime, proposal.proposal.id),
+        reasonCode
+      );
+      assert.equal(before.equals(runtime.database.serialize()), true, label);
+    }
+  });
+});
+
+describe("M5-08 atomic typed-asset trade execution", () => {
+  test("transfers every asset once, preserves terms, and cancels conflicts", (t) => {
+    const runtime = createRuntime(t);
+    insertContract(runtime.repositories, {
+      id: IDS.prospectContract,
+      yearId: IDS.prospectContractYear,
+      playerId: IDS.prospectPlayer,
+      teamId: IDS.teamA,
+      aavCents: 100,
+      status: "active",
+    });
+    runtime.database
+      .prepare("UPDATE contracts SET contract_type = 'fantasy_elc' WHERE id = ?")
+      .run(IDS.prospectContract);
+    const acceptedProposal = create(runtime, "execution-primary");
+    const conflict = create(runtime, "execution-conflict");
+    const contractBefore = runtime.database
+      .prepare("SELECT * FROM contracts WHERE id = ?")
+      .get(IDS.contract);
+    const contractYearsBefore = runtime.database
+      .prepare("SELECT * FROM contract_years WHERE contract_id = ? ORDER BY id")
+      .all(IDS.contract);
+    const retentionBefore = runtime.database
+      .prepare("SELECT * FROM retention_obligations WHERE id = ?")
+      .get(IDS.assetRetention);
+    const buyoutBefore = runtime.database
+      .prepare("SELECT * FROM buyout_obligations WHERE id = ?")
+      .get(IDS.buyout);
+
+    const result = accept(
+      runtime,
+      acceptedProposal.proposal.id,
+      "accept-every-asset"
+    );
+
+    assert.equal(result.code, "TRADE_ACCEPTED");
+    assert.equal(result.replayed, false);
+    assert.equal(result.proposal.storageStatus, "completed");
+    assert.equal(result.proposal.version, 2);
+    assert.equal(result.generallyIllegal, false);
+    assert.equal(result.transfers.length, 8);
+    assert.deepEqual(result.automaticallyCancelledTradeIds, [conflict.proposal.id]);
+    const ownership = runtime.database
+      .prepare("SELECT * FROM player_ownerships WHERE id = ?")
+      .get(IDS.ownership);
+    assert.equal(ownership.team_id, IDS.teamB);
+    assert.equal(ownership.roster_category, "Active");
+    assert.equal(ownership.slot_number, 1);
+    assert.equal(ownership.acquired_transaction_type, "trade_execution");
+    assert.equal(ownership.acquired_transaction_id, acceptedProposal.proposal.id);
+    const prospect = runtime.database
+      .prepare("SELECT * FROM player_ownerships WHERE id = ?")
+      .get(IDS.prospectOwnership);
+    assert.equal(prospect.team_id, IDS.teamB);
+    assert.equal(prospect.ownership_kind, "Prospect Right");
+    assert.equal(prospect.roster_category, "Prospect");
+    assert.equal(
+      runtime.database.prepare("SELECT current_team_id FROM contracts WHERE id = ?")
+        .get(IDS.prospectContract).current_team_id,
+      IDS.teamB
+    );
+    const contractAfter = runtime.database
+      .prepare("SELECT * FROM contracts WHERE id = ?")
+      .get(IDS.contract);
+    assert.equal(contractAfter.current_team_id, IDS.teamB);
+    for (const field of [
+      "contract_type",
+      "original_total_value_cents",
+      "original_term_years",
+      "aav_cents",
+      "start_season_id",
+      "status",
+      "auction_buyout_lock_expires_at_ms",
+    ]) {
+      assert.equal(contractAfter[field], contractBefore[field], field);
+    }
+    assert.deepEqual(
+      runtime.database
+        .prepare("SELECT * FROM contract_years WHERE contract_id = ? ORDER BY id")
+        .all(IDS.contract),
+      contractYearsBefore
+    );
+    assert.equal(
+      runtime.database.prepare("SELECT current_owner_team_id FROM draft_picks WHERE id = ?")
+        .get(IDS.draftPick).current_owner_team_id,
+      IDS.teamB
+    );
+    const retentionAfter = runtime.database
+      .prepare("SELECT * FROM retention_obligations WHERE id = ?")
+      .get(IDS.assetRetention);
+    assert.equal(retentionAfter.responsible_team_id, IDS.teamA);
+    assert.equal(retentionAfter.retained_aav_cents, retentionBefore.retained_aav_cents);
+    assert.equal(retentionAfter.contract_id, retentionBefore.contract_id);
+    const buyoutAfter = runtime.database
+      .prepare("SELECT * FROM buyout_obligations WHERE id = ?")
+      .get(IDS.buyout);
+    assert.equal(buyoutAfter.responsible_team_id, IDS.teamA);
+    assert.equal(
+      buyoutAfter.annual_penalty_basis_cents,
+      buyoutBefore.annual_penalty_basis_cents
+    );
+    const createdRetention = runtime.database
+      .prepare(
+        "SELECT * FROM retention_obligations WHERE creation_trade_id = ?"
+      )
+      .get(acceptedProposal.proposal.id);
+    assert.equal(createdRetention.contract_id, IDS.contract);
+    assert.equal(createdRetention.responsible_team_id, IDS.teamA);
+    assert.equal(createdRetention.retained_aav_cents, 400);
+    assert.equal(
+      count(
+        runtime.database,
+        "retention_years",
+        `WHERE retention_obligation_id = '${createdRetention.id}'`
+      ),
+      1
+    );
+    const existingFuture = runtime.database
+      .prepare("SELECT * FROM future_considerations WHERE id = ?")
+      .get(IDS.futureConsideration);
+    assert.equal(existingFuture.status, "cancelled");
+    assert.equal(existingFuture.resolved_at_ms, NOW_MS);
+    const createdFuture = runtime.database
+      .prepare(
+        "SELECT * FROM future_considerations WHERE originating_trade_id = ? AND id <> ?"
+      )
+      .get(acceptedProposal.proposal.id, IDS.futureConsideration);
+    assert.equal(createdFuture.owing_team_id, IDS.teamB);
+    assert.equal(createdFuture.receiving_team_id, IDS.teamA);
+    assert.equal(createdFuture.status, "outstanding");
+    assert.equal(
+      runtime.database.prepare("SELECT status FROM trades WHERE id = ?")
+        .get(conflict.proposal.id).status,
+      "cancelled"
+    );
+    assert.equal(
+      count(
+        runtime.database,
+        "trade_events",
+        "WHERE event_type = 'proposal_auto_cancelled'"
+      ),
+      1
+    );
+    assert.equal(count(runtime.database, "ownership_events"), 2);
+    assert.equal(count(runtime.database, "contract_events"), 2);
+    assert.equal(count(runtime.database, "draft_pick_ownership_events"), 1);
+    assert.equal(count(runtime.database, "league_activity"), 4);
+    assert.equal(count(runtime.database, "outbox_events"), 4);
+    const completedActivity = runtime.database
+      .prepare(`
+        SELECT * FROM league_activity
+        WHERE related_id = ? AND event_type = 'trade_completed'
+      `)
+      .get(acceptedProposal.proposal.id);
+    const completedMetadata = JSON.parse(completedActivity.metadata_json);
+    assert.equal(completedMetadata.assets.length, 8);
+    assert.equal(completedMetadata.generallyIllegal, false);
+    assert.equal(
+      completedMetadata.assets.find(({ assetType }) => assetType === "contract")
+        .executionSnapshot.contract.aavCents,
+      contractBefore.aav_cents
+    );
+    assert.equal(
+      count(
+        runtime.database,
+        "league_activity",
+        "WHERE event_type = 'trade_proposal_automatically_cancelled'"
+      ),
+      1
+    );
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+
+    const bytesAfter = runtime.database.serialize();
+    const replay = accept(
+      runtime,
+      acceptedProposal.proposal.id,
+      "accept-every-asset"
+    );
+    assert.equal(replay.code, "TRADE_ACCEPTANCE_REPLAYED");
+    assert.equal(replay.replayed, true);
+    assert.deepEqual(replay.transfers, result.transfers);
+    assert.equal(bytesAfter.equals(runtime.database.serialize()), true);
+
+    const retrade = runtime.service.create({
+      leagueId: IDS.league,
+      input: {
+        proposingTeamId: IDS.teamB,
+        receivingTeamId: IDS.teamA,
+        proposingAssets: [
+          { type: "draft_pick", draftPickId: IDS.draftPick },
+        ],
+        receivingAssets: [
+          { type: "buyout_obligation", buyoutObligationId: IDS.buyout },
+        ],
+      },
+      idempotencyKey: "retrade-pick-proposal",
+      authenticated: authenticated(IDS.receivingManager),
+    });
+    accept(runtime, retrade.proposal.id, "retrade-pick-accept", IDS.manager);
+    const pick = runtime.database
+      .prepare("SELECT * FROM draft_picks WHERE id = ?")
+      .get(IDS.draftPick);
+    assert.equal(pick.current_owner_team_id, IDS.teamA);
+    assert.equal(pick.original_team_id, IDS.teamA);
+    assert.equal(count(runtime.database, "draft_pick_ownership_events"), 2);
+  });
+
+  test("enforces receiver, commissioner-freeze, terminal, and deadline authority", (t) => {
+    const wrongTeam = createRuntime(t);
+    const wrongTeamProposal = create(wrongTeam, "execution-wrong-team");
+    assert.throws(
+      () =>
+        wrongTeam.acceptanceService.accept({
+          leagueId: IDS.league,
+          input: { tradeId: wrongTeamProposal.proposal.id },
+          idempotencyKey: "public-accept",
+          authenticated: null,
+        }),
+      (error) => error?.code === "LEAGUE_NOT_FOUND"
+    );
+    assert.throws(
+      () =>
+        wrongTeam.acceptanceService.accept({
+          leagueId: uuid(999),
+          input: { tradeId: wrongTeamProposal.proposal.id },
+          idempotencyKey: "cross-league-accept",
+          authenticated: authenticated(IDS.receivingManager),
+        }),
+      (error) => error?.code === "LEAGUE_NOT_FOUND"
+    );
+    assert.throws(
+      () =>
+        accept(
+          wrongTeam,
+          wrongTeamProposal.proposal.id,
+          "wrong-team-accept",
+          IDS.manager
+        ),
+      (error) => error?.code === "TEAM_MANAGER_REQUIRED"
+    );
+    wrongTeam.database
+      .prepare(
+        "UPDATE league_memberships SET status = 'suspended', ended_at_ms = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+      )
+      .run(NOW_MS, NOW_MS, IDS.receivingMembership);
+    assert.throws(
+      () =>
+        accept(
+          wrongTeam,
+          wrongTeamProposal.proposal.id,
+          "inactive-accept",
+          IDS.receivingManager
+        ),
+      (error) => error?.code === "LEAGUE_NOT_FOUND"
+    );
+
+    const frozen = createRuntime(t);
+    const frozenProposal = create(frozen, "execution-frozen");
+    frozen.database
+      .prepare(
+        "UPDATE leagues SET status = 'frozen', updated_at_ms = ?, version = version + 1 WHERE id = ?"
+      )
+      .run(NOW_MS, IDS.league);
+    assertExecutionReason(
+      () =>
+        accept(
+          frozen,
+          frozenProposal.proposal.id,
+          "frozen-manager-accept",
+          IDS.receivingManager
+        ),
+      TRADE_EXECUTION_CODES.roleDenied
+    );
+    assert.equal(
+      accept(
+        frozen,
+        frozenProposal.proposal.id,
+        "frozen-commissioner-accept",
+        IDS.commissioner
+      ).code,
+      "TRADE_ACCEPTED"
+    );
+    assert.equal(
+      frozen.database
+        .prepare("SELECT commissioner_completion_reference FROM trades WHERE id = ?")
+        .get(frozenProposal.proposal.id).commissioner_completion_reference,
+      frozen.database
+        .prepare("SELECT id FROM trade_events WHERE trade_id = ? AND event_type = 'proposal_accepted'")
+        .get(frozenProposal.proposal.id).id
+    );
+    const afterComplete = frozen.database.serialize();
+    assertExecutionReason(
+      () =>
+        accept(
+          frozen,
+          frozenProposal.proposal.id,
+          "second-accept",
+          IDS.commissioner
+        ),
+      TRADE_EXECUTION_CODES.notPending
+    );
+    assert.equal(afterComplete.equals(frozen.database.serialize()), true);
+
+    const deadline = createRuntime(t);
+    const deadlineProposal = create(deadline, "execution-deadline");
+    deadline.setNow(TRADE_DEADLINE_MS);
+    const beforeDeadlineDenial = deadline.database.serialize();
+    assertExecutionReason(
+      () =>
+        accept(
+          deadline,
+          deadlineProposal.proposal.id,
+          "deadline-accept"
+        ),
+      TRADE_EXECUTION_CODES.windowClosed
+    );
+    assert.equal(beforeDeadlineDenial.equals(deadline.database.serialize()), true);
+  });
+
+  test("persists an explicit unplaced transfer and general-illegality evidence", (t) => {
+    const runtime = createRuntime(t);
+    for (let slotNumber = 1; slotNumber <= 12; slotNumber += 1) {
+      const playerId = uuid(200 + slotNumber);
+      const contractId = uuid(300 + slotNumber);
+      insertPlayer(runtime.repositories, playerId, `Filler${slotNumber}`);
+      insertContract(runtime.repositories, {
+        id: contractId,
+        yearId: uuid(400 + slotNumber),
+        playerId,
+        teamId: IDS.teamB,
+        aavCents: 100,
+        status: "active",
+      });
+      runtime.repositories.player_ownerships.insert({
+        id: uuid(500 + slotNumber),
+        league_id: IDS.league,
+        season_id: IDS.currentSeason,
+        player_id: playerId,
+        team_id: IDS.teamB,
+        ownership_kind: "Rostered",
+        roster_category: "Active",
+        position_group: "F",
+        slot_number: slotNumber,
+        acquired_transaction_type: "migration",
+        acquired_transaction_id: null,
+        created_at_ms: NOW_MS - 20_000,
+        updated_at_ms: NOW_MS - 20_000,
+        version: 1,
+      });
+    }
+    const proposal = create(runtime, "execution-unplaced");
+
+    const result = accept(runtime, proposal.proposal.id, "accept-unplaced");
+
+    assert.equal(result.generallyIllegal, true);
+    assert.ok(
+      result.teams
+        .find((team) => team.teamId === IDS.teamB)
+        .issues.some((issue) => issue.code === "NORMAL_ROSTER_SLOT_UNPLACED")
+    );
+    const ownership = runtime.database
+      .prepare("SELECT * FROM player_ownerships WHERE id = ?")
+      .get(IDS.ownership);
+    assert.equal(ownership.team_id, IDS.teamB);
+    assert.equal(ownership.roster_category, "Active");
+    assert.equal(ownership.slot_number, null);
+    assert.equal(ownership.acquired_transaction_type, "trade_execution");
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+  });
+
+  test("rolls every transfer, activity, outbox, and idempotency record back after a late failure", (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "execution-late-failure");
+    runtime.database.exec(`
+      CREATE TRIGGER reject_m5_09_completion_outbox
+      BEFORE INSERT ON outbox_events
+      WHEN NEW.event_type = 'trade.changed'
+        AND NEW.aggregate_id = '${proposal.proposal.id}'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced late acceptance-outbox failure');
+      END;
+    `);
+    const before = runtime.database.serialize();
+
+    assert.throws(
+      () => accept(runtime, proposal.proposal.id, "late-acceptance"),
+      (error) =>
+        error?.code === "REPOSITORY_CONSTRAINT" &&
+        error?.cause?.code === "SQLITE_CONSTRAINT_TRIGGER"
+    );
+    assert.equal(before.equals(runtime.database.serialize()), true);
+    assert.equal(
+      runtime.database.prepare("SELECT status FROM trades WHERE id = ?")
+        .get(proposal.proposal.id).status,
+      "proposed"
+    );
+  });
+
+  test("rejects conflicting key reuse and stale assets without partial execution", (t) => {
+    const runtime = createRuntime(t);
+    const first = create(runtime, "execution-key-first");
+    const second = create(runtime, "execution-key-second");
+    accept(runtime, first.proposal.id, "shared-acceptance-key");
+    const beforeConflict = runtime.database.serialize();
+    assertExecutionReason(
+      () => accept(runtime, second.proposal.id, "shared-acceptance-key"),
+      TRADE_EXECUTION_CODES.idempotencyConflict
+    );
+    assert.equal(beforeConflict.equals(runtime.database.serialize()), true);
+
+    const stale = createRuntime(t);
+    const staleProposal = create(stale, "execution-stale");
+    stale.database
+      .prepare(
+        "UPDATE draft_picks SET current_owner_team_id = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+      )
+      .run(IDS.teamB, NOW_MS, IDS.draftPick);
+    const beforeStale = stale.database.serialize();
+    assertAssetReason(
+      () => accept(stale, staleProposal.proposal.id, "stale-acceptance"),
+      TRADE_ASSET_CODES.ineligible
+    );
+    assert.equal(beforeStale.equals(stale.database.serialize()), true);
+
+    const duplicateRetention = createRuntime(t);
+    const duplicateInput = creationInput();
+    duplicateInput.proposingAssets[1].retainedAavCents = 399;
+    const duplicateProposal = create(
+      duplicateRetention,
+      "execution-duplicate-retention",
+      duplicateInput
+    );
+    duplicateRetention.repositories.retention_obligations.insert({
+      id: uuid(900),
+      league_id: IDS.league,
+      contract_id: IDS.contract,
+      player_id: IDS.contractPlayer,
+      originating_team_id: IDS.teamB,
+      responsible_team_id: IDS.teamA,
+      retained_aav_cents: 1,
+      creation_trade_id: null,
+      status: "active",
+      created_at_ms: NOW_MS,
+      updated_at_ms: NOW_MS,
+      version: 1,
+    });
+    duplicateRetention.repositories.retention_years.insert({
+      id: uuid(901),
+      league_id: IDS.league,
+      retention_obligation_id: uuid(900),
+      season_id: IDS.currentSeason,
+      retained_aav_cents: 1,
+      status: "current",
+      created_at_ms: NOW_MS,
+    });
+    const beforeDuplicate = duplicateRetention.database.serialize();
+    assertAssetReason(
+      () =>
+        accept(
+          duplicateRetention,
+          duplicateProposal.proposal.id,
+          "duplicate-retention-accept"
+        ),
+      TRADE_ASSET_CODES.retentionInvalid
+    );
+    assert.equal(
+      beforeDuplicate.equals(duplicateRetention.database.serialize()),
+      true
+    );
+  });
+});
+
+describe("M5-07 atomic proposal response and cancellation", () => {
+  test("lets only the receiving manager reject and replays exactly", (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "proposal-for-rejection");
+    const beforeSources = sourceState(runtime.database);
+
+    assert.throws(
+      () =>
+        respond(runtime, {
+          userId: IDS.manager,
+          tradeId: proposal.proposal.id,
+          action: "reject",
+          idempotencyKey: "wrong-rejector",
+        }),
+      { code: "TEAM_MANAGER_REQUIRED" }
+    );
+    const rejected = respond(runtime, {
+      userId: IDS.receivingManager,
+      tradeId: proposal.proposal.id,
+      action: "reject",
+      idempotencyKey: "reject-proposal",
+    });
+    assert.equal(rejected.code, "TRADE_PROPOSAL_REJECTED");
+    assert.equal(rejected.proposal.status, "Rejected");
+    assert.equal(rejected.proposal.storageStatus, "declined");
+    assert.equal(rejected.proposal.version, 2);
+    assert.equal(rejected.event.type, "proposal_rejected");
+    assert.equal(rejected.event.actorUserId, IDS.receivingManager);
+    assert.equal(sourceState(runtime.database), beforeSources);
+    assert.equal(count(runtime.database, "trade_assets"), 8);
+
+    const replay = respond(runtime, {
+      userId: IDS.receivingManager,
+      tradeId: proposal.proposal.id,
+      action: "reject",
+      idempotencyKey: "reject-proposal",
+    });
+    assert.equal(replay.code, "TRADE_LIFECYCLE_REPLAYED");
+    assert.equal(replay.event.id, rejected.event.id);
+    assert.equal(count(runtime.database, "trade_events"), 2);
+    assert.equal(count(runtime.database, "idempotency_requests"), 2);
+    assert.equal(count(runtime.database, "league_activity"), 2);
+    assert.equal(count(runtime.database, "outbox_events"), 2);
+    assertLifecycleReason(
+      () =>
+        respond(runtime, {
+          userId: IDS.manager,
+          tradeId: proposal.proposal.id,
+          action: "cancel",
+          idempotencyKey: "terminal-cancel",
+        }),
+      "TRADE_LIFECYCLE_NOT_PENDING"
+    );
+  });
+
+  test("lets only the proposing manager cancel without changing assets", (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "proposal-for-cancel");
+    assert.throws(
+      () =>
+        respond(runtime, {
+          userId: IDS.receivingManager,
+          tradeId: proposal.proposal.id,
+          action: "cancel",
+          idempotencyKey: "wrong-canceller",
+        }),
+      { code: "TEAM_MANAGER_REQUIRED" }
+    );
+    const beforeSources = sourceState(runtime.database);
+    const cancelled = respond(runtime, {
+      userId: IDS.manager,
+      tradeId: proposal.proposal.id,
+      action: "cancel",
+      idempotencyKey: "cancel-proposal",
+    });
+    assert.equal(cancelled.code, "TRADE_PROPOSAL_CANCELLED");
+    assert.equal(cancelled.proposal.storageStatus, "cancelled");
+    assert.equal(cancelled.event.type, "proposal_cancelled");
+    assert.equal(sourceState(runtime.database), beforeSources);
+  });
+
+  test("preserves explicit commissioner lifecycle authority during a freeze", (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "proposal-before-freeze");
+    runtime.repositories.leagues.updateVersioned({
+      key: IDS.league,
+      expectedVersion: 2,
+      changes: { status: "frozen", updated_at_ms: NOW_MS },
+    });
+    assertLifecycleReason(
+      () =>
+        respond(runtime, {
+          userId: IDS.manager,
+          tradeId: proposal.proposal.id,
+          action: "cancel",
+          idempotencyKey: "frozen-manager",
+        }),
+      "TRADE_LIFECYCLE_ROLE_DENIED"
+    );
+    const cancelled = respond(runtime, {
+      userId: IDS.commissioner,
+      tradeId: proposal.proposal.id,
+      action: "cancel",
+      idempotencyKey: "frozen-commissioner",
+    });
+    assert.equal(cancelled.proposal.status, "Cancelled");
+    assert.equal(cancelled.event.metadata.actorAuthority, "commissioner");
+  });
+
+  test("closes lifecycle actions at the exact effective deadline", (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "proposal-at-deadline");
+    runtime.setNow(TRADE_DEADLINE_MS);
+    assertLifecycleReason(
+      () =>
+        respond(runtime, {
+          userId: IDS.receivingManager,
+          tradeId: proposal.proposal.id,
+          action: "reject",
+          idempotencyKey: "late-rejection",
+        }),
+      "TRADE_LIFECYCLE_WINDOW_CLOSED"
+    );
+    assert.equal(
+      runtime.database
+        .prepare("SELECT status FROM trades WHERE id = ?")
+        .get(proposal.proposal.id).status,
+      "proposed"
+    );
+    assert.equal(count(runtime.database, "idempotency_requests"), 1);
+  });
+
+  test("rejects idempotency conflicts and rolls every late failure back", (t) => {
+    const conflict = createRuntime(t);
+    const first = create(conflict, "first-conflict-proposal");
+    respond(conflict, {
+      userId: IDS.manager,
+      tradeId: first.proposal.id,
+      action: "cancel",
+      idempotencyKey: "shared-cancel-key",
+    });
+    const second = create(conflict, "second-conflict-proposal");
+    assertLifecycleReason(
+      () =>
+        respond(conflict, {
+          userId: IDS.manager,
+          tradeId: second.proposal.id,
+          action: "cancel",
+          idempotencyKey: "shared-cancel-key",
+        }),
+      "TRADE_LIFECYCLE_IDEMPOTENCY_CONFLICT"
+    );
+    assert.equal(
+      conflict.database
+        .prepare("SELECT status FROM trades WHERE id = ?")
+        .get(second.proposal.id).status,
+      "proposed"
+    );
+
+    const rollback = createRuntime(t);
+    const proposal = create(rollback, "rollback-response-proposal");
+    rollback.database.exec(`
+      CREATE TRIGGER reject_m5_09_lifecycle_outbox
+      BEFORE INSERT ON outbox_events
+      WHEN NEW.event_type = 'trade.changed'
+        AND NEW.aggregate_id = '${proposal.proposal.id}'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced lifecycle outbox failure');
+      END;
+    `);
+    const beforeSources = sourceState(rollback.database);
+    assert.throws(
+      () =>
+        respond(rollback, {
+          userId: IDS.receivingManager,
+          tradeId: proposal.proposal.id,
+          action: "reject",
+          idempotencyKey: "late-response-failure",
+        }),
+      { code: "REPOSITORY_CONSTRAINT" }
+    );
+    const trade = rollback.database
+      .prepare("SELECT status, version, responded_at_ms FROM trades WHERE id = ?")
+      .get(proposal.proposal.id);
+    assert.deepEqual(trade, {
+      status: "proposed",
+      version: 1,
+      responded_at_ms: null,
+    });
+    assert.equal(count(rollback.database, "idempotency_requests"), 1);
+    assert.equal(count(rollback.database, "trade_events"), 1);
+    assert.equal(count(rollback.database, "league_activity"), 1);
+    assert.equal(count(rollback.database, "outbox_events"), 1);
+    assert.equal(sourceState(rollback.database), beforeSources);
+  });
+});
+
+describe("M5-07 durable proposal expiry", () => {
+  test("never expires early or through an authenticated read", async (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "proposal-for-expiry-read");
+    const beforeDeadline = await runtime.expiryJob.run();
+    assert.equal(beforeDeadline.status, "succeeded");
+    assert.equal(beforeDeadline.due, 0);
+    assert.equal(count(runtime.database, "job_runs"), 0);
+
+    runtime.setNow(TRADE_DEADLINE_MS);
+    const visible = runtime.repository.listVisible({
+      leagueId: IDS.league,
+      viewerUserId: IDS.manager,
+      viewerMembershipId: IDS.membership,
+    });
+    assert.equal(
+      visible.find(({ id }) => id === proposal.proposal.id).storageStatus,
+      "proposed"
+    );
+    assert.equal(
+      runtime.database
+        .prepare("SELECT status FROM trades WHERE id = ?")
+        .get(proposal.proposal.id).status,
+      "proposed"
+    );
+    assert.equal(count(runtime.database, "trade_events"), 1);
+  });
+
+  test("expires at the exact persisted deadline once with a durable occurrence", async (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "proposal-for-exact-expiry");
+    const beforeSources = sourceState(runtime.database);
+    runtime.setNow(TRADE_DEADLINE_MS);
+
+    const result = await runtime.expiryJob.run();
+
+    assert.deepEqual(
+      {
+        status: result.status,
+        due: result.due,
+        acquired: result.acquired,
+        expired: result.expired,
+        failed: result.failed,
+      },
+      { status: "succeeded", due: 1, acquired: 1, expired: 1, failed: 0 }
+    );
+    assert.deepEqual(
+      runtime.database
+        .prepare("SELECT status, version, responded_at_ms FROM trades WHERE id = ?")
+        .get(proposal.proposal.id),
+      {
+        status: "expired",
+        version: 2,
+        responded_at_ms: TRADE_DEADLINE_MS,
+      }
+    );
+    const event = runtime.database
+      .prepare(`
+        SELECT actor_user_id, event_type, reason, occurred_at_ms
+        FROM trade_events
+        WHERE trade_id = ? AND event_type = 'proposal_expired'
+      `)
+      .get(proposal.proposal.id);
+    assert.deepEqual(event, {
+      actor_user_id: null,
+      event_type: "proposal_expired",
+      reason: "effective_deadline_elapsed",
+      occurred_at_ms: TRADE_DEADLINE_MS,
+    });
+    assert.equal(
+      runtime.database
+        .prepare("SELECT event_type FROM league_activity WHERE related_id = ? ORDER BY occurred_at_ms DESC LIMIT 1")
+        .get(proposal.proposal.id).event_type,
+      "trade_proposal_expired"
+    );
+    assert.equal(count(runtime.database, "league_activity"), 2);
+    assert.equal(count(runtime.database, "outbox_events"), 2);
+    const run = runtime.database
+      .prepare("SELECT * FROM job_runs WHERE job_type = 'trades:expire:target'")
+      .get();
+    assert.equal(run.status, "succeeded");
+    assert.equal(run.attempt_count, 1);
+    assert.equal(
+      run.occurrence_key,
+      `trade-expiry:${proposal.proposal.id}:${TRADE_DEADLINE_MS}`
+    );
+    assert.equal(sourceState(runtime.database), beforeSources);
+
+    const replay = await runtime.expiryJob.run();
+    assert.equal(replay.due, 0);
+    assert.equal(count(runtime.database, "job_runs"), 1);
+    assert.equal(count(runtime.database, "trade_events"), 2);
+    assert.equal(count(runtime.database, "league_activity"), 2);
+    assert.equal(count(runtime.database, "outbox_events"), 2);
+  });
+
+  test("rolls late expiry failure back and retries the same occurrence", async (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "proposal-for-expiry-retry");
+    runtime.database.exec(`
+      CREATE TRIGGER reject_m5_09_expiry_outbox
+      BEFORE INSERT ON outbox_events
+      WHEN NEW.event_type = 'trade.changed'
+        AND NEW.aggregate_id = '${proposal.proposal.id}'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced expiry outbox failure');
+      END;
+    `);
+    runtime.setNow(TRADE_DEADLINE_MS);
+    const beforeSources = sourceState(runtime.database);
+
+    const failed = await runtime.expiryJob.run();
+
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.failed, 1);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT status FROM trades WHERE id = ?")
+        .get(proposal.proposal.id).status,
+      "proposed"
+    );
+    assert.equal(count(runtime.database, "trade_events"), 1);
+    assert.equal(count(runtime.database, "league_activity"), 1);
+    assert.equal(count(runtime.database, "outbox_events"), 1);
+    let run = runtime.database
+      .prepare("SELECT * FROM job_runs WHERE job_type = 'trades:expire:target'")
+      .get();
+    assert.equal(run.status, "failed");
+    assert.equal(run.attempt_count, 1);
+    assert.equal(run.last_error_code, "REPOSITORY_CONSTRAINT");
+    assert.equal(sourceState(runtime.database), beforeSources);
+
+    runtime.database.exec("DROP TRIGGER reject_m5_09_expiry_outbox");
+    const retried = await runtime.expiryJob.run();
+    assert.equal(retried.status, "succeeded");
+    assert.equal(retried.expired, 1);
+    run = runtime.database
+      .prepare("SELECT * FROM job_runs WHERE job_type = 'trades:expire:target'")
+      .get();
+    assert.equal(run.status, "succeeded");
+    assert.equal(run.attempt_count, 2);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT status FROM trades WHERE id = ?")
+        .get(proposal.proposal.id).status,
+      "expired"
+    );
+    assert.equal(count(runtime.database, "trade_events"), 2);
+    assert.equal(count(runtime.database, "league_activity"), 2);
+    assert.equal(count(runtime.database, "outbox_events"), 2);
+  });
+});
+
+function createAcceptedRecoveryTrade(runtime, key) {
+  insertContract(runtime.repositories, {
+    id: IDS.prospectContract,
+    yearId: IDS.prospectContractYear,
+    playerId: IDS.prospectPlayer,
+    teamId: IDS.teamA,
+    aavCents: 100,
+    status: "active",
+  });
+  runtime.database
+    .prepare("UPDATE contracts SET contract_type = 'fantasy_elc' WHERE id = ?")
+    .run(IDS.prospectContract);
+  const proposal = create(runtime, `${key}-proposal`);
+  const accepted = accept(runtime, proposal.proposal.id, `${key}-accept`);
+  return Object.freeze({ proposal, accepted });
+}
+
+function recoveryPreview(runtime, tradeId, userId = IDS.commissioner) {
+  return runtime.recoveryService.preview({
+    leagueId: IDS.league,
+    input: { tradeId },
+    authenticated: authenticated(userId),
+  });
+}
+
+function reverseTrade(runtime, tradeId, idempotencyKey) {
+  return runtime.recoveryService.reverse({
+    leagueId: IDS.league,
+    input: { tradeId, confirmed: true },
+    idempotencyKey,
+    authenticated: authenticated(IDS.commissioner),
+  });
+}
+
+function markTradeCorrectionRequired(runtime, tradeId, idempotencyKey) {
+  return runtime.recoveryService.markCorrectionRequired({
+    leagueId: IDS.league,
+    input: { tradeId, confirmed: true },
+    idempotencyKey,
+    authenticated: authenticated(IDS.commissioner),
+  });
+}
+
+function assertRecoveryReason(action, reasonCode) {
+  assert.throws(action, (error) => {
+    assert.ok(error instanceof TradeReversalPolicyError);
+    assert.equal(error.reasonCode, reasonCode);
+    return true;
+  });
+}
+
+describe("M5-10 commissioner trade reversal and recovery routing", () => {
+  test("requires exact preview and explicitly confirmed write input", () => {
+    assert.deepEqual(
+      validateTradeReversalPreviewInput({ tradeId: IDS.priorTrade }),
+      { tradeId: IDS.priorTrade }
+    );
+    assert.deepEqual(
+      validateTradeRecoveryWriteInput({
+        tradeId: IDS.priorTrade,
+        confirmed: true,
+      }),
+      { tradeId: IDS.priorTrade, confirmed: true }
+    );
+    assertRecoveryReason(
+      () => validateTradeRecoveryWriteInput({
+        tradeId: IDS.priorTrade,
+        confirmed: false,
+      }),
+      TRADE_REVERSAL_CODES.confirmationRequired
+    );
+    assertRecoveryReason(
+      () => validateTradeReversalPreviewInput({
+        tradeId: IDS.priorTrade,
+        extra: true,
+      }),
+      TRADE_REVERSAL_CODES.inputInvalid
+    );
+  });
+
+  test("keeps preview read-only and denies every non-current-commissioner identity", (t) => {
+    const runtime = createRuntime(t);
+    const { proposal } = createAcceptedRecoveryTrade(runtime, "recovery-auth");
+    const before = runtime.database.serialize();
+
+    assert.throws(
+      () => recoveryPreview(runtime, proposal.proposal.id, IDS.manager),
+      { code: "LEAGUE_COMMISSIONER_REQUIRED" }
+    );
+    assert.throws(
+      () => runtime.recoveryService.preview({
+        leagueId: IDS.league,
+        input: { tradeId: proposal.proposal.id },
+        authenticated: null,
+      }),
+      { code: "LEAGUE_NOT_FOUND" }
+    );
+    assert.throws(
+      () => runtime.recoveryService.preview({
+        leagueId: uuid(999_991),
+        input: { tradeId: proposal.proposal.id },
+        authenticated: authenticated(IDS.commissioner),
+      }),
+      { code: "LEAGUE_NOT_FOUND" }
+    );
+    assert.equal(before.equals(runtime.database.serialize()), true);
+
+    runtime.database.prepare(
+      "UPDATE league_memberships SET permission_category = 'commissioner', updated_at_ms = ?, version = version + 1 WHERE id = ?"
+    ).run(NOW_MS, IDS.receivingMembership);
+    runtime.database.prepare(
+      "UPDATE leagues SET commissioner_membership_id = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+    ).run(IDS.receivingMembership, NOW_MS, IDS.league);
+    assert.throws(
+      () => recoveryPreview(runtime, proposal.proposal.id),
+      { code: "LEAGUE_COMMISSIONER_REQUIRED" }
+    );
+    runtime.database.prepare(
+      "UPDATE leagues SET commissioner_membership_id = NULL, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+    ).run(NOW_MS, IDS.league);
+    runtime.database.prepare(
+      "UPDATE league_memberships SET permission_category = 'manager', updated_at_ms = ?, version = version + 1 WHERE id = ?"
+    ).run(NOW_MS, IDS.receivingMembership);
+    runtime.database.prepare(
+      "UPDATE league_memberships SET status = 'ended', ended_at_ms = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+    ).run(NOW_MS, NOW_MS, IDS.commissionerMembership);
+    assert.throws(
+      () => recoveryPreview(runtime, proposal.proposal.id),
+      { code: "LEAGUE_NOT_FOUND" }
+    );
+  });
+
+  test("reverses all eight asset forms after the deadline and replays without writes", (t) => {
+    const runtime = createRuntime(t);
+    const contractBefore = runtime.database
+      .prepare("SELECT * FROM contracts WHERE id = ?")
+      .get(IDS.contract);
+    const { proposal } = createAcceptedRecoveryTrade(runtime, "safe-recovery");
+    const createdAssets = runtime.database.prepare(`
+      SELECT id, asset_type, future_consideration_description
+      FROM trade_assets WHERE trade_id = ? ORDER BY sequence
+    `).all(proposal.proposal.id);
+
+    const beforePreview = runtime.database.serialize();
+    const previewed = recoveryPreview(runtime, proposal.proposal.id);
+    assert.equal(previewed.code, "TRADE_REVERSAL_PREVIEWED");
+    assert.equal(
+      previewed.preview.recoverable,
+      true,
+      JSON.stringify(previewed.preview.mismatches)
+    );
+    assert.equal(previewed.preview.assets.length, 8);
+    assert.equal(beforePreview.equals(runtime.database.serialize()), true);
+
+    const beforeWrongRoute = runtime.database.serialize();
+    assertRecoveryReason(
+      () => markTradeCorrectionRequired(
+        runtime,
+        proposal.proposal.id,
+        "safe-correction-route"
+      ),
+      TRADE_REVERSAL_CODES.correctionNotRequired
+    );
+    assert.equal(beforeWrongRoute.equals(runtime.database.serialize()), true);
+
+    runtime.setNow(TRADE_DEADLINE_MS + 1);
+    const reversed = reverseTrade(
+      runtime,
+      proposal.proposal.id,
+      "safe-recovery-reverse"
+    );
+    assert.equal(reversed.code, "TRADE_REVERSED");
+    assert.equal(reversed.trade.storageStatus, "reversed");
+    assert.equal(reversed.trade.version, 3);
+
+    const ownership = runtime.database
+      .prepare("SELECT * FROM player_ownerships WHERE id = ?")
+      .get(IDS.ownership);
+    assert.equal(ownership.team_id, IDS.teamA);
+    assert.equal(ownership.roster_category, "Active");
+    assert.equal(ownership.slot_number, 1);
+    assert.equal(ownership.acquired_transaction_type, "trade_reversal");
+    assert.equal(ownership.acquired_transaction_id, proposal.proposal.id);
+    assert.equal(ownership.version, 3);
+    const prospect = runtime.database
+      .prepare("SELECT * FROM player_ownerships WHERE id = ?")
+      .get(IDS.prospectOwnership);
+    assert.equal(prospect.team_id, IDS.teamA);
+    assert.equal(prospect.roster_category, "Prospect");
+    assert.equal(prospect.version, 3);
+
+    const contractAfter = runtime.database
+      .prepare("SELECT * FROM contracts WHERE id = ?")
+      .get(IDS.contract);
+    assert.equal(contractAfter.current_team_id, IDS.teamA);
+    assert.equal(contractAfter.version, 3);
+    for (const field of [
+      "contract_type",
+      "original_total_value_cents",
+      "original_term_years",
+      "aav_cents",
+      "start_season_id",
+      "status",
+      "acquisition_source_type",
+      "acquisition_source_id",
+      "auction_buyout_lock_expires_at_ms",
+    ]) {
+      assert.equal(contractAfter[field], contractBefore[field], field);
+    }
+    assert.equal(
+      runtime.database.prepare("SELECT current_team_id FROM contracts WHERE id = ?")
+        .get(IDS.prospectContract).current_team_id,
+      IDS.teamA
+    );
+    assert.equal(
+      runtime.database.prepare("SELECT current_owner_team_id FROM draft_picks WHERE id = ?")
+        .get(IDS.draftPick).current_owner_team_id,
+      IDS.teamA
+    );
+    assert.equal(
+      runtime.database.prepare("SELECT COUNT(*) AS count FROM draft_pick_ownership_events WHERE draft_pick_id = ?")
+        .get(IDS.draftPick).count,
+      2
+    );
+    assert.equal(
+      runtime.database.prepare("SELECT responsible_team_id FROM retention_obligations WHERE id = ?")
+        .get(IDS.assetRetention).responsible_team_id,
+      IDS.teamB
+    );
+    assert.equal(
+      runtime.database.prepare("SELECT responsible_team_id FROM buyout_obligations WHERE id = ?")
+        .get(IDS.buyout).responsible_team_id,
+      IDS.teamB
+    );
+    assert.deepEqual(
+      runtime.database.prepare(
+        "SELECT receiving_team_id, status, resolved_at_ms FROM future_considerations WHERE id = ?"
+      ).get(IDS.futureConsideration),
+      {
+        receiving_team_id: IDS.teamB,
+        status: "outstanding",
+        resolved_at_ms: null,
+      }
+    );
+    const createdRetention = createdAssets.find(
+      (asset) => asset.asset_type === "requested_retention"
+    );
+    const createdConsideration = createdAssets.find(
+      (asset) => asset.future_consideration_description !== null
+    );
+    assert.equal(
+      runtime.database.prepare("SELECT COUNT(*) AS count FROM retention_obligations WHERE id = ?")
+        .get(createdRetention.id).count,
+      0
+    );
+    assert.equal(
+      runtime.database.prepare("SELECT COUNT(*) AS count FROM future_considerations WHERE id = ?")
+        .get(createdConsideration.id).count,
+      0
+    );
+    assert.equal(count(runtime.database, "commissioner_corrections"), 1);
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT event_type FROM league_activity WHERE related_id = ? ORDER BY occurred_at_ms DESC LIMIT 1"
+      ).get(proposal.proposal.id).event_type,
+      "trade_reversed"
+    );
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+
+    const beforeReplay = runtime.database.serialize();
+    const replay = reverseTrade(
+      runtime,
+      proposal.proposal.id,
+      "safe-recovery-reverse"
+    );
+    assert.equal(replay.code, "TRADE_RECOVERY_REPLAYED");
+    assert.equal(replay.event.id, reversed.event.id);
+    assert.equal(beforeReplay.equals(runtime.database.serialize()), true);
+
+    runtime.setNow(NOW_MS);
+    const second = create(runtime, "safe-recovery-second-proposal");
+    accept(runtime, second.proposal.id, "safe-recovery-second-accept");
+    const beforeConflict = runtime.database.serialize();
+    assertRecoveryReason(
+      () => reverseTrade(
+        runtime,
+        second.proposal.id,
+        "safe-recovery-reverse"
+      ),
+      TRADE_REVERSAL_CODES.idempotencyConflict
+    );
+    assert.equal(beforeConflict.equals(runtime.database.serialize()), true);
+  });
+
+  test("reports every bounded unsafe post-trade state without writes", (t) => {
+    const cases = [
+      [TRADE_REVERSAL_REASON_CODES.assetMoved, (runtime) => {
+        runtime.database.prepare(
+          "UPDATE player_ownerships SET team_id = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+        ).run(IDS.teamA, NOW_MS + 1, IDS.ownership);
+      }],
+      [TRADE_REVERSAL_REASON_CODES.assetChanged, (runtime) => {
+        runtime.database.prepare(
+          "UPDATE contracts SET original_total_value_cents = 1100, aav_cents = 1100, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+        ).run(NOW_MS + 1, IDS.contract);
+      }],
+      [TRADE_REVERSAL_REASON_CODES.assetConsumed, (runtime) => {
+        runtime.database.prepare(
+          "UPDATE draft_picks SET status = 'forfeited', updated_at_ms = ?, version = version + 1 WHERE id = ?"
+        ).run(NOW_MS + 1, IDS.draftPick);
+      }],
+      [TRADE_REVERSAL_REASON_CODES.obligationChanged, (runtime) => {
+        runtime.database.prepare(
+          "UPDATE buyout_obligations SET status = 'completed', updated_at_ms = ?, version = version + 1 WHERE id = ?"
+        ).run(NOW_MS + 1, IDS.buyout);
+      }],
+      [TRADE_REVERSAL_REASON_CODES.createdObligationMissing, (runtime, tradeId) => {
+        const createdId = runtime.database.prepare(
+          "SELECT id FROM trade_assets WHERE trade_id = ? AND future_consideration_description IS NOT NULL"
+        ).get(tradeId).id;
+        runtime.database.prepare(
+          "DELETE FROM future_considerations WHERE id = ?"
+        ).run(createdId);
+      }],
+      [TRADE_REVERSAL_REASON_CODES.createdObligationChanged, (runtime, tradeId) => {
+        const createdId = runtime.database.prepare(
+          "SELECT id FROM trade_assets WHERE trade_id = ? AND asset_type = 'requested_retention'"
+        ).get(tradeId).id;
+        runtime.database.prepare(
+          "UPDATE retention_obligations SET retained_aav_cents = retained_aav_cents - 1, updated_at_ms = ?, version = version + 1 WHERE id = ?"
+        ).run(NOW_MS + 1, createdId);
+      }],
+      [TRADE_REVERSAL_REASON_CODES.originalSlotOccupied, (runtime) => {
+        const playerId = uuid(990_001);
+        insertPlayer(runtime.repositories, playerId, "Occupant");
+        runtime.repositories.player_ownerships.insert({
+          id: uuid(990_002),
+          league_id: IDS.league,
+          season_id: IDS.currentSeason,
+          player_id: playerId,
+          team_id: IDS.teamA,
+          ownership_kind: "Rostered",
+          roster_category: "Active",
+          position_group: "F",
+          slot_number: 1,
+          acquired_transaction_type: "migration",
+          acquired_transaction_id: null,
+          created_at_ms: NOW_MS + 1,
+          updated_at_ms: NOW_MS + 1,
+          version: 1,
+        });
+      }],
+      [TRADE_REVERSAL_REASON_CODES.snapshotInvalid, (runtime, tradeId) => {
+        runtime.database.prepare(
+          "UPDATE trade_assets SET proposal_snapshot_json = '{}' WHERE trade_id = ? AND sequence = 1"
+        ).run(tradeId);
+      }],
+      [TRADE_REVERSAL_REASON_CODES.assetMissing, (runtime) => {
+        runtime.database.pragma("foreign_keys = OFF");
+        runtime.database.prepare(
+          "DELETE FROM player_ownerships WHERE id = ?"
+        ).run(IDS.ownership);
+        runtime.database.pragma("foreign_keys = ON");
+      }],
+    ];
+
+    for (const [reasonCode, mutate] of cases) {
+      const runtime = createRuntime(t);
+      const { proposal } = createAcceptedRecoveryTrade(
+        runtime,
+        `unsafe-${reasonCode.toLowerCase()}`
+      );
+      mutate(runtime, proposal.proposal.id);
+      const before = runtime.database.serialize();
+      const result = recoveryPreview(runtime, proposal.proposal.id);
+      assert.equal(result.preview.recoverable, false, reasonCode);
+      assert.ok(
+        result.preview.mismatches.some(
+          (mismatch) => mismatch.reasonCode === reasonCode
+        ),
+        reasonCode
+      );
+      assert.equal(before.equals(runtime.database.serialize()), true, reasonCode);
+    }
+  });
+
+  test("reports consumed state, rejects direct reversal, and routes correction without moving assets", (t) => {
+    const runtime = createRuntime(t);
+    const { proposal } = createAcceptedRecoveryTrade(runtime, "unsafe-recovery");
+    runtime.database.prepare(
+      "UPDATE draft_picks SET status = 'forfeited', updated_at_ms = ?, version = version + 1 WHERE id = ?"
+    ).run(NOW_MS + 1, IDS.draftPick);
+    const beforePreview = runtime.database.serialize();
+    const previewed = recoveryPreview(runtime, proposal.proposal.id);
+    assert.equal(previewed.preview.recoverable, false);
+    assert.ok(previewed.preview.mismatches.some(
+      ({ reasonCode }) => reasonCode === TRADE_REVERSAL_REASON_CODES.assetConsumed
+    ));
+    assert.equal(beforePreview.equals(runtime.database.serialize()), true);
+
+    const beforeRejectedReverse = runtime.database.serialize();
+    assertRecoveryReason(
+      () => reverseTrade(runtime, proposal.proposal.id, "unsafe-direct-reverse"),
+      TRADE_REVERSAL_CODES.safeReversalRequired
+    );
+    assert.equal(
+      beforeRejectedReverse.equals(runtime.database.serialize()),
+      true
+    );
+
+    const assetsBeforeRouting = sourceState(runtime.database);
+    runtime.setNow(NOW_MS + 2);
+    const routed = markTradeCorrectionRequired(
+      runtime,
+      proposal.proposal.id,
+      "unsafe-correction-route"
+    );
+    assert.equal(routed.code, "TRADE_CORRECTION_REQUIRED");
+    assert.equal(routed.trade.storageStatus, "correction_required");
+    assert.equal(sourceState(runtime.database), assetsBeforeRouting);
+    assert.equal(
+      runtime.database.prepare("SELECT reason FROM commissioner_corrections WHERE feature_record_id = ?")
+        .get(proposal.proposal.id).reason,
+      "direct_trade_reversal_unsafe"
+    );
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT event_type FROM league_activity WHERE related_id = ? AND event_type = 'trade_correction_required'"
+      ).get(proposal.proposal.id).event_type,
+      "trade_correction_required"
+    );
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT event_type FROM outbox_events WHERE aggregate_id = ? ORDER BY created_at_ms DESC LIMIT 1"
+      ).get(proposal.proposal.id).event_type,
+      "trade.changed"
+    );
+    const beforeReplay = runtime.database.serialize();
+    const replay = markTradeCorrectionRequired(
+      runtime,
+      proposal.proposal.id,
+      "unsafe-correction-route"
+    );
+    assert.equal(replay.code, "TRADE_RECOVERY_REPLAYED");
+    assert.equal(replay.event.id, routed.event.id);
+    assert.equal(beforeReplay.equals(runtime.database.serialize()), true);
+  });
+
+  test("rolls back every reversal effect after a late transactional failure", (t) => {
+    const runtime = createRuntime(t);
+    const { proposal } = createAcceptedRecoveryTrade(runtime, "rollback-recovery");
+    runtime.database.exec(`
+      CREATE TRIGGER reject_m5_10_recovery_outbox
+      BEFORE INSERT ON outbox_events
+      WHEN NEW.event_type = 'trade.changed'
+        AND NEW.aggregate_id = '${proposal.proposal.id}'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced recovery outbox failure');
+      END;
+    `);
+    const before = runtime.database.serialize();
+    assert.throws(
+      () => reverseTrade(runtime, proposal.proposal.id, "rollback-reverse"),
+      { code: "REPOSITORY_CONSTRAINT" }
+    );
+    assert.equal(before.equals(runtime.database.serialize()), true);
+    assert.equal(
+      runtime.database.prepare("SELECT status FROM trades WHERE id = ?")
+        .get(proposal.proposal.id).status,
+      "completed"
+    );
+  });
+});

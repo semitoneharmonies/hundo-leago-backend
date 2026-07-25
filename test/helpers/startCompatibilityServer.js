@@ -102,7 +102,7 @@ async function startCompatibilityServer(
     );
   }
 
-  const child = spawn(process.execPath, ["server.js"], {
+  const child = spawn(process.execPath, ["server-compatibility.js"], {
     cwd: backendRoot,
     env,
     shell: false,

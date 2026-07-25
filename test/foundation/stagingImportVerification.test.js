@@ -210,7 +210,7 @@ describe("M2-13 independent staging import verification", () => {
       evidence.database.seededApplicationMetadataRowCount,
       2
     );
-    assert.equal(evidence.database.emptyApplicationTableCount, 72);
+    assert.equal(evidence.database.emptyApplicationTableCount, 73);
     assert.equal(evidence.checks.integrity, "ok");
     assert.equal(evidence.checks.foreignKeyViolationCount, 0);
     assert.equal(evidence.checks.inputsUnchanged, true);

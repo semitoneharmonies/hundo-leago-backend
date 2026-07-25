@@ -5,19 +5,31 @@ const path = require("node:path");
 
 const { canonicalize } = require("../migration/sourceInventory");
 const { openReadonlyDatabase } = require("./connection");
+const {
+  DATABASE_IDENTITY_KEYS,
+} = require("./databaseIdentity");
 
 const BACKUP_MANIFEST_VERSION = 1;
 const BACKUP_FILE_NAME = "database.sqlite3";
 const BACKUP_MANIFEST_FILE_NAME = "backup-manifest.json";
 const APPROVED_REASONS = Object.freeze([
+  "scheduled-hourly",
+  "scheduled-daily",
+  "commissioner-request",
+  "pre-deploy",
   "pre-migration",
   "pre-restore",
+  "pre-reset",
+  "pre-rollover",
+  "pre-bulk-operation",
+  "incident-preservation",
   "pre-cutover-rehearsal",
   "manual-platform-operation",
 ]);
 const APPROVED_ENVIRONMENTS = Object.freeze([
   "test",
   "staging",
+  "production",
 ]);
 const BACKUP_ERROR_CODES = Object.freeze({
   argumentInvalid: "BACKUP_ARGUMENT_INVALID",
@@ -125,12 +137,29 @@ function inspectDatabase(databasePath) {
         "FROM schema_migrations ORDER BY migration_id"
       ).all()
       : [];
+    const metadata = tables.includes("application_metadata")
+      ? Object.fromEntries(
+          database.prepare(
+            "SELECT metadata_key, metadata_value FROM application_metadata " +
+              "WHERE metadata_key IN (?, ?, ?) ORDER BY metadata_key"
+          ).all(
+            DATABASE_IDENTITY_KEYS.environmentId,
+            DATABASE_IDENTITY_KEYS.databaseId,
+            DATABASE_IDENTITY_KEYS.createdAt
+          ).map(({ metadata_key: key, metadata_value: value }) => [key, value])
+        )
+      : {};
     inspection = Object.freeze({
       integrity,
       foreignKeyViolationCount: 0,
       userVersion: database.pragma("user_version", { simple: true }),
       rowCounts: Object.freeze(rowCounts),
       migrations: Object.freeze(migrations.map(Object.freeze)),
+      databaseIdentity: Object.freeze({
+        environmentId: metadata[DATABASE_IDENTITY_KEYS.environmentId] || null,
+        databaseId: metadata[DATABASE_IDENTITY_KEYS.databaseId] || null,
+        createdAt: metadata[DATABASE_IDENTITY_KEYS.createdAt] || null,
+      }),
     });
   } catch (error) {
     operationError = error;

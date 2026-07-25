@@ -24,7 +24,8 @@
       "targetTables": [
         "teams",
         "team_manager_assignments",
-        "team_events"
+        "team_events",
+        "team_logo_objects"
       ],
       "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
       "countTreatment": "source_count_equals_reported_omitted_count",
@@ -286,5 +287,5 @@
       "reason": "Hard-coded frontend identity and plaintext credential material is not an account source and must never be migrated."
     }
   ],
-  "checksum": "55b4a039cb7ff6c9070822fe05c56dcb71d20508e111a14ca20c978ff2d34ffc"
+  "checksum": "de5aa74ba6bec5fa927fed2f4c4a67c4930768d76fa167d03624046802157403"
 }

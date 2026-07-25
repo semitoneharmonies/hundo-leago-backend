@@ -4,6 +4,8 @@ const path = require("node:path");
 
 const MIGRATION_FILE_PATTERN =
   /^(?<id>\d{4})_(?<name>[a-z0-9]+(?:_[a-z0-9]+)*)\.sql$/;
+const FOREIGN_KEY_REBUILD_DIRECTIVE =
+  "-- hundo-leago: foreign-key-rebuild\n";
 
 const MIGRATION_LEDGER_SQL = `
   CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -260,10 +262,37 @@ function applyOneMigration({
   now,
 }) {
   const startedAtMs = now();
-  database.exec("BEGIN IMMEDIATE;");
+  const requiresForeignKeyRebuild =
+    migration.sql.startsWith(
+      FOREIGN_KEY_REBUILD_DIRECTIVE
+    );
+  let foreignKeysSuspended = false;
+  let caughtError = null;
 
   try {
+    if (requiresForeignKeyRebuild) {
+      database.pragma("foreign_keys = OFF");
+      if (
+        database.pragma("foreign_keys", {
+          simple: true,
+        }) !== 0
+      ) {
+        throw new Error(
+          "Foreign-key enforcement could not be suspended for the declared rebuild."
+        );
+      }
+      foreignKeysSuspended = true;
+    }
+    database.exec("BEGIN IMMEDIATE;");
     database.exec(migration.sql);
+    if (
+      requiresForeignKeyRebuild &&
+      database.pragma("foreign_key_check").length > 0
+    ) {
+      throw new Error(
+        "The declared rebuild produced a foreign-key violation."
+      );
+    }
     const appliedAtMs = now();
     const durationMs = Math.max(0, appliedAtMs - startedAtMs);
 
@@ -291,6 +320,7 @@ function applyOneMigration({
     database.pragma(`user_version = ${migration.id}`);
     database.exec("COMMIT;");
   } catch (error) {
+    caughtError = error;
     if (database.inTransaction) {
       try {
         database.exec("ROLLBACK;");
@@ -298,6 +328,26 @@ function applyOneMigration({
         // Preserve the original migration failure.
       }
     }
+  } finally {
+    if (foreignKeysSuspended) {
+      try {
+        database.pragma("foreign_keys = ON");
+        if (
+          database.pragma("foreign_keys", {
+            simple: true,
+          }) !== 1
+        ) {
+          throw new Error(
+            "Foreign-key enforcement was not restored."
+          );
+        }
+      } catch (error) {
+        caughtError ||= error;
+      }
+    }
+  }
+
+  if (caughtError) {
     throw migrationError(
       "MIGRATION_APPLY_FAILED",
       "A migration failed and was rolled back.",
@@ -305,7 +355,7 @@ function applyOneMigration({
         migrationId: migration.id,
         fileName: migration.fileName,
       },
-      error
+      caughtError
     );
   }
 }
@@ -353,6 +403,7 @@ function migrateDatabase({
 }
 
 module.exports = {
+  FOREIGN_KEY_REBUILD_DIRECTIVE,
   MIGRATION_FILE_PATTERN,
   MIGRATION_LEDGER_SQL,
   MigrationError,

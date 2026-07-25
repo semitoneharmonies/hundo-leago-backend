@@ -109,7 +109,7 @@ describe("M2-10 SQLite backup and restore verification", () => {
     await assert.rejects(() => createVerifiedBackup({
       databasePath: source.databasePath,
       outputDirectory: path.join(source.root, "wrong"),
-      environment: "production", reason: "pre-migration", capturedAtMs: 1,
+      environment: "development", reason: "pre-migration", capturedAtMs: 1,
     }), code(BACKUP_ERROR_CODES.argumentInvalid));
     const existing = path.join(source.root, "existing");
     fs.mkdirSync(existing);

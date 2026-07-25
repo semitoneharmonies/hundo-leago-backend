@@ -56,6 +56,7 @@ function resolveDatabasePath({
   databasePath,
   environment = "development",
   persistentRoot,
+  requirePersistentRoot = false,
   workingDirectory = process.cwd(),
 } = {}) {
   if (typeof databasePath !== "string" || databasePath.trim() === "") {
@@ -76,11 +77,11 @@ function resolveDatabasePath({
     );
   }
 
-  if (environment === "production") {
+  if (environment === "production" || requirePersistentRoot === true) {
     if (!path.isAbsolute(trimmedDatabasePath)) {
       throw connectionError(
         "DATABASE_PATH_NOT_ABSOLUTE",
-        "The production database path must be absolute."
+        "A deployed database path must be absolute."
       );
     }
 
@@ -91,7 +92,7 @@ function resolveDatabasePath({
     ) {
       throw connectionError(
         "DATABASE_PERSISTENT_ROOT_REQUIRED",
-        "An absolute production persistent root is required."
+        "An absolute deployed persistent root is required."
       );
     }
 
@@ -107,7 +108,7 @@ function resolveDatabasePath({
     } catch (error) {
       throw connectionError(
         "DATABASE_DIRECTORY_NOT_WRITABLE",
-        "The production persistent root and database parent directory must exist.",
+        "The deployed persistent root and database parent directory must exist.",
         error
       );
     }
@@ -124,7 +125,7 @@ function resolveDatabasePath({
     ) {
       throw connectionError(
         "DATABASE_PATH_OUTSIDE_PERSISTENT_ROOT",
-        "The production database must be below its persistent root."
+        "A deployed database must be below its persistent root."
       );
     }
 

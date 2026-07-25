@@ -1,0 +1,933 @@
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const {
+  openDatabase,
+} = require("../../infrastructure/database/connection");
+const {
+  migrateDatabase,
+} = require("../../infrastructure/database/migrate");
+const {
+  createScryptPasswordHasher,
+} = require("../../infrastructure/security/createScryptPasswordHasher");
+const {
+  assertReleaseQaPassword,
+} = require("./releaseQaPasswordPolicy");
+const {
+  FIXTURE_BUILD_ID,
+  FIXTURE_CREATED_AT,
+  FIXTURE_DATABASE_ID,
+  FIXTURE_ENVIRONMENT_ID,
+  FIXTURE_NOW_MS,
+  LEAGUE_ALIASES,
+  PLAYER_BLUEPRINTS,
+  TEAM_NAMES,
+  fixtureEmail,
+  fixtureId,
+} = require("./releaseQaFixtureContract");
+const {
+  verifyReleaseQaFixture,
+} = require("./verifyReleaseQaFixture");
+
+class ReleaseQaFixtureError extends Error {
+  constructor(code, message, options = {}) {
+    super(message, options);
+    this.name = "ReleaseQaFixtureError";
+    this.code = code;
+  }
+}
+
+function fail(code, message, cause) {
+  throw new ReleaseQaFixtureError(
+    code,
+    message,
+    cause === undefined ? {} : { cause }
+  );
+}
+
+function isInside(rootPath, targetPath) {
+  const relative = path.relative(rootPath, targetPath);
+  return relative !== "" && relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+function assertSafeFixturePath({ databasePath, environment, temporaryRoot }) {
+  if (environment !== "test") {
+    fail(
+      "RELEASE_QA_TEST_ENVIRONMENT_REQUIRED",
+      "The release-QA fixture can only run with environment=test."
+    );
+  }
+  if (!path.isAbsolute(databasePath || "") || !path.isAbsolute(temporaryRoot || "")) {
+    fail(
+      "RELEASE_QA_ABSOLUTE_PATH_REQUIRED",
+      "Absolute database and temporary-root paths are required."
+    );
+  }
+
+  const resolvedDatabasePath = path.resolve(databasePath);
+  const resolvedTemporaryRoot = path.resolve(temporaryRoot);
+  const resolvedSystemTemp = fs.realpathSync(os.tmpdir());
+  let physicalTemporaryRoot;
+  let physicalParent;
+  try {
+    physicalTemporaryRoot = fs.realpathSync(resolvedTemporaryRoot);
+    physicalParent = fs.realpathSync(path.dirname(resolvedDatabasePath));
+  } catch (error) {
+    fail(
+      "RELEASE_QA_TEMPORARY_PATH_REQUIRED",
+      "The temporary root and database parent must already exist.",
+      error
+    );
+  }
+
+  if (
+    physicalTemporaryRoot !== resolvedSystemTemp &&
+    !isInside(resolvedSystemTemp, physicalTemporaryRoot)
+  ) {
+    fail(
+      "RELEASE_QA_SYSTEM_TEMP_REQUIRED",
+      "The release-QA temporary root must be below the operating-system temp directory."
+    );
+  }
+  if (!isInside(physicalTemporaryRoot, physicalParent) &&
+      physicalParent !== physicalTemporaryRoot) {
+    fail(
+      "RELEASE_QA_PATH_OUTSIDE_TEMP_ROOT",
+      "The release-QA database must be below its temporary root."
+    );
+  }
+  if (!/release-qa[^\\/]*\.sqlite3$/i.test(path.basename(resolvedDatabasePath))) {
+    fail(
+      "RELEASE_QA_DATABASE_NAME_INVALID",
+      "The release-QA database file name must identify release-qa and end in .sqlite3."
+    );
+  }
+  if (fs.existsSync(resolvedDatabasePath)) {
+    fail(
+      "RELEASE_QA_DATABASE_ALREADY_EXISTS",
+      "The release-QA fixture refuses to replace an existing database."
+    );
+  }
+  return resolvedDatabasePath;
+}
+
+function deterministicPasswordHasher() {
+  const salt = Buffer.from("m7-release-qa-salt", "utf8").subarray(0, 16);
+  return createScryptPasswordHasher({
+    secureRandom: Object.freeze({
+      bytes(length) {
+        if (length !== salt.byteLength) return Buffer.alloc(length, 7);
+        return Buffer.from(salt);
+      },
+    }),
+    maxConcurrent: 1,
+    maxQueued: 0,
+    validatePassword: assertReleaseQaPassword,
+  });
+}
+
+const ACCOUNT_DEFINITIONS = Object.freeze([
+  Object.freeze({ alias: "platformAdmin", displayName: "Admin", status: "active" }),
+  Object.freeze({ alias: "leagueACommissioner", displayName: "Comm A", status: "active" }),
+  Object.freeze({ alias: "leagueBCommissioner", displayName: "Comm B", status: "active" }),
+  Object.freeze({ alias: "leagueAManagerOne", displayName: "Man A Leag A", status: "active" }),
+  Object.freeze({ alias: "leagueAManagerTwo", displayName: "Man B Leag A", status: "active" }),
+  Object.freeze({ alias: "leagueBManagerOne", displayName: "Man A Leag B", status: "active" }),
+  Object.freeze({ alias: "verifiedWithoutMembership", displayName: "No League", status: "active" }),
+  Object.freeze({ alias: "pendingVerification", displayName: "Pending", status: "pending_verification" }),
+  Object.freeze({ alias: "deactivated", displayName: "Deactivated", status: "deactivated" }),
+]);
+
+function insertAccounts(database, passwordHash) {
+  const insertUser = database.prepare(`
+    INSERT INTO users (
+      id, email_normalized, email_display, display_name,
+      display_name_normalized, status, created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+  `);
+  const insertCredential = database.prepare(`
+    INSERT INTO user_credentials (
+      id, user_id, password_hash, algorithm, algorithm_version,
+      status, created_at_ms, replaced_at_ms, version
+    ) VALUES (?, ?, ?, 'scrypt', 1, 'active', ?, NULL, 1)
+  `);
+  const accounts = {};
+  for (const definition of ACCOUNT_DEFINITIONS) {
+    const id = fixtureId(`account:${definition.alias}`);
+    const email = fixtureEmail(definition.alias);
+    insertUser.run(
+      id,
+      email,
+      email,
+      definition.displayName,
+      definition.displayName.toLowerCase(),
+      definition.status,
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS
+    );
+    insertCredential.run(
+      fixtureId(`credential:${definition.alias}`),
+      id,
+      passwordHash,
+      FIXTURE_NOW_MS
+    );
+    accounts[definition.alias] = Object.freeze({ id });
+  }
+  database.prepare(`
+    INSERT INTO platform_roles (
+      id, user_id, role, status, granted_by_user_id,
+      granted_at_ms, ended_at_ms, version
+    ) VALUES (?, ?, 'platform_administrator', 'active', ?, ?, NULL, 1)
+  `).run(
+    fixtureId("platform-role:administrator"),
+    accounts.platformAdmin.id,
+    accounts.platformAdmin.id,
+    FIXTURE_NOW_MS
+  );
+  return Object.freeze(accounts);
+}
+
+function insertGlobalPlayers(database) {
+  const insertPlayer = database.prepare(`
+    INSERT INTO players (
+      id, first_name, last_name, full_name, birth_date,
+      status, created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, 1)
+  `);
+  const insertExternalId = database.prepare(`
+    INSERT INTO player_external_ids (
+      id, player_id, provider, external_value, created_at_ms
+    ) VALUES (?, ?, 'release_qa', ?, ?)
+  `);
+  const players = {};
+  PLAYER_BLUEPRINTS.forEach((blueprint, index) => {
+    const id = fixtureId(`player:${blueprint.alias}`);
+    const firstName = "Fixture";
+    const lastName = `Player ${String(index + 1).padStart(2, "0")}`;
+    insertPlayer.run(
+      id,
+      firstName,
+      lastName,
+      `${firstName} ${lastName}`,
+      `199${index % 10}-01-01`,
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS
+    );
+    insertExternalId.run(
+      fixtureId(`player-external:${blueprint.alias}`),
+      id,
+      `release-qa-${String(index + 1).padStart(3, "0")}`,
+      FIXTURE_NOW_MS
+    );
+    players[blueprint.alias] = Object.freeze({ id, ...blueprint });
+  });
+  return Object.freeze(players);
+}
+
+function insertLeagueBase(database, leagueAlias, accounts) {
+  const leagueId = fixtureId(`league:${leagueAlias}`);
+  const leagueName = leagueAlias === "leagueA"
+    ? "Release QA Alpha League"
+    : "Release QA Beta League";
+  const commissionerAlias = leagueAlias === "leagueA"
+    ? "leagueACommissioner"
+    : "leagueBCommissioner";
+  const managerAliases = leagueAlias === "leagueA"
+    ? ["leagueAManagerOne", "leagueAManagerTwo"]
+    : ["leagueBManagerOne"];
+
+  database.prepare(`
+    INSERT INTO leagues (
+      id, name, name_normalized, status, timezone,
+      commissioner_membership_id, current_season_id,
+      created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, 'active', 'America/Vancouver', NULL, NULL, ?, ?, 1)
+  `).run(leagueId, leagueName, leagueName.toLowerCase(), FIXTURE_NOW_MS, FIXTURE_NOW_MS);
+  database.prepare(`
+    INSERT INTO league_settings (
+      league_id, salary_cap_cents, trade_deadline_at_ms, maximum_teams,
+      active_forward_slots, active_defence_slots, bench_slots,
+      maximum_bench_aav_cents, injured_reserve_slots,
+      prospect_slots_unlimited, scoring_rule_version, standings_rule_version,
+      created_at_ms, updated_at_ms, version
+    ) VALUES (?, 10000, ?, 6, 12, 6, 4, 400, 4, 1, 1, 1, ?, ?, 1)
+  `).run(leagueId, FIXTURE_NOW_MS + 30 * 86_400_000, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
+
+  const seasons = ["current", "futureOne", "futureTwo"].map((seasonAlias, index) => {
+    const id = fixtureId(`season:${leagueAlias}:${seasonAlias}`);
+    database.prepare(`
+      INSERT INTO seasons (
+        id, league_id, label, nhl_season_key, status,
+        regular_season_starts_at_ms, regular_season_ends_at_ms,
+        fantasy_playoffs_start_at_ms, fantasy_playoffs_end_at_ms,
+        created_at_ms, updated_at_ms, version, free_agent_draft_completed_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+    `).run(
+      id,
+      leagueId,
+      index === 0 ? "2026-27" : `${2026 + index}-${String(27 + index).padStart(2, "0")}`,
+      `${20262027 + index * 10001}`,
+      index === 0 ? "active" : "planned",
+      FIXTURE_NOW_MS - 21 * 86_400_000,
+      FIXTURE_NOW_MS + (180 + index * 365) * 86_400_000,
+      FIXTURE_NOW_MS + (150 + index * 365) * 86_400_000,
+      FIXTURE_NOW_MS + (180 + index * 365) * 86_400_000,
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS,
+      index === 0 ? FIXTURE_NOW_MS - 7 * 86_400_000 : null
+    );
+    return Object.freeze({ alias: seasonAlias, id });
+  });
+
+  const membershipAliases = [
+    "platformAdmin",
+    commissionerAlias,
+    ...managerAliases,
+  ];
+  const memberships = {};
+  const insertMembership = database.prepare(`
+    INSERT INTO league_memberships (
+      id, league_id, user_id, permission_category, status,
+      joined_at_ms, ended_at_ms, created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, 'active', ?, NULL, ?, ?, 1)
+  `);
+  for (const accountAlias of membershipAliases) {
+    const id = fixtureId(`membership:${leagueAlias}:${accountAlias}`);
+    insertMembership.run(
+      id,
+      leagueId,
+      accounts[accountAlias].id,
+      accountAlias === "platformAdmin"
+        ? "member"
+        : accountAlias === commissionerAlias
+          ? "commissioner"
+          : "manager",
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS
+    );
+    memberships[accountAlias] = Object.freeze({ id });
+  }
+
+  const teams = TEAM_NAMES.map((name, index) => {
+    const id = fixtureId(`team:${leagueAlias}:${index + 1}`);
+    database.prepare(`
+      INSERT INTO teams (
+        id, league_id, name, name_normalized, status,
+        primary_colour, secondary_colour, logo_reference,
+        created_at_ms, updated_at_ms, version
+      ) VALUES (?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, 1)
+    `).run(
+      id,
+      leagueId,
+      name,
+      name.toLowerCase(),
+      index % 2 === 0 ? "#16324f" : "#b03a2e",
+      "#f7f7f7",
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS
+    );
+    return Object.freeze({ id, name });
+  });
+
+  const assignmentAccounts = [commissionerAlias, ...managerAliases];
+  assignmentAccounts.forEach((accountAlias, index) => {
+    database.prepare(`
+      INSERT INTO team_manager_assignments (
+        id, league_id, team_id, user_id, membership_id,
+        assigned_by_user_id, replaces_assignment_id, status,
+        assigned_at_ms, accepted_at_ms, ended_at_ms, version
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, 'accepted', ?, ?, NULL, 1)
+    `).run(
+      fixtureId(`assignment:${leagueAlias}:${accountAlias}`),
+      leagueId,
+      teams[index].id,
+      accounts[accountAlias].id,
+      memberships[accountAlias].id,
+      accounts[commissionerAlias].id,
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS
+    );
+  });
+
+  database.prepare(`
+    UPDATE leagues
+    SET commissioner_membership_id = ?, current_season_id = ?,
+        updated_at_ms = ?, version = version + 1
+    WHERE id = ?
+  `).run(
+    memberships[commissionerAlias].id,
+    seasons[0].id,
+    FIXTURE_NOW_MS,
+    leagueId
+  );
+
+  return Object.freeze({
+    alias: leagueAlias,
+    commissionerAlias,
+    leagueId,
+    memberships: Object.freeze(memberships),
+    seasons: Object.freeze(seasons),
+    teams: Object.freeze(teams),
+  });
+}
+
+function insertLeaguePlayerState(database, league, players, accounts) {
+  const insertPosition = database.prepare(`
+    INSERT INTO league_player_positions (
+      id, league_id, player_id, position_group, reason,
+      corrected_by_user_id, effective_at_ms, ended_at_ms, version
+    ) VALUES (?, ?, ?, ?, 'release QA fixture', ?, ?, NULL, 1)
+  `);
+  const insertOwnership = database.prepare(`
+    INSERT INTO player_ownerships (
+      id, league_id, season_id, player_id, team_id, ownership_kind,
+      roster_category, position_group, slot_number,
+      acquired_transaction_type, acquired_transaction_id,
+      created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'release_qa_fixture', NULL, ?, ?, 1)
+  `);
+  const insertContract = database.prepare(`
+    INSERT INTO contracts (
+      id, league_id, player_id, current_team_id, contract_type,
+      original_total_value_cents, original_term_years, aav_cents,
+      start_season_id, status, acquisition_source_type,
+      acquisition_source_id, auction_buyout_lock_expires_at_ms,
+      created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'release_qa_fixture', NULL, NULL, ?, ?, 1)
+  `);
+  const insertContractYear = database.prepare(`
+    INSERT INTO contract_years (
+      id, league_id, contract_id, season_id, year_number,
+      aav_cents, status, rollover_at_ms, created_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
+  `);
+  const contracts = {};
+
+  PLAYER_BLUEPRINTS.forEach((blueprint, index) => {
+    const player = players[blueprint.alias];
+    insertPosition.run(
+      fixtureId(`position:${league.alias}:${blueprint.alias}`),
+      league.leagueId,
+      player.id,
+      blueprint.position,
+      accounts[league.commissionerAlias].id,
+      FIXTURE_NOW_MS
+    );
+    if (blueprint.rosterCategory) {
+      insertOwnership.run(
+        fixtureId(`ownership:${league.alias}:${blueprint.alias}`),
+        league.leagueId,
+        league.seasons[0].id,
+        player.id,
+        league.teams[0].id,
+        blueprint.ownershipKind,
+        blueprint.rosterCategory,
+        blueprint.position,
+        blueprint.slotNumber,
+        FIXTURE_NOW_MS,
+        FIXTURE_NOW_MS
+      );
+    }
+    if (!blueprint.contract && blueprint.alias !== "boughtOutForward") return;
+
+    const contractId = fixtureId(`contract:${league.alias}:${blueprint.alias}`);
+    const termYears = blueprint.alias === "boughtOutForward"
+      ? 1
+      : blueprint.alias === "signedProspect" ? 3 : (index % 3) + 1;
+    const aavCents = blueprint.aavCents || 200 + (index % 3) * 25;
+    const status = blueprint.alias === "boughtOutForward" ? "eliminated" : "active";
+    insertContract.run(
+      contractId,
+      league.leagueId,
+      player.id,
+      league.teams[0].id,
+      blueprint.contractType || "normal",
+      aavCents * termYears,
+      termYears,
+      aavCents,
+      league.seasons[0].id,
+      status,
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS
+    );
+    for (let year = 1; year <= termYears; year += 1) {
+      insertContractYear.run(
+        fixtureId(`contract-year:${league.alias}:${blueprint.alias}:${year}`),
+        league.leagueId,
+        contractId,
+        league.seasons[year - 1].id,
+        year,
+        aavCents,
+        status === "eliminated" ? "eliminated" : year === 1 ? "current" : "future",
+        FIXTURE_NOW_MS
+      );
+    }
+    contracts[blueprint.alias] = Object.freeze({ id: contractId, aavCents, termYears });
+  });
+
+  const retentionId = fixtureId(`retention:${league.alias}`);
+  database.prepare(`
+    INSERT INTO retention_obligations (
+      id, league_id, contract_id, player_id, originating_team_id,
+      responsible_team_id, retained_aav_cents, creation_trade_id,
+      status, created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, ?, ?, 75, NULL, 'active', ?, ?, 1)
+  `).run(
+    retentionId,
+    league.leagueId,
+    contracts.activeForward1.id,
+    players.activeForward1.id,
+    league.teams[0].id,
+    league.teams[1].id,
+    FIXTURE_NOW_MS,
+    FIXTURE_NOW_MS
+  );
+  database.prepare(`
+    INSERT INTO retention_years (
+      id, league_id, retention_obligation_id, season_id,
+      retained_aav_cents, status, created_at_ms
+    ) VALUES (?, ?, ?, ?, 75, 'current', ?)
+  `).run(
+    fixtureId(`retention-year:${league.alias}`),
+    league.leagueId,
+    retentionId,
+    league.seasons[0].id,
+    FIXTURE_NOW_MS
+  );
+
+  const buyoutId = fixtureId(`buyout:${league.alias}`);
+  database.prepare(`
+    INSERT INTO buyout_obligations (
+      id, league_id, contract_id, player_id, originating_team_id,
+      responsible_team_id, annual_penalty_basis_cents,
+      buyout_transaction_id, status, created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, ?, ?, 150, ?, 'active', ?, ?, 1)
+  `).run(
+    buyoutId,
+    league.leagueId,
+    contracts.boughtOutForward.id,
+    players.boughtOutForward.id,
+    league.teams[0].id,
+    league.teams[0].id,
+    `release-qa-buyout-${league.alias}`,
+    FIXTURE_NOW_MS,
+    FIXTURE_NOW_MS
+  );
+  database.prepare(`
+    INSERT INTO buyout_years (
+      id, league_id, buyout_obligation_id, season_id,
+      penalty_cents, status, created_at_ms
+    ) VALUES (?, ?, ?, ?, 150, 'current', ?)
+  `).run(
+    fixtureId(`buyout-year:${league.alias}`),
+    league.leagueId,
+    buyoutId,
+    league.seasons[0].id,
+    FIXTURE_NOW_MS
+  );
+  return Object.freeze({ contracts, retentionId, buyoutId });
+}
+
+function insertAuctionAndTrades(database, league, leagueState, players, accounts) {
+  const managerAlias = league.alias === "leagueA"
+    ? "leagueAManagerOne"
+    : "leagueBManagerOne";
+  const managerMembershipId = league.memberships[managerAlias].id;
+  const auctionId = fixtureId(`auction:${league.alias}`);
+  database.prepare(`
+    INSERT INTO auctions (
+      id, league_id, season_id, player_id, status, opened_at_ms,
+      resolves_at_ms, opened_by_user_id, created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 1)
+  `).run(
+    auctionId,
+    league.leagueId,
+    league.seasons[0].id,
+    players.freeAgentForward.id,
+    FIXTURE_NOW_MS - 3_600_000,
+    FIXTURE_NOW_MS + 86_400_000,
+    accounts[managerAlias].id,
+    FIXTURE_NOW_MS - 3_600_000,
+    FIXTURE_NOW_MS - 3_600_000
+  );
+  database.prepare(`
+    INSERT INTO auction_bids (
+      id, league_id, season_id, auction_id, team_id,
+      submitted_by_user_id, total_value_cents, term_years,
+      lowest_offered_aav_cents, first_submitted_at_ms,
+      last_edited_at_ms, edit_count, status, idempotency_request_id, version
+    ) VALUES (?, ?, ?, ?, ?, ?, 900, 3, 300, ?, ?, 0, 'active', NULL, 1)
+  `).run(
+    fixtureId(`auction-bid:${league.alias}`),
+    league.leagueId,
+    league.seasons[0].id,
+    auctionId,
+    league.teams[0].id,
+    accounts[managerAlias].id,
+    FIXTURE_NOW_MS - 1_800_000,
+    FIXTURE_NOW_MS - 1_800_000
+  );
+
+  for (let tradeNumber = 1; tradeNumber <= 2; tradeNumber += 1) {
+    const tradeId = fixtureId(`trade:${league.alias}:${tradeNumber}`);
+    const destination = league.teams[tradeNumber].id;
+    database.prepare(`
+      INSERT INTO trades (
+        id, league_id, season_id, proposing_team_id, receiving_team_id,
+        proposing_user_id, creating_membership_id, creating_authority,
+        status, created_at_ms, expires_at_ms, effective_deadline_at_ms,
+        responded_at_ms, completed_at_ms, commissioner_completion_reference,
+        proposal_model_version, updated_at_ms, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'manager', 'proposed', ?, ?, ?,
+        NULL, NULL, NULL, 2, ?, 1)
+    `).run(
+      tradeId,
+      league.leagueId,
+      league.seasons[0].id,
+      league.teams[0].id,
+      destination,
+      accounts[managerAlias].id,
+      managerMembershipId,
+      FIXTURE_NOW_MS - tradeNumber * 1_000,
+      FIXTURE_NOW_MS + 7 * 86_400_000,
+      FIXTURE_NOW_MS + 6 * 86_400_000,
+      FIXTURE_NOW_MS - tradeNumber * 1_000
+    );
+    database.prepare(`
+      INSERT INTO trade_assets (
+        id, league_id, trade_id, direction, source_team_id,
+        destination_team_id, asset_type, contract_id, player_id,
+        draft_pick_id, retention_obligation_id, buyout_obligation_id,
+        future_consideration_id, requested_retention_contract_id,
+        requested_retention_cents, future_consideration_description,
+        proposal_snapshot_json, asset_model_version, sequence, created_at_ms
+      ) VALUES (?, ?, ?, 'proposing_to_receiving', ?, ?, 'contract', ?, NULL,
+        NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, 2, 1, ?)
+    `).run(
+      fixtureId(`trade-asset:${league.alias}:${tradeNumber}`),
+      league.leagueId,
+      tradeId,
+      league.teams[0].id,
+      destination,
+      leagueState.contracts.activeForward2.id,
+      JSON.stringify({
+        fixture: true,
+        sharedAssetAlias: "activeForward2Contract",
+        sourceTeamAlias: "team1",
+        destinationTeamAlias: `team${tradeNumber + 1}`,
+      }),
+      FIXTURE_NOW_MS - tradeNumber * 1_000
+    );
+  }
+}
+
+function insertMatchupAndReleaseSignals(database, league, accounts, statSourceId) {
+  const day = 86_400_000;
+  const priorWeekId = fixtureId(`matchup-week:${league.alias}:prior`);
+  const currentWeekId = fixtureId(`matchup-week:${league.alias}:current`);
+  const insertWeek = database.prepare(`
+    INSERT INTO matchup_weeks (
+      id, league_id, season_id, week_key, sequence,
+      starts_at_ms, baseline_at_ms, locks_at_ms, ends_at_ms,
+      rolls_over_at_ms, status, created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+  `);
+  insertWeek.run(
+    priorWeekId, league.leagueId, league.seasons[0].id, "week-01", 1,
+    FIXTURE_NOW_MS - 14 * day, FIXTURE_NOW_MS - 14 * day,
+    FIXTURE_NOW_MS - 13 * day, FIXTURE_NOW_MS - 8 * day,
+    FIXTURE_NOW_MS - 7 * day, "final", FIXTURE_NOW_MS - 14 * day,
+    FIXTURE_NOW_MS - 7 * day
+  );
+  insertWeek.run(
+    currentWeekId, league.leagueId, league.seasons[0].id, "week-02", 2,
+    FIXTURE_NOW_MS - day, FIXTURE_NOW_MS - day,
+    FIXTURE_NOW_MS - 12 * 3_600_000, FIXTURE_NOW_MS + 6 * day,
+    FIXTURE_NOW_MS + 7 * day, "live", FIXTURE_NOW_MS - day,
+    FIXTURE_NOW_MS
+  );
+
+  const priorMatchupId = fixtureId(`matchup:${league.alias}:prior`);
+  const insertMatchup = database.prepare(`
+    INSERT INTO matchups (
+      id, league_id, season_id, matchup_week_id,
+      home_team_id, away_team_id, home_team_name, away_team_name,
+      status, created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+  `);
+  const pairings = [[0, 1], [2, 3], [4, 5]];
+  pairings.forEach(([homeIndex, awayIndex], index) => {
+    const suffix = index === 0 ? "" : `:${index + 1}`;
+    insertMatchup.run(
+      fixtureId(`matchup:${league.alias}:prior${suffix}`),
+      league.leagueId,
+      league.seasons[0].id,
+      priorWeekId,
+      league.teams[homeIndex].id,
+      league.teams[awayIndex].id,
+      league.teams[homeIndex].name,
+      league.teams[awayIndex].name,
+      "final",
+      FIXTURE_NOW_MS - 14 * day,
+      FIXTURE_NOW_MS - 7 * day
+    );
+    insertMatchup.run(
+      fixtureId(`matchup:${league.alias}:current${suffix}`),
+      league.leagueId,
+      league.seasons[0].id,
+      currentWeekId,
+      league.teams[homeIndex].id,
+      league.teams[awayIndex].id,
+      league.teams[homeIndex].name,
+      league.teams[awayIndex].name,
+      "live",
+      FIXTURE_NOW_MS - day,
+      FIXTURE_NOW_MS
+    );
+  });
+
+  const refreshId = fixtureId(`stat-refresh:${league.alias}`);
+  database.prepare(`
+    INSERT INTO stat_refreshes (
+      id, stat_source_id, nhl_season_key, source_version, status,
+      started_at_ms, completed_at_ms, player_count, error_code,
+      metadata_json, version
+    ) VALUES (?, ?, '20262027', 'release-qa-v1', 'succeeded',
+      ?, ?, 26, NULL, ?, 1)
+  `).run(
+    refreshId,
+    statSourceId,
+    FIXTURE_NOW_MS - 7 * day,
+    FIXTURE_NOW_MS - 7 * day,
+    JSON.stringify({ fixture: true, leagueAlias: league.alias })
+  );
+  const snapshotId = fixtureId(`stat-snapshot:${league.alias}`);
+  database.prepare(`
+    INSERT INTO stat_snapshots (
+      id, stat_source_id, source_refresh_id, league_id, season_id,
+      matchup_week_id, intended_use, completeness_status,
+      freshness_status, captured_at_ms, committed, created_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, 'matchup_final', 'complete', 'fresh', ?, 1, ?)
+  `).run(
+    snapshotId, statSourceId, refreshId, league.leagueId,
+    league.seasons[0].id, priorWeekId,
+    FIXTURE_NOW_MS - 7 * day, FIXTURE_NOW_MS - 7 * day
+  );
+
+  const resultId = fixtureId(`matchup-result:${league.alias}`);
+  const resultVersionId = fixtureId(`matchup-result-version:${league.alias}`);
+  database.prepare(`
+    INSERT INTO matchup_results (
+      id, league_id, season_id, matchup_id, current_version_id,
+      status, finalized_at_ms, created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, NULL, 'official', ?, ?, ?, 1)
+  `).run(
+    resultId, league.leagueId, league.seasons[0].id, priorMatchupId,
+    FIXTURE_NOW_MS - 7 * day, FIXTURE_NOW_MS - 14 * day,
+    FIXTURE_NOW_MS - 7 * day
+  );
+  database.prepare(`
+    INSERT INTO matchup_result_versions (
+      id, league_id, season_id, matchup_result_id, version_number,
+      home_team_id, away_team_id, home_score_hundredths,
+      away_score_hundredths, outcome, source_snapshot_id,
+      source_type, actor_user_id, reason, supersedes_version_id, created_at_ms
+    ) VALUES (?, ?, ?, ?, 1, ?, ?, 1250, 975, 'home_win', ?,
+      'calculated', NULL, NULL, NULL, ?)
+  `).run(
+    resultVersionId, league.leagueId, league.seasons[0].id, resultId,
+    league.teams[0].id, league.teams[1].id, snapshotId,
+    FIXTURE_NOW_MS - 7 * day
+  );
+  database.prepare(`
+    UPDATE matchup_results SET current_version_id = ?, version = version + 1
+    WHERE id = ?
+  `).run(resultVersionId, resultId);
+
+  const standingsSnapshotId = fixtureId(`standings-snapshot:${league.alias}`);
+  database.prepare(`
+    INSERT INTO standings_snapshots (
+      id, league_id, season_id, snapshot_version, source_result_version,
+      status, calculated_at_ms, created_at_ms
+    ) VALUES (?, ?, ?, 1, 1, 'current', ?, ?)
+  `).run(
+    standingsSnapshotId, league.leagueId, league.seasons[0].id,
+    FIXTURE_NOW_MS - 7 * day, FIXTURE_NOW_MS - 7 * day
+  );
+  league.teams.forEach((team, index) => {
+    const wins = index === 0 ? 1 : 0;
+    const losses = index === 1 ? 1 : 0;
+    const pointsFor = index === 0 ? 1250 : index === 1 ? 975 : 0;
+    const pointsAgainst = index === 0 ? 975 : index === 1 ? 1250 : 0;
+    database.prepare(`
+      INSERT INTO standings_rows (
+        id, league_id, season_id, standings_snapshot_id, team_id, rank,
+        wins, losses, ties, standings_points,
+        fantasy_points_for_hundredths, fantasy_points_against_hundredths,
+        fantasy_point_differential_hundredths, created_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+    `).run(
+      fixtureId(`standings-row:${league.alias}:${index + 1}`),
+      league.leagueId,
+      league.seasons[0].id,
+      standingsSnapshotId,
+      team.id,
+      index + 1,
+      wins,
+      losses,
+      wins * 2,
+      pointsFor,
+      pointsAgainst,
+      pointsFor - pointsAgainst,
+      FIXTURE_NOW_MS - 7 * day
+    );
+  });
+
+  database.prepare(`
+    INSERT INTO league_activity (
+      id, league_id, season_id, event_type, actor_user_id,
+      actor_authority, team_id, player_id, related_type, related_id,
+      display_summary, reason, metadata_json, occurred_at_ms
+    ) VALUES (?, ?, ?, 'release_qa.fixture_ready', ?, 'commissioner',
+      ?, NULL, 'league', ?, 'Release QA fixture is ready.',
+      NULL, ?, ?)
+  `).run(
+    fixtureId(`activity:${league.alias}`),
+    league.leagueId,
+    league.seasons[0].id,
+    accounts[league.commissionerAlias].id,
+    league.teams[0].id,
+    league.leagueId,
+    JSON.stringify({ fixture: true, leagueAlias: league.alias }),
+    FIXTURE_NOW_MS
+  );
+  database.prepare(`
+    INSERT INTO notifications (
+      id, user_id, league_id, event_type, message_data_json,
+      related_feature, related_record_id, delivery_status,
+      created_at_ms, read_at_ms, delivered_at_ms, version
+    ) VALUES (?, ?, ?, 'release_qa.fixture_ready', ?, 'release_qa', ?,
+      'delivered', ?, NULL, ?, 1)
+  `).run(
+    fixtureId(`notification:${league.alias}`),
+    accounts[league.commissionerAlias].id,
+    league.leagueId,
+    JSON.stringify({ message: "Release QA fixture ready" }),
+    league.leagueId,
+    FIXTURE_NOW_MS,
+    FIXTURE_NOW_MS
+  );
+  database.prepare(`
+    INSERT INTO outbox_events (
+      id, league_id, event_type, aggregate_type, aggregate_id,
+      payload_json, status, attempt_count, available_at_ms,
+      published_at_ms, last_error_code, created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, 'release_qa.email_captured', 'league', ?, ?,
+      'published', 1, ?, ?, NULL, ?, ?, 1)
+  `).run(
+    fixtureId(`captured-email:${league.alias}`),
+    league.leagueId,
+    league.leagueId,
+    JSON.stringify({ fixture: true, template: "release_qa_ready" }),
+    FIXTURE_NOW_MS,
+    FIXTURE_NOW_MS,
+    FIXTURE_NOW_MS,
+    FIXTURE_NOW_MS
+  );
+}
+
+function seedFixture(database, passwordHash) {
+  const insertMetadata = database.prepare(`
+    INSERT INTO application_metadata (
+      metadata_key, metadata_value, created_at_ms, updated_at_ms
+    ) VALUES (?, ?, ?, ?)
+  `);
+  insertMetadata.run("database_created_at", FIXTURE_CREATED_AT, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
+  insertMetadata.run("database_id", FIXTURE_DATABASE_ID, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
+  insertMetadata.run("environment_id", FIXTURE_ENVIRONMENT_ID, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
+
+  const accounts = insertAccounts(database, passwordHash);
+  const players = insertGlobalPlayers(database);
+  const statSourceId = fixtureId("stat-source");
+  database.prepare(`
+    INSERT INTO stat_sources (
+      id, provider, status, created_at_ms, updated_at_ms, version
+    ) VALUES (?, 'release_qa_fixture', 'active', ?, ?, 1)
+  `).run(statSourceId, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
+
+  for (const leagueAlias of LEAGUE_ALIASES) {
+    const league = insertLeagueBase(database, leagueAlias, accounts);
+    const leagueState = insertLeaguePlayerState(database, league, players, accounts);
+    insertAuctionAndTrades(database, league, leagueState, players, accounts);
+    insertMatchupAndReleaseSignals(database, league, accounts, statSourceId);
+  }
+}
+
+async function createReleaseQaFixture({
+  databasePath,
+  environment,
+  migrationsDirectory,
+  password,
+  temporaryRoot,
+} = {}) {
+  const resolvedDatabasePath = assertSafeFixturePath({
+    databasePath,
+    environment,
+    temporaryRoot,
+  });
+  if (!path.isAbsolute(migrationsDirectory || "")) {
+    fail(
+      "RELEASE_QA_MIGRATIONS_REQUIRED",
+      "An absolute migrations directory is required."
+    );
+  }
+  if (typeof password !== "string" || password.length === 0) {
+    fail(
+      "RELEASE_QA_PASSWORD_REQUIRED",
+      "An explicit fixture password is required."
+    );
+  }
+
+  const passwordHash = await deterministicPasswordHasher().hash(password);
+  const connection = openDatabase({
+    databasePath: resolvedDatabasePath,
+    environment: "test",
+  });
+  try {
+    migrateDatabase({
+      database: connection.database,
+      migrationsDirectory,
+      applicationBuildId: FIXTURE_BUILD_ID,
+      now: () => FIXTURE_NOW_MS,
+    });
+    connection.database.transaction(() => {
+      seedFixture(connection.database, passwordHash);
+    }).immediate();
+  } catch (error) {
+    if (error instanceof ReleaseQaFixtureError) throw error;
+    fail(
+      "RELEASE_QA_FIXTURE_CREATION_FAILED",
+      "The release-QA fixture could not be created.",
+      error
+    );
+  } finally {
+    if (connection.database?.open) connection.database.close();
+  }
+
+  const manifest = verifyReleaseQaFixture({
+    databasePath: resolvedDatabasePath,
+  });
+  return Object.freeze({
+    databasePath: resolvedDatabasePath,
+    manifest,
+  });
+}
+
+module.exports = {
+  ReleaseQaFixtureError,
+  assertSafeFixturePath,
+  createReleaseQaFixture,
+};

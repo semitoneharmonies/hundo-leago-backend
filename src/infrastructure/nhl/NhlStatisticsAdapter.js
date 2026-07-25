@@ -1,4 +1,5 @@
 const DEFAULT_USER_AGENT = "hundo-leago/1.0";
+const DEFAULT_ORIGIN = "https://api.nhle.com";
 
 function createNhlStatisticsAdapter({
   fetchImpl = fetch,
@@ -6,11 +7,26 @@ function createNhlStatisticsAdapter({
   gameTypeId = 2,
   pageSize = 100,
   userAgent = DEFAULT_USER_AGENT,
+  origin = DEFAULT_ORIGIN,
 } = {}) {
   if (!seasonId) {
     throw new TypeError(
       "createNhlStatisticsAdapter requires a seasonId"
     );
+  }
+  let parsedOrigin;
+  try {
+    parsedOrigin = new URL(origin);
+  } catch {
+    throw new TypeError("createNhlStatisticsAdapter requires an HTTPS origin");
+  }
+  if (
+    parsedOrigin.protocol !== "https:" ||
+    parsedOrigin.origin !== origin ||
+    parsedOrigin.username ||
+    parsedOrigin.password
+  ) {
+    throw new TypeError("createNhlStatisticsAdapter requires an HTTPS origin");
   }
 
   function buildUrl(start) {
@@ -27,7 +43,7 @@ function createNhlStatisticsAdapter({
       encodeURIComponent("gamesPlayed>=1");
 
     return (
-      "https://api.nhle.com/stats/rest/en/skater/summary" +
+      `${origin}/stats/rest/en/skater/summary` +
       `?isAggregate=false&isGame=false&sort=${sort}` +
       `&start=${start}&limit=${pageSize}` +
       `&factCayenneExp=${factCayenneExpression}` +
@@ -77,5 +93,6 @@ function createNhlStatisticsAdapter({
 
 module.exports = {
   DEFAULT_USER_AGENT,
+  DEFAULT_ORIGIN,
   createNhlStatisticsAdapter,
 };

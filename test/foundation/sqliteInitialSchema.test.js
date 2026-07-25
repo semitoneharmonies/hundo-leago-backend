@@ -90,6 +90,7 @@ const EXPECTED_TABLES = [
   "stat_snapshots",
   "stat_sources",
   "team_events",
+  "team_logo_objects",
   "team_manager_assignments",
   "teams",
   "trade_assets",
@@ -436,6 +437,8 @@ function matchupValues(ids, overrides = {}) {
     matchup_week_id: uuid(140),
     home_team_id: ids.teamA1,
     away_team_id: ids.teamA2,
+    home_team_name: "Team A1",
+    away_team_name: "Team A2",
     status: "scheduled",
     created_at_ms: 1_000,
     updated_at_ms: 1_000,
@@ -499,17 +502,116 @@ describe("M2-04 initial relational schema", () => {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     });
 
-    assert.equal(migrations.length, 1);
+    assert.equal(migrations.length, 18);
     assert.equal(migrations[0].id, 1);
     assert.equal(migrations[0].fileName, "0001_initial.sql");
+    assert.equal(migrations[1].id, 2);
+    assert.equal(
+      migrations[1].fileName,
+      "0002_add_pending_credential_setup_user_status.sql"
+    );
+    assert.equal(migrations[2].id, 3);
+    assert.equal(
+      migrations[2].fileName,
+      "0003_add_league_invitation_team_workflow.sql"
+    );
+    assert.equal(migrations[3].id, 4);
+    assert.equal(
+      migrations[3].fileName,
+      "0004_add_manager_transfer_intent.sql"
+    );
+    assert.equal(migrations[4].id, 5);
+    assert.equal(
+      migrations[4].fileName,
+      "0005_add_team_logo_objects.sql"
+    );
+    assert.equal(migrations[5].id, 6);
+    assert.equal(
+      migrations[5].fileName,
+      "0006_allow_rounded_contract_aav.sql"
+    );
+    assert.equal(migrations[6].id, 7);
+    assert.equal(
+      migrations[6].fileName,
+      "0007_preserve_released_ownership_history.sql"
+    );
+    assert.equal(migrations[7].id, 8);
+    assert.equal(
+      migrations[7].fileName,
+      "0008_allow_optional_commissioner_correction_reason.sql"
+    );
+    assert.equal(migrations[8].id, 9);
+    assert.equal(
+      migrations[8].fileName,
+      "0009_add_free_agent_draft_completion.sql"
+    );
+    assert.equal(migrations[9].id, 10);
+    assert.equal(
+      migrations[9].fileName,
+      "0010_add_auction_bid_lowest_offered_aav.sql"
+    );
+    assert.equal(migrations[10].id, 11);
+    assert.equal(
+      migrations[10].fileName,
+      "0011_add_atomic_auction_completion.sql"
+    );
+    assert.equal(migrations[11].id, 12);
+    assert.equal(
+      migrations[11].fileName,
+      "0012_add_atomic_trade_proposal_assets.sql"
+    );
+    assert.equal(migrations[12].id, 13);
+    assert.equal(
+      migrations[12].fileName,
+      "0013_add_atomic_trade_execution.sql"
+    );
+    assert.equal(migrations[13].id, 14);
+    assert.equal(
+      migrations[13].fileName,
+      "0014_add_trade_reversal_and_correction_required.sql"
+    );
+    assert.equal(migrations[14].id, 15);
+    assert.equal(
+      migrations[14].fileName,
+      "0015_add_matchup_schedule_participants.sql"
+    );
+    assert.equal(migrations[15].id, 16);
+    assert.equal(
+      migrations[15].fileName,
+      "0016_update_matchup_lifecycle_statuses.sql"
+    );
+    assert.equal(migrations[16].id, 17);
+    assert.equal(
+      migrations[16].fileName,
+      "0017_add_matchup_lock_legality_evidence.sql"
+    );
+    assert.equal(migrations[17].id, 18);
+    assert.equal(
+      migrations[17].fileName,
+      "0018_add_job_run_lease_tokens_and_retry_time.sql"
+    );
     assert.equal(migrationResult.status, "exact");
-    assert.equal(database.pragma("user_version", { simple: true }), 1);
+    assert.equal(database.pragma("user_version", { simple: true }), 18);
 
     const ledgerBefore = database
       .prepare("SELECT * FROM schema_migrations")
       .all();
-    assert.equal(ledgerBefore.length, 1);
+    assert.equal(ledgerBefore.length, 18);
     assert.equal(ledgerBefore[0].checksum, migrations[0].checksum);
+    assert.equal(ledgerBefore[1].checksum, migrations[1].checksum);
+    assert.equal(ledgerBefore[2].checksum, migrations[2].checksum);
+    assert.equal(ledgerBefore[3].checksum, migrations[3].checksum);
+    assert.equal(ledgerBefore[4].checksum, migrations[4].checksum);
+    assert.equal(ledgerBefore[5].checksum, migrations[5].checksum);
+    assert.equal(ledgerBefore[6].checksum, migrations[6].checksum);
+    assert.equal(ledgerBefore[7].checksum, migrations[7].checksum);
+    assert.equal(ledgerBefore[8].checksum, migrations[8].checksum);
+    assert.equal(ledgerBefore[9].checksum, migrations[9].checksum);
+    assert.equal(ledgerBefore[10].checksum, migrations[10].checksum);
+    assert.equal(ledgerBefore[11].checksum, migrations[11].checksum);
+    assert.equal(ledgerBefore[12].checksum, migrations[12].checksum);
+    assert.equal(ledgerBefore[13].checksum, migrations[13].checksum);
+    assert.equal(ledgerBefore[14].checksum, migrations[14].checksum);
 
     const rerun = migrateDatabase({
       database,
@@ -559,7 +661,7 @@ describe("M2-04 initial relational schema", () => {
         },
         {
           metadata_key: "data_model_version",
-          metadata_value: "1",
+          metadata_value: "18",
         },
       ]
     );
@@ -767,6 +869,31 @@ describe("M2-04 initial relational schema", () => {
       "hundo-leago-m2-04-cross-league-"
     );
     const ids = seedBase(database);
+
+    insert(
+      database,
+      "player_ownerships",
+      ownershipValues(ids, { id: uuid(218) })
+    );
+    insert(
+      database,
+      "player_ownerships",
+      ownershipValues(ids, {
+        id: uuid(219),
+        league_id: ids.leagueB,
+        season_id: ids.seasonB,
+        player_id: ids.player1,
+        team_id: ids.teamB1,
+      })
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM player_ownerships WHERE player_id = ?"
+        )
+        .get(ids.player1).count,
+      2
+    );
 
     assertConstraint(
       () => {
@@ -1007,7 +1134,7 @@ describe("M2-04 initial relational schema", () => {
       {
         id: uuid(238),
         player_id: ids.player3,
-        original_total_value_cents: 2_999,
+        original_total_value_cents: 2_998,
       },
       {
         id: uuid(239),
@@ -1197,6 +1324,7 @@ describe("M2-04 initial relational schema", () => {
       submitted_by_user_id: ids.userA,
       total_value_cents: 3_000,
       term_years: 3,
+      lowest_offered_aav_cents: 1_000,
       first_submitted_at_ms: 1_100,
       last_edited_at_ms: 1_100,
       edit_count: 0,
@@ -1392,6 +1520,7 @@ describe("M2-04 initial relational schema", () => {
           season_id: ids.seasonA,
           matchup_week_id: uuid(140),
           team_id: ids.teamA1,
+          team_display_name: "Team A1",
           created_at_ms: 1_000,
         });
       },
@@ -1403,6 +1532,7 @@ describe("M2-04 initial relational schema", () => {
       season_id: ids.seasonA,
       matchup_week_id: uuid(140),
       team_id: ids.teamA3,
+      team_display_name: "Team A3",
       created_at_ms: 1_000,
     });
     assertConstraint(

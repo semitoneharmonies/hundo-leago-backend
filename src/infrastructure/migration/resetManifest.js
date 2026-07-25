@@ -89,7 +89,12 @@ const RESET_OMISSION_POLICY = deepFreeze([
   ),
   omissionFamily(
     "season_1_teams",
-    ["teams", "team_manager_assignments", "team_events"],
+    [
+      "teams",
+      "team_manager_assignments",
+      "team_events",
+      "team_logo_objects",
+    ],
     "Existing Season 1 team records are within the approved clean Season 2 reset scope."
   ),
   omissionFamily(

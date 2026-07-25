@@ -305,9 +305,9 @@ function verifyAllApplicationTableCounts(
       },
       {
         metadata_key: "data_model_version",
-        metadata_value: "1",
+        metadata_value: "18",
         created_at_ms: 0,
-        updated_at_ms: 0,
+        updated_at_ms: 1,
       },
     ],
     STAGING_VERIFICATION_ERROR_CODES.databaseMismatch,

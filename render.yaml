@@ -10,7 +10,7 @@
       "numInstances": 1,
       "buildCommand": "npm ci && npm run check && npm test",
       "startCommand": "npm start",
-      "healthCheckPath": "/health",
+      "healthCheckPath": "/api/v1/health/ready",
       "autoDeployTrigger": "off",
       "disk": {
         "name": "hundo-leago-staging-disk",
@@ -31,8 +31,32 @@
           "sync": false
         },
         {
+          "key": "FRONTEND_BUILD_ID",
+          "sync": false
+        },
+        {
+          "key": "APP_ENVIRONMENT_ID",
+          "value": "hundo-leago-staging-environment-v1"
+        },
+        {
+          "key": "DATABASE_ID",
+          "sync": false
+        },
+        {
           "key": "DATABASE_PATH",
           "value": "/opt/render/project/data/hundo-staging/sqlite/hundo-leago.sqlite3"
+        },
+        {
+          "key": "PERSISTENT_DATA_ROOT",
+          "value": "/opt/render/project/data/hundo-staging"
+        },
+        {
+          "key": "CURRENT_SEASON_LABEL",
+          "value": "2026"
+        },
+        {
+          "key": "CURRENT_NHL_SEASON_KEY",
+          "value": "20262027"
         },
         {
           "key": "PUBLIC_FRONTEND_ORIGIN",
@@ -49,6 +73,10 @@
         {
           "key": "SCHEDULED_JOBS_ENABLED",
           "value": "false"
+        },
+        {
+          "key": "LEAGUE_WRITE_MODE",
+          "value": "closed"
         },
         {
           "key": "DEBUG_ROUTES_ENABLED",
@@ -68,6 +96,10 @@
         },
         {
           "key": "AUDIT_METADATA_SECRET",
+          "generateValue": true
+        },
+        {
+          "key": "ACTION_TOKEN_DELIVERY_KEY",
           "generateValue": true
         },
         {
@@ -96,7 +128,7 @@
         },
         {
           "key": "BACKUP_OBJECT_PREFIX",
-          "value": "hundo-leago/staging"
+          "value": "hundo-leago/staging/"
         },
         {
           "key": "BACKUP_OBJECT_ACCESS_KEY_ID",
@@ -112,7 +144,7 @@
         },
         {
           "key": "BACKUP_ENCRYPTION_KEY",
-          "generateValue": true
+          "sync": false
         },
         {
           "key": "BACKUP_SCHEDULE_ENABLED",

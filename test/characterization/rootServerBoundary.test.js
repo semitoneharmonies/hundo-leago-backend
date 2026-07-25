@@ -161,7 +161,7 @@ describe(
 );
 
 describe("root server boundary", () => {
-  test("contains startup and shutdown wiring only", async () => {
+  test("contains target startup failure wiring only", async () => {
     const source = await fs.promises.readFile(
       path.join(__dirname, "..", "..", "server.js"),
       "utf8"
@@ -172,11 +172,9 @@ describe("root server boundary", () => {
       lines.length <= 80,
       `server.js still has ${lines.length} lines`
     );
-    assert.match(source, /createCompatibilityRuntime/);
-    assert.match(source, /startBackgroundJobs/);
-    assert.match(source, /installSignalHandlers/);
-    assert.match(source, /listen\(/);
-    assert.match(source, /shutdown\(\)/);
+    assert.match(source, /startTargetProcess/);
+    assert.match(source, /reportTargetStartupFailure/);
+    assert.doesNotMatch(source, /createCompatibilityRuntime/);
     assert.doesNotMatch(
       source,
       /\b(?:app|router)\.(?:get|post|put|patch|delete|use)\(/
@@ -189,5 +187,17 @@ describe("root server boundary", () => {
       source,
       /\b(?:fs|path)\./
     );
+  });
+
+  test("keeps legacy JSON startup explicit in the compatibility entrypoint", async () => {
+    const source = await fs.promises.readFile(
+      path.join(__dirname, "..", "..", "server-compatibility.js"),
+      "utf8"
+    );
+    assert.match(source, /createCompatibilityRuntime/);
+    assert.match(source, /startBackgroundJobs/);
+    assert.match(source, /installSignalHandlers/);
+    assert.match(source, /listen\(/);
+    assert.match(source, /shutdown\(\)/);
   });
 });

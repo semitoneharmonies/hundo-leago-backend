@@ -346,6 +346,10 @@ const DEFINITIONS = [
     { versioned: true }
   ),
   repositoryDefinition(
+    "team_logo_objects",
+    REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
     "teams",
     REPOSITORY_SCOPES.requiredLeague,
     { versioned: true }
