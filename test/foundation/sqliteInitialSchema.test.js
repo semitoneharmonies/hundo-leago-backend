@@ -504,7 +504,7 @@ describe("M2-04 initial relational schema", () => {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     });
 
-    assert.equal(migrations.length, 19);
+    assert.equal(migrations.length, 20);
     assert.equal(migrations[0].id, 1);
     assert.equal(migrations[0].fileName, "0001_initial.sql");
     assert.equal(migrations[1].id, 2);
@@ -597,13 +597,18 @@ describe("M2-04 initial relational schema", () => {
       migrations[18].fileName,
       "0019_add_roster_display_order.sql"
     );
+    assert.equal(migrations[19].id, 20);
+    assert.equal(
+      migrations[19].fileName,
+      "0020_add_team_tertiary_colour_and_trade_block.sql"
+    );
     assert.equal(migrationResult.status, "exact");
-    assert.equal(database.pragma("user_version", { simple: true }), 19);
+    assert.equal(database.pragma("user_version", { simple: true }), 20);
 
     const ledgerBefore = database
       .prepare("SELECT * FROM schema_migrations")
       .all();
-    assert.equal(ledgerBefore.length, 19);
+    assert.equal(ledgerBefore.length, 20);
     assert.equal(ledgerBefore[0].checksum, migrations[0].checksum);
     assert.equal(ledgerBefore[1].checksum, migrations[1].checksum);
     assert.equal(ledgerBefore[2].checksum, migrations[2].checksum);
@@ -668,7 +673,7 @@ describe("M2-04 initial relational schema", () => {
         },
         {
           metadata_key: "data_model_version",
-          metadata_value: "19",
+          metadata_value: "20",
         },
       ]
     );

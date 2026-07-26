@@ -520,6 +520,7 @@ describe("M3-18 team-profile policy", () => {
     assert.deepEqual(result.colours, {
       primaryColour: "#102030",
       secondaryColour: "#abcdef",
+      tertiaryColour: null,
     });
     assert.equal(result.logo.byteLength, bytes.length);
     assert.equal(result.logo.width, 32);

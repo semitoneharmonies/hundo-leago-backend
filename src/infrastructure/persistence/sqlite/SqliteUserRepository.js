@@ -58,6 +58,7 @@ function createSqliteUserRepository({
 
   let findByEmailStatement;
   let findByDisplayNameStatement;
+  let listSafeUsersStatement;
   try {
     findByEmailStatement = database.prepare(
       `SELECT ${USER_SELECT_SQL} FROM users ` +
@@ -66,6 +67,11 @@ function createSqliteUserRepository({
     findByDisplayNameStatement = database.prepare(
       `SELECT ${USER_SELECT_SQL} FROM users ` +
         "WHERE display_name_normalized = @value"
+    );
+    listSafeUsersStatement = database.prepare(
+      `SELECT ${USER_SELECT_SQL} FROM users ` +
+        "WHERE status IN ('active', 'pending_credential_setup') " +
+        "ORDER BY display_name_normalized ASC, id ASC"
     );
   } catch (error) {
     throw mapRepositoryError(error, {
@@ -116,6 +122,20 @@ function createSqliteUserRepository({
         value,
         "findByNormalizedDisplayName"
       );
+    },
+    listSafeUsers() {
+      try {
+        return Object.freeze(
+          listSafeUsersStatement
+            .all()
+            .map((row) => Object.freeze({ ...row }))
+        );
+      } catch (error) {
+        throw mapRepositoryError(error, {
+          operation: "listSafeUsers",
+          tableName: "users",
+        });
+      }
     },
     insert(record) {
       return freezeRow(records.insert(record));

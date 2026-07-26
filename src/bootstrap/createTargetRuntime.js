@@ -176,6 +176,9 @@ const {
   createLeagueReadService,
 } = require("../application/services/leagues/createLeagueReadService");
 const {
+  createLeagueMembershipService,
+} = require("../application/services/leagues/createLeagueMembershipService");
+const {
   createPublicRosterService,
 } = require("../application/services/leagues/createPublicRosterService");
 const {
@@ -193,6 +196,9 @@ const {
 const {
   createTeamWorkspaceService,
 } = require("../application/services/leagues/createTeamWorkspaceService");
+const {
+  createRosterActionService,
+} = require("../application/services/leagues/createRosterActionService");
 const {
   assertMigrationCompatibility,
   discoverMigrations,
@@ -221,6 +227,9 @@ const {
 const {
   createSqliteAuctionResolutionRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteAuctionResolutionRepository");
+const {
+  createSqliteBuyoutRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteBuyoutRepository");
 const {
   createSqliteAuthenticationRateLimitRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteAuthenticationRateLimitRepository");
@@ -324,6 +333,9 @@ const {
   createSqliteTeamWorkspaceRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteTeamWorkspaceRepository");
 const {
+  createSqliteRosterMovementRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteRosterMovementRepository");
+const {
   createSqliteTradeProposalRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteTradeProposalRepository");
 const {
@@ -381,6 +393,9 @@ const {
   createLeagueReadRouter,
 } = require("../transport/http/createLeagueReadRouter");
 const {
+  createLeagueMembershipRouter,
+} = require("../transport/http/createLeagueMembershipRouter");
+const {
   createMatchupRouter,
 } = require("../transport/http/createMatchupRouter");
 const {
@@ -392,6 +407,9 @@ const {
 const {
   createPublicRosterRouter,
 } = require("../transport/http/createPublicRosterRouter");
+const {
+  createRosterActionRouter,
+} = require("../transport/http/createRosterActionRouter");
 const {
   createTargetRequestSecurity,
 } = require("../transport/http/createTargetRequestSecurity");
@@ -438,6 +456,7 @@ const TARGET_ENDPOINTS = Object.freeze([
   ["GET", "/api/v1/leagues/:leagueId/players", "player"],
   ["GET", "/api/v1/leagues/:leagueId/players/:playerId", "player"],
   ["POST", "/api/v1/admin/leagues", "platformAdministration"],
+  ["GET", "/api/v1/admin/users", "platformAdministration"],
   [
     "POST",
     "/api/v1/admin/leagues/:leagueId/commissioner-assignments",
@@ -462,6 +481,12 @@ const TARGET_ENDPOINTS = Object.freeze([
   ["GET", "/api/v1/leagues/:leagueId", "leagueRead"],
   ["GET", "/api/v1/leagues/:leagueId/settings", "leagueRead"],
   ["GET", "/api/v1/leagues/:leagueId/memberships", "leagueRead"],
+  ["GET", "/api/v1/leagues/:leagueId/invitable-users", "leagueRead"],
+  [
+    "DELETE",
+    "/api/v1/leagues/:leagueId/memberships/:membershipId",
+    "leagueMembership",
+  ],
   ["GET", "/api/v1/leagues/:leagueId/seasons", "leagueRead"],
   [
     "GET",
@@ -642,6 +667,21 @@ const TARGET_ENDPOINTS = Object.freeze([
     "team",
   ],
   [
+    "PUT",
+    "/api/v1/leagues/:leagueId/teams/:teamId/roster/:ownershipId/trade-block",
+    "team",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/teams/:teamId/roster/:ownershipId/move-to-ir",
+    "rosterAction",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/teams/:teamId/contracts/:contractId/buyout",
+    "rosterAction",
+  ],
+  [
     "GET",
     "/api/v1/public/leagues/:leagueId/teams/:teamId/roster",
     "publicRoster",
@@ -800,6 +840,7 @@ function createTargetRepositories({ database } = {}) {
     auctionResolutions: createSqliteAuctionResolutionRepository({ database }),
     auctions: createSqliteAuctionRepository({ database }),
     audit: createSqliteSecurityAuditRepository({ database }),
+    buyouts: createSqliteBuyoutRepository({ database }),
     commissionerAssignments: createSqliteCommissionerAssignmentRepository({
       database,
     }),
@@ -828,6 +869,7 @@ function createTargetRepositories({ database } = {}) {
     platformRoles: createSqlitePlatformRoleRepository({ database }),
     publicRoster: createSqlitePublicRosterRepository({ database }),
     rateLimits: createSqliteAuthenticationRateLimitRepository({ database }),
+    rosterMovements: createSqliteRosterMovementRepository({ database }),
     sessions: createSqliteSessionRepository({ database }),
     statistics: createSqliteStatisticsRepository({ database }),
     teamAuthority: createSqliteTeamAuthorityRepository({ database }),
@@ -1330,6 +1372,7 @@ function createTargetServices({
       repositoryContext: repositories.context,
       platformAuthorization,
       leagueCreationRepository: repositories.leagueCreation,
+      userRepository: repositories.users,
       auditRepository: repositories.audit,
       clock,
       secureRandom,
@@ -1356,6 +1399,12 @@ function createTargetServices({
       leagueAccessRepository: repositories.leagueAccess,
       platformAuthorization,
     }),
+    membership: createLeagueMembershipService({
+      leagueAuthorization,
+      leagueAccessRepository: repositories.leagueAccess,
+      clock,
+      secureRandom,
+    }),
     invitation: createLeagueInvitationService({
       repositoryContext: repositories.context,
       leagueAuthorization,
@@ -1373,6 +1422,15 @@ function createTargetServices({
       leagueAuthorization,
       teamAuthorization,
       repository: repositories.teamWorkspace,
+      clock,
+      secureRandom,
+    }),
+    rosterAction: createRosterActionService({
+      leagueAuthorization,
+      teamAuthorization,
+      workspaceRepository: repositories.teamWorkspace,
+      rosterMovementRepository: repositories.rosterMovements,
+      buyoutRepository: repositories.buyouts,
       clock,
       secureRandom,
     }),
@@ -1507,6 +1565,10 @@ function createTargetRouters({
       requestSecurity,
       leagueReadService: services.league.read,
     }),
+    leagueMembership: createLeagueMembershipRouter({
+      requestSecurity,
+      leagueMembershipService: services.league.membership,
+    }),
     matchup: createMatchupRouter({
       requestSecurity,
       matchupService: services.league.matchup,
@@ -1523,6 +1585,10 @@ function createTargetRouters({
     publicRoster: createPublicRosterRouter({
       requestSecurity,
       publicRosterService: services.league.publicRoster,
+    }),
+    rosterAction: createRosterActionRouter({
+      requestSecurity,
+      rosterActionService: services.league.rosterAction,
     }),
     team: createTeamRouter({
       ...sharedAudit,

@@ -191,6 +191,7 @@ function createPublicRosterProjection(input) {
     "name",
     "primaryColour",
     "secondaryColour",
+    "tertiaryColour",
     "logoReference",
   ]);
   if (!Array.isArray(input.players)) fail(PUBLIC_ROSTER_CODES.playerInvalid);
@@ -236,6 +237,7 @@ function createPublicRosterProjection(input) {
       name: text(input.team.name),
       primaryColour: input.team.primaryColour,
       secondaryColour: input.team.secondaryColour,
+      tertiaryColour: input.team.tertiaryColour,
       logoReference,
     }),
     players,

@@ -42,6 +42,8 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
   let updateOrderSetStatement;
   let deleteOrderEntriesStatement;
   let insertOrderEntryStatement;
+  let tradeBlockOwnershipStatement;
+  let updateTradeBlockStatement;
 
   try {
     scopeStatement = database.prepare(`
@@ -55,6 +57,7 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
         team.name AS team_name,
         team.primary_colour,
         team.secondary_colour,
+        team.tertiary_colour,
         team.version AS team_version,
         CASE WHEN logo.id IS NULL THEN 0 ELSE 1 END AS has_logo
       FROM leagues AS league
@@ -85,6 +88,18 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
           ) AS recency
         FROM player_stat_totals AS totals
         WHERE totals.nhl_season_key = @nhlSeasonKey
+      ),
+      latest_source AS (
+        SELECT
+          source.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY source.player_id
+            ORDER BY source.effective_at_ms DESC,
+              source.created_at_ms DESC,
+              source.id DESC
+          ) AS recency
+        FROM player_source_state AS source
+        WHERE source.ended_at_ms IS NULL
       )
       SELECT
         ownership.id AS ownership_id,
@@ -94,6 +109,7 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
         ownership.position_group,
         ownership.roster_category,
         ownership.slot_number,
+        ownership.trade_blocked,
         player.full_name,
         player.birth_date,
         contract.id AS contract_id,
@@ -114,6 +130,7 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
         stats.assists,
         stats.nhl_points,
         stats.fantasy_points_hundredths,
+        source.source_payload_json,
         display_entry.display_order
       FROM player_ownerships AS ownership
       INNER JOIN players AS player ON player.id = ownership.player_id
@@ -125,6 +142,9 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
       LEFT JOIN latest_stats AS stats
         ON stats.player_id = ownership.player_id
        AND stats.recency = 1
+      LEFT JOIN latest_source AS source
+        ON source.player_id = ownership.player_id
+       AND source.recency = 1
       LEFT JOIN roster_display_order_sets AS display_set
         ON display_set.league_id = ownership.league_id
        AND display_set.season_id = ownership.season_id
@@ -286,6 +306,26 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
         @id, @leagueId, @orderSetId, @ownershipId,
         @positionGroup, @displayOrder, @occurredAtMs
       )
+    `);
+    tradeBlockOwnershipStatement = database.prepare(`
+      SELECT id, league_id, season_id, team_id, player_id,
+        trade_blocked, version
+      FROM player_ownerships
+      WHERE id = @ownershipId
+        AND league_id = @leagueId
+        AND team_id = @teamId
+      LIMIT 2
+    `);
+    updateTradeBlockStatement = database.prepare(`
+      UPDATE player_ownerships
+      SET trade_blocked = @tradeBlocked,
+        updated_at_ms = @occurredAtMs,
+        version = version + 1
+      WHERE id = @ownershipId
+        AND league_id = @leagueId
+        AND team_id = @teamId
+        AND version = @expectedVersion
+        AND trade_blocked <> @tradeBlocked
     `);
   } catch (error) {
     throw mapRepositoryError(error, {
@@ -449,6 +489,64 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
         throw mapRepositoryError(error, {
           operation: "saveRosterDisplayOrder",
           tableName: "roster_display_order_sets",
+        });
+      }
+    },
+    setTradeBlock(command) {
+      const parameters = {
+        leagueId: stableId(command.leagueId),
+        teamId: stableId(command.teamId),
+        ownershipId: stableId(command.ownershipId),
+        expectedVersion: command.expectedVersion,
+        tradeBlocked: command.blocked ? 1 : 0,
+        occurredAtMs: command.occurredAtMs,
+      };
+      if (
+        !Number.isSafeInteger(parameters.expectedVersion) ||
+        parameters.expectedVersion < 1 ||
+        !Number.isSafeInteger(parameters.occurredAtMs) ||
+        parameters.occurredAtMs < 0
+      ) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.argumentInvalid,
+          "A valid trade-block update is required."
+        );
+      }
+      try {
+        const beforeRows = tradeBlockOwnershipStatement.all(parameters);
+        if (beforeRows.length > 1) {
+          throw repositoryError(
+            REPOSITORY_ERROR_CODES.schemaIncompatible,
+            "A roster ownership is not unique."
+          );
+        }
+        if (!beforeRows[0]) {
+          throw repositoryError(
+            REPOSITORY_ERROR_CODES.recordNotFound,
+            "The roster ownership does not exist."
+          );
+        }
+        if (beforeRows[0].version !== parameters.expectedVersion) {
+          throw repositoryError(
+            REPOSITORY_ERROR_CODES.versionConflict,
+            "The roster ownership changed before this request completed."
+          );
+        }
+        if (beforeRows[0].trade_blocked === parameters.tradeBlocked) {
+          return freezeRow(beforeRows[0]);
+        }
+        const result = updateTradeBlockStatement.run(parameters);
+        if (result.changes !== 1) {
+          throw repositoryError(
+            REPOSITORY_ERROR_CODES.versionConflict,
+            "The roster ownership changed before this request completed."
+          );
+        }
+        return freezeRow(tradeBlockOwnershipStatement.get(parameters));
+      } catch (error) {
+        throw mapRepositoryError(error, {
+          operation: "setRosterTradeBlock",
+          tableName: "player_ownerships",
         });
       }
     },

@@ -24,6 +24,7 @@ function roster() {
       name: "Team",
       primaryColour: null,
       secondaryColour: null,
+      tertiaryColour: null,
       logoReference: null,
     }),
     players: Object.freeze([]),

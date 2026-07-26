@@ -63,6 +63,19 @@ function statistics(row) {
       });
 }
 
+function injuredReserveEligible(sourcePayloadJson) {
+  if (typeof sourcePayloadJson !== "string") return false;
+  try {
+    const payload = JSON.parse(sourcePayloadJson);
+    const status = String(payload?.Status || payload?.status || "")
+      .trim()
+      .toLowerCase();
+    return status === "injured reserve";
+  } catch {
+    return false;
+  }
+}
+
 function player(row, nowMs) {
   return Object.freeze({
     ownershipId: row.ownership_id,
@@ -74,6 +87,8 @@ function player(row, nowMs) {
     ownershipKind: row.ownership_kind,
     slotNumber: row.slot_number,
     displayOrder: row.display_order,
+    onTradeBlock: row.trade_blocked === 1,
+    injuredReserveEligible: injuredReserveEligible(row.source_payload_json),
     age: age(row.birth_date, nowMs),
     contract:
       row.contract_id === null
@@ -107,6 +122,7 @@ function safeWorkspace(record, nowMs, canManage) {
       name: scope.team_name,
       primaryColour: scope.primary_colour,
       secondaryColour: scope.secondary_colour,
+      tertiaryColour: scope.tertiary_colour,
       logoReference:
         scope.has_logo === 1
           ? `/api/v1/leagues/${scope.league_id}/teams/${scope.team_id}/logo`
@@ -252,6 +268,24 @@ function normalizeOrderInput(input) {
   });
 }
 
+function normalizeTradeBlockInput(input) {
+  if (
+    !input ||
+    typeof input !== "object" ||
+    Array.isArray(input) ||
+    Object.keys(input).sort().join(",") !== "blocked,expectedVersion" ||
+    typeof input.blocked !== "boolean" ||
+    !Number.isSafeInteger(input.expectedVersion) ||
+    input.expectedVersion < 1
+  ) {
+    failInput();
+  }
+  return Object.freeze({
+    blocked: input.blocked,
+    expectedVersion: input.expectedVersion,
+  });
+}
+
 function createTeamWorkspaceService({
   leagueAuthorization,
   teamAuthorization,
@@ -267,7 +301,7 @@ function createTeamWorkspaceService({
   for (const method of ["requireManager", "requireTeamVisibility"]) {
     assertMethod(teamAuthorization, method, "team authorization");
   }
-  for (const method of ["read", "saveOrder"]) {
+  for (const method of ["read", "saveOrder", "setTradeBlock"]) {
     assertMethod(repository, method, "a team-workspace repository");
   }
   assertMethod(clock, "nowMs", "a clock");
@@ -322,7 +356,37 @@ function createTeamWorkspaceService({
     });
   }
 
-  return Object.freeze({ read, saveOrder });
+  function setTradeBlock({
+    authenticated,
+    leagueId,
+    teamId,
+    ownershipId,
+    input,
+  } = {}) {
+    const authority = managerAuthority(authenticated, leagueId, teamId);
+    if (!CANONICAL_UUID_PATTERN.test(ownershipId || "")) failInput();
+    const command = normalizeTradeBlockInput(input);
+    const ownership = repository.setTradeBlock({
+      leagueId,
+      teamId,
+      ownershipId,
+      occurredAtMs: clock.nowMs(),
+      actorUserId: authority.actorUserId,
+      ...command,
+    });
+    return Object.freeze({
+      code: command.blocked
+        ? "PLAYER_ADDED_TO_TRADE_BLOCK"
+        : "PLAYER_REMOVED_FROM_TRADE_BLOCK",
+      ownership: Object.freeze({
+        id: ownership.id,
+        version: ownership.version,
+        onTradeBlock: ownership.trade_blocked === 1,
+      }),
+    });
+  }
+
+  return Object.freeze({ read, saveOrder, setTradeBlock });
 }
 
 module.exports = {
@@ -331,5 +395,6 @@ module.exports = {
   TeamWorkspaceNotFoundError,
   createTeamWorkspaceService,
   normalizeOrderInput,
+  normalizeTradeBlockInput,
   safeWorkspace,
 };

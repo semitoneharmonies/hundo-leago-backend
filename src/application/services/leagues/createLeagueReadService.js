@@ -165,6 +165,7 @@ function createLeagueReadService({
     "findLeagueSettings",
     "findLeagueSummary",
     "listLeagueMemberships",
+    "listInvitableUsers",
     "listLeagueSeasons",
     "listVisibleLeagues",
   ]) {
@@ -274,9 +275,31 @@ function createLeagueReadService({
     });
   }
 
+  function listInvitableUsers({ leagueId, authenticated } = {}) {
+    const authority = leagueAuthorization.requireCommissioner(
+      authenticated,
+      leagueId
+    );
+    return Object.freeze({
+      code: "INVITABLE_LEAGUE_USERS_FOUND",
+      users: Object.freeze(
+        leagueAccessRepository
+          .listInvitableUsers(authority.leagueId)
+          .map((row) =>
+            Object.freeze({
+              id: row.user_id,
+              displayName: row.display_name,
+              email: row.email_display,
+            })
+          )
+      ),
+    });
+  }
+
   return Object.freeze({
     list,
     listMemberships,
+    listInvitableUsers,
     listSeasons,
     readLeague,
     readSettings,

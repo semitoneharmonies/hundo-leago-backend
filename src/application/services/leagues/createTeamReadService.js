@@ -29,6 +29,7 @@ function safeTeam(row) {
     status: row.team_status,
     primaryColour: row.primary_colour,
     secondaryColour: row.secondary_colour,
+    tertiaryColour: row.tertiary_colour,
     logoReference: hasTargetLogo
       ? `/api/v1/leagues/${row.league_id}/teams/${row.team_id}/logo`
       : null,

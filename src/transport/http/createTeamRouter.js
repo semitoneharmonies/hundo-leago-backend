@@ -17,6 +17,9 @@ const SAFE_MESSAGES = Object.freeze({
   TEAM_WORKSPACE_INPUT_INVALID: "The team-workspace request is invalid.",
   ROSTER_DISPLAY_ORDER_CONFLICT:
     "The roster changed before the display order could be saved.",
+  ROSTER_OWNERSHIP_NOT_FOUND: "The roster player was not found.",
+  TRADE_BLOCK_CONFLICT:
+    "The player changed before the trade block could be updated.",
   IDEMPOTENCY_KEY_REUSED:
     "The idempotency key was already used for a different request.",
   IDEMPOTENCY_REQUEST_UNAVAILABLE:
@@ -60,7 +63,7 @@ function createTeamRouter({
     assertMethod(teamReadService, method, "a team read service");
   }
   assertMethod(teamCreationService, "create", "a team-creation service");
-  for (const method of ["read", "saveOrder"]) {
+  for (const method of ["read", "saveOrder", "setTradeBlock"]) {
     assertMethod(teamWorkspaceService, method, "a team-workspace service");
   }
   assertMethod(auditPrivacyDigest, "digest", "an audit privacy digest");
@@ -132,6 +135,17 @@ function createTeamRouter({
       return errorResponse(request, response, 404, error.code);
     }
     if (
+      error?.code === "REPOSITORY_RECORD_NOT_FOUND" &&
+      request.path.endsWith("/trade-block")
+    ) {
+      return errorResponse(
+        request,
+        response,
+        404,
+        "ROSTER_OWNERSHIP_NOT_FOUND"
+      );
+    }
+    if (
       [
         "TEAM_CREATION_NOT_ALLOWED",
         "TEAM_CREATION_RESULT_UNAVAILABLE",
@@ -148,7 +162,9 @@ function createTeamRouter({
         request,
         response,
         409,
-        "ROSTER_DISPLAY_ORDER_CONFLICT"
+        request.path.endsWith("/trade-block")
+          ? "TRADE_BLOCK_CONFLICT"
+          : "ROSTER_DISPLAY_ORDER_CONFLICT"
       );
     }
     return errorResponse(request, response, 500, "TEAM_REQUEST_FAILED");
@@ -213,6 +229,28 @@ function createTeamRouter({
           teamWorkspaceService.saveOrder({
             leagueId: request.params.leagueId,
             teamId: request.params.teamId,
+            input: request.body,
+            authenticated: requestSecurity.getAuthenticatedSession(request),
+          })
+        );
+      } catch (error) {
+        return mapError(request, response, error);
+      }
+    }
+  );
+
+  router.put(
+    "/api/v1/leagues/:leagueId/teams/:teamId/roster/:ownershipId/trade-block",
+    requestSecurity.authenticateUnsafe,
+    (request, response) => {
+      try {
+        return successResponse(
+          request,
+          response,
+          teamWorkspaceService.setTradeBlock({
+            leagueId: request.params.leagueId,
+            teamId: request.params.teamId,
+            ownershipId: request.params.ownershipId,
             input: request.body,
             authenticated: requestSecurity.getAuthenticatedSession(request),
           })

@@ -156,7 +156,8 @@ function projectionInput(overrides = {}) {
     league: { id: IDS.league, name: "Public League" },
     season: { id: IDS.season, label: "Season 2" },
     team: { id: IDS.team, name: "Public Team", primaryColour: "#112233",
-      secondaryColour: "#aabbcc", logoReference: null },
+      secondaryColour: "#aabbcc", tertiaryColour: null,
+      logoReference: null },
     players: [{
       id: IDS.activePlayer, name: "Active Player", position: "F",
       rosterCategory: "Active", aavCents: 1_000,

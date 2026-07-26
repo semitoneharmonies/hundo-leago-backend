@@ -411,7 +411,7 @@ describe("M2-09 JSON import dry-run", () => {
             "SELECT COUNT(*) AS count FROM schema_migrations"
           )
           .get().count,
-        19
+        20
       );
       assert.equal(
         database.pragma("integrity_check", {

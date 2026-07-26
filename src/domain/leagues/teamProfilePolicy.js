@@ -18,6 +18,7 @@ const PROFILE_KEYS = new Set([
   "name",
   "primaryColour",
   "secondaryColour",
+  "tertiaryColour",
 ]);
 const LOGO_KEYS = new Set(["contentBase64", "mediaType"]);
 
@@ -413,18 +414,35 @@ function validateTeamProfileInput(input) {
     input,
     "secondaryColour"
   );
+  const hasTertiary = Object.prototype.hasOwnProperty.call(
+    input,
+    "tertiaryColour"
+  );
   const hasLogo = Object.prototype.hasOwnProperty.call(input, "logo");
   if (hasPrimary !== hasSecondary) fail("team_colours_incomplete");
+  if (hasTertiary && !hasPrimary) fail("team_colours_incomplete");
   let name = null;
   if (hasName) name = validateTeamName(input.name);
   let colours = null;
   if (hasPrimary) {
     if (input.primaryColour === null && input.secondaryColour === null) {
-      colours = Object.freeze({ primaryColour: null, secondaryColour: null });
+      if (input.tertiaryColour !== undefined && input.tertiaryColour !== null) {
+        fail("team_colours_incomplete");
+      }
+      colours = Object.freeze({
+        primaryColour: null,
+        secondaryColour: null,
+        tertiaryColour: null,
+      });
     } else {
       colours = Object.freeze({
         primaryColour: validateColour(input.primaryColour),
         secondaryColour: validateColour(input.secondaryColour),
+        tertiaryColour:
+          input.tertiaryColour === undefined ||
+          input.tertiaryColour === null
+            ? null
+            : validateColour(input.tertiaryColour),
       });
     }
   }

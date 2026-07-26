@@ -37,6 +37,7 @@ function createLeagueReadRouter({
   for (const method of [
     "list",
     "listMemberships",
+    "listInvitableUsers",
     "listSeasons",
     "readLeague",
     "readSettings",
@@ -126,6 +127,11 @@ function createLeagueReadRouter({
     "/api/v1/leagues/:leagueId/memberships",
     requestSecurity.authenticateBootstrap,
     handle("listMemberships")
+  );
+  router.get(
+    "/api/v1/leagues/:leagueId/invitable-users",
+    requestSecurity.authenticateBootstrap,
+    handle("listInvitableUsers")
   );
   router.get(
     "/api/v1/leagues/:leagueId/seasons",

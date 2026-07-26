@@ -131,6 +131,7 @@ function createAdministrativeLeagueService({
   repositoryContext,
   platformAuthorization,
   leagueCreationRepository,
+  userRepository,
   auditRepository,
   clock,
   secureRandom,
@@ -349,7 +350,25 @@ function createAdministrativeLeagueService({
     }
   }
 
-  return Object.freeze({ create });
+  function listUsers({ authenticated } = {}) {
+    assertMethod(userRepository, "listSafeUsers", "a user repository");
+    platformAuthorization.requireAdministrator(authenticated);
+    return Object.freeze({
+      code: "ADMIN_USERS_FOUND",
+      users: Object.freeze(
+        userRepository.listSafeUsers().map((row) =>
+          Object.freeze({
+            id: row.id,
+            displayName: row.display_name,
+            email: row.email_display,
+            status: row.status,
+          })
+        )
+      ),
+    });
+  }
+
+  return Object.freeze({ create, listUsers });
 }
 
 module.exports = {

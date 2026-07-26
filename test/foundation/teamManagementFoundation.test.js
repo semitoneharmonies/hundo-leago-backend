@@ -771,6 +771,9 @@ async function startTeamApi(t, runtime) {
         saveOrder() {
           throw new Error("The roster-order endpoint is outside this test.");
         },
+        setTradeBlock() {
+          throw new Error("The trade-block endpoint is outside this test.");
+        },
       },
       auditPrivacyDigest: {
         digest() {

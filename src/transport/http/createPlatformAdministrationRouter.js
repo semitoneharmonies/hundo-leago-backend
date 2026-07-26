@@ -31,9 +31,11 @@ function createPlatformAdministrationRouter({
 } = {}) {
   for (const method of [
     "assignRequestId",
+    "authenticateBootstrap",
     "authenticateUnsafe",
     "credentialedCors",
     "getAuthenticatedSession",
+    "getSessionBootstrap",
     "getRequestId",
     "requireAllowedOrigin",
     "requireCompatibleFetchMetadata",
@@ -50,6 +52,11 @@ function createPlatformAdministrationRouter({
     leagueCreationService,
     "create",
     "an administrative league-creation service"
+  );
+  assertMethod(
+    leagueCreationService,
+    "listUsers",
+    "an administrative user-read service"
   );
   assertMethod(
     auditPrivacyDigest,
@@ -110,6 +117,30 @@ function createPlatformAdministrationRouter({
   router.use(requestSecurity.requireJson);
   router.use(requestSecurity.requireCompatibleFetchMetadata);
   router.use(express.json({ limit: "16kb", strict: true }));
+
+  router.get(
+    "/api/v1/admin/users",
+    requestSecurity.authenticateBootstrap,
+    (request, response) => {
+      try {
+        return response.status(200).json({
+          data: leagueCreationService.listUsers({
+            authenticated: requestSecurity.getSessionBootstrap(request),
+          }),
+          meta: { requestId: requestId(request) },
+        });
+      } catch (error) {
+        return errorResponse(
+          request,
+          response,
+          error?.code === "PLATFORM_ADMINISTRATOR_REQUIRED" ? 403 : 500,
+          error?.code === "PLATFORM_ADMINISTRATOR_REQUIRED"
+            ? error.code
+            : "ADMINISTRATION_REQUEST_FAILED"
+        );
+      }
+    }
+  );
 
   router.post(
     "/api/v1/admin/leagues",

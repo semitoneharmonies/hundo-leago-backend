@@ -32,6 +32,12 @@ function createSqliteLeagueAccessRepository({ database } = {}) {
   let findLeagueSettingsStatement;
   let listLeagueMembershipsStatement;
   let listLeagueSeasonsStatement;
+  let listInvitableUsersStatement;
+  let findMembershipStatement;
+  let endMembershipStatement;
+  let endManagerAssignmentsStatement;
+  let insertMembershipActivityStatement;
+  let endMembershipTransaction;
   try {
     listVisibleLeaguesStatement = database.prepare(`
       SELECT
@@ -132,6 +138,97 @@ function createSqliteLeagueAccessRepository({ database } = {}) {
         created_at_ms DESC,
         id ASC
     `);
+    listInvitableUsersStatement = database.prepare(`
+      SELECT users.id AS user_id, users.display_name, users.email_display
+      FROM users
+      WHERE users.status = 'active'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM league_memberships
+          WHERE league_memberships.league_id = @leagueId
+            AND league_memberships.user_id = users.id
+            AND league_memberships.status IN ('active', 'invited')
+        )
+      ORDER BY users.display_name_normalized ASC, users.id ASC
+    `);
+    findMembershipStatement = database.prepare(`
+      SELECT *
+      FROM league_memberships
+      WHERE league_id = @leagueId AND id = @membershipId
+      LIMIT 2
+    `);
+    endMembershipStatement = database.prepare(`
+      UPDATE league_memberships
+      SET status = 'ended', ended_at_ms = @occurredAtMs,
+        updated_at_ms = @occurredAtMs, version = version + 1
+      WHERE league_id = @leagueId
+        AND id = @membershipId
+        AND status IN ('active', 'invited')
+        AND version = @expectedVersion
+    `);
+    endManagerAssignmentsStatement = database.prepare(`
+      UPDATE team_manager_assignments
+      SET status = 'ended', ended_at_ms = @occurredAtMs,
+        version = version + 1
+      WHERE league_id = @leagueId
+        AND membership_id = @membershipId
+        AND status IN ('pending', 'accepted')
+        AND ended_at_ms IS NULL
+    `);
+    insertMembershipActivityStatement = database.prepare(`
+      INSERT INTO league_activity (
+        id, league_id, season_id, event_type, actor_user_id,
+        actor_authority, team_id, player_id, related_type, related_id,
+        display_summary, reason, metadata_json, occurred_at_ms
+      ) VALUES (
+        @activityId, @leagueId, NULL, 'league_membership_ended',
+        @actorUserId, 'commissioner', NULL, NULL,
+        'league_membership', @membershipId,
+        'A league membership was removed.', NULL, @metadataJson,
+        @occurredAtMs
+      )
+    `);
+    endMembershipTransaction = database.transaction((command) => {
+      const rows = findMembershipStatement.all(command);
+      if (rows.length > 1) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.schemaIncompatible,
+          "A league membership is not unique."
+        );
+      }
+      const current = rows[0];
+      if (!current) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.recordNotFound,
+          "The league membership was not found."
+        );
+      }
+      if (
+        !["active", "invited"].includes(current.status) ||
+        current.version !== command.expectedVersion
+      ) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.versionConflict,
+          "The league membership changed before removal."
+        );
+      }
+      endManagerAssignmentsStatement.run(command);
+      const ended = endMembershipStatement.run(command);
+      if (ended.changes !== 1) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.versionConflict,
+          "The league membership changed before removal."
+        );
+      }
+      insertMembershipActivityStatement.run({
+        ...command,
+        metadataJson: JSON.stringify({
+          membershipId: command.membershipId,
+          removedUserId: current.user_id,
+        }),
+      });
+      return findMembershipStatement.get(command);
+    });
   } catch (error) {
     throw mapRepositoryError(error, {
       operation: "prepareLeagueAccessRepository",
@@ -211,6 +308,39 @@ function createSqliteLeagueAccessRepository({ database } = {}) {
       } catch (error) {
         throw mapRepositoryError(error, {
           operation: "listLeagueMemberships",
+          tableName: "league_memberships",
+        });
+      }
+    },
+    listInvitableUsers(leagueId) {
+      try {
+        return freezeRows(
+          listInvitableUsersStatement.all({
+            leagueId: stableId(leagueId),
+          })
+        );
+      } catch (error) {
+        throw mapRepositoryError(error, {
+          operation: "listInvitableLeagueUsers",
+          tableName: "users",
+        });
+      }
+    },
+    endMembership(command) {
+      try {
+        return freezeRow(
+          endMembershipTransaction.immediate({
+            leagueId: stableId(command.leagueId),
+            membershipId: stableId(command.membershipId),
+            actorUserId: stableId(command.actorUserId),
+            activityId: stableId(command.activityId),
+            expectedVersion: command.expectedVersion,
+            occurredAtMs: command.occurredAtMs,
+          })
+        );
+      } catch (error) {
+        throw mapRepositoryError(error, {
+          operation: "endLeagueMembership",
           tableName: "league_memberships",
         });
       }

@@ -65,6 +65,7 @@ function profileRequestHash({ leagueId, teamId, expectedVersion, profile }) {
           ? {
               primaryColour: profile.colours.primaryColour,
               secondaryColour: profile.colours.secondaryColour,
+              tertiaryColour: profile.colours.tertiaryColour,
             }
           : {}),
         ...(profile.hasLogo
@@ -322,10 +323,12 @@ function createTeamProfileService({
         if (
           profile.colours &&
           (profile.colours.primaryColour !== current.primary_colour ||
-            profile.colours.secondaryColour !== current.secondary_colour)
+            profile.colours.secondaryColour !== current.secondary_colour ||
+            profile.colours.tertiaryColour !== current.tertiary_colour)
         ) {
           changes.primary_colour = profile.colours.primaryColour;
           changes.secondary_colour = profile.colours.secondaryColour;
+          changes.tertiary_colour = profile.colours.tertiaryColour;
         }
         if (profile.hasLogo) {
           if (profile.logo === null) {
