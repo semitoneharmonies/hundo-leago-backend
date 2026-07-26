@@ -13,6 +13,10 @@ const SAFE_MESSAGES = Object.freeze({
   TEAM_NAME_UNAVAILABLE: "The team name is unavailable.",
   TEAM_NOT_FOUND: "The team was not found.",
   TEAM_REQUEST_FAILED: "The team request could not be completed.",
+  TEAM_MANAGER_REQUIRED: "Current team-manager authority is required.",
+  TEAM_WORKSPACE_INPUT_INVALID: "The team-workspace request is invalid.",
+  ROSTER_DISPLAY_ORDER_CONFLICT:
+    "The roster changed before the display order could be saved.",
   IDEMPOTENCY_KEY_REUSED:
     "The idempotency key was already used for a different request.",
   IDEMPOTENCY_REQUEST_UNAVAILABLE:
@@ -29,6 +33,7 @@ function createTeamRouter({
   requestSecurity,
   teamReadService,
   teamCreationService,
+  teamWorkspaceService,
   auditPrivacyDigest,
   networkSourceResolver = (request) => request.ip,
 } = {}) {
@@ -55,6 +60,9 @@ function createTeamRouter({
     assertMethod(teamReadService, method, "a team read service");
   }
   assertMethod(teamCreationService, "create", "a team-creation service");
+  for (const method of ["read", "saveOrder"]) {
+    assertMethod(teamWorkspaceService, method, "a team-workspace service");
+  }
   assertMethod(auditPrivacyDigest, "digest", "an audit privacy digest");
   if (typeof networkSourceResolver !== "function") {
     throw new TypeError("team routes require a network-source resolver");
@@ -104,10 +112,20 @@ function createTeamRouter({
   }
 
   function mapError(request, response, error) {
-    if (["LEAGUE_ID_INVALID", "TEAM_INPUT_INVALID"].includes(error?.code)) {
+    if (
+      [
+        "LEAGUE_ID_INVALID",
+        "TEAM_ID_INVALID",
+        "TEAM_INPUT_INVALID",
+        "TEAM_WORKSPACE_INPUT_INVALID",
+      ].includes(error?.code)
+    ) {
       return errorResponse(request, response, 400, "TEAM_INPUT_INVALID");
     }
     if (error?.code === "LEAGUE_COMMISSIONER_REQUIRED") {
+      return errorResponse(request, response, 403, error.code);
+    }
+    if (error?.code === "TEAM_MANAGER_REQUIRED") {
       return errorResponse(request, response, 403, error.code);
     }
     if (["LEAGUE_NOT_FOUND", "TEAM_NOT_FOUND"].includes(error?.code)) {
@@ -124,6 +142,14 @@ function createTeamRouter({
       ].includes(error?.code)
     ) {
       return errorResponse(request, response, 409, error.code);
+    }
+    if (error?.code === "REPOSITORY_VERSION_CONFLICT") {
+      return errorResponse(
+        request,
+        response,
+        409,
+        "ROSTER_DISPLAY_ORDER_CONFLICT"
+      );
     }
     return errorResponse(request, response, 500, "TEAM_REQUEST_FAILED");
   }
@@ -148,6 +174,47 @@ function createTeamRouter({
           teamReadService.list({
             leagueId: request.params.leagueId,
             authenticated: requestSecurity.getSessionBootstrap(request),
+          })
+        );
+      } catch (error) {
+        return mapError(request, response, error);
+      }
+    }
+  );
+
+  router.get(
+    "/api/v1/leagues/:leagueId/teams/:teamId/roster",
+    requestSecurity.authenticateBootstrap,
+    (request, response) => {
+      try {
+        return successResponse(
+          request,
+          response,
+          teamWorkspaceService.read({
+            leagueId: request.params.leagueId,
+            teamId: request.params.teamId,
+            authenticated: requestSecurity.getSessionBootstrap(request),
+          })
+        );
+      } catch (error) {
+        return mapError(request, response, error);
+      }
+    }
+  );
+
+  router.put(
+    "/api/v1/leagues/:leagueId/teams/:teamId/roster-display-order",
+    requestSecurity.authenticateUnsafe,
+    (request, response) => {
+      try {
+        return successResponse(
+          request,
+          response,
+          teamWorkspaceService.saveOrder({
+            leagueId: request.params.leagueId,
+            teamId: request.params.teamId,
+            input: request.body,
+            authenticated: requestSecurity.getAuthenticatedSession(request),
           })
         );
       } catch (error) {

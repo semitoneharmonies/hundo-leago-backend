@@ -293,6 +293,15 @@ const DEFINITIONS = [
     REPOSITORY_SCOPES.requiredLeague
   ),
   repositoryDefinition(
+    "roster_display_order_entries",
+    REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
+    "roster_display_order_sets",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
     "seasons",
     REPOSITORY_SCOPES.requiredLeague,
     { versioned: true }

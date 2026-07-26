@@ -8,6 +8,7 @@ const {
   ReleaseQaFixtureError,
   assertSafeFixturePath,
   createReleaseQaFixture,
+  seedFixture,
 } = require("../../src/operations/release/createReleaseQaFixture");
 const {
   ReleaseQaFixtureVerificationError,
@@ -16,6 +17,7 @@ const {
 const {
   ACCOUNT_ALIASES,
   FIXTURE_ID_NAMESPACE,
+  PLAYER_BLUEPRINTS,
   checksumManifest,
   fixtureEmail,
   fixtureId,
@@ -24,6 +26,9 @@ const {
   openDatabase,
   openReadonlyDatabase,
 } = require("../../src/infrastructure/database/connection");
+const {
+  migrateDatabase,
+} = require("../../src/infrastructure/database/migrate");
 const {
   createMatchupScoringService,
 } = require("../../src/application/services/matchups/createMatchupScoringService");
@@ -76,6 +81,10 @@ function temporaryRoot(t) {
     fs.rmSync(resolved, { recursive: true, force: true });
   });
   return root;
+}
+
+function providerUuid(value) {
+  return `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 }
 
 test("release-QA fixture path gate refuses non-test, outside-root, existing, and ambiguous targets", (t) => {
@@ -279,6 +288,109 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
     assert.deepEqual(
       await passwordHasher.verify(FIXTURE_PASSWORD, credentials[0].password_hash),
       { verified: true, needsRehash: false }
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("release-QA fixture uses and verifies retained provider-backed NHL identities", (t) => {
+  const root = temporaryRoot(t);
+  const databasePath = path.join(root, "provider-release-qa.sqlite3");
+  const connection = openDatabase({ databasePath, environment: "test" });
+  migrateDatabase({
+    database: connection.database,
+    migrationsDirectory: MIGRATIONS_DIRECTORY,
+    applicationBuildId: "provider-release-qa-test",
+    now: () => FIXTURE_NOW_MS,
+  });
+  const insertPlayer = connection.database.prepare(`
+    INSERT INTO players (
+      id, first_name, last_name, full_name, birth_date, status,
+      created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, '1998-01-01', 'active', ?, ?, 1)
+  `);
+  const insertExternal = connection.database.prepare(`
+    INSERT INTO player_external_ids (
+      id, player_id, provider, external_value, created_at_ms
+    ) VALUES (?, ?, 'sportsdataio-discovery-lab', ?, ?)
+  `);
+  const insertSource = connection.database.prepare(`
+    INSERT INTO player_source_state (
+      id, player_id, provider, source_position, normalized_position,
+      nhl_team_abbreviation, active, source_version, source_payload_json,
+      effective_at_ms, ended_at_ms, created_at_ms
+    ) VALUES (
+      ?, ?, 'sportsdataio-discovery-lab', ?, ?, 'VAN', 1,
+      '2026REG', NULL, ?, NULL, ?
+    )
+  `);
+  for (let index = 0; index < 60; index += 1) {
+    const position = index < 40 ? "F" : "D";
+    const playerId = providerUuid(10_000 + index);
+    const firstName = "NHL";
+    const lastName = `${position === "F" ? "Forward" : "Defence"} ${String(
+      index + 1
+    ).padStart(2, "0")}`;
+    insertPlayer.run(
+      playerId,
+      firstName,
+      lastName,
+      `${firstName} ${lastName}`,
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS
+    );
+    insertExternal.run(
+      providerUuid(20_000 + index),
+      playerId,
+      `provider-${index + 1}`,
+      FIXTURE_NOW_MS
+    );
+    insertSource.run(
+      providerUuid(30_000 + index),
+      playerId,
+      position === "F" ? "C" : "D",
+      position,
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS
+    );
+  }
+  connection.database.transaction(() => {
+    seedFixture(connection.database, "provider-fixture-password-hash");
+  }).immediate();
+  connection.database.close();
+
+  const manifest = verifyReleaseQaFixture({ databasePath });
+  assert.equal(manifest.global.playerCount, PLAYER_BLUEPRINTS.length);
+  const database = openReadonlyDatabase({ databasePath });
+  try {
+    assert.equal(
+      database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM player_external_ids WHERE provider='release_qa'"
+        )
+        .get().count,
+      0
+    );
+    assert.equal(
+      database
+        .prepare(`
+          SELECT COUNT(DISTINCT players.id) AS count
+          FROM players
+          JOIN league_player_positions
+            ON league_player_positions.player_id=players.id
+          WHERE players.full_name LIKE 'Fixture Player %'
+        `)
+        .get().count,
+      0
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT COUNT(DISTINCT player_id) AS count FROM league_player_positions"
+        )
+        .get().count,
+      PLAYER_BLUEPRINTS.length
     );
   } finally {
     database.close();

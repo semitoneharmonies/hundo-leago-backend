@@ -475,14 +475,15 @@ function installedTargetEndpoints(routers) {
 }
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 79 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 79);
+  test("declares 83 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 83);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      79
+      83
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
+      "accountProfile",
       "accountRegistration",
       "accountSession",
       "activityNotification",
@@ -560,7 +561,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const options = runtimeOptions(database);
     const runtime = createTargetRuntime(options);
     assert.equal(runtime.migrationState.status, "exact");
-    assert.equal(runtime.migrationState.userVersion, 18);
+    assert.equal(runtime.migrationState.userVersion, 19);
     assert.equal(
       typeof runtime.services.league.auctionResolution.resolveDue,
       "function"

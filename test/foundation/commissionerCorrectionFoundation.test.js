@@ -115,6 +115,16 @@ function insertUser(repositories, id, name) {
   });
 }
 
+function insertRow(database, tableName, values) {
+  const columns = Object.keys(values);
+  database
+    .prepare(
+      `INSERT INTO ${tableName} (${columns.join(", ")}) ` +
+        `VALUES (${columns.map(() => "?").join(", ")})`
+    )
+    .run(...columns.map((column) => values[column]));
+}
+
 function seedRuntime(context) {
   const { repositories } = context;
   insertUser(repositories, IDS.commissioner, "Commissioner");
@@ -544,9 +554,18 @@ describe("M4-11 optional-reason migration", () => {
       applicationBuildId: "m4-11-before",
       now: () => NOW_MS,
     });
-    const context = createSqliteRepositoryContext({ database });
-    insertUser(context.repositories, IDS.commissioner, "Commissioner");
-    context.repositories.leagues.insert({
+    insertRow(database, "users", {
+      id: IDS.commissioner,
+      email_normalized: "commissioner@example.test",
+      email_display: "commissioner@example.test",
+      display_name: "Commissioner",
+      display_name_normalized: "commissioner",
+      status: "active",
+      created_at_ms: NOW_MS,
+      updated_at_ms: NOW_MS,
+      version: 1,
+    });
+    insertRow(database, "leagues", {
       id: IDS.league,
       name: "League",
       name_normalized: "league",
@@ -558,7 +577,7 @@ describe("M4-11 optional-reason migration", () => {
       updated_at_ms: NOW_MS,
       version: 1,
     });
-    context.repositories.seasons.insert({
+    insertRow(database, "seasons", {
       id: IDS.season1,
       league_id: IDS.league,
       label: "Season",
@@ -572,7 +591,7 @@ describe("M4-11 optional-reason migration", () => {
       updated_at_ms: NOW_MS,
       version: 1,
     });
-    context.repositories.commissioner_corrections.insert({
+    insertRow(database, "commissioner_corrections", {
       id: IDS.correction,
       league_id: IDS.league,
       season_id: IDS.season1,
@@ -618,7 +637,7 @@ describe("M4-11 optional-reason migration", () => {
       IDS.commissioner,
       NOW_MS + 1
     );
-    assert.equal(database.pragma("user_version", { simple: true }), 18);
+    assert.equal(database.pragma("user_version", { simple: true }), 19);
   });
 });
 

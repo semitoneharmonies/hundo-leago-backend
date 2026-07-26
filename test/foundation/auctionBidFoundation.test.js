@@ -43,6 +43,27 @@ function uuid(value) {
   return `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 }
 
+function createHistoricalRepositories(database) {
+  return new Proxy(
+    {},
+    {
+      get(_target, tableName) {
+        return {
+          insert(values) {
+            const columns = Object.keys(values);
+            database
+              .prepare(
+                `INSERT INTO ${String(tableName)} (${columns.join(", ")}) ` +
+                  `VALUES (${columns.map(() => "?").join(", ")})`
+              )
+              .run(...columns.map((column) => values[column]));
+          },
+        };
+      },
+    }
+  );
+}
+
 const IDS = Object.freeze({
   user: uuid(1),
   membership: uuid(2),
@@ -829,9 +850,7 @@ describe("M5-02 lowest-offered AAV migration", () => {
       applicationBuildId: "m5-02-before",
       now: () => NOW_MS,
     });
-    const { repositories } = createSqliteRepositoryContext({
-      database: connection.database,
-    });
+    const repositories = createHistoricalRepositories(connection.database);
     repositories.users.insert({
       id: IDS.user,
       email_normalized: "manager@example.test",

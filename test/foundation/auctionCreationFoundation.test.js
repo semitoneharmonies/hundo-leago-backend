@@ -40,6 +40,27 @@ function uuid(value) {
   return `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 }
 
+function createHistoricalRepositories(database) {
+  return new Proxy(
+    {},
+    {
+      get(_target, tableName) {
+        return {
+          insert(values) {
+            const columns = Object.keys(values);
+            database
+              .prepare(
+                `INSERT INTO ${String(tableName)} (${columns.join(", ")}) ` +
+                  `VALUES (${columns.map(() => "?").join(", ")})`
+              )
+              .run(...columns.map((column) => values[column]));
+          },
+        };
+      },
+    }
+  );
+}
+
 const IDS = Object.freeze({
   manager: uuid(1),
   commissioner: uuid(2),
@@ -390,8 +411,8 @@ describe("M5-01 auction persistence foundation", () => {
       applicationBuildId: "m5-01-before",
       now: () => NOW_MS,
     });
-    const context = createSqliteRepositoryContext({ database: connection.database });
-    context.repositories.leagues.insert({
+    const repositories = createHistoricalRepositories(connection.database);
+    repositories.leagues.insert({
       id: IDS.leagueA,
       name: "Alpha League",
       name_normalized: "alpha league",
@@ -403,7 +424,7 @@ describe("M5-01 auction persistence foundation", () => {
       updated_at_ms: NOW_MS,
       version: 1,
     });
-    context.repositories.seasons.insert({
+    repositories.seasons.insert({
       id: IDS.seasonA,
       league_id: IDS.leagueA,
       label: "2026-27",

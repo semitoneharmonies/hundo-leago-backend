@@ -47,7 +47,7 @@ test("M7 manual-QA guide identifies every deterministic account without a passwo
   assert.equal(
     accounts.find((account) => account.alias === "leagueBManagerOne")
       .expectedAccess,
-    "Release QA Beta League, Owls"
+    "Release QA Beta League, Vipers"
   );
   assert.equal(
     JSON.stringify(accounts).includes("M7 Manual QA Password"),

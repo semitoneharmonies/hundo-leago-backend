@@ -50,7 +50,64 @@ function count(database, sql, ...parameters) {
   return database.prepare(sql).get(...parameters).count;
 }
 
-function verifyTradeScenarios(database, alias, leagueId) {
+function resolveFixturePlayerIds(database) {
+  const synthetic = Object.fromEntries(
+    PLAYER_BLUEPRINTS.map(({ alias }) => [alias, fixtureId(`player:${alias}`)])
+  );
+  const syntheticCount = database
+    .prepare(
+      `SELECT COUNT(*) AS count FROM players WHERE id IN (${PLAYER_BLUEPRINTS.map(
+        () => "?"
+      ).join(", ")})`
+    )
+    .get(...Object.values(synthetic)).count;
+  if (syntheticCount === PLAYER_BLUEPRINTS.length) {
+    return Object.freeze(synthetic);
+  }
+  assertEqual(syntheticCount, 0, "partial synthetic player identity set");
+
+  const providerPlayers = database
+    .prepare(`
+      SELECT player.id, source.normalized_position
+      FROM players AS player
+      INNER JOIN player_external_ids AS external
+        ON external.player_id = player.id
+       AND external.provider = 'sportsdataio-discovery-lab'
+      INNER JOIN player_source_state AS source
+        ON source.player_id = player.id
+       AND source.provider = 'sportsdataio-discovery-lab'
+       AND source.ended_at_ms IS NULL
+       AND source.active = 1
+       AND source.normalized_position IN ('F', 'D')
+      WHERE player.status = 'active'
+      GROUP BY player.id
+      ORDER BY lower(player.full_name) ASC, player.id ASC
+    `)
+    .all();
+  const byPosition = new Map([
+    ["F", providerPlayers.filter(({ normalized_position }) => normalized_position === "F")],
+    ["D", providerPlayers.filter(({ normalized_position }) => normalized_position === "D")],
+  ]);
+  const offsets = new Map([
+    ["F", 0],
+    ["D", 0],
+  ]);
+  const resolved = {};
+  for (const blueprint of PLAYER_BLUEPRINTS) {
+    const offset = offsets.get(blueprint.position);
+    const selected = byPosition.get(blueprint.position)[offset];
+    assertEqual(
+      Boolean(selected),
+      true,
+      `provider-backed ${blueprint.position} player identity`
+    );
+    resolved[blueprint.alias] = selected.id;
+    offsets.set(blueprint.position, offset + 1);
+  }
+  return Object.freeze(resolved);
+}
+
+function verifyTradeScenarios(database, alias, leagueId, playerIds) {
   const scenarioId = (scenarioAlias) =>
     fixtureId(`trade-scenario:${alias}:${scenarioAlias}:1`);
   const completedTradeId = scenarioId("accepted");
@@ -121,7 +178,7 @@ function verifyTradeScenarios(database, alias, leagueId) {
         ON player_ownerships.league_id=contracts.league_id
        AND player_ownerships.player_id=contracts.player_id
       WHERE contracts.league_id=? AND contracts.player_id=?
-    `).get(leagueId, fixtureId(`player:${playerAlias}`));
+    `).get(leagueId, playerIds[playerAlias]);
     const destinationTeamId = fixtureId(`team:${alias}:${destinationTeamNumber}`);
     assertEqual(
       executedAsset?.contractTeamId,
@@ -294,7 +351,7 @@ function verifyAccounts(database) {
   });
 }
 
-function verifyLeague(database, alias) {
+function verifyLeague(database, alias, playerIds) {
   const leagueId = fixtureId(`league:${alias}`);
   const expectedMembershipCount = alias === "leagueA" ? 4 : 3;
   const row = database.prepare(`
@@ -340,7 +397,8 @@ function verifyLeague(database, alias) {
     expectedMembershipCount,
     `${alias} membership count`
   );
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM seasons WHERE league_id=?", leagueId), 3, `${alias} season count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM seasons WHERE league_id=?", leagueId), 4, `${alias} season count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM draft_picks WHERE league_id=? AND status='unused'", leagueId), 96, `${alias} four-season draft-pick count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM league_player_positions WHERE league_id=?", leagueId), 26, `${alias} player-position count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM player_ownerships WHERE league_id=?", leagueId), 23, `${alias} ownership count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM contracts WHERE league_id=?", leagueId), 23, `${alias} contract count`);
@@ -376,7 +434,7 @@ function verifyLeague(database, alias) {
           SELECT 1 FROM contracts c
           WHERE c.league_id=o.league_id AND c.player_id=o.player_id
         )
-    `, leagueId, fixtureId("player:unsignedProspect")),
+    `, leagueId, playerIds.unsignedProspect),
     1,
     `${alias} unsigned prospect coverage`
   );
@@ -395,7 +453,7 @@ function verifyLeague(database, alias) {
             AND cy.aav_cents=100
             AND cy.year_number BETWEEN 1 AND 3
         )=3
-    `, leagueId, fixtureId("player:signedProspect")),
+    `, leagueId, playerIds.signedProspect),
     1,
     `${alias} signed prospect coverage`
   );
@@ -410,7 +468,7 @@ function verifyLeague(database, alias) {
   );
   for (const playerAlias of ["freeAgentForward", "freeAgentDefence"]) {
     assertEqual(
-      count(database, "SELECT COUNT(*) AS count FROM player_ownerships WHERE league_id=? AND player_id=?", leagueId, fixtureId(`player:${playerAlias}`)),
+      count(database, "SELECT COUNT(*) AS count FROM player_ownerships WHERE league_id=? AND player_id=?", leagueId, playerIds[playerAlias]),
       0,
       `${alias} ${playerAlias} remains free`
     );
@@ -422,7 +480,7 @@ function verifyLeague(database, alias) {
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM trades WHERE league_id=? AND status='completed'", leagueId), 1, `${alias} completed trade count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM trades WHERE league_id=? AND status='accepted'", leagueId), 0, `${alias} legacy accepted storage count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM trades WHERE league_id=? AND status='declined'", leagueId), 1, `${alias} declined trade count`);
-  verifyTradeScenarios(database, alias, leagueId);
+  verifyTradeScenarios(database, alias, leagueId, playerIds);
   assertEqual(count(database, `
     SELECT COUNT(*) AS count
     FROM trade_assets
@@ -470,6 +528,7 @@ function verifyLeague(database, alias) {
       auctions: 1,
       bench: 2,
       buyouts: 1,
+      draftPicks: 96,
       injuredReserve: 1,
       memberships: expectedMembershipCount,
       notifications: 1,
@@ -499,7 +558,7 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
   try {
     assertEqual(database.pragma("integrity_check", { simple: true }), "ok", "SQLite integrity");
     assertEqual(database.pragma("foreign_key_check").length, 0, "foreign-key violation count");
-    assertEqual(database.pragma("user_version", { simple: true }), 18, "schema version");
+    assertEqual(database.pragma("user_version", { simple: true }), 19, "schema version");
 
     const metadata = Object.fromEntries(database.prepare(`
       SELECT metadata_key, metadata_value FROM application_metadata
@@ -510,9 +569,17 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
     assertEqual(metadata.environment_id, FIXTURE_ENVIRONMENT_ID, "environment identity");
 
     assertEqual(count(database, "SELECT COUNT(*) AS count FROM leagues"), 2, "league count");
-    assertEqual(count(database, "SELECT COUNT(*) AS count FROM players"), PLAYER_BLUEPRINTS.length, "global player count");
+    const playerIds = resolveFixturePlayerIds(database);
+    assertEqual(
+      count(database, "SELECT COUNT(*) AS count FROM players") >=
+        PLAYER_BLUEPRINTS.length,
+      true,
+      "minimum global player count"
+    );
     const accounts = verifyAccounts(database);
-    const leagues = LEAGUE_ALIASES.map((alias) => verifyLeague(database, alias));
+    const leagues = LEAGUE_ALIASES.map((alias) =>
+      verifyLeague(database, alias, playerIds)
+    );
     const overlappingPlayers = count(database, `
       SELECT COUNT(*) AS count FROM (
         SELECT player_id FROM league_player_positions
@@ -552,7 +619,7 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
           WHERE league_id=? AND player_id=?
         `).get(
           fixtureId("league:leagueA"),
-          fixtureId(`player:${playerAlias}`)
+          playerIds[playerAlias]
         )?.teamId,
         fixtureId(`team:leagueA:${alphaTeamNumber}`),
         `leagueA ${playerAlias} deliberate roster assignment`
@@ -564,7 +631,7 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
           WHERE league_id=? AND player_id=?
         `).get(
           fixtureId("league:leagueB"),
-          fixtureId(`player:${playerAlias}`)
+          playerIds[playerAlias]
         )?.teamId,
         fixtureId(`team:leagueB:${betaTeamNumber}`),
         `leagueB ${playerAlias} deliberate roster assignment`
@@ -581,7 +648,7 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
       fixtureBuildId: FIXTURE_BUILD_ID,
       fixtureCreatedAt: FIXTURE_CREATED_AT,
       environmentId: FIXTURE_ENVIRONMENT_ID,
-      schemaVersion: 18,
+      schemaVersion: 19,
       accounts,
       leagues: Object.freeze(leagues),
       global: Object.freeze({

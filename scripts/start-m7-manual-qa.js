@@ -40,15 +40,15 @@ const ACCOUNT_EXPECTATIONS = Object.freeze({
   }),
   leagueAManagerOne: Object.freeze({
     role: "Manager",
-    expectedAccess: "Release QA Alpha League, Owls",
+    expectedAccess: "Release QA Alpha League, Ravens",
   }),
   leagueAManagerTwo: Object.freeze({
     role: "Manager",
-    expectedAccess: "Release QA Alpha League, Ravens",
+    expectedAccess: "Release QA Alpha League, Wolves",
   }),
   leagueBManagerOne: Object.freeze({
     role: "Manager",
-    expectedAccess: "Release QA Beta League, Owls",
+    expectedAccess: "Release QA Beta League, Vipers",
   }),
   verifiedWithoutMembership: Object.freeze({
     role: "Verified user without membership",

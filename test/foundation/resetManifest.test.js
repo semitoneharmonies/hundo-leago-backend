@@ -176,8 +176,8 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
     assert.equal(manifest.omissionFamilies.length, 12);
     assert.equal(manifest.protectedFamilies.length, 9);
     assert.equal(manifest.neverImportFamilies.length, 1);
-    assert.equal(policyTables.length, 77);
-    assert.equal(new Set(policyTables).size, 77);
+    assert.equal(policyTables.length, 79);
+    assert.equal(new Set(policyTables).size, 79);
     assert.deepEqual(
       [...policyTables].sort(),
       [...catalogTables].sort()

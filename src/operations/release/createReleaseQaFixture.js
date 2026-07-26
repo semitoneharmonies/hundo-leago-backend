@@ -222,6 +222,62 @@ function insertAccounts(database, passwordHash) {
 }
 
 function insertGlobalPlayers(database) {
+  const providerPlayers = database.prepare(`
+    SELECT
+      player.id,
+      player.first_name,
+      player.last_name,
+      player.full_name,
+      source.normalized_position
+    FROM players AS player
+    INNER JOIN player_external_ids AS external
+      ON external.player_id = player.id
+     AND external.provider = 'sportsdataio-discovery-lab'
+    INNER JOIN player_source_state AS source
+      ON source.player_id = player.id
+     AND source.provider = 'sportsdataio-discovery-lab'
+     AND source.ended_at_ms IS NULL
+     AND source.active = 1
+     AND source.normalized_position IN ('F', 'D')
+    WHERE player.status = 'active'
+    GROUP BY player.id
+    ORDER BY lower(player.full_name) ASC, player.id ASC
+  `).all();
+  const providerByPosition = new Map([
+    ["F", providerPlayers.filter((player) => player.normalized_position === "F")],
+    ["D", providerPlayers.filter((player) => player.normalized_position === "D")],
+  ]);
+  const requiredByPosition = new Map(
+    ["F", "D"].map((position) => [
+      position,
+      PLAYER_BLUEPRINTS.filter((player) => player.position === position).length,
+    ])
+  );
+  const canUseProviderCatalog = [...requiredByPosition].every(
+    ([position, required]) =>
+      providerByPosition.get(position).length >= required
+  );
+  if (canUseProviderCatalog) {
+    const offsets = new Map([["F", 0], ["D", 0]]);
+    return Object.freeze(
+      Object.fromEntries(
+        PLAYER_BLUEPRINTS.map((blueprint) => {
+          const offset = offsets.get(blueprint.position);
+          const selected = providerByPosition.get(blueprint.position)[offset];
+          offsets.set(blueprint.position, offset + 1);
+          return [
+            blueprint.alias,
+            Object.freeze({
+              id: selected.id,
+              ...blueprint,
+              providerBacked: true,
+            }),
+          ];
+        })
+      )
+    );
+  }
+
   const insertPlayer = database.prepare(`
     INSERT INTO players (
       id, first_name, last_name, full_name, birth_date,
@@ -287,7 +343,12 @@ function insertLeagueBase(database, leagueAlias, accounts) {
     ) VALUES (?, 10000, ?, 6, 12, 6, 4, 400, 4, 1, 1, 1, ?, ?, 1)
   `).run(leagueId, FIXTURE_NOW_MS + 30 * 86_400_000, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
 
-  const seasons = ["current", "futureOne", "futureTwo"].map((seasonAlias, index) => {
+  const seasons = [
+    "current",
+    "futureOne",
+    "futureTwo",
+    "futureThree",
+  ].map((seasonAlias, index) => {
     const id = fixtureId(`season:${leagueAlias}:${seasonAlias}`);
     database.prepare(`
       INSERT INTO seasons (
@@ -302,7 +363,7 @@ function insertLeagueBase(database, leagueAlias, accounts) {
       index === 0 ? "2026-27" : `${2026 + index}-${String(27 + index).padStart(2, "0")}`,
       `${20262027 + index * 10001}`,
       index === 0 ? "active" : "planned",
-      FIXTURE_NOW_MS - 21 * 86_400_000,
+      FIXTURE_NOW_MS + (index * 365 - 21) * 86_400_000,
       FIXTURE_NOW_MS + (180 + index * 365) * 86_400_000,
       FIXTURE_NOW_MS + (150 + index * 365) * 86_400_000,
       FIXTURE_NOW_MS + (180 + index * 365) * 86_400_000,
@@ -402,22 +463,57 @@ function insertLeagueBase(database, leagueAlias, accounts) {
     FIXTURE_NOW_MS,
     leagueId
   );
-  database.prepare(`
+  const insertDraft = database.prepare(`
     INSERT INTO entry_drafts (
       id, league_id, season_id, status, rounds, pick_clock_seconds,
       starts_at_ms, completed_at_ms, created_by_user_id,
       created_at_ms, updated_at_ms, version
-    ) VALUES (?, ?, ?, 'completed', 4, 300, ?, ?, ?, ?, ?, 1)
-  `).run(
-    fixtureId(`entry-draft:${leagueAlias}`),
-    leagueId,
-    seasons[0].id,
-    FIXTURE_NOW_MS - 8 * 86_400_000,
-    FIXTURE_NOW_MS - 7 * 86_400_000,
-    accounts[commissionerAlias].id,
-    FIXTURE_NOW_MS - 8 * 86_400_000,
-    FIXTURE_NOW_MS - 7 * 86_400_000
-  );
+    ) VALUES (?, ?, ?, ?, 4, 300, ?, ?, ?, ?, ?, 1)
+  `);
+  const insertDraftPick = database.prepare(`
+    INSERT INTO draft_picks (
+      id, league_id, draft_id, target_season_id, round_number,
+      position_number, original_team_id, current_owner_team_id,
+      status, selection_id, created_at_ms, updated_at_ms, version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unused', NULL, ?, ?, 1)
+  `);
+  seasons.forEach((season, seasonIndex) => {
+    const draftId =
+      seasonIndex === 0
+        ? fixtureId(`entry-draft:${leagueAlias}`)
+        : fixtureId(`entry-draft:${leagueAlias}:${season.alias}`);
+    const startsAtMs =
+      FIXTURE_NOW_MS + (seasonIndex * 365 - 8) * 86_400_000;
+    insertDraft.run(
+      draftId,
+      leagueId,
+      season.id,
+      seasonIndex === 0 ? "completed" : "setup",
+      startsAtMs,
+      seasonIndex === 0 ? startsAtMs + 86_400_000 : null,
+      accounts[commissionerAlias].id,
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS
+    );
+    for (let round = 1; round <= 4; round += 1) {
+      teams.forEach((team, teamIndex) => {
+        insertDraftPick.run(
+          fixtureId(
+            `draft-pick:${leagueAlias}:${season.alias}:${round}:${teamIndex + 1}`
+          ),
+          leagueId,
+          draftId,
+          season.id,
+          round,
+          teamIndex + 1,
+          team.id,
+          team.id,
+          FIXTURE_NOW_MS,
+          FIXTURE_NOW_MS
+        );
+      });
+    }
+  });
 
   return Object.freeze({
     alias: leagueAlias,
@@ -471,9 +567,11 @@ function insertLeaguePlayerState(database, league, players, accounts) {
         ? BETA_PLAYER_TEAM_NUMBERS[blueprint.alias]
         : undefined;
     const assignedTeam = league.teams[
-      assignedTeamNumber === undefined
-        ? index % league.teams.length
-        : assignedTeamNumber - 1
+      blueprint.alias === "boughtOutForward"
+        ? league.teams.length - 1
+        : assignedTeamNumber === undefined
+          ? index % league.teams.length
+          : assignedTeamNumber - 1
     ];
     insertPosition.run(
       fixtureId(`position:${league.alias}:${blueprint.alias}`),
@@ -794,12 +892,12 @@ function insertAuctionAndTrades(database, league, leagueState, players, accounts
     "invalid-cap",
     FIXTURE_NOW_MS + 30_000,
     {
-      proposingTeamId: league.teams[1].id,
+      proposingTeamId: league.teams[5].id,
       receivingTeamId: league.teams[2].id,
       proposingAssets: [
         {
           type: "contract",
-          contractId: leagueState.contracts.activeForward7.id,
+          contractId: leagueState.contracts.activeForward6.id,
         },
         {
           type: "buyout_obligation",

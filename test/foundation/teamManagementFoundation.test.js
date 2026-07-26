@@ -764,6 +764,14 @@ async function startTeamApi(t, runtime) {
       requestSecurity,
       teamReadService: createReadService(runtime),
       teamCreationService: createCreationService(runtime),
+      teamWorkspaceService: {
+        read() {
+          throw new Error("The team-workspace endpoint is outside this test.");
+        },
+        saveOrder() {
+          throw new Error("The roster-order endpoint is outside this test.");
+        },
+      },
       auditPrivacyDigest: {
         digest() {
           return { digest: "e".repeat(64), keyVersion: 1 };

@@ -22,7 +22,7 @@ describe("M6-09 job lease-token migration", () => {
     });
     const migrations = discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY });
     applyMigrations({ database: connection.database, migrations: migrations.slice(0, 17), applicationBuildId: "m6-09-before", now: () => 1 });
-    applyMigrations({ database: connection.database, migrations, applicationBuildId: "m6-09-after", now: () => 2 });
+    applyMigrations({ database: connection.database, migrations: migrations.slice(0, 18), applicationBuildId: "m6-09-after", now: () => 2 });
     assert.equal(connection.database.pragma("user_version", { simple: true }), 18);
     const columns = connection.database.pragma("table_info(job_runs)").map(({ name }) => name);
     assert.equal(columns.includes("lease_token"), true);

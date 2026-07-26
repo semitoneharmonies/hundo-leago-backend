@@ -99,7 +99,12 @@ const RESET_OMISSION_POLICY = deepFreeze([
   ),
   omissionFamily(
     "season_1_rosters",
-    ["player_ownerships", "ownership_events"],
+    [
+      "player_ownerships",
+      "ownership_events",
+      "roster_display_order_entries",
+      "roster_display_order_sets",
+    ],
     "Existing Season 1 roster and ownership records are within the approved clean Season 2 reset scope."
   ),
   omissionFamily(

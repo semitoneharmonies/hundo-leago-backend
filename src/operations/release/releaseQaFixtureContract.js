@@ -1,7 +1,7 @@
 const crypto = require("node:crypto");
 
-const FIXTURE_VERSION = 6;
-const FIXTURE_BUILD_ID = "m7-release-qa-fixture-v6";
+const FIXTURE_VERSION = 7;
+const FIXTURE_BUILD_ID = "m7-release-qa-fixture-v7";
 const FIXTURE_ID_NAMESPACE = "m7-release-qa-fixture-v1";
 const FIXTURE_CREATED_AT = "2026-07-25T12:00:00.000Z";
 const FIXTURE_NOW_MS = Date.parse(FIXTURE_CREATED_AT);

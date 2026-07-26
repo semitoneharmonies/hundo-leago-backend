@@ -36,7 +36,9 @@
       "familyId": "season_1_rosters",
       "targetTables": [
         "player_ownerships",
-        "ownership_events"
+        "ownership_events",
+        "roster_display_order_entries",
+        "roster_display_order_sets"
       ],
       "selectionRule": "source_records_explicitly_classified_as_season_1_by_the_import_transform",
       "countTreatment": "source_count_equals_reported_omitted_count",
@@ -287,5 +289,5 @@
       "reason": "Hard-coded frontend identity and plaintext credential material is not an account source and must never be migrated."
     }
   ],
-  "checksum": "de5aa74ba6bec5fa927fed2f4c4a67c4930768d76fa167d03624046802157403"
+  "checksum": "34399999d9ec446fa80ed3dd4639fa5d4294646c1ad7feb04f2e7c87e826aafc"
 }

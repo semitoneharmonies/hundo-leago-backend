@@ -297,7 +297,7 @@ function inspectCandidate({
     },
     {
       metadata_key: "data_model_version",
-      metadata_value: "18",
+      metadata_value: "19",
       created_at_ms: 0,
       updated_at_ms: 1,
     },

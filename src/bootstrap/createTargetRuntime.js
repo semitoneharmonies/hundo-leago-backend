@@ -32,6 +32,9 @@ const {
   createAccountReactivationService,
 } = require("../application/services/accounts/createAccountReactivationService");
 const {
+  createAccountProfileService,
+} = require("../application/services/accounts/createAccountProfileService");
+const {
   createAdministratorCredentialSetupService,
 } = require("../application/services/accounts/createAdministratorCredentialSetupService");
 const {
@@ -188,6 +191,9 @@ const {
   createTeamReadService,
 } = require("../application/services/leagues/createTeamReadService");
 const {
+  createTeamWorkspaceService,
+} = require("../application/services/leagues/createTeamWorkspaceService");
+const {
   assertMigrationCompatibility,
   discoverMigrations,
 } = require("../infrastructure/database/migrate");
@@ -315,6 +321,9 @@ const {
   createSqliteTeamReadRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteTeamReadRepository");
 const {
+  createSqliteTeamWorkspaceRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteTeamWorkspaceRepository");
+const {
   createSqliteTradeProposalRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteTradeProposalRepository");
 const {
@@ -347,6 +356,9 @@ const {
 const {
   createAccountRegistrationRouter,
 } = require("../transport/http/createAccountRegistrationRouter");
+const {
+  createAccountProfileRouter,
+} = require("../transport/http/createAccountProfileRouter");
 const {
   createAccountSessionRouter,
 } = require("../transport/http/createAccountSessionRouter");
@@ -414,6 +426,8 @@ const TARGET_ENDPOINTS = Object.freeze([
   ["GET", "/api/v1/session", "accountSession"],
   ["DELETE", "/api/v1/session", "accountSession"],
   ["POST", "/api/v1/session/password", "accountSession"],
+  ["GET", "/api/v1/account", "accountProfile"],
+  ["PATCH", "/api/v1/account", "accountProfile"],
   ["POST", "/api/v1/password-reset-requests", "accountSession"],
   ["POST", "/api/v1/password-resets", "accountSession"],
   ["POST", "/api/v1/account/deactivation", "accountSession"],
@@ -621,6 +635,12 @@ const TARGET_ENDPOINTS = Object.freeze([
   ["GET", "/api/v1/leagues/:leagueId/teams", "team"],
   ["POST", "/api/v1/leagues/:leagueId/teams", "team"],
   ["GET", "/api/v1/leagues/:leagueId/teams/:teamId", "team"],
+  ["GET", "/api/v1/leagues/:leagueId/teams/:teamId/roster", "team"],
+  [
+    "PUT",
+    "/api/v1/leagues/:leagueId/teams/:teamId/roster-display-order",
+    "team",
+  ],
   [
     "GET",
     "/api/v1/public/leagues/:leagueId/teams/:teamId/roster",
@@ -817,6 +837,7 @@ function createTargetRepositories({ database } = {}) {
     }),
     teamProfiles: createSqliteTeamProfileRepository({ database }),
     teamRead: createSqliteTeamReadRepository({ database }),
+    teamWorkspace: createSqliteTeamWorkspaceRepository({ database }),
     tradeProposals: createSqliteTradeProposalRepository({ database }),
     tradeExpiries: createSqliteTradeExpiryRepository({ database }),
     tradeRecovery: createSqliteTradeReversalRepository({ database }),
@@ -1081,6 +1102,12 @@ function createTargetServices({
   });
 
   const account = Object.freeze({
+    profile: createAccountProfileService({
+      activeUserAuthorization: leagueAuthorization,
+      repositoryContext: repositories.context,
+      userRepository: repositories.users,
+      clock,
+    }),
     registration: createSelfServiceAccountService({
       repositoryContext: repositories.context,
       userRepository: repositories.users,
@@ -1342,6 +1369,13 @@ function createTargetServices({
       leagueAuthorization,
       teamReadRepository: repositories.teamRead,
     }),
+    teamWorkspace: createTeamWorkspaceService({
+      leagueAuthorization,
+      teamAuthorization,
+      repository: repositories.teamWorkspace,
+      clock,
+      secureRandom,
+    }),
     teamCreation: createTeamCreationService({
       repositoryContext: repositories.context,
       leagueAuthorization,
@@ -1436,6 +1470,10 @@ function createTargetRouters({
       sessionCookie,
       networkSourceResolver,
     }),
+    accountProfile: createAccountProfileRouter({
+      requestSecurity,
+      accountProfileService: services.account.profile,
+    }),
     accountSession: createAccountSessionRouter({
       ...sharedAudit,
       signInService: services.account.signIn,
@@ -1490,6 +1528,7 @@ function createTargetRouters({
       ...sharedAudit,
       teamReadService: services.league.teamRead,
       teamCreationService: services.league.teamCreation,
+      teamWorkspaceService: services.league.teamWorkspace,
     }),
     teamManagerAssignment: createTeamManagerAssignmentRouter({
       ...sharedAudit,
