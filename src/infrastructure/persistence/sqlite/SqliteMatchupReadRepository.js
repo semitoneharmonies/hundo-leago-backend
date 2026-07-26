@@ -36,12 +36,25 @@ function createSqliteMatchupReadRepository({ database } = {}) {
       "AND season_id = @seasonId ORDER BY sequence"
   );
   const matchupsStatement = database.prepare(
-    "SELECT * FROM matchups WHERE league_id = @leagueId " +
-      "AND season_id = @seasonId ORDER BY matchup_week_id, id"
+    "SELECT matchups.*, home_team.name AS current_home_team_name, " +
+      "away_team.name AS current_away_team_name FROM matchups " +
+      "LEFT JOIN teams AS home_team ON home_team.league_id = matchups.league_id " +
+      "AND home_team.id = matchups.home_team_id " +
+      "LEFT JOIN teams AS away_team ON away_team.league_id = matchups.league_id " +
+      "AND away_team.id = matchups.away_team_id " +
+      "WHERE matchups.league_id = @leagueId " +
+      "AND matchups.season_id = @seasonId ORDER BY matchups.matchup_week_id, matchups.id"
   );
   const byesStatement = database.prepare(
-    "SELECT * FROM matchup_byes WHERE league_id = @leagueId " +
-      "AND season_id = @seasonId ORDER BY matchup_week_id, team_id"
+    "SELECT matchup_byes.*, teams.name AS current_team_name, " +
+      "matchup_weeks.status AS week_status FROM matchup_byes " +
+      "LEFT JOIN teams ON teams.league_id = matchup_byes.league_id " +
+      "AND teams.id = matchup_byes.team_id " +
+      "JOIN matchup_weeks ON matchup_weeks.league_id = matchup_byes.league_id " +
+      "AND matchup_weeks.id = matchup_byes.matchup_week_id " +
+      "WHERE matchup_byes.league_id = @leagueId " +
+      "AND matchup_byes.season_id = @seasonId " +
+      "ORDER BY matchup_byes.matchup_week_id, matchup_byes.team_id"
   );
   const weekStatement = database.prepare(
     "SELECT * FROM matchup_weeks WHERE league_id = @leagueId " +
@@ -51,10 +64,16 @@ function createSqliteMatchupReadRepository({ database } = {}) {
     "SELECT matchups.*, matchup_weeks.week_key, matchup_weeks.sequence, " +
       "matchup_weeks.starts_at_ms, matchup_weeks.baseline_at_ms, " +
       "matchup_weeks.locks_at_ms, matchup_weeks.ends_at_ms, " +
-      "matchup_weeks.rolls_over_at_ms, matchup_weeks.status AS week_status, " +
-      "matchup_weeks.version AS week_version FROM matchups " +
+    "matchup_weeks.rolls_over_at_ms, matchup_weeks.status AS week_status, " +
+      "matchup_weeks.version AS week_version, " +
+      "home_team.name AS current_home_team_name, " +
+      "away_team.name AS current_away_team_name FROM matchups " +
       "JOIN matchup_weeks ON matchup_weeks.league_id = matchups.league_id " +
       "AND matchup_weeks.id = matchups.matchup_week_id " +
+      "LEFT JOIN teams AS home_team ON home_team.league_id = matchups.league_id " +
+      "AND home_team.id = matchups.home_team_id " +
+      "LEFT JOIN teams AS away_team ON away_team.league_id = matchups.league_id " +
+      "AND away_team.id = matchups.away_team_id " +
       "WHERE matchups.league_id = @leagueId AND matchups.season_id = @seasonId " +
       "AND matchups.matchup_week_id = @weekId AND matchups.id = @matchupId LIMIT 2"
   );

@@ -432,7 +432,7 @@ function insertLeagueBase(database, leagueAlias, accounts) {
     return Object.freeze({ id, name });
   });
 
-  const assignmentAccounts = [commissionerAlias, ...managerAliases];
+  const assignmentAccounts = managerAliases;
   assignmentAccounts.forEach((accountAlias, index) => {
     database.prepare(`
       INSERT INTO team_manager_assignments (
@@ -443,7 +443,7 @@ function insertLeagueBase(database, leagueAlias, accounts) {
     `).run(
       fixtureId(`assignment:${leagueAlias}:${accountAlias}`),
       leagueId,
-      teams[index].id,
+      teams[index + 1].id,
       accounts[accountAlias].id,
       memberships[accountAlias].id,
       accounts[commissionerAlias].id,
@@ -961,6 +961,7 @@ function insertAuctionAndTrades(database, league, leagueState, players, accounts
 
 function insertMatchupAndReleaseSignals(database, league, leagueState, players, accounts, statSourceId) {
   const day = 86_400_000;
+  const matchupWeekCount = 22;
   const priorWeekId = fixtureId(`matchup-week:${league.alias}:prior`);
   const currentWeekId = fixtureId(`matchup-week:${league.alias}:current`);
   const insertWeek = database.prepare(`
@@ -984,6 +985,24 @@ function insertMatchupAndReleaseSignals(database, league, leagueState, players, 
     FIXTURE_NOW_MS + 7 * day, "live", FIXTURE_NOW_MS - day,
     FIXTURE_NOW_MS
   );
+  for (let sequence = 3; sequence <= matchupWeekCount; sequence += 1) {
+    const startsAtMs = FIXTURE_NOW_MS - day + (sequence - 2) * 7 * day;
+    insertWeek.run(
+      fixtureId(`matchup-week:${league.alias}:future:${sequence}`),
+      league.leagueId,
+      league.seasons[0].id,
+      `week-${String(sequence).padStart(2, "0")}`,
+      sequence,
+      startsAtMs,
+      startsAtMs,
+      startsAtMs + 15 * 3_600_000,
+      startsAtMs + 7 * day,
+      startsAtMs + 7 * day,
+      "scheduled",
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS
+    );
+  }
 
   const priorMatchupId = fixtureId(`matchup:${league.alias}:prior`);
   const insertMatchup = database.prepare(`
@@ -1023,6 +1042,37 @@ function insertMatchupAndReleaseSignals(database, league, leagueState, players, 
       FIXTURE_NOW_MS
     );
   });
+  const futureRounds = [
+    [[0, 5], [1, 4], [2, 3]],
+    [[0, 4], [5, 3], [1, 2]],
+    [[0, 3], [4, 2], [5, 1]],
+    [[0, 2], [3, 1], [4, 5]],
+    [[0, 1], [2, 5], [3, 4]],
+  ];
+  for (let sequence = 3; sequence <= matchupWeekCount; sequence += 1) {
+    const weekId = fixtureId(
+      `matchup-week:${league.alias}:future:${sequence}`
+    );
+    const startsAtMs = FIXTURE_NOW_MS - day + (sequence - 2) * 7 * day;
+    const round = futureRounds[(sequence - 3) % futureRounds.length];
+    round.forEach(([homeIndex, awayIndex], index) => {
+      insertMatchup.run(
+        fixtureId(
+          `matchup:${league.alias}:future:${sequence}:${index + 1}`
+        ),
+        league.leagueId,
+        league.seasons[0].id,
+        weekId,
+        league.teams[homeIndex].id,
+        league.teams[awayIndex].id,
+        league.teams[homeIndex].name,
+        league.teams[awayIndex].name,
+        "scheduled",
+        FIXTURE_NOW_MS,
+        startsAtMs
+      );
+    });
+  }
 
   const refreshId = fixtureId(`stat-refresh:${league.alias}`);
   database.prepare(`
@@ -1140,8 +1190,9 @@ function insertMatchupAndReleaseSignals(database, league, leagueState, players, 
       );
       activeRoster.forEach((rosteredPlayer, rosterIndex) => {
         const total = totalsByPlayerId.get(rosteredPlayer.playerId);
-        const goalDelta = 1 + (rosterIndex % 2);
-        const assistDelta = 1 + ((rosterIndex + teamIndex) % 2);
+        const goalDelta = 1 + ((rosterIndex + teamIndex) % 2);
+        const assistDelta =
+          1 + ((rosterIndex + teamIndex) % 2) + (teamIndex % 3);
         const baselineGoals = total.goals - goalDelta;
         const baselineAssists = total.assists - assistDelta;
         const baselineFantasyPointsHundredths =

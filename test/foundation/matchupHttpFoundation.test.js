@@ -221,6 +221,40 @@ describe("M6-12 matchup HTTP integration service", () => {
     assert.equal(JSON.stringify(list).includes("nhl_season_key"), false);
   });
 
+  test("uses current names for scheduled matchups while preserving finalized names", () => {
+    const renamed = {
+      ...rawMatchup(),
+      current_home_team_name: "Renamed Home",
+      current_away_team_name: "Renamed Away",
+    };
+    const active = integrationFixture({ matchupRow: renamed });
+    const input = {
+      leagueId: LEAGUE_ID,
+      seasonId: SEASON_ID,
+      authenticated: { valid: true },
+    };
+    assert.equal(
+      active.service.listWeeks(input).weeks[0].matchups[0].homeTeam.name,
+      "Renamed Home"
+    );
+    assert.equal(
+      active.service.readMatchup({
+        ...input,
+        weekId: WEEK_ID,
+        matchupId: MATCHUP_ID,
+      }).matchup.awayTeam.name,
+      "Renamed Away"
+    );
+
+    const finalized = integrationFixture({
+      matchupRow: { ...renamed, status: "final" },
+    });
+    assert.equal(
+      finalized.service.listWeeks(input).weeks[0].matchups[0].homeTeam.name,
+      "Home"
+    );
+  });
+
   test("uses commissioner authority and explicit previews before all four writes", () => {
     const { calls, service } = integrationFixture();
     const base = { leagueId: LEAGUE_ID, seasonId: SEASON_ID, authenticated: { valid: true } };

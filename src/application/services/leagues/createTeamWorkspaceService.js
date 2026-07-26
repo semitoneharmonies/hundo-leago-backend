@@ -193,6 +193,9 @@ function safeWorkspace(record, nowMs, canManage) {
           Object.freeze({
             id: row.id,
             label: `${row.player_name} · $${(row.penalty_cents / 100).toFixed(2)} penalty · ${row.remaining_years}y`,
+            playerName: row.player_name,
+            annualPenaltyCents: row.penalty_cents,
+            remainingYears: row.remaining_years,
           })
         )
       ),

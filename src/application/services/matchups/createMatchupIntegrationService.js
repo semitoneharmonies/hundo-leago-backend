@@ -59,22 +59,43 @@ function operationId(value, createId) {
 }
 
 function projectMatchup(row) {
+  const preserveHistoricalName = ["final", "correction_required"].includes(
+    row.status
+  );
   return Object.freeze({
     id: row.id,
     leagueId: row.league_id,
     seasonId: row.season_id,
     weekId: row.matchup_week_id,
-    homeTeam: Object.freeze({ id: row.home_team_id, name: row.home_team_name }),
-    awayTeam: Object.freeze({ id: row.away_team_id, name: row.away_team_name }),
+    homeTeam: Object.freeze({
+      id: row.home_team_id,
+      name:
+        (!preserveHistoricalName && row.current_home_team_name) ||
+        row.home_team_name,
+    }),
+    awayTeam: Object.freeze({
+      id: row.away_team_id,
+      name:
+        (!preserveHistoricalName && row.current_away_team_name) ||
+        row.away_team_name,
+    }),
     status: row.status,
     version: row.version,
   });
 }
 
 function projectBye(row) {
+  const preserveHistoricalName = ["final", "correction_required"].includes(
+    row.week_status
+  );
   return Object.freeze({
     id: row.id,
-    team: Object.freeze({ id: row.team_id, name: row.team_display_name }),
+    team: Object.freeze({
+      id: row.team_id,
+      name:
+        (!preserveHistoricalName && row.current_team_name) ||
+        row.team_display_name,
+    }),
   });
 }
 

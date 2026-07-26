@@ -397,6 +397,20 @@ function verifyLeague(database, alias, playerIds) {
     expectedMembershipCount,
     `${alias} membership count`
   );
+  const commissionerAlias =
+    alias === "leagueA" ? "leagueACommissioner" : "leagueBCommissioner";
+  assertEqual(
+    count(
+      database,
+      `SELECT COUNT(*) AS count FROM team_manager_assignments
+       WHERE league_id=? AND user_id=? AND status='accepted'
+         AND ended_at_ms IS NULL`,
+      leagueId,
+      fixtureId(`account:${commissionerAlias}`)
+    ),
+    0,
+    `${alias} commissioner has no implicit team assignment`
+  );
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM seasons WHERE league_id=?", leagueId), 4, `${alias} season count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM draft_picks WHERE league_id=? AND status='unused'", leagueId), 96, `${alias} four-season draft-pick count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM league_player_positions WHERE league_id=?", leagueId), 26, `${alias} player-position count`);
@@ -486,9 +500,10 @@ function verifyLeague(database, alias, playerIds) {
     FROM trade_assets
     WHERE league_id=? AND contract_id=?
   `, leagueId, fixtureId(`contract:${alias}:activeForward2`)), 2, `${alias} simultaneous shared-asset coverage`);
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchup_weeks WHERE league_id=?", leagueId), 2, `${alias} matchup-week count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchup_weeks WHERE league_id=?", leagueId), 22, `${alias} matchup-week count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchups WHERE league_id=? AND status='live'", leagueId), 3, `${alias} live matchup count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchups WHERE league_id=? AND status='final'", leagueId), 3, `${alias} final matchup count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchups WHERE league_id=? AND status='scheduled'", leagueId), 60, `${alias} scheduled matchup count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchup_results WHERE league_id=? AND status='official'", leagueId), 1, `${alias} official result count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM player_stat_totals WHERE refresh_id=?", fixtureId(`stat-refresh:${alias}`)), PLAYER_BLUEPRINTS.length, `${alias} synthetic player-stat total count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM stat_snapshots WHERE league_id=?", leagueId), 12, `${alias} matchup snapshot count`);
