@@ -321,7 +321,7 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
       nhl_team_abbreviation, active, source_version, source_payload_json,
       effective_at_ms, ended_at_ms, created_at_ms
     ) VALUES (
-      ?, ?, 'sportsdataio-discovery-lab', ?, ?, 'VAN', 1,
+      ?, ?, 'sportsdataio-discovery-lab', ?, ?, 'VAN', ?,
       '2026REG', NULL, ?, NULL, ?
     )
   `);
@@ -353,6 +353,7 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
       playerId,
       position === "F" ? "C" : "D",
       position,
+      positionIndex < 10 ? 0 : 1,
       FIXTURE_NOW_MS,
       FIXTURE_NOW_MS
     );

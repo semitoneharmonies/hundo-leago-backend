@@ -229,7 +229,8 @@ function insertGlobalPlayers(database) {
       player.last_name,
       player.full_name,
       player.birth_date,
-      source.normalized_position
+      source.normalized_position,
+      source.active
     FROM players AS player
     INNER JOIN player_external_ids AS external
       ON external.player_id = player.id
@@ -238,7 +239,6 @@ function insertGlobalPlayers(database) {
       ON source.player_id = player.id
      AND source.provider = 'sportsdataio-discovery-lab'
      AND source.ended_at_ms IS NULL
-     AND source.active = 1
      AND source.normalized_position IN ('F', 'D')
     WHERE player.status = 'active'
     GROUP BY player.id
@@ -248,66 +248,30 @@ function insertGlobalPlayers(database) {
     ["F", providerPlayers.filter((player) => player.normalized_position === "F")],
     ["D", providerPlayers.filter((player) => player.normalized_position === "D")],
   ]);
-  const requiredByPosition = new Map(
-    ["F", "D"].map((position) => [
+  const available = new Map(
+    [...providerByPosition].map(([position, rows]) => [
       position,
-      PLAYER_BLUEPRINTS.filter((player) => player.position === position).length,
+      [...rows],
     ])
   );
-  const canUseProviderCatalog = [...requiredByPosition].every(
-    ([position, required]) =>
-      providerByPosition.get(position).length >= required
-  ) && ["F", "D"].every((position) => {
-    const required = PLAYER_BLUEPRINTS.filter(
-      (blueprint) =>
-        blueprint.position === position && blueprint.requiresUnder19
-    ).length;
-    const available = providerByPosition.get(position).filter(
-      (player) =>
-        typeof player.birth_date === "string" &&
-        player.birth_date > "2007-07-26"
-    ).length;
-    return available >= required;
-  });
-  if (canUseProviderCatalog) {
-    const available = new Map(
-      [...providerByPosition].map(([position, rows]) => [
-        position,
-        [...rows],
-      ])
-    );
-    const selectedByAlias = new Map();
-    const selectionOrder = [
-      ...PLAYER_BLUEPRINTS.filter(({ requiresUnder19 }) => requiresUnder19),
-      ...PLAYER_BLUEPRINTS.filter(({ requiresUnder19 }) => !requiresUnder19),
-    ];
-    for (const blueprint of selectionOrder) {
-      const pool = available.get(blueprint.position);
-      const selectedIndex = blueprint.requiresUnder19
-        ? pool.findIndex(
-            (player) =>
-              typeof player.birth_date === "string" &&
-              player.birth_date > "2007-07-26"
-          )
-        : 0;
+  const selectedByAlias = new Map();
+  const selectionOrder = [
+    ...PLAYER_BLUEPRINTS.filter(({ requiresUnder19 }) => requiresUnder19),
+    ...PLAYER_BLUEPRINTS.filter(({ requiresUnder19 }) => !requiresUnder19),
+  ];
+  for (const blueprint of selectionOrder) {
+    const pool = available.get(blueprint.position);
+    const selectedIndex = blueprint.requiresUnder19
+      ? pool.findIndex(
+          (player) =>
+            typeof player.birth_date === "string" &&
+            player.birth_date > "2007-07-26"
+        )
+      : pool.findIndex((player) => player.active === 1);
+    if (selectedIndex >= 0) {
       const [selected] = pool.splice(selectedIndex, 1);
       selectedByAlias.set(blueprint.alias, selected);
     }
-    return Object.freeze(
-      Object.fromEntries(
-        PLAYER_BLUEPRINTS.map((blueprint) => {
-          const selected = selectedByAlias.get(blueprint.alias);
-          return [
-            blueprint.alias,
-            Object.freeze({
-              id: selected.id,
-              ...blueprint,
-              providerBacked: true,
-            }),
-          ];
-        })
-      )
-    );
   }
 
   const insertPlayer = database.prepare(`
@@ -323,6 +287,15 @@ function insertGlobalPlayers(database) {
   `);
   const players = {};
   PLAYER_BLUEPRINTS.forEach((blueprint, index) => {
+    const providerPlayer = selectedByAlias.get(blueprint.alias);
+    if (providerPlayer) {
+      players[blueprint.alias] = Object.freeze({
+        id: providerPlayer.id,
+        ...blueprint,
+        providerBacked: true,
+      });
+      return;
+    }
     const id = fixtureId(`player:${blueprint.alias}`);
     const firstName = "Fixture";
     const lastName = `Player ${String(index + 1).padStart(2, "0")}`;

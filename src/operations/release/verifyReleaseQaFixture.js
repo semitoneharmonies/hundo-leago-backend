@@ -54,21 +54,24 @@ function resolveFixturePlayerIds(database) {
   const synthetic = Object.fromEntries(
     PLAYER_BLUEPRINTS.map(({ alias }) => [alias, fixtureId(`player:${alias}`)])
   );
-  const syntheticCount = database
-    .prepare(
-      `SELECT COUNT(*) AS count FROM players WHERE id IN (${PLAYER_BLUEPRINTS.map(
-        () => "?"
-      ).join(", ")})`
-    )
-    .get(...Object.values(synthetic)).count;
-  if (syntheticCount === PLAYER_BLUEPRINTS.length) {
-    return Object.freeze(synthetic);
-  }
-  assertEqual(syntheticCount, 0, "partial synthetic player identity set");
+  const syntheticIds = new Set(
+    database
+      .prepare(
+        `SELECT id FROM players WHERE id IN (${PLAYER_BLUEPRINTS.map(
+          () => "?"
+        ).join(", ")})`
+      )
+      .all(...Object.values(synthetic))
+      .map(({ id }) => id)
+  );
 
   const providerPlayers = database
     .prepare(`
-      SELECT player.id, player.birth_date, source.normalized_position
+      SELECT
+        player.id,
+        player.birth_date,
+        source.normalized_position,
+        source.active
       FROM players AS player
       INNER JOIN player_external_ids AS external
         ON external.player_id = player.id
@@ -77,7 +80,6 @@ function resolveFixturePlayerIds(database) {
         ON source.player_id = player.id
        AND source.provider = 'sportsdataio-discovery-lab'
        AND source.ended_at_ms IS NULL
-       AND source.active = 1
        AND source.normalized_position IN ('F', 'D')
       WHERE player.status = 'active'
       GROUP BY player.id
@@ -97,6 +99,10 @@ function resolveFixturePlayerIds(database) {
     ...PLAYER_BLUEPRINTS.filter(({ requiresUnder19 }) => !requiresUnder19),
   ];
   for (const blueprint of selectionOrder) {
+    if (syntheticIds.has(synthetic[blueprint.alias])) {
+      resolved[blueprint.alias] = synthetic[blueprint.alias];
+      continue;
+    }
     const pool = available.get(blueprint.position);
     const selectedIndex = blueprint.requiresUnder19
       ? pool.findIndex(
@@ -104,7 +110,7 @@ function resolveFixturePlayerIds(database) {
             typeof player.birth_date === "string" &&
             player.birth_date > "2007-07-26"
         )
-      : 0;
+      : pool.findIndex((player) => player.active === 1);
     const [selected] = selectedIndex < 0
       ? []
       : pool.splice(selectedIndex, 1);
