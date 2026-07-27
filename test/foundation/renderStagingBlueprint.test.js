@@ -105,7 +105,12 @@ describe("M2 gate staging Render blueprint", () => {
 
     assert.equal(environment.get("LEAGUE_WRITE_MODE")?.value, "open");
 
-    assert.equal(environment.get("EMAIL_DELIVERY_MODE")?.value, "capture");
+    assert.equal(environment.get("EMAIL_DELIVERY_MODE")?.value, "allowlist");
+    assert.equal(
+      environment.get("STAGING_EMAIL_RECIPIENT_ALLOWLIST")?.sync,
+      false
+    );
+    assert.equal(environment.get("RESEND_API_KEY")?.sync, false);
   });
 
   test("contains secret references or generated values, never secret literals", () => {

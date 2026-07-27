@@ -84,7 +84,15 @@
         },
         {
           "key": "EMAIL_DELIVERY_MODE",
-          "value": "capture"
+          "value": "allowlist"
+        },
+        {
+          "key": "STAGING_EMAIL_RECIPIENT_ALLOWLIST",
+          "sync": false
+        },
+        {
+          "key": "RESEND_API_KEY",
+          "sync": false
         },
         {
           "key": "SPORTSDATAIO_NHL_API_KEY",
