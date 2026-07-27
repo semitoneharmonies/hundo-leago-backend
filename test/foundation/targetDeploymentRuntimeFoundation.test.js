@@ -471,6 +471,8 @@ describe("M7-01 deployed target runtime configuration", () => {
     const ready = await fetch(new URL("/api/v1/health/ready", baseUrl));
     assert.equal(live.status, 200);
     assert.equal(ready.status, 200);
+    assert.equal(live.headers.get("x-powered-by"), null);
+    assert.equal(ready.headers.get("x-powered-by"), null);
     assert.deepEqual(await live.json(), { data: { status: "live" } });
     assert.deepEqual(await ready.json(), { data: { status: "ready" } });
 

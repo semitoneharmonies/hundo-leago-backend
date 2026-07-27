@@ -797,6 +797,7 @@ function createTargetApplication({
   }
 
   const app = expressModule();
+  app.disable("x-powered-by");
   if (leagueWriteGate !== undefined) {
     if (typeof leagueWriteGate !== "function") {
       throw new TypeError("target runtime requires a league write gate");
