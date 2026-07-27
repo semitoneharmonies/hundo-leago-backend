@@ -148,7 +148,11 @@ function createSqliteMatchupRecoveryRepository({ database, beforeCommit } = {}) 
     }
     const context = readMatchupContext(command);
     if (
-      !context || context.commissioner_user_id !== command.actorUserId ||
+      !context ||
+      (
+        context.commissioner_user_id !== command.actorUserId &&
+        command.authorizedAsPlatformAdministrator !== true
+      ) ||
       context.version !== command.expectedVersion || context.week_version !== command.expectedWeekVersion
     ) throw repositoryError(REPOSITORY_ERROR_CODES.versionConflict, "The matchup recovery context changed.");
     if (routeMatchup.run(command).changes !== 1 || routeWeek.run(command).changes !== 1) {
@@ -169,7 +173,14 @@ function createSqliteMatchupRecoveryRepository({ database, beforeCommit } = {}) 
     }
     const context = readStandingsContext(command);
     const currentId = context?.currentSnapshot?.id || null;
-    if (!context || context.season.commissioner_user_id !== command.actorUserId || currentId !== command.expectedCurrentSnapshotId) {
+    if (
+      !context ||
+      (
+        context.season.commissioner_user_id !== command.actorUserId &&
+        command.authorizedAsPlatformAdministrator !== true
+      ) ||
+      currentId !== command.expectedCurrentSnapshotId
+    ) {
       throw repositoryError(REPOSITORY_ERROR_CODES.versionConflict, "The standings recovery context changed.");
     }
     if (currentId && supersedeSnapshot.run({ ...command, currentSnapshotId: currentId }).changes !== 1) {

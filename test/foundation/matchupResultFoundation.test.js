@@ -259,6 +259,24 @@ describe("M6-07 atomic finalization and append-only correction", () => {
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM matchup_result_versions").get().count, 1);
   });
 
+  test("records a correction by a previously authorized platform administrator", (t) => {
+    const { database, service } = createRuntime(t);
+    service.finalize(input());
+
+    const corrected = service.correct({
+      ...input(uuid(403), NOW_MS + 1),
+      actorUserId: IDS.outsider,
+      authorizedAsPlatformAdministrator: true,
+      expectedResultVersion: 1,
+      homeScoreHundredths: 100,
+      awayScoreHundredths: 200,
+      reason: "Platform administrator correction",
+    });
+
+    assert.equal(corrected.corrected, true);
+    assert.equal(corrected.context.versions[1].actor_user_id, IDS.outsider);
+  });
+
   test("rolls every finalization effect back after a late failure", (t) => {
     let fail = true;
     const { database, service } = createRuntime(t, { fail: () => fail });

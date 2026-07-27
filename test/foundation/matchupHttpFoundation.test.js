@@ -64,6 +64,10 @@ function integrationFixture({
   matchupResult = null,
   finalScore = null,
   liveScore = null,
+  commissionerAuthority = {
+    actorUserId: "commissioner",
+    authority: "commissioner",
+  },
 } = {}) {
   const calls = [];
   const authority = {
@@ -73,7 +77,7 @@ function integrationFixture({
     },
     requireCommissioner(authenticated, leagueId) {
       calls.push({ method: "commissioner", authenticated, leagueId });
-      return { actorUserId: "commissioner" };
+      return commissionerAuthority;
     },
   };
   const schedule = {
@@ -277,6 +281,51 @@ describe("M6-12 matchup HTTP integration service", () => {
     assert.equal(calls.filter(({ method }) => method === "commissioner").length, 4);
     for (const method of ["scheduleGenerate", "weekAdvance", "correct", "standingsRebuild"]) {
       assert.equal(calls.some((call) => call.method === method), false, method);
+    }
+  });
+
+  test("propagates inherited platform-administrator authority to matchup commands", () => {
+    const { calls, service } = integrationFixture({
+      commissionerAuthority: {
+        actorUserId: "platform-admin",
+        authority: "platform_administrator",
+      },
+    });
+    const base = {
+      leagueId: LEAGUE_ID,
+      seasonId: SEASON_ID,
+      authenticated: { valid: true },
+    };
+
+    service.generateSchedule({
+      ...base,
+      input: { confirmed: false },
+    });
+    service.rebuildStandings({
+      ...base,
+      input: { confirmed: false },
+    });
+    service.correctResult({
+      ...base,
+      resultId: RESULT_ID,
+      expectedVersion: 3,
+      idempotencyKey: OPERATION_ID,
+      input: {
+        confirmed: true,
+        homeScoreHundredths: 500,
+        awayScoreHundredths: 400,
+        reason: "Official provider correction",
+      },
+    });
+
+    for (const method of [
+      "schedulePreview",
+      "standingsPreview",
+      "correct",
+    ]) {
+      const call = calls.find((candidate) => candidate.method === method);
+      assert.equal(call.input.actorUserId, "platform-admin");
+      assert.equal(call.input.authorizedAsPlatformAdministrator, true);
     }
   });
 

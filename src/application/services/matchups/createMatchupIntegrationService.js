@@ -406,6 +406,8 @@ function createMatchupIntegrationService({
       leagueId: input.leagueId,
       seasonId: input.seasonId,
       actorUserId: authority.actorUserId,
+      authorizedAsPlatformAdministrator:
+        authority.authority === "platform_administrator",
       nowMs: clock.nowMs(),
     };
     const preview = scheduleService.preview(command);
@@ -495,6 +497,8 @@ function createMatchupIntegrationService({
         weekId: scope.week_id,
         matchupId: scope.matchup_id,
         actorUserId: authority.actorUserId,
+        authorizedAsPlatformAdministrator:
+          authority.authority === "platform_administrator",
         operationId: operationId(input.idempotencyKey, createId),
         expectedResultVersion: input.expectedVersion,
         homeScoreHundredths: body.homeScoreHundredths,
@@ -517,6 +521,8 @@ function createMatchupIntegrationService({
       leagueId: input.leagueId,
       seasonId: input.seasonId,
       actorUserId: authority.actorUserId,
+      authorizedAsPlatformAdministrator:
+        authority.authority === "platform_administrator",
     };
     const preview = recoveryService.previewStandings(command);
     if (!confirmed) {

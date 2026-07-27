@@ -200,7 +200,11 @@ function createSqliteMatchupResultRepository({ database, beforeCommit } = {}) {
   const correctionTransaction = database.transaction((command) => {
     const context = readContext(command);
     if (
-      !context || !context.result || context.matchup.commissioner_user_id !== command.actorUserId ||
+      !context || !context.result ||
+      (
+        context.matchup.commissioner_user_id !== command.actorUserId &&
+        command.authorizedAsPlatformAdministrator !== true
+      ) ||
       context.result.version !== command.expectedResultVersion ||
       context.result.current_version_id !== command.supersedesVersionId ||
       context.versions.at(-1)?.id !== command.supersedesVersionId

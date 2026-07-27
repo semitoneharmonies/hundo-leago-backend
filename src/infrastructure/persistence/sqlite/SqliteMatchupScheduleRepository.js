@@ -127,7 +127,10 @@ function createSqliteMatchupScheduleRepository({ database, beforeCommit } = {}) 
     if (
       !current ||
       current.season_version !== command.expectedSeasonVersion ||
-      current.commissioner_user_id !== command.actorUserId ||
+      (
+        current.commissioner_user_id !== command.actorUserId &&
+        command.authorizedAsPlatformAdministrator !== true
+      ) ||
       current.existingWeekCount !== 0
     ) {
       throw repositoryError(

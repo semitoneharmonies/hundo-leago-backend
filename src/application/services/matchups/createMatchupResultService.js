@@ -104,7 +104,10 @@ function createMatchupResultService({ repository, scoringService, createId = ran
     if (!context || !context.result || context.versions.length < 1) {
       fail(MATCHUP_RESULT_SERVICE_CODES.contextMissing, "The official matchup result was not found.");
     }
-    if (context.matchup.commissioner_user_id !== input.actorUserId) {
+    if (
+      context.matchup.commissioner_user_id !== input.actorUserId &&
+      input.authorizedAsPlatformAdministrator !== true
+    ) {
       fail(MATCHUP_RESULT_SERVICE_CODES.commissionerRequired, "Current commissioner authority is required.");
     }
     const correction = validateResultCorrection(input);
@@ -116,6 +119,8 @@ function createMatchupResultService({ repository, scoringService, createId = ran
       matchupId: context.matchup.id,
       operationId: input.operationId || createId(),
       actorUserId: input.actorUserId,
+      authorizedAsPlatformAdministrator:
+        input.authorizedAsPlatformAdministrator === true,
       resultId: context.result.id,
       resultVersionId: createId(),
       versionNumber: current.version_number + 1,

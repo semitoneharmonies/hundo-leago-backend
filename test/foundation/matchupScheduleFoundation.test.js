@@ -317,6 +317,28 @@ describe("M6-02 atomic matchup schedule persistence", () => {
     assert.equal(before.equals(runtime.database.serialize()), true);
   });
 
+  test("allows a previously authorized platform administrator without impersonating the commissioner", (t) => {
+    const runtime = createRuntime(t);
+    const before = runtime.database.serialize();
+    const input = {
+      ...runtime.scope,
+      actorUserId: runtime.other.commissionerId,
+      authorizedAsPlatformAdministrator: true,
+      nowMs: NOW_MS,
+    };
+    const preview = runtime.service.preview(input);
+
+    assert.equal(preview.plan.teamIds.length, 4);
+    assert.equal(before.equals(runtime.database.serialize()), true);
+    assert.equal(runtime.service.generate(input).weekCount, 22);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT actor_user_id FROM matchup_operations")
+        .get().actor_user_id,
+      runtime.other.commissionerId
+    );
+  });
+
   test("rejects generation at Week 1 and rolls every row back after a late failure", (t) => {
     const runtime = createRuntime(t, { beforeCommit() { throw new Error("late failure"); } });
     assert.throws(() => runtime.service.preview({

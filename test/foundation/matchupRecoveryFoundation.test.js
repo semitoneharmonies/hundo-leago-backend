@@ -210,6 +210,63 @@ describe("M6-10 commissioner matchup and standings recovery", () => {
     assert.equal(database.prepare("SELECT actor_user_id FROM standings_operations WHERE id = ?").get(uuid(411)).actor_user_id, IDS.commissioner);
   });
 
+  test("allows a previously authorized platform administrator to perform recovery without impersonation", (t) => {
+    const { database, service } = createRuntime(t);
+    const changes = database.prepare("SELECT total_changes() AS count").get().count;
+    const authority = {
+      leagueId: IDS.league,
+      seasonId: IDS.season,
+      actorUserId: IDS.outsider,
+      authorizedAsPlatformAdministrator: true,
+    };
+    const preview = service.previewStandings(authority);
+
+    assert.equal(preview.projection.rows.length, 2);
+    assert.equal(database.prepare("SELECT total_changes() AS count").get().count, changes);
+    const rebuilt = service.rebuildStandings({
+      ...authority,
+      operationId: uuid(430),
+      confirmed: true,
+      reason: "Platform administrator standings recovery",
+      expectedVersion: preview.expectedVersion,
+      expectedCurrentSnapshotId: preview.currentSnapshotId,
+      nowMs: 300,
+    });
+    assert.equal(rebuilt.replayed, false);
+    assert.equal(
+      database
+        .prepare("SELECT actor_user_id FROM standings_operations WHERE id = ?")
+        .get(uuid(430)).actor_user_id,
+      IDS.outsider
+    );
+
+    const matchupPreview = service.previewMatchup({
+      ...authority,
+      weekId: IDS.week,
+      matchupId: IDS.matchup,
+      operationId: uuid(431),
+      nowMs: 301,
+    });
+    const routed = service.routeMatchup({
+      ...authority,
+      weekId: IDS.week,
+      matchupId: IDS.matchup,
+      operationId: uuid(431),
+      confirmed: true,
+      reason: "Platform administrator matchup recovery",
+      expectedVersion: matchupPreview.expectedVersion,
+      expectedWeekVersion: matchupPreview.expectedWeekVersion,
+      nowMs: 301,
+    });
+    assert.equal(routed.replayed, false);
+    assert.equal(
+      database
+        .prepare("SELECT actor_user_id FROM matchup_operations WHERE id = ?")
+        .get(uuid(431)).actor_user_id,
+      IDS.outsider
+    );
+  });
+
   test("rolls a late standings rebuild failure back without superseding current", (t) => {
     let fail = false;
     const { database, service } = createRuntime(t, {

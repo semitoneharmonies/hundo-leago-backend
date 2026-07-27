@@ -39,10 +39,19 @@ function createMatchupScheduleService({ repository, createId = randomUUID } = {}
     throw new TypeError("createMatchupScheduleService requires an ID factory");
   }
 
-  function preview({ leagueId, seasonId, actorUserId, nowMs }) {
+  function preview({
+    leagueId,
+    seasonId,
+    actorUserId,
+    authorizedAsPlatformAdministrator = false,
+    nowMs,
+  }) {
     const context = repository.readContext({ leagueId, seasonId });
     if (!context) fail(MATCHUP_SCHEDULE_SERVICE_CODES.contextMissing, "The season was not found.");
-    if (context.commissioner_user_id !== actorUserId) {
+    if (
+      context.commissioner_user_id !== actorUserId &&
+      authorizedAsPlatformAdministrator !== true
+    ) {
       fail(MATCHUP_SCHEDULE_SERVICE_CODES.commissionerRequired, "Commissioner authority is required.");
     }
     if (!["planned", "active"].includes(context.season_status)) {
@@ -129,6 +138,8 @@ function createMatchupScheduleService({ repository, createId = randomUUID } = {}
       leagueId: context.league_id,
       seasonId: context.season_id,
       actorUserId: input.actorUserId,
+      authorizedAsPlatformAdministrator:
+        input.authorizedAsPlatformAdministrator === true,
       expectedSeasonVersion: context.season_version,
       teamCount: plan.teamIds.length,
       weeks: Object.freeze(weeks),

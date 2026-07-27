@@ -473,6 +473,46 @@ async function verifyAdministrator(baseUrl, frontendOrigin, password, expectedWr
         200
       );
     }
+    if (expectedWriteMode === "open") {
+      const league = visibleLeagues.find(
+        (candidate) => candidate.id === expectedIds[0]
+      );
+      const seasonId = league?.currentSeason?.id;
+      if (typeof seasonId !== "string") {
+        fail(
+          "administrator-competition-authority",
+          "The administrator league projection did not include an active season."
+        );
+      }
+      const preview = await request(
+        baseUrl,
+        frontendOrigin,
+        `/api/v1/leagues/${league.id}/seasons/${seasonId}/standings/rebuilds`,
+        {
+          method: "POST",
+          body: { confirmed: false },
+          cookie: session.cookie,
+          csrfToken: session.csrfToken,
+        }
+      );
+      const previewBody = expectStatus(
+        "administrator-competition-authority",
+        preview,
+        200
+      );
+      if (
+        previewBody?.data?.code !==
+          "MATCHUP_STANDINGS_REBUILD_PREVIEWED" ||
+        !Number.isSafeInteger(
+          previewBody?.data?.preview?.expectedVersion
+        )
+      ) {
+        fail(
+          "administrator-competition-authority",
+          "The platform administrator did not receive a valid read-only standings preview."
+        );
+      }
+    }
     const operations = await request(baseUrl, frontendOrigin, "/api/v1/operations/health", {
       cookie: session.cookie,
     });
@@ -563,6 +603,7 @@ async function verifyReleaseQaRuntime({
     accountAliasCount: ACCOUNT_ALIASES.length,
     checks: Object.freeze({
       accountStates: "passed",
+      administratorCompetitionAuthority: "passed",
       administratorLeagueAuthority: "passed",
       authenticationAndReload: "passed",
       commissionerBidPrivacy: "passed",

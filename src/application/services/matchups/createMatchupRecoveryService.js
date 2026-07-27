@@ -40,7 +40,10 @@ function createMatchupRecoveryService({ repository, standingsService, createId =
   function previewMatchup(input) {
     const context = repository.readMatchupContext(input);
     if (!context) fail(MATCHUP_RECOVERY_SERVICE_CODES.contextMissing, "The matchup was not found.");
-    if (context.commissioner_user_id !== input.actorUserId) {
+    if (
+      context.commissioner_user_id !== input.actorUserId &&
+      input.authorizedAsPlatformAdministrator !== true
+    ) {
       fail(MATCHUP_RECOVERY_SERVICE_CODES.commissionerRequired, "Current commissioner authority is required.");
     }
     if (!["awaiting_data", "final"].includes(context.status) || !["awaiting_data", "final"].includes(context.week_status)) {
@@ -70,6 +73,8 @@ function createMatchupRecoveryService({ repository, standingsService, createId =
       weekId: input.weekId,
       matchupId: input.matchupId,
       actorUserId: input.actorUserId,
+      authorizedAsPlatformAdministrator:
+        input.authorizedAsPlatformAdministrator === true,
       operationId: input.operationId,
       expectedVersion: validated.expectedVersion,
       expectedWeekVersion: input.expectedWeekVersion,
@@ -81,7 +86,10 @@ function createMatchupRecoveryService({ repository, standingsService, createId =
   function previewStandings(input) {
     const context = repository.readStandingsContext(input);
     if (!context) fail(MATCHUP_RECOVERY_SERVICE_CODES.contextMissing, "The standings season was not found.");
-    if (context.season.commissioner_user_id !== input.actorUserId) {
+    if (
+      context.season.commissioner_user_id !== input.actorUserId &&
+      input.authorizedAsPlatformAdministrator !== true
+    ) {
       fail(MATCHUP_RECOVERY_SERVICE_CODES.commissionerRequired, "Current commissioner authority is required.");
     }
     const projection = standingsService.read(input);
@@ -119,6 +127,8 @@ function createMatchupRecoveryService({ repository, standingsService, createId =
       leagueId: input.leagueId,
       seasonId: input.seasonId,
       actorUserId: input.actorUserId,
+      authorizedAsPlatformAdministrator:
+        input.authorizedAsPlatformAdministrator === true,
       operationId: input.operationId,
       expectedCurrentSnapshotId: input.expectedCurrentSnapshotId ?? null,
       snapshotId: createId(),
