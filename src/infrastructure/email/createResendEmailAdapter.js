@@ -95,6 +95,7 @@ function createResendEmailAdapter({
   apiKey,
   deliveryMode,
   from,
+  recipientAllowlist = [],
   replyTo = null,
   fetchImplementation = globalThis.fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -104,9 +105,27 @@ function createResendEmailAdapter({
   const credential = assertApiKey(apiKey);
   const sender = assertSender(from);
   const replyAddress = assertReplyTo(replyTo);
-  if (!["sandbox", "send"].includes(deliveryMode)) {
-    throw new TypeError("Resend account email requires sandbox or send mode");
+  if (!["sandbox", "allowlist", "send"].includes(deliveryMode)) {
+    throw new TypeError(
+      "Resend account email requires sandbox, allowlist, or send mode"
+    );
   }
+  if (
+    !Array.isArray(recipientAllowlist) ||
+    recipientAllowlist.some(
+      (value) =>
+        typeof value !== "string" ||
+        value !== value.trim() ||
+        !EMAIL_PATTERN.test(value)
+    ) ||
+    (deliveryMode === "allowlist" && recipientAllowlist.length === 0) ||
+    (deliveryMode !== "allowlist" && recipientAllowlist.length !== 0)
+  ) {
+    throw new TypeError("Resend account email requires a valid recipient allowlist");
+  }
+  const allowedRecipients = new Set(
+    recipientAllowlist.map((value) => value.toLowerCase())
+  );
   if (typeof fetchImplementation !== "function") {
     throw new TypeError("Resend account email requires a fetch implementation");
   }
@@ -132,6 +151,12 @@ function createResendEmailAdapter({
       throw new TypeError("Resend account email requires an idempotency key");
     }
     const rendered = render(message);
+    if (
+      deliveryMode === "allowlist" &&
+      !allowedRecipients.has(rendered.to.toLowerCase())
+    ) {
+      throw providerFailure(false);
+    }
     const body = {
       from: sender,
       to: [

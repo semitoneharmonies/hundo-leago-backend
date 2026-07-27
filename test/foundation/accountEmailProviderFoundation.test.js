@@ -175,6 +175,35 @@ describe("M3-21 Resend account email adapter", () => {
     assert.equal(requestBody.includes("manager@example.test"), false);
   });
 
+  test("delivers staging allowlist traffic only to exact approved recipients", async () => {
+    const recipients = [];
+    const adapter = createResendEmailAdapter({
+      apiKey: API_KEY,
+      deliveryMode: "allowlist",
+      from: "Hundo Leago <accounts@hundo.example>",
+      recipientAllowlist: ["manager@example.test"],
+      async fetchImplementation(_url, options) {
+        recipients.push(...JSON.parse(options.body).to);
+        return response(200, { id: "allowlisted-email-id" });
+      },
+    });
+
+    await adapter.sendEmailVerification(verification());
+    assert.deepEqual(recipients, ["manager@example.test"]);
+    await assert.rejects(
+      adapter.sendEmailVerification(
+        verification({
+          idempotencyKey: "verification/event-2",
+          to: "other@example.test",
+        })
+      ),
+      (error) =>
+        error instanceof AccountEmailProviderError &&
+        error.retryable === false
+    );
+    assert.deepEqual(recipients, ["manager@example.test"]);
+  });
+
   test("uses the same provider boundary for all approved security notifications", async () => {
     const subjects = [];
     const adapter = createResendEmailAdapter({
@@ -341,6 +370,7 @@ describe("M3-21 configured adapter and delivery job", () => {
         deliveryMode: "sandbox",
         from: "accounts@hundo.example",
         provider: "resend",
+        recipientAllowlist: [],
         replyTo: null,
       },
       fetchImplementation: async () => {

@@ -22,12 +22,13 @@ const EMAIL_DELIVERY_MODES = Object.freeze([
   "disabled",
   "capture",
   "sandbox",
+  "allowlist",
   "send",
 ]);
 const EMAIL_MODES_BY_ENVIRONMENT = Object.freeze({
   local: Object.freeze(["disabled", "capture"]),
   test: Object.freeze(["disabled", "capture"]),
-  staging: Object.freeze(["capture", "sandbox"]),
+  staging: Object.freeze(["capture", "sandbox", "allowlist"]),
   production: Object.freeze(["send"]),
 });
 const RESEND_API_ORIGIN = "https://api.resend.com";
@@ -343,6 +344,38 @@ function readOptionalEmailAddress(env, field, options) {
   return validateEmailAddress(field, raw, options);
 }
 
+function readStagingEmailRecipientAllowlist(env, deliveryMode) {
+  const field = "STAGING_EMAIL_RECIPIENT_ALLOWLIST";
+  const raw = env[field];
+  if (deliveryMode !== "allowlist") {
+    if (raw !== undefined && raw !== null && raw !== "") {
+      fail(field, "the allowlist is only allowed in staging allowlist mode");
+    }
+    return Object.freeze([]);
+  }
+  if (
+    typeof raw !== "string" ||
+    raw === "" ||
+    raw !== raw.trim()
+  ) {
+    fail(field, "an exact comma-separated recipient allowlist is required");
+  }
+  const recipients = raw.split(",").map((value) => {
+    if (value !== value.trim()) {
+      fail(field, "recipient whitespace is not allowed");
+    }
+    return validateEmailAddress(field, value).toLowerCase();
+  });
+  if (
+    recipients.length < 1 ||
+    recipients.length > 32 ||
+    new Set(recipients).size !== recipients.length
+  ) {
+    fail(field, "the recipient allowlist is invalid");
+  }
+  return Object.freeze(recipients);
+}
+
 function readResendApiKey(env, required) {
   const field = "RESEND_API_KEY";
   const raw = env[field];
@@ -378,7 +411,9 @@ function readEmailConfig(env, appEnv) {
       "the mode is not approved for this application environment"
     );
   }
-  const providerEnabled = ["sandbox", "send"].includes(deliveryMode);
+  const providerEnabled = ["sandbox", "allowlist", "send"].includes(
+    deliveryMode
+  );
   const from = readOptionalEmailAddress(env, "EMAIL_FROM", {
     allowDisplayName: true,
   });
@@ -387,6 +422,10 @@ function readEmailConfig(env, appEnv) {
     fail("EMAIL_FROM", "a provider sender is required");
   }
   const apiKey = readResendApiKey(env, providerEnabled);
+  const recipientAllowlist = readStagingEmailRecipientAllowlist(
+    env,
+    deliveryMode
+  );
 
   return Object.freeze({
     apiKey,
@@ -394,6 +433,7 @@ function readEmailConfig(env, appEnv) {
     deliveryMode,
     from,
     provider: providerEnabled ? "resend" : null,
+    recipientAllowlist,
     replyTo,
   });
 }

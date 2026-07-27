@@ -292,10 +292,23 @@ describe("M3-02 security configuration", () => {
     const production = loadSecurityConfig({
       env: deployedEnv("production"),
     });
+    const allowlist = loadSecurityConfig({
+      env: deployedEnv("staging", {
+        EMAIL_DELIVERY_MODE: "allowlist",
+        EMAIL_FROM: "Hundo Leago <accounts@staging.hundo.example>",
+        RESEND_API_KEY,
+        STAGING_EMAIL_RECIPIENT_ALLOWLIST:
+          "manager+one@example.test,manager+two@example.test",
+      }),
+    });
 
     assert.equal(sandbox.email.provider, "resend");
     assert.equal(sandbox.email.apiOrigin, "https://api.resend.com");
     assert.equal(sandbox.email.apiKey.configured, true);
+    assert.deepEqual(allowlist.email.recipientAllowlist, [
+      "manager+one@example.test",
+      "manager+two@example.test",
+    ]);
     assert.equal(production.email.deliveryMode, "send");
     assert.equal(production.email.from.includes("accounts@"), true);
 
@@ -309,6 +322,20 @@ describe("M3-02 security configuration", () => {
       [
         deployedEnv("production", { EMAIL_DELIVERY_MODE: "capture" }),
         "EMAIL_DELIVERY_MODE",
+      ],
+      [
+        deployedEnv("staging", {
+          EMAIL_DELIVERY_MODE: "allowlist",
+          EMAIL_FROM: "accounts@staging.hundo.example",
+          RESEND_API_KEY,
+        }),
+        "STAGING_EMAIL_RECIPIENT_ALLOWLIST",
+      ],
+      [
+        deployedEnv("staging", {
+          STAGING_EMAIL_RECIPIENT_ALLOWLIST: "manager@example.test",
+        }),
+        "STAGING_EMAIL_RECIPIENT_ALLOWLIST",
       ],
       [
         deployedEnv("staging", {

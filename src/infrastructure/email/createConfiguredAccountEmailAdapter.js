@@ -22,7 +22,7 @@ function createConfiguredAccountEmailAdapter({
     return createCaptureEmailAdapter();
   }
   if (
-    !["sandbox", "send"].includes(emailConfig.deliveryMode) ||
+    !["sandbox", "allowlist", "send"].includes(emailConfig.deliveryMode) ||
     emailConfig.provider !== "resend" ||
     emailConfig.apiOrigin !== RESEND_API_ORIGIN ||
     typeof emailConfig.from !== "string" ||
@@ -36,6 +36,7 @@ function createConfiguredAccountEmailAdapter({
     apiKey: emailConfig.apiKey.value,
     deliveryMode: emailConfig.deliveryMode,
     from: emailConfig.from,
+    recipientAllowlist: emailConfig.recipientAllowlist,
     replyTo: emailConfig.replyTo,
     ...(fetchImplementation === undefined
       ? {}
