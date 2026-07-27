@@ -14,6 +14,7 @@ function createApplication({
   }
 
   const app = expressModule();
+  app.disable("x-powered-by");
 
   app.use(
     corsMiddleware({

@@ -103,6 +103,7 @@ describe("current compatibility CORS behavior", () => {
     const response = await fetch(`${baseUrl}/cors-probe`);
 
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get("x-powered-by"), null);
     assert.equal(
       response.headers.get("access-control-allow-origin"),
       null
