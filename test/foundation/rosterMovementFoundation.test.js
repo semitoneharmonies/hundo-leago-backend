@@ -322,6 +322,35 @@ describe("M4-04 atomic roster movement repository", () => {
     );
   });
 
+  test("persists a confirmed ordinary move into an unplaced overflow slot", (t) => {
+    const runtime = createRuntime(t);
+    runtime.context.repositories.player_ownerships.insert(
+      ownership({ roster_category: "Bench" })
+    );
+
+    const result = runtime.repository.move(
+      moveInput({
+        expectedSourceCategory: "Bench",
+        destinationCategory: "Active",
+        destinationSlotNumber: null,
+      })
+    );
+
+    assert.equal(result.ownership.roster_category, "Active");
+    assert.equal(result.ownership.slot_number, null);
+    assert.equal(result.ownership.version, 2);
+    assert.equal(result.ownershipEvent.event_type, "roster_category_moved");
+    assert.equal(result.activity.event_type, "roster_moved");
+    assert.equal(
+      runtime.database
+        .prepare(
+          "SELECT slot_number FROM player_ownerships WHERE id = ?"
+        )
+        .get(IDS.ownership1).slot_number,
+      null
+    );
+  });
+
   test("supports the required Active-to-IR and IR-to-Active sequence", (t) => {
     const runtime = createRuntime(t);
     runtime.context.repositories.player_ownerships.insert(ownership());

@@ -76,7 +76,7 @@ describe("M7-02 explicit database environment identity", () => {
 
     assert.equal(result.initialized, true);
     assert.equal(result.replayed, false);
-    assert.equal(result.schemaVersion, 20);
+    assert.equal(result.schemaVersion, 21);
     assert.deepEqual(result.identity, {
       createdAt: CREATED_AT,
       databaseId: DATABASE_ID,
