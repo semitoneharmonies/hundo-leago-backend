@@ -70,9 +70,14 @@ test("staging migration bridge backs up, migrates once, and replays schema 21", 
         environmentId: "test:release-qa",
       });
     },
-    async createBackup({ argv }) {
+    async createBackup(input) {
       calls.push("backup");
-      assert.equal(argv.includes("pre-migration"), true);
+      assert.equal(input.reason, "pre-migration");
+      assert.equal(input.databasePath, "C:\\staging\\database.sqlite3");
+      assert.match(
+        input.outputDirectory,
+        /m7-15-schema-21-safe-backup$/
+      );
       return {
         backupId: "backup-v1-safe",
         manifestChecksum: "manifest-safe",
@@ -85,6 +90,8 @@ test("staging migration bridge backs up, migrates once, and replays schema 21", 
       version = 21;
       return { latestMigrationId: 21 };
     },
+    nowMs: () => 1_000,
+    randomId: () => "safe-backup",
   };
 
   assert.deepEqual(await runStagingSchemaMigrationBridge(dependencies), {

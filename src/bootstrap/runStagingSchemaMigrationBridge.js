@@ -1,3 +1,6 @@
+const crypto = require("node:crypto");
+const path = require("node:path");
+
 const {
   assertDatabaseIdentity,
 } = require("../infrastructure/database/databaseIdentity");
@@ -5,11 +8,11 @@ const {
   openDatabase,
 } = require("../infrastructure/database/connection");
 const {
+  createVerifiedBackup,
+} = require("../infrastructure/database/sqliteBackup");
+const {
   loadTargetRuntimeConfig,
 } = require("../config/loadTargetRuntimeConfig");
-const {
-  runDeployedBackup,
-} = require("../../scripts/db-backup");
 const {
   runMigrationCommand,
 } = require("../../scripts/db-migrate");
@@ -58,8 +61,10 @@ async function runStagingSchemaMigrationBridge({
   loadConfig = loadTargetRuntimeConfig,
   openDatabaseFunction = openDatabase,
   assertDatabaseIdentityFunction = assertDatabaseIdentity,
-  createBackup = runDeployedBackup,
+  createBackup = createVerifiedBackup,
   migrate = runMigrationCommand,
+  nowMs = Date.now,
+  randomId = crypto.randomUUID,
 } = {}) {
   const confirmation = env.STAGING_SCHEMA_MIGRATION_CONFIRMATION;
   if (confirmation === undefined) {
@@ -71,7 +76,9 @@ async function runStagingSchemaMigrationBridge({
     typeof openDatabaseFunction !== "function" ||
     typeof assertDatabaseIdentityFunction !== "function" ||
     typeof createBackup !== "function" ||
-    typeof migrate !== "function"
+    typeof migrate !== "function" ||
+    typeof nowMs !== "function" ||
+    typeof randomId !== "function"
   ) {
     fail("STAGING_SCHEMA_MIGRATION_BRIDGE_INVALID");
   }
@@ -102,17 +109,16 @@ async function runStagingSchemaMigrationBridge({
   }
 
   const backup = await createBackup({
-    env,
-    argv: [
-      "--reason",
-      "pre-migration",
-      "--requested-by-type",
-      "platform_operation",
-      "--requested-by-id",
-      "m7-15-schema-21",
-      "--retention-class",
-      "pre-change",
-    ],
+    databasePath: config.databasePath,
+    outputDirectory: path.join(
+      config.persistentRoot,
+      "backups",
+      `m7-15-schema-21-${randomId()}`
+    ),
+    environment: config.appEnv,
+    reason: "pre-migration",
+    capturedAtMs: nowMs(),
+    temporaryRoot: config.persistentRoot,
   });
   const migration = migrate({
     env,
