@@ -131,13 +131,13 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
   assert.equal(first.manifest.manifestChecksum, checksumManifest(first.manifest));
   assert.match(first.manifest.manifestChecksum, /^[0-9a-f]{64}$/);
   assert.equal(first.manifest.global.leagueCount, 2);
-  assert.equal(first.manifest.global.playerCount, 26);
-  assert.equal(first.manifest.global.overlappingPlayerCount, 26);
+  assert.equal(first.manifest.global.playerCount, 146);
+  assert.equal(first.manifest.global.overlappingPlayerCount, 146);
   assert.equal(first.manifest.global.overlappingTeamNameCount, 0);
   assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.teams), [6, 6]);
   assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.populatedRosterTeams), [6, 6]);
-  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.syntheticPlayerTotals), [26, 26]);
-  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.matchupPlayers), [36, 36]);
+  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.syntheticPlayerTotals), [146, 146]);
+  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.matchupPlayers), [216, 216]);
   assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.trades), [5, 5]);
   assert.equal(first.manifest.scenarios.twoLeagueIdentityIsolation, true);
   assert.equal(first.manifest.scenarios.distinctLeagueRosters, true);
@@ -180,7 +180,7 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
         leagueB,
         fixtureId("player:benchForward")
       ).teamId,
-      fixtureId("team:leagueB:2")
+        fixtureId("team:leagueB:1")
     );
     const completedTradeId = fixtureId("trade-scenario:leagueA:accepted:1");
     const completedTrade = database.prepare(`
@@ -308,7 +308,7 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
     INSERT INTO players (
       id, first_name, last_name, full_name, birth_date, status,
       created_at_ms, updated_at_ms, version
-    ) VALUES (?, ?, ?, ?, '1998-01-01', 'active', ?, ?, 1)
+    ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, 1)
   `);
   const insertExternal = connection.database.prepare(`
     INSERT INTO player_external_ids (
@@ -325,8 +325,9 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
       '2026REG', NULL, ?, NULL, ?
     )
   `);
-  for (let index = 0; index < 60; index += 1) {
-    const position = index < 40 ? "F" : "D";
+  for (let index = 0; index < 160; index += 1) {
+    const position = index < 100 ? "F" : "D";
+    const positionIndex = position === "F" ? index : index - 100;
     const playerId = providerUuid(10_000 + index);
     const firstName = "NHL";
     const lastName = `${position === "F" ? "Forward" : "Defence"} ${String(
@@ -337,6 +338,7 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
       firstName,
       lastName,
       `${firstName} ${lastName}`,
+      positionIndex < 10 ? "2008-01-01" : "1998-01-01",
       FIXTURE_NOW_MS,
       FIXTURE_NOW_MS
     );

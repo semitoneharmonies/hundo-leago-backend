@@ -82,10 +82,10 @@ test("authenticated team workspace projects cap, picks, assets, and persisted li
   });
   assert.equal(workspace.code, "TEAM_WORKSPACE_FOUND");
   assert.equal(workspace.canManage, true);
-  assert.equal(workspace.cap.activePlayerCents, 650);
+  assert.equal(workspace.cap.activePlayerCents, 4050);
   assert.equal(workspace.cap.retainedSalaryCents, 75);
   assert.equal(workspace.cap.buyoutPenaltyCents, 0);
-  assert.equal(workspace.cap.usageCents, 725);
+  assert.equal(workspace.cap.usageCents, 4125);
   assert.equal(workspace.cap.retentionSlotsUsed, 1);
   assert.equal(workspace.cap.retentionSlotLimit, 3);
   assert.equal(workspace.draftPicks.length, 16);
@@ -102,7 +102,16 @@ test("authenticated team workspace projects cap, picks, assets, and persisted li
       "2026-27 Round 4 · originally Alpha Ravens",
     ]
   );
-  assert.equal(workspace.tradeAssets.contracts.length, 4);
+  assert.equal(
+    workspace.tradeAssets.contracts.length,
+    workspace.players.filter(
+      (player) =>
+        player.contract !== null &&
+        ["Active", "Bench", "Injured Reserve"].includes(
+          player.rosterCategory
+        )
+    ).length
+  );
   assert.equal(workspace.orderVersion, 0);
 
   const forwards = workspace.players.filter(

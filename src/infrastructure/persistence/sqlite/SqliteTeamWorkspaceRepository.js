@@ -117,6 +117,18 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
         contract.original_total_value_cents,
         contract.original_term_years,
         contract.aav_cents,
+        COALESCE((
+          SELECT SUM(retention_year.retained_aav_cents)
+          FROM retention_obligations AS retention
+          INNER JOIN retention_years AS retention_year
+            ON retention_year.league_id = retention.league_id
+           AND retention_year.retention_obligation_id = retention.id
+           AND retention_year.season_id = ownership.season_id
+           AND retention_year.status = 'current'
+          WHERE retention.league_id = ownership.league_id
+            AND retention.contract_id = contract.id
+            AND retention.status = 'active'
+        ), 0) AS retained_aav_cents,
         contract.version AS contract_version,
         COALESCE((
           SELECT COUNT(*)

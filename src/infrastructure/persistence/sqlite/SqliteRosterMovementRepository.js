@@ -34,12 +34,39 @@ function createSqliteRosterMovementRepository({ database } = {}) {
   });
 
   let findOwnershipStatement;
+  let findUnplacedSourceOwnershipStatement;
+  let placeSourceOwnershipStatement;
   let moveTransaction;
   try {
     findOwnershipStatement = database.prepare(
       "SELECT * FROM player_ownerships " +
         "WHERE league_id = @leagueId AND player_id = @playerId LIMIT 2"
     );
+    findUnplacedSourceOwnershipStatement = database.prepare(`
+      SELECT id, version
+      FROM player_ownerships
+      WHERE league_id = @leagueId
+        AND season_id = @seasonId
+        AND team_id = @teamId
+        AND roster_category = @sourceCategory
+        AND slot_number IS NULL
+        AND (
+          @sourceCategory <> 'Active'
+          OR position_group = @sourcePositionGroup
+        )
+      ORDER BY updated_at_ms ASC, id ASC
+      LIMIT 1
+    `);
+    placeSourceOwnershipStatement = database.prepare(`
+      UPDATE player_ownerships
+      SET slot_number = @sourceSlotNumber,
+        updated_at_ms = @occurredAtMs,
+        version = version + 1
+      WHERE id = @id
+        AND league_id = @leagueId
+        AND version = @expectedVersion
+        AND slot_number IS NULL
+    `);
     moveTransaction = database.transaction((move) => {
       const rows = findOwnershipStatement.all({
         leagueId: move.leagueId,
@@ -72,6 +99,27 @@ function createSqliteRosterMovementRepository({ database } = {}) {
           },
         })
       );
+      if (current.slot_number !== null) {
+        const replacement = findUnplacedSourceOwnershipStatement.get({
+          ...move,
+          sourceCategory: current.roster_category,
+          sourcePositionGroup: current.position_group,
+        });
+        if (replacement) {
+          const placed = placeSourceOwnershipStatement.run({
+            ...move,
+            id: replacement.id,
+            expectedVersion: replacement.version,
+            sourceSlotNumber: current.slot_number,
+          });
+          if (placed.changes !== 1) {
+            throw repositoryError(
+              REPOSITORY_ERROR_CODES.versionConflict,
+              "The source roster changed before its open slot was restored."
+            );
+          }
+        }
+      }
       const beforeMetadata = JSON.stringify({
         rosterCategory: current.roster_category,
         positionGroup: current.position_group,

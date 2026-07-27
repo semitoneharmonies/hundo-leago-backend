@@ -1,6 +1,9 @@
 const {
   CANONICAL_UUID_PATTERN,
 } = require("../../../domain/players/playerIdentityPolicy");
+const {
+  evaluateStructuralRosterLegality,
+} = require("../../../domain/rosters/rosterMovementPolicy");
 
 const RETENTION_SLOT_LIMIT = 3;
 
@@ -100,9 +103,86 @@ function player(row, nowMs) {
             originalTotalValueCents: row.original_total_value_cents,
             originalTermYears: row.original_term_years,
             aavCents: row.aav_cents,
+            retainedAavCents: row.retained_aav_cents,
             remainingYears: row.remaining_contract_years,
           }),
     statistics: statistics(row),
+  });
+}
+
+function evaluateTeamRosterLegality(record, categoryOverride = null) {
+  const players = record.players.map((row) => ({
+    ...row,
+    roster_category:
+      categoryOverride?.ownershipId === row.ownership_id
+        ? categoryOverride.destinationCategory
+        : row.roster_category,
+  }));
+  const structural = evaluateStructuralRosterLegality({
+    leagueId: record.scope.league_id,
+    seasonId: record.scope.season_id,
+    teamId: record.scope.team_id,
+    assignments: players.map((row) => ({
+      leagueId: record.scope.league_id,
+      seasonId: record.scope.season_id,
+      teamId: record.scope.team_id,
+      playerId: row.player_id,
+      rosterCategory: row.roster_category,
+      assignedPositionGroup: row.position_group,
+    })),
+    effectivePositions: players.map((row) => ({
+      playerId: row.player_id,
+      positionGroup: row.position_group,
+    })),
+  });
+  let projectedUsageCents = record.cap.capUsageCents;
+  if (categoryOverride) {
+    const moved = record.players.find(
+      (row) => row.ownership_id === categoryOverride.ownershipId
+    );
+    if (moved) {
+      const netAavCents = Math.max(
+        0,
+        Number(moved.aav_cents || 0) -
+          Number(moved.retained_aav_cents || 0)
+      );
+      const wasActive = moved.roster_category === "Active";
+      const becomesActive = categoryOverride.destinationCategory === "Active";
+      if (wasActive && !becomesActive) projectedUsageCents -= netAavCents;
+      if (!wasActive && becomesActive) projectedUsageCents += netAavCents;
+    }
+  }
+  const reasons = [...structural.reasons];
+  if (!record.cap.complete) {
+    reasons.push({ code: "SALARY_CAP_CALCULATION_INCOMPLETE" });
+  }
+  if (projectedUsageCents > record.cap.capLimitCents) {
+    reasons.push({ code: "SALARY_CAP_EXCEEDED" });
+  }
+  for (const row of players) {
+    if (
+      ["Active", "Bench", "Injured Reserve"].includes(row.roster_category) &&
+      row.contract_id === null
+    ) {
+      reasons.push({
+        code: "ACTIVE_CONTRACT_MISSING",
+        playerId: row.player_id,
+      });
+    }
+  }
+  return Object.freeze({
+    legal: reasons.length === 0,
+    counts: structural.counts,
+    limits: structural.limits,
+    cap: Object.freeze({
+      limitCents: record.cap.capLimitCents,
+      usageCents: projectedUsageCents,
+      spaceCents: record.cap.capLimitCents - projectedUsageCents,
+      complete: record.cap.complete,
+    }),
+    reasons: Object.freeze(
+      reasons.map((reason) => Object.freeze({ ...reason }))
+    ),
   });
 }
 
@@ -142,6 +222,7 @@ function safeWorkspace(record, nowMs, canManage) {
       complete: cap.complete,
       issues: cap.issues,
     }),
+    legality: evaluateTeamRosterLegality(record),
     draftPicks: Object.freeze(
       record.draftPicks.map((row) =>
         Object.freeze({
@@ -242,8 +323,7 @@ function normalizeOrderInput(input) {
   ) {
     failInput();
   }
-  function items(values, maximum) {
-    if (values.length > maximum) failInput();
+  function items(values) {
     return Object.freeze(
       values.map((item) => {
         if (
@@ -263,8 +343,8 @@ function normalizeOrderInput(input) {
   }
   return Object.freeze({
     expectedVersion: input.expectedVersion,
-    forwardOwnerships: items(input.forwardOwnerships, 12),
-    defenceOwnerships: items(input.defenceOwnerships, 6),
+    forwardOwnerships: items(input.forwardOwnerships),
+    defenceOwnerships: items(input.defenceOwnerships),
   });
 }
 
@@ -394,6 +474,7 @@ module.exports = {
   TeamWorkspaceInputError,
   TeamWorkspaceNotFoundError,
   createTeamWorkspaceService,
+  evaluateTeamRosterLegality,
   normalizeOrderInput,
   normalizeTradeBlockInput,
   safeWorkspace,

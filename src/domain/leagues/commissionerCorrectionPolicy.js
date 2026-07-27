@@ -156,6 +156,7 @@ function rosterSlot(rosterCategory, positionGroup, value) {
     if (value !== null) fail(COMMISSIONER_CORRECTION_CODES.rosterInvalid);
     return null;
   }
+  if (value === null) return null;
   if (!Number.isSafeInteger(value)) {
     fail(COMMISSIONER_CORRECTION_CODES.rosterInvalid);
   }

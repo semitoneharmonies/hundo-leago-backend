@@ -1,6 +1,10 @@
 const express = require("express");
 
 const SAFE_MESSAGES = Object.freeze({
+  ACTIVE_CONTRACT_MISSING:
+    "This player needs an active contract before joining this roster category.",
+  BENCH_AAV_LIMIT_EXCEEDED:
+    "This player's contract exceeds the maximum Bench AAV.",
   BUYOUT_CONTRACT_NOT_ELIGIBLE: "This contract is not eligible for buyout.",
   BUYOUT_CONTRACT_NOT_OWNED: "This team does not own that contract.",
   BUYOUT_LOCK_ACTIVE: "This contract is still protected by its auction buyout lock.",
@@ -17,6 +21,8 @@ const SAFE_MESSAGES = Object.freeze({
   ROSTER_ACTION_REQUEST_FAILED:
     "The roster action could not be completed.",
   ROSTER_OWNERSHIP_NOT_FOUND: "The roster player was not found.",
+  ROSTER_ILLEGAL_CONFIRMATION_REQUIRED:
+    "This move creates an illegal roster. Confirm the warning to continue.",
   TEAM_MANAGER_REQUIRED: "Current team-manager authority is required.",
   TEAM_NOT_FOUND: "The team was not found.",
 });
@@ -41,16 +47,21 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
   ]) {
     assertMethod(requestSecurity, method, "the target request-security boundary");
   }
-  for (const method of ["buyOutContract", "moveToInjuredReserve"]) {
+  for (const method of [
+    "buyOutContract",
+    "moveRosterPlayer",
+    "moveToInjuredReserve",
+  ]) {
     assertMethod(rosterActionService, method, "a roster-action service");
   }
 
-  function errorResponse(request, response, status, code) {
+  function errorResponse(request, response, status, code, details = null) {
     return response.status(status).json({
       error: {
         code,
         message: SAFE_MESSAGES[code],
         requestId: requestSecurity.getRequestId(request),
+        ...(details === null ? {} : { details }),
       },
     });
   }
@@ -71,8 +82,11 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
           : [
                 "BUYOUT_CONTRACT_NOT_ELIGIBLE",
                 "BUYOUT_CONTRACT_NOT_OWNED",
+                "ACTIVE_CONTRACT_MISSING",
+                "BENCH_AAV_LIMIT_EXCEEDED",
                 "INJURED_RESERVE_FULL",
                 "PLAYER_NOT_IR_ELIGIBLE",
+                "ROSTER_ILLEGAL_CONFIRMATION_REQUIRED",
                 "ROSTER_OWNERSHIP_NOT_FOUND",
               ].includes(error?.code)
             ? error.code
@@ -83,7 +97,13 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
       error?.reasonCode === "BUYOUT_LOCK_ACTIVE" ||
       error?.reasonCode === "BUYOUT_PENDING_TRADE_EXISTS"
     ) {
-      return errorResponse(request, response, 409, conflictCode);
+      return errorResponse(
+        request,
+        response,
+        409,
+        conflictCode,
+        error?.details || null
+      );
     }
     if (
       [
@@ -122,6 +142,28 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
   router.use(requestSecurity.requireJson);
   router.use(requestSecurity.requireCompatibleFetchMetadata);
   router.use(express.json({ limit: "16kb", strict: true }));
+
+  router.post(
+    "/api/v1/leagues/:leagueId/teams/:teamId/roster/:ownershipId/move",
+    requestSecurity.authenticateUnsafe,
+    (request, response) => {
+      try {
+        return successResponse(
+          request,
+          response,
+          rosterActionService.moveRosterPlayer({
+            authenticated: requestSecurity.getAuthenticatedSession(request),
+            leagueId: request.params.leagueId,
+            teamId: request.params.teamId,
+            ownershipId: request.params.ownershipId,
+            input: request.body,
+          })
+        );
+      } catch (error) {
+        return mapError(request, response, error);
+      }
+    }
+  );
 
   router.post(
     "/api/v1/leagues/:leagueId/teams/:teamId/roster/:ownershipId/move-to-ir",

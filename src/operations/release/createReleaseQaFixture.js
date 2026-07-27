@@ -228,6 +228,7 @@ function insertGlobalPlayers(database) {
       player.first_name,
       player.last_name,
       player.full_name,
+      player.birth_date,
       source.normalized_position
     FROM players AS player
     INNER JOIN player_external_ids AS external
@@ -256,15 +257,46 @@ function insertGlobalPlayers(database) {
   const canUseProviderCatalog = [...requiredByPosition].every(
     ([position, required]) =>
       providerByPosition.get(position).length >= required
-  );
+  ) && ["F", "D"].every((position) => {
+    const required = PLAYER_BLUEPRINTS.filter(
+      (blueprint) =>
+        blueprint.position === position && blueprint.requiresUnder19
+    ).length;
+    const available = providerByPosition.get(position).filter(
+      (player) =>
+        typeof player.birth_date === "string" &&
+        player.birth_date > "2007-07-26"
+    ).length;
+    return available >= required;
+  });
   if (canUseProviderCatalog) {
-    const offsets = new Map([["F", 0], ["D", 0]]);
+    const available = new Map(
+      [...providerByPosition].map(([position, rows]) => [
+        position,
+        [...rows],
+      ])
+    );
+    const selectedByAlias = new Map();
+    const selectionOrder = [
+      ...PLAYER_BLUEPRINTS.filter(({ requiresUnder19 }) => requiresUnder19),
+      ...PLAYER_BLUEPRINTS.filter(({ requiresUnder19 }) => !requiresUnder19),
+    ];
+    for (const blueprint of selectionOrder) {
+      const pool = available.get(blueprint.position);
+      const selectedIndex = blueprint.requiresUnder19
+        ? pool.findIndex(
+            (player) =>
+              typeof player.birth_date === "string" &&
+              player.birth_date > "2007-07-26"
+          )
+        : 0;
+      const [selected] = pool.splice(selectedIndex, 1);
+      selectedByAlias.set(blueprint.alias, selected);
+    }
     return Object.freeze(
       Object.fromEntries(
         PLAYER_BLUEPRINTS.map((blueprint) => {
-          const offset = offsets.get(blueprint.position);
-          const selected = providerByPosition.get(blueprint.position)[offset];
-          offsets.set(blueprint.position, offset + 1);
+          const selected = selectedByAlias.get(blueprint.alias);
           return [
             blueprint.alias,
             Object.freeze({
@@ -299,7 +331,9 @@ function insertGlobalPlayers(database) {
       firstName,
       lastName,
       `${firstName} ${lastName}`,
-      `199${index % 10}-01-01`,
+      blueprint.requiresUnder19
+        ? `200${8 + (index % 2)}-01-01`
+        : `199${index % 10}-01-01`,
       FIXTURE_NOW_MS,
       FIXTURE_NOW_MS
     );
@@ -570,7 +604,7 @@ function insertLeaguePlayerState(database, league, players, accounts) {
       blueprint.alias === "boughtOutForward"
         ? league.teams.length - 1
         : assignedTeamNumber === undefined
-          ? index % league.teams.length
+          ? (blueprint.teamNumber || ((index % league.teams.length) + 1)) - 1
           : assignedTeamNumber - 1
     ];
     insertPosition.run(
@@ -581,6 +615,28 @@ function insertLeaguePlayerState(database, league, players, accounts) {
       accounts[league.commissionerAlias].id,
       FIXTURE_NOW_MS
     );
+    if (blueprint.injuredReserveEligible) {
+      const source = database.prepare(`
+        SELECT id, source_payload_json
+        FROM player_source_state
+        WHERE player_id=? AND ended_at_ms IS NULL
+        ORDER BY effective_at_ms DESC, id DESC
+        LIMIT 1
+      `).get(player.id);
+      if (source) {
+        let payload = {};
+        try {
+          payload = JSON.parse(source.source_payload_json);
+        } catch {
+          payload = {};
+        }
+        database.prepare(`
+          UPDATE player_source_state
+          SET source_payload_json=?
+          WHERE id=?
+        `).run(JSON.stringify({ ...payload, Status: "Injured Reserve" }), source.id);
+      }
+    }
     if (blueprint.rosterCategory) {
       insertOwnership.run(
         fixtureId(`ownership:${league.alias}:${blueprint.alias}`),
@@ -607,7 +663,7 @@ function insertLeaguePlayerState(database, league, players, accounts) {
     const contractId = fixtureId(`contract:${league.alias}:${blueprint.alias}`);
     const termYears = blueprint.alias === "boughtOutForward"
       ? 1
-      : blueprint.alias === "signedProspect" ? 3 : (index % 3) + 1;
+      : blueprint.contractType === "fantasy_elc" ? 3 : (index % 3) + 1;
     const aavCents = blueprint.aavCents || 200 + (index % 3) * 25;
     const status = blueprint.alias === "boughtOutForward" ? "eliminated" : "active";
     insertContract.run(
@@ -835,12 +891,12 @@ function insertAuctionAndTrades(database, league, leagueState, players, accounts
       proposingTeamId: league.teams[0].id,
       receivingTeamId: league.teams[1].id,
       proposingAssets: [{
-        type: "contract",
-        contractId: leagueState.contracts.activeForward7.id,
+        type: "prospect_right",
+        playerId: players.team1Prospect1.id,
       }],
       receivingAssets: [{
-        type: "contract",
-        contractId: leagueState.contracts.activeForward8.id,
+        type: "prospect_right",
+        playerId: players.team2Prospect2.id,
       }],
     }
   );
@@ -1080,13 +1136,14 @@ function insertMatchupAndReleaseSignals(database, league, leagueState, players, 
       id, stat_source_id, nhl_season_key, source_version, status,
       started_at_ms, completed_at_ms, player_count, error_code,
       metadata_json, version
-    ) VALUES (?, ?, '20262027', 'release-qa-v3', 'succeeded',
-      ?, ?, 26, NULL, ?, 1)
+    ) VALUES (?, ?, '20262027', 'release-qa-v4', 'succeeded',
+      ?, ?, ?, NULL, ?, 1)
   `).run(
     refreshId,
     statSourceId,
     FIXTURE_NOW_MS - 7 * day,
     FIXTURE_NOW_MS - 7 * day,
+    PLAYER_BLUEPRINTS.length,
     JSON.stringify({
       fixture: true,
       leagueAlias: league.alias,

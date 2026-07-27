@@ -475,12 +475,12 @@ function installedTargetEndpoints(routers) {
 }
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 89 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 89);
+  test("declares 90 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 90);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      89
+      90
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -973,25 +973,24 @@ describe("M3-19 composed target HTTP boundary", () => {
       true
     );
     const teamId = fixtureId("team:leagueA:1");
-    const occupiedForwardSlots = new Set(
+    const occupiedBenchSlots = new Set(
       workspace.roster
         .filter((player) =>
           player.teamId === teamId &&
-          player.rosterCategory === "Active" &&
-          player.positionGroup === "F"
+          player.rosterCategory === "Bench"
         )
         .map((player) => player.slotNumber)
     );
     const slotNumber = Array.from(
-      { length: 12 },
+      { length: 4 },
       (_, index) => index + 1
-    ).find((slot) => !occupiedForwardSlots.has(slot));
+    ).find((slot) => !occupiedBenchSlots.has(slot));
     assert.equal(Number.isSafeInteger(slotNumber), true);
     const request = {
       seasonId: workspace.league.currentSeasonId,
       playerId,
       teamId,
-      rosterCategory: "Active",
+      rosterCategory: "Bench",
       positionGroup: "F",
       slotNumber,
       contractType: "normal",

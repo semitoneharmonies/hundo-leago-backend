@@ -673,6 +673,11 @@ const TARGET_ENDPOINTS = Object.freeze([
   ],
   [
     "POST",
+    "/api/v1/leagues/:leagueId/teams/:teamId/roster/:ownershipId/move",
+    "rosterAction",
+  ],
+  [
+    "POST",
     "/api/v1/leagues/:leagueId/teams/:teamId/roster/:ownershipId/move-to-ir",
     "rosterAction",
   ],

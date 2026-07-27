@@ -131,7 +131,9 @@ function lifecycleEventType(action) {
 
 function createSqliteTradeProposalRepository({ database } = {}) {
   let activityRepository;
+  let notificationsRepository;
   let outboxRepository;
+  let listReceivingManagersStatement;
   let loadFoundationStateStatement;
   let listVisibleStatement;
   let findVisibleDetailStatement;
@@ -191,10 +193,43 @@ function createSqliteTradeProposalRepository({ database } = {}) {
       database,
       definition: getRepositoryDefinition("league_activity"),
     });
+    notificationsRepository = createSqliteRecordRepository({
+      database,
+      definition: getRepositoryDefinition("notifications"),
+    });
     outboxRepository = createSqliteRecordRepository({
       database,
       definition: getRepositoryDefinition("outbox_events"),
     });
+    listReceivingManagersStatement = database.prepare(`
+      SELECT DISTINCT
+        assignment.user_id,
+        proposing_team.name AS proposing_team_name,
+        receiving_team.name AS receiving_team_name
+      FROM teams AS receiving_team
+      INNER JOIN teams AS proposing_team
+        ON proposing_team.league_id = receiving_team.league_id
+       AND proposing_team.id = @proposingTeamId
+      INNER JOIN team_manager_assignments AS assignment
+        ON assignment.league_id = receiving_team.league_id
+       AND assignment.team_id = receiving_team.id
+       AND assignment.status = 'accepted'
+       AND assignment.ended_at_ms IS NULL
+      INNER JOIN league_memberships AS membership
+        ON membership.id = assignment.membership_id
+       AND membership.league_id = receiving_team.league_id
+       AND membership.user_id = assignment.user_id
+       AND membership.status = 'active'
+       AND membership.ended_at_ms IS NULL
+      INNER JOIN users
+        ON users.id = assignment.user_id
+       AND users.status = 'active'
+      WHERE receiving_team.league_id = @leagueId
+        AND receiving_team.id = @receivingTeamId
+        AND receiving_team.status <> 'erased'
+        AND assignment.user_id <> @actorUserId
+      ORDER BY assignment.user_id ASC
+    `);
     loadFoundationStateStatement = database.prepare(`
       SELECT
         leagues.status AS league_status,
@@ -1962,6 +1997,33 @@ function createSqliteTradeProposalRepository({ database } = {}) {
       occurredAtMs: command.createdAtMs,
       tradeVersion: 1,
     });
+    for (const recipient of listReceivingManagersStatement.all(command)) {
+      notificationsRepository.insert({
+        id: deterministicUuid(
+          `trade-proposal-notification:${command.eventId}:${recipient.user_id}`
+        ),
+        user_id: recipient.user_id,
+        league_id: command.leagueId,
+        event_type: "trade_proposal_received",
+        message_data_json: JSON.stringify({
+          message:
+            `Trade proposal received from ${recipient.proposing_team_name}.`,
+          tradeId: command.tradeId,
+          leagueId: command.leagueId,
+          proposingTeamId: command.proposingTeamId,
+          proposingTeamName: recipient.proposing_team_name,
+          receivingTeamId: command.receivingTeamId,
+          receivingTeamName: recipient.receiving_team_name,
+        }),
+        related_feature: "trade",
+        related_record_id: command.tradeId,
+        delivery_status: "delivered",
+        created_at_ms: command.createdAtMs,
+        read_at_ms: null,
+        delivered_at_ms: command.createdAtMs,
+        version: 1,
+      });
+    }
     if (completeIdempotencyStatement.run(command).changes !== 1) {
       throw repositoryError(
         REPOSITORY_ERROR_CODES.versionConflict,

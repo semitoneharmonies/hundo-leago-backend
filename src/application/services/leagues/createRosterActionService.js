@@ -1,6 +1,9 @@
 const {
   CANONICAL_UUID_PATTERN,
 } = require("../../../domain/players/playerIdentityPolicy");
+const {
+  evaluateTeamRosterLegality,
+} = require("./createTeamWorkspaceService");
 
 class RosterActionInputError extends Error {
   constructor() {
@@ -11,10 +14,11 @@ class RosterActionInputError extends Error {
 }
 
 class RosterActionConflictError extends Error {
-  constructor(code) {
+  constructor(code, details = null) {
     super("The roster action cannot be completed in its current state.");
     this.name = "RosterActionConflictError";
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -108,15 +112,64 @@ function createRosterActionService({
     input,
   } = {}) {
     const submitted = exactObject(input, ["expectedVersion"]);
+    const result = moveRosterPlayer({
+      authenticated,
+      leagueId,
+      teamId,
+      ownershipId,
+      input: {
+        confirmedIllegal: false,
+        destinationCategory: "Injured Reserve",
+        expectedVersion: submitted.expectedVersion,
+      },
+    });
+    return Object.freeze({
+      ...result,
+      code: "PLAYER_MOVED_TO_INJURED_RESERVE",
+    });
+  }
+
+  function moveRosterPlayer({
+    authenticated,
+    leagueId,
+    teamId,
+    ownershipId,
+    input,
+  } = {}) {
+    const submitted = exactObject(input, [
+      "confirmedIllegal",
+      "destinationCategory",
+      "expectedVersion",
+    ]);
     const expectedVersion = positiveVersion(submitted.expectedVersion);
+    if (typeof submitted.confirmedIllegal !== "boolean") failInput();
+    if (
+      !["Active", "Bench", "Injured Reserve"].includes(
+        submitted.destinationCategory
+      )
+    ) {
+      failInput();
+    }
     const actor = authority(authenticated, leagueId, teamId);
     const workspace = record(leagueId, teamId);
     const player = playerByOwnership(workspace, ownershipId);
     if (
       player.ownership_version !== expectedVersion ||
-      player.roster_category !== "Active"
+      player.roster_category === "Prospect" ||
+      player.roster_category === submitted.destinationCategory ||
+      (player.roster_category !== "Active" &&
+        submitted.destinationCategory !== "Active")
     ) {
       throw new RosterActionConflictError("ROSTER_ACTION_STALE");
+    }
+    if (player.contract_id === null) {
+      throw new RosterActionConflictError("ACTIVE_CONTRACT_MISSING");
+    }
+    if (
+      submitted.destinationCategory === "Bench" &&
+      Number(player.aav_cents) > 400
+    ) {
+      throw new RosterActionConflictError("BENCH_AAV_LIMIT_EXCEEDED");
     }
     let source = null;
     if (typeof player.source_payload_json === "string") {
@@ -129,28 +182,50 @@ function createRosterActionService({
     const sourceStatus = String(source?.Status || source?.status || "")
       .trim()
       .toLowerCase();
-    if (sourceStatus !== "injured reserve") {
+    if (
+      submitted.destinationCategory === "Injured Reserve" &&
+      sourceStatus !== "injured reserve"
+    ) {
       throw new RosterActionConflictError("PLAYER_NOT_IR_ELIGIBLE");
+    }
+    const legality = evaluateTeamRosterLegality(workspace, {
+      ownershipId,
+      destinationCategory: submitted.destinationCategory,
+    });
+    if (!legality.legal && submitted.confirmedIllegal !== true) {
+      throw new RosterActionConflictError(
+        "ROSTER_ILLEGAL_CONFIRMATION_REQUIRED",
+        { legality }
+      );
     }
     const occupied = new Set(
       workspace.players
-        .filter((candidate) => candidate.roster_category === "Injured Reserve")
+        .filter(
+          (candidate) =>
+            candidate.roster_category === submitted.destinationCategory &&
+            (submitted.destinationCategory !== "Active" ||
+              candidate.position_group === player.position_group)
+        )
         .map((candidate) => candidate.slot_number)
     );
-    const destinationSlotNumber = [1, 2, 3, 4].find(
-      (slot) => !occupied.has(slot)
-    );
-    if (!destinationSlotNumber) {
-      throw new RosterActionConflictError("INJURED_RESERVE_FULL");
-    }
+    const maximum =
+      submitted.destinationCategory === "Active"
+        ? player.position_group === "F"
+          ? 12
+          : 6
+        : 4;
+    const destinationSlotNumber =
+      Array.from({ length: maximum }, (_, index) => index + 1).find(
+        (slot) => !occupied.has(slot)
+      ) || null;
     const moved = rosterMovementRepository.move({
       leagueId: workspace.scope.league_id,
       seasonId: workspace.scope.season_id,
       teamId: workspace.scope.team_id,
       playerId: player.player_id,
       expectedVersion,
-      expectedSourceCategory: "Active",
-      destinationCategory: "Injured Reserve",
+      expectedSourceCategory: player.roster_category,
+      destinationCategory: submitted.destinationCategory,
       destinationPositionGroup: player.position_group,
       destinationSlotNumber,
       actorUserId: actor.actorUserId,
@@ -161,7 +236,8 @@ function createRosterActionService({
       occurredAtMs: clock.nowMs(),
     });
     return Object.freeze({
-      code: "PLAYER_MOVED_TO_INJURED_RESERVE",
+      code: "ROSTER_PLAYER_MOVED",
+      legality,
       ownership: Object.freeze({
         id: moved.ownership.id,
         version: moved.ownership.version,
@@ -242,7 +318,11 @@ function createRosterActionService({
     });
   }
 
-  return Object.freeze({ buyOutContract, moveToInjuredReserve });
+  return Object.freeze({
+    buyOutContract,
+    moveRosterPlayer,
+    moveToInjuredReserve,
+  });
 }
 
 module.exports = {

@@ -825,7 +825,18 @@ describe("M5-06 atomic pending trade-proposal creation", () => {
     assert.equal(count(runtime.database, "trade_events"), 1);
     assert.equal(count(runtime.database, "idempotency_requests"), 1);
     assert.equal(count(runtime.database, "league_activity"), 1);
+    assert.equal(count(runtime.database, "notifications"), 1);
     assert.equal(count(runtime.database, "outbox_events"), 1);
+    const notification = runtime.database
+      .prepare("SELECT * FROM notifications WHERE related_record_id = ?")
+      .get(result.proposal.id);
+    assert.equal(notification.user_id, IDS.receivingManager);
+    assert.equal(notification.event_type, "trade_proposal_received");
+    assert.equal(notification.related_feature, "trade");
+    assert.equal(
+      JSON.parse(notification.message_data_json).tradeId,
+      result.proposal.id
+    );
     const activity = runtime.database
       .prepare("SELECT * FROM league_activity WHERE related_id = ?")
       .get(result.proposal.id);

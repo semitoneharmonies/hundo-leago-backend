@@ -105,6 +105,7 @@ function optionalReason(value) {
 }
 
 function destinationSlot(category, positionGroup, slotNumber) {
+  if (slotNumber === null) return null;
   if (!Number.isSafeInteger(slotNumber)) {
     fail(ROSTER_MOVEMENT_CODES.slotInvalid);
   }

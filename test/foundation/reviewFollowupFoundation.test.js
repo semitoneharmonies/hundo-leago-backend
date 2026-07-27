@@ -79,6 +79,11 @@ function workspaceRecord(players = [workspacePlayer()]) {
       team_id: IDS.team,
     },
     players,
+    cap: {
+      capLimitCents: 10_000,
+      capUsageCents: 200,
+      complete: true,
+    },
   };
 }
 
@@ -137,6 +142,7 @@ describe("M7-14 roster review actions", () => {
             workspacePlayer(),
             workspacePlayer({
               ownership_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              player_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
               roster_category: "Injured Reserve",
               slot_number: 1,
             }),
@@ -174,6 +180,75 @@ describe("M7-14 roster review actions", () => {
     assert.equal(command.destinationCategory, "Injured Reserve");
     assert.equal(command.destinationSlotNumber, 2);
     assert.equal(command.actorAuthority, "manager");
+  });
+
+  test("requires confirmation, then persists an over-limit Bench-to-Active move", () => {
+    let command = null;
+    const { leagueAuthorization, teamAuthorization } = authorization();
+    const activeForwards = Array.from({ length: 12 }, (_, index) =>
+      workspacePlayer({
+        ownership_id:
+          `${String(index + 1).padStart(8, "0")}-cccc-4ccc-8ccc-cccccccccccc`,
+        player_id:
+          `${String(index + 101).padStart(8, "0")}-eeee-4eee-8eee-eeeeeeeeeeee`,
+        slot_number: index + 1,
+      })
+    );
+    const benchPlayer = workspacePlayer({
+      ownership_id: IDS.ownership,
+      player_id: IDS.player,
+      roster_category: "Bench",
+      slot_number: 1,
+      contract_id: IDS.contract,
+      aav_cents: 300,
+    });
+    const service = createRosterActionService({
+      leagueAuthorization,
+      teamAuthorization,
+      workspaceRepository: {
+        read: () => workspaceRecord([...activeForwards, benchPlayer]),
+      },
+      rosterMovementRepository: {
+        move(input) {
+          command = input;
+          return {
+            ownership: {
+              id: IDS.ownership,
+              version: 4,
+              roster_category: "Active",
+              slot_number: null,
+            },
+          };
+        },
+      },
+      buyoutRepository: { buyOut() {} },
+      clock: { nowMs: () => 1_000 },
+      secureRandom: identifierSource(),
+    });
+    const request = {
+      authenticated: {},
+      leagueId: IDS.league,
+      teamId: IDS.team,
+      ownershipId: IDS.ownership,
+      input: {
+        confirmedIllegal: false,
+        destinationCategory: "Active",
+        expectedVersion: 3,
+      },
+    };
+
+    assert.throws(
+      () => service.moveRosterPlayer(request),
+      { code: "ROSTER_ILLEGAL_CONFIRMATION_REQUIRED" }
+    );
+    const result = service.moveRosterPlayer({
+      ...request,
+      input: { ...request.input, confirmedIllegal: true },
+    });
+
+    assert.equal(result.code, "ROSTER_PLAYER_MOVED");
+    assert.equal(result.legality.legal, false);
+    assert.equal(command.destinationSlotNumber, null);
   });
 
   test("buys out the selected contract with its exact remaining term", () => {
