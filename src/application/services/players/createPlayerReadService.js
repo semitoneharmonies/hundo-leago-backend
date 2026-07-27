@@ -221,8 +221,10 @@ function createPlayerReadService({
       limit: pageSize + 1,
       cursorName: cursorRow?.sort_name || null,
       cursorId: cursorRow?.id || null,
+      cursorFantasyPoints: null,
       leagueId: eligibility.leagueId,
       auctionEligible: eligibility.auctionEligible,
+      sort: "name",
     });
     const hasMore = rows.length > pageSize;
     const pageRows = rows.slice(0, pageSize);

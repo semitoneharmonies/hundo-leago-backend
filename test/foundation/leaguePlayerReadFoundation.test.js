@@ -580,6 +580,57 @@ describe("league-scoped player read service", () => {
     assert.equal(second.page.hasMore, false);
     assert.equal(before.equals(runtime.database.serialize()), true);
   });
+
+  test("orders cursor pages by fantasy points when requested", (t) => {
+    const runtime = createRuntime(t);
+    runtime.database.prepare(`
+      INSERT INTO player_stat_totals (
+        id, stat_source_id, refresh_id, nhl_season_key, player_id,
+        games_played, goals, assists, nhl_points,
+        fantasy_points_hundredths, source_updated_at_ms, created_at_ms
+      ) VALUES (?, ?, ?, '20252026', ?, 82, 40, 50, 90, 12000, ?, ?)
+    `).run(
+      uuid(604),
+      uuid(601),
+      uuid(602),
+      PLAYER_TWO_ID,
+      NOW_MS,
+      NOW_MS
+    );
+    const before = runtime.database.serialize();
+    const first = runtime.service.list({
+      authenticated: authenticated(USER_A_ID),
+      leagueId: LEAGUE_A_ID,
+      limit: 1,
+      sort: "fantasyPoints",
+    });
+    assert.equal(first.players[0].id, PLAYER_TWO_ID);
+    assert.equal(first.page.hasMore, true);
+
+    const second = runtime.service.list({
+      authenticated: authenticated(USER_A_ID),
+      leagueId: LEAGUE_A_ID,
+      limit: 1,
+      cursor: first.page.nextCursor,
+      sort: "fantasyPoints",
+    });
+    assert.equal(second.players[0].id, PLAYER_ONE_ID);
+    assert.equal(second.page.hasMore, false);
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
+  test("rejects unsupported league-player sort modes", (t) => {
+    const runtime = createRuntime(t);
+    assert.throws(
+      () =>
+        runtime.service.list({
+          authenticated: authenticated(USER_A_ID),
+          leagueId: LEAGUE_A_ID,
+          sort: "salary",
+        }),
+      (error) => error?.code === "PLAYER_READ_INPUT_INVALID"
+    );
+  });
 });
 
 describe("league-scoped player HTTP routes", () => {
@@ -596,6 +647,23 @@ describe("league-scoped player HTTP routes", () => {
     assert.equal(listBody.data[0].league.id, LEAGUE_A_ID);
     assert.equal(listBody.page.hasMore, true);
     assert.equal(listBody.meta.requestId, "league-player-request");
+
+    const sortedList = await fetch(
+      `${api.baseUrl}/api/v1/leagues/${LEAGUE_A_ID}/players?limit=1&sort=fantasyPoints`,
+      { headers: headers(api, SESSION_A) }
+    );
+    assert.equal(sortedList.status, 200);
+    assert.equal((await sortedList.json()).data[0].id, PLAYER_ONE_ID);
+
+    const invalidSort = await fetch(
+      `${api.baseUrl}/api/v1/leagues/${LEAGUE_A_ID}/players?sort=salary`,
+      { headers: headers(api, SESSION_A) }
+    );
+    assert.equal(invalidSort.status, 400);
+    assert.equal(
+      (await invalidSort.json()).error.code,
+      "PLAYER_READ_INPUT_INVALID"
+    );
 
     const detail = await fetch(
       `${api.baseUrl}/api/v1/leagues/${LEAGUE_A_ID}/players/${PLAYER_ONE_ID}`,

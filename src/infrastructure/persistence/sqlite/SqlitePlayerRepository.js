@@ -30,6 +30,7 @@ const PLAYER_COLUMNS = Object.freeze([
   "version",
 ]);
 const PLAYER_STATUSES = new Set(["active", "historical", "all"]);
+const PLAYER_PAGE_SORTS = new Set(["name", "fantasyPoints"]);
 const SPORTSDATAIO_PROVIDER = "sportsdataio-discovery-lab";
 const RELEASE_QA_FIXTURE_PROVIDER = "release_qa_fixture";
 const PLAYER_READ_COLUMNS = Object.freeze([
@@ -101,6 +102,7 @@ function createSqlitePlayerRepository({ database } = {}) {
   let findPageCursorStatement;
   let listExternalIdsStatement;
   let listPageStatement;
+  let listPageByFantasyPointsStatement;
   try {
     findByExternalIdentifierStatement = database.prepare(
       `SELECT ${PLAYER_COLUMNS.map((column) => `players.${column}`).join(", ")} ` +
@@ -146,8 +148,12 @@ function createSqlitePlayerRepository({ database } = {}) {
         "WHERE players.id = @playerId LIMIT 1"
     );
     findPageCursorStatement = database.prepare(
-      "SELECT id, full_name, lower(full_name) AS sort_name, status " +
-        "FROM players WHERE id = ? LIMIT 1"
+      "SELECT players.id, players.full_name, " +
+        "lower(players.full_name) AS sort_name, players.status, " +
+        "COALESCE(statistics.fantasy_points_hundredths, -1) " +
+        "AS sort_fantasy_points_hundredths " +
+        `FROM players ${currentStatisticsJoin} ` +
+        "WHERE players.id = ? LIMIT 1"
     );
     listExternalIdsStatement = database.prepare(
       "SELECT provider, external_value, created_at_ms " +
@@ -208,6 +214,66 @@ function createSqlitePlayerRepository({ database } = {}) {
         "(lower(players.full_name) = @cursorName AND players.id > @cursorId)" +
         ") " +
         "ORDER BY lower(players.full_name) ASC, players.id ASC " +
+        "LIMIT @limit"
+    );
+    listPageByFantasyPointsStatement = database.prepare(
+      `SELECT ${PLAYER_READ_COLUMNS.join(", ")} FROM players ` +
+        `${currentSourceJoin} ${currentStatisticsJoin} ` +
+        "WHERE (@status = 'all' OR players.status = @status) " +
+        "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
+        "AND (@auctionEligible = 0 OR (" +
+        "players.status = 'active' " +
+        "AND (" +
+        "EXISTS (" +
+        "SELECT 1 FROM league_player_positions AS correction " +
+        "WHERE correction.league_id = @leagueId " +
+        "AND correction.player_id = players.id " +
+        "AND correction.ended_at_ms IS NULL " +
+        "AND correction.position_group IN ('F', 'D')" +
+        ") OR (" +
+        "NOT EXISTS (" +
+        "SELECT 1 FROM league_player_positions AS correction " +
+        "WHERE correction.league_id = @leagueId " +
+        "AND correction.player_id = players.id " +
+        "AND correction.ended_at_ms IS NULL" +
+        ") AND 1 = (" +
+        "SELECT COUNT(DISTINCT state.normalized_position) " +
+        "FROM player_source_state AS state " +
+        "WHERE state.player_id = players.id " +
+        "AND state.ended_at_ms IS NULL " +
+        "AND state.active = 1 " +
+        "AND state.normalized_position IN ('F', 'D')" +
+        ")" +
+        ")) " +
+        "AND NOT EXISTS (" +
+        "SELECT 1 FROM player_ownerships AS ownership " +
+        "WHERE ownership.league_id = @leagueId " +
+        "AND ownership.player_id = players.id" +
+        ") " +
+        "AND NOT EXISTS (" +
+        "SELECT 1 FROM ownership_events AS event " +
+        "WHERE event.league_id = @leagueId " +
+        "AND event.player_id = players.id " +
+        "AND event.event_type IN (" +
+        "'fantasy_elc_declined', 'unsigned_prospect_rights_released'" +
+        ")" +
+        ") " +
+        "AND NOT EXISTS (" +
+        "SELECT 1 FROM auctions AS auction " +
+        "WHERE auction.league_id = @leagueId " +
+        "AND auction.player_id = players.id " +
+        "AND auction.status IN ('open', 'resolving')" +
+        ")" +
+        ")) " +
+        "AND (" +
+        "@cursorFantasyPoints IS NULL OR " +
+        "COALESCE(statistics.fantasy_points_hundredths, -1) < @cursorFantasyPoints OR (" +
+        "COALESCE(statistics.fantasy_points_hundredths, -1) = @cursorFantasyPoints AND (" +
+        "lower(players.full_name) > @cursorName OR " +
+        "(lower(players.full_name) = @cursorName AND players.id > @cursorId)" +
+        "))) " +
+        "ORDER BY COALESCE(statistics.fantasy_points_hundredths, -1) DESC, " +
+        "lower(players.full_name) ASC, players.id ASC " +
         "LIMIT @limit"
     );
   } catch (error) {
@@ -327,8 +393,10 @@ function createSqlitePlayerRepository({ database } = {}) {
           "limit",
           "cursorName",
           "cursorId",
+          "cursorFantasyPoints",
           "leagueId",
           "auctionEligible",
+          "sort",
         ],
         "Exact player-page options are required."
       );
@@ -338,6 +406,7 @@ function createSqlitePlayerRepository({ database } = {}) {
         !Number.isSafeInteger(options.limit) ||
         options.limit < 1 ||
         options.limit > 101 ||
+        !PLAYER_PAGE_SORTS.has(options.sort) ||
         !(
           (options.cursorName === null && options.cursorId === null) ||
           (
@@ -345,6 +414,19 @@ function createSqlitePlayerRepository({ database } = {}) {
             options.cursorName.length > 0 &&
             typeof options.cursorId === "string"
           )
+        ) ||
+        !(
+          options.cursorFantasyPoints === null ||
+          Number.isSafeInteger(options.cursorFantasyPoints)
+        ) ||
+        !(
+          (options.sort === "name" &&
+            options.cursorFantasyPoints === null) ||
+          (options.sort === "fantasyPoints" &&
+            ((options.cursorId === null &&
+              options.cursorFantasyPoints === null) ||
+              (options.cursorId !== null &&
+                Number.isSafeInteger(options.cursorFantasyPoints))))
         ) ||
         typeof options.auctionEligible !== "boolean" ||
         !(
@@ -371,11 +453,14 @@ function createSqlitePlayerRepository({ database } = {}) {
           : `%${escapeLike(options.query.toLowerCase())}%`;
       try {
         return freezeRows(
-          listPageStatement.all({
+          (options.sort === "fantasyPoints"
+            ? listPageByFantasyPointsStatement
+            : listPageStatement).all({
             status: options.status,
             pattern,
             cursorName: options.cursorName,
             cursorId,
+            cursorFantasyPoints: options.cursorFantasyPoints,
             limit: options.limit,
             leagueId: options.leagueId,
             auctionEligible: options.auctionEligible ? 1 : 0,

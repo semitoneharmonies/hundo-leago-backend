@@ -140,6 +140,7 @@ function createPlayerRouter({
             status: request.query.status,
             limit: request.query.limit,
             cursor: request.query.cursor,
+            sort: request.query.sort,
           });
           return response.status(200).json({
             data: result.players,

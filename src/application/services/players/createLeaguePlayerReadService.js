@@ -21,6 +21,12 @@ function failInput() {
   throw new PlayerReadInputError();
 }
 
+function normalizeSort(value) {
+  if (value === undefined || value === "name") return "name";
+  if (value === "fantasyPoints") return value;
+  failInput();
+}
+
 function safeExternalId(row) {
   return Object.freeze({
     provider: row.provider,
@@ -98,10 +104,12 @@ function createLeaguePlayerReadService({
     status,
     limit,
     cursor,
+    sort,
   } = {}) {
     const authority = authorize(authenticated, leagueId);
     const canonicalQuery = normalizeQuery(query);
     const canonicalStatus = normalizeStatus(status);
+    const canonicalSort = normalizeSort(sort);
     const pageSize = normalizeLimit(limit);
     const cursorId = normalizeCursor(cursor);
     const cursorRow =
@@ -120,8 +128,13 @@ function createLeaguePlayerReadService({
       limit: pageSize + 1,
       cursorName: cursorRow?.sort_name || null,
       cursorId: cursorRow?.id || null,
+      cursorFantasyPoints:
+        canonicalSort === "fantasyPoints" && cursorRow
+          ? cursorRow.sort_fantasy_points_hundredths
+          : null,
       leagueId: null,
       auctionEligible: false,
+      sort: canonicalSort,
     });
     const hasMore = rows.length > pageSize;
     const pageRows = rows.slice(0, pageSize);
@@ -182,5 +195,6 @@ function createLeaguePlayerReadService({
 
 module.exports = {
   createLeaguePlayerReadService,
+  normalizeSort,
   safeLeagueContext,
 };
