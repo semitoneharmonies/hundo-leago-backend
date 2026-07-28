@@ -71,6 +71,10 @@
           "value": "info"
         },
         {
+          "key": "SESSION_COOKIE_SAME_SITE",
+          "value": "lax"
+        },
+        {
           "key": "SCHEDULED_JOBS_ENABLED",
           "value": "false"
         },

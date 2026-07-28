@@ -1505,7 +1505,7 @@ function createTargetRouters({
   const sessionCookie = createSessionCookie({
     appEnv: config.appEnv,
     publicFrontendOrigin: config.publicFrontendOrigin,
-    sameSite: config.appEnv === "local" ? "lax" : "none",
+    sameSite: config.sessionCookieSameSite,
   });
   const requestSecurity = createTargetRequestSecurity({
     isAllowedOrigin: config.isAllowedFrontendOrigin,

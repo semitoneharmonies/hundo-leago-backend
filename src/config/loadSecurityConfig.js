@@ -18,6 +18,10 @@ const LOG_LEVELS = Object.freeze([
   "warn",
   "error",
 ]);
+const SESSION_COOKIE_SAME_SITE_VALUES = Object.freeze([
+  "lax",
+  "none",
+]);
 const EMAIL_DELIVERY_MODES = Object.freeze([
   "disabled",
   "capture",
@@ -176,6 +180,27 @@ function readFrontendOrigins(env, appEnv) {
   }
 
   return Object.freeze(origins);
+}
+
+function readSessionCookieSameSite(env, appEnv) {
+  const field = "SESSION_COOKIE_SAME_SITE";
+  const raw = env[field];
+  if (raw === undefined || raw === null || raw === "") {
+    if (DEPLOYED_ENVIRONMENTS.has(appEnv)) {
+      fail(field, "a deployed cookie site policy is required");
+    }
+    return "lax";
+  }
+
+  const sameSite = readEnum(
+    env,
+    field,
+    SESSION_COOKIE_SAME_SITE_VALUES
+  );
+  if (!DEPLOYED_ENVIRONMENTS.has(appEnv) && sameSite !== "lax") {
+    fail(field, "local and test cookies must use lax");
+  }
+  return sameSite;
 }
 
 function createExactOriginMatcher(origins) {
@@ -459,6 +484,10 @@ function loadSecurityConfig({ env } = {}) {
     fail("NODE_ENV", "the value contradicts APP_ENV");
   }
 
+  const sessionCookieSameSite = readSessionCookieSameSite(
+    env,
+    appEnv
+  );
   const buildId = readBuildId(env, appEnv);
   const logLevel = readEnum(env, "LOG_LEVEL", LOG_LEVELS);
   const publicFrontendOrigin = parseCanonicalOrigin(
@@ -522,6 +551,7 @@ function loadSecurityConfig({ env } = {}) {
     nodeEnv,
     buildId,
     logLevel,
+    sessionCookieSameSite,
     publicFrontendOrigin,
     frontendOrigins,
     isAllowedFrontendOrigin:
@@ -544,6 +574,7 @@ module.exports = {
   MAXIMUM_FRONTEND_ORIGINS,
   RESEND_API_ORIGIN,
   SECRET_MINIMUM_BYTES,
+  SESSION_COOKIE_SAME_SITE_VALUES,
   SecurityConfigError,
   createExactOriginMatcher,
   loadSecurityConfig,

@@ -72,6 +72,7 @@ function deployedEnv(appEnv, overrides = {}) {
     NODE_ENV: "production",
     APP_BUILD_ID: "commit-0123456789abcdef",
     LOG_LEVEL: "info",
+    SESSION_COOKIE_SAME_SITE: "none",
     PUBLIC_FRONTEND_ORIGIN:
       publicFrontendOrigin,
     FRONTEND_ORIGINS: publicFrontendOrigin,
@@ -150,6 +151,9 @@ describe("M3-02 security configuration", () => {
 
     assert.equal(local.buildId, "local-unbuilt");
     assert.equal(testConfig.buildId, "test-unbuilt");
+    assert.equal(local.sessionCookieSameSite, "lax");
+    assert.equal(testConfig.sessionCookieSameSite, "lax");
+    assert.equal(staging.sessionCookieSameSite, "none");
     assert.equal(local.rateLimitKey.configured, false);
     assert.equal(local.email.deliveryMode, "capture");
     assert.equal(local.email.provider, null);
@@ -200,6 +204,36 @@ describe("M3-02 security configuration", () => {
       ),
       false
     );
+  });
+
+  test("requires an explicit approved cookie site policy when deployed", () => {
+    const sameSiteStaging = loadSecurityConfig({
+      env: deployedEnv("staging", {
+        SESSION_COOKIE_SAME_SITE: "lax",
+        PUBLIC_FRONTEND_ORIGIN: "https://staging.hundoleago.com",
+        FRONTEND_ORIGINS: "https://staging.hundoleago.com",
+      }),
+    });
+    assert.equal(sameSiteStaging.sessionCookieSameSite, "lax");
+
+    for (const env of [
+      deployedEnv("staging", {
+        SESSION_COOKIE_SAME_SITE: undefined,
+      }),
+      deployedEnv("production", {
+        SESSION_COOKIE_SAME_SITE: "strict",
+      }),
+      localEnv({
+        SESSION_COOKIE_SAME_SITE: "none",
+      }),
+    ]) {
+      assert.throws(
+        () => loadSecurityConfig({ env }),
+        (error) =>
+          error instanceof SecurityConfigError &&
+          error.field === "SESSION_COOKIE_SAME_SITE"
+      );
+    }
   });
 
   test("accepts only canonical exact frontend origins", () => {

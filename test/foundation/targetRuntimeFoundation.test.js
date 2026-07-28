@@ -45,7 +45,7 @@ const MIGRATIONS_DIRECTORY = path.join(
   "migrations"
 );
 const NOW_MS = Date.parse("2026-07-22T12:00:00.000Z");
-const PUBLIC_FRONTEND_ORIGIN = "https://staging-hundo.netlify.app";
+const PUBLIC_FRONTEND_ORIGIN = "https://staging.hundoleago.com";
 const TRACKED_COMPATIBILITY_FILES = Object.freeze([
   "league.json",
   "league_with_meta.json",
@@ -58,6 +58,9 @@ function securityEnv({ configured = true } = {}) {
     NODE_ENV: configured ? "production" : "development",
     ...(configured ? { APP_BUILD_ID: "m3-19-test-build" } : {}),
     LOG_LEVEL: configured ? "info" : "debug",
+    ...(configured
+      ? { SESSION_COOKIE_SAME_SITE: "lax" }
+      : {}),
     PUBLIC_FRONTEND_ORIGIN: configured
       ? PUBLIC_FRONTEND_ORIGIN
       : "http://localhost:5173",
@@ -874,7 +877,7 @@ describe("M3-19 composed target HTTP boundary", () => {
     assert.match(setCookie, /^__Host-hl_session=[A-Za-z0-9_-]{43};/);
     assert.match(setCookie, /HttpOnly/);
     assert.match(setCookie, /Secure/);
-    assert.match(setCookie, /SameSite=None/);
+    assert.match(setCookie, /SameSite=Lax/);
     const cookie = setCookie.split(";", 1)[0];
 
     const beforeBootstrap = database.serialize();

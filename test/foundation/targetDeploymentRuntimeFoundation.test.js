@@ -57,9 +57,10 @@ function deployedEnvironment(overrides = {}) {
     PERSISTENT_DATA_ROOT: PERSISTENT_ROOT,
     CURRENT_SEASON_LABEL: "2026",
     CURRENT_NHL_SEASON_KEY: "20262027",
-    PUBLIC_FRONTEND_ORIGIN: "https://staging-hundo.netlify.app",
-    FRONTEND_ORIGINS: "https://staging-hundo.netlify.app",
+    PUBLIC_FRONTEND_ORIGIN: "https://staging.hundoleago.com",
+    FRONTEND_ORIGINS: "https://staging.hundoleago.com",
     LOG_LEVEL: "info",
+    SESSION_COOKIE_SAME_SITE: "lax",
     ACCOUNT_EMAIL_DELIVERY_ENABLED: "false",
     SCHEDULED_JOBS_ENABLED: "false",
     LEAGUE_WRITE_MODE: "closed",
@@ -509,7 +510,7 @@ describe("M7-01 deployed target runtime configuration", () => {
     const blockedWrite = await fetch(new URL("/api/v1/accounts", baseUrl), {
       method: "POST",
       headers: {
-        Origin: "https://staging-hundo.netlify.app",
+        Origin: "https://staging.hundoleago.com",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -525,7 +526,7 @@ describe("M7-01 deployed target runtime configuration", () => {
 
     const anonymous = await fetch(
       new URL("/api/v1/operations/health", baseUrl),
-      { headers: { Origin: "https://staging-hundo.netlify.app" } }
+      { headers: { Origin: "https://staging.hundoleago.com" } }
     );
     assert.equal(anonymous.status, 401);
     assert.equal((await anonymous.json()).error.code, "SESSION_REQUIRED");
@@ -558,7 +559,7 @@ describe("M7-01 deployed target runtime configuration", () => {
       new URL("/api/v1/operations/health", baseUrl),
       {
         headers: {
-          Origin: "https://staging-hundo.netlify.app",
+          Origin: "https://staging.hundoleago.com",
           Cookie:
             `${runtime.transport.sessionCookie.name}=` +
             session.rawSessionToken,
@@ -656,7 +657,7 @@ describe("M7-01 deployed target runtime configuration", () => {
       {
         method: "POST",
         headers: {
-          Origin: "https://staging-hundo.netlify.app",
+          Origin: "https://staging.hundoleago.com",
           "Content-Type": "application/json",
           Cookie:
             `${runtime.transport.sessionCookie.name}=` +
@@ -770,7 +771,7 @@ describe("M7-01 deployed target runtime configuration", () => {
     const requestOptions = {
       method: "POST",
       headers: {
-        Origin: "https://staging-hundo.netlify.app",
+        Origin: "https://staging.hundoleago.com",
         "Content-Type": "application/json",
         Cookie:
           `${runtime.transport.sessionCookie.name}=` +
@@ -853,7 +854,7 @@ describe("M7-01 deployed target runtime configuration", () => {
       ),
       {
         headers: {
-          Origin: "https://staging-hundo.netlify.app",
+          Origin: "https://staging.hundoleago.com",
           Cookie:
             `${runtime.transport.sessionCookie.name}=` +
             session.rawSessionToken,

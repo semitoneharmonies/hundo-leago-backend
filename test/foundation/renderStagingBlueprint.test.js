@@ -104,6 +104,10 @@ describe("M2 gate staging Render blueprint", () => {
     }
 
     assert.equal(environment.get("LEAGUE_WRITE_MODE")?.value, "open");
+    assert.equal(
+      environment.get("SESSION_COOKIE_SAME_SITE")?.value,
+      "lax"
+    );
 
     assert.equal(
       environment.get("ACCOUNT_EMAIL_DELIVERY_ENABLED")?.value,
