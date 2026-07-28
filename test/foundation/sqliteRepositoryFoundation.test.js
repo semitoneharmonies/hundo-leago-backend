@@ -386,7 +386,7 @@ describe("M2-05 SQLite repository foundation", () => {
       repositories.application_metadata.findByKey({
         key: "data_model_version",
       });
-    assert.equal(metadata.metadata_value, "21");
+    assert.equal(metadata.metadata_value, "22");
     assert.equal(
       typeof repositories.application_metadata.listAll,
       "function"

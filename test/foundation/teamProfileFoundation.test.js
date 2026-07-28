@@ -506,6 +506,7 @@ describe("M3-18 team-profile policy", () => {
     const bytes = png(32, 24);
     const result = validateTeamProfileInput({
       name: "  Harbour Owls  ",
+      patternTemplate: "tiger",
       primaryColour: "#102030",
       secondaryColour: "#abcdef",
       logo: {
@@ -522,6 +523,8 @@ describe("M3-18 team-profile policy", () => {
       secondaryColour: "#abcdef",
       tertiaryColour: null,
     });
+    assert.equal(result.hasPatternTemplate, true);
+    assert.equal(result.patternTemplate, "tiger");
     assert.equal(result.logo.byteLength, bytes.length);
     assert.equal(result.logo.width, 32);
     assert.equal(result.logo.height, 24);
@@ -555,6 +558,10 @@ describe("M3-18 team-profile policy", () => {
     expectPolicyError(
       () => validateTeamProfileInput({ unknown: true }),
       "team_profile_input_invalid"
+    );
+    expectPolicyError(
+      () => validateTeamProfileInput({ patternTemplate: "zebra" }),
+      "team_pattern_template_invalid"
     );
     expectPolicyError(
       () => validateTeamProfileInput({ primaryColour: "#abcdef" }),
@@ -873,8 +880,10 @@ describe("M3-18 team-profile application service", () => {
     const result = runtime.profileService.update(
       profileCommand(
         {
+          patternTemplate: "leopard",
           primaryColour: "#112233",
           secondaryColour: "#aabbcc",
+          tertiaryColour: "#f97316",
         },
         {
           authenticated: authenticated(COMMISSIONER_ID),
@@ -883,6 +892,8 @@ describe("M3-18 team-profile application service", () => {
       )
     );
     assert.equal(result.team.version, 2);
+    assert.equal(result.team.patternTemplate, "leopard");
+    assert.equal(result.team.tertiaryColour, "#f97316");
     assert.equal(
       runtime.database.prepare(
         "SELECT COUNT(*) AS count FROM league_activity"
@@ -1008,6 +1019,29 @@ describe("M3-18 team-profile application service", () => {
           currentVersion: 1,
           refetch: true,
         });
+        return true;
+      }
+    );
+    assert(initial.equals(runtime.database.serialize()));
+    assert.throws(
+      () =>
+        runtime.profileService.update(
+          profileCommand(
+            {
+              patternTemplate: "leopard",
+              primaryColour: "#112233",
+              secondaryColour: "#aabbcc",
+              tertiaryColour: null,
+            },
+            { idempotencyKey: "pattern-colour-count" }
+          )
+        ),
+      (error) => {
+        assert.equal(error.code, "TEAM_PROFILE_INPUT_INVALID");
+        assert.equal(
+          error.reasonCode,
+          "team_pattern_colour_count_mismatch"
+        );
         return true;
       }
     );

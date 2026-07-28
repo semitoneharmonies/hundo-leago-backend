@@ -5,9 +5,15 @@ const {
   validateStableId,
 } = require("../../../domain/leagues/teamPolicy");
 const {
+  TeamProfilePolicyError,
   validateExpectedVersion,
   validateTeamProfileInput,
 } = require("../../../domain/leagues/teamProfilePolicy");
+const {
+  DEFAULT_THREE_TEAM_PATTERN,
+  DEFAULT_TWO_TEAM_PATTERN,
+  teamPatternColourCount,
+} = require("../../../domain/leagues/teamPatternPolicy");
 const { safeTeam } = require("./createTeamReadService");
 
 const TEAM_PROFILE_OPERATION = "league.team.profile.update.v1";
@@ -60,6 +66,9 @@ function profileRequestHash({ leagueId, teamId, expectedVersion, profile }) {
               name: profile.name.name,
               nameNormalized: profile.name.nameNormalized,
             }
+          : {}),
+        ...(profile.hasPatternTemplate
+          ? { patternTemplate: profile.patternTemplate }
           : {}),
         ...(profile.colours
           ? {
@@ -299,6 +308,39 @@ function createTeamProfileService({
             { currentVersion: current.version, refetch: true }
           );
         }
+        const currentPatternTemplate =
+          current.pattern_template ||
+          (current.tertiary_colour
+            ? DEFAULT_THREE_TEAM_PATTERN
+            : DEFAULT_TWO_TEAM_PATTERN);
+        const nextPatternTemplate = profile.hasPatternTemplate
+          ? profile.patternTemplate
+          : currentPatternTemplate;
+        const nextPrimaryColour = profile.colours
+          ? profile.colours.primaryColour
+          : current.primary_colour;
+        const nextSecondaryColour = profile.colours
+          ? profile.colours.secondaryColour
+          : current.secondary_colour;
+        const nextTertiaryColour = profile.colours
+          ? profile.colours.tertiaryColour
+          : current.tertiary_colour;
+        const requiredColourCount = teamPatternColourCount(
+          nextPatternTemplate
+        );
+        const coloursAreIncomplete =
+          nextPrimaryColour === null && nextSecondaryColour === null;
+        if (
+          (coloursAreIncomplete &&
+            (requiredColourCount !== 2 || nextTertiaryColour !== null)) ||
+          (!coloursAreIncomplete &&
+            ((requiredColourCount === 2 && nextTertiaryColour !== null) ||
+              (requiredColourCount === 3 && nextTertiaryColour === null)))
+        ) {
+          throw new TeamProfilePolicyError(
+            "team_pattern_colour_count_mismatch"
+          );
+        }
         const currentLogo = teamProfileRepository.findCurrentLogo({
           leagueId: canonicalLeagueId,
           teamId: canonicalTeamId,
@@ -319,6 +361,12 @@ function createTeamProfileService({
           changes.name = profile.name.name;
           changes.name_normalized = profile.name.nameNormalized;
           renamed = true;
+        }
+        if (
+          profile.hasPatternTemplate &&
+          profile.patternTemplate !== currentPatternTemplate
+        ) {
+          changes.pattern_template = profile.patternTemplate;
         }
         if (
           profile.colours &&
@@ -425,6 +473,7 @@ function createTeamProfileService({
     } catch (error) {
       const domain = [error, error?.cause].find(
         (candidate) =>
+          candidate instanceof TeamProfilePolicyError ||
           candidate instanceof TeamProfileConflictError ||
           candidate instanceof TeamProfileNotFoundError
       );

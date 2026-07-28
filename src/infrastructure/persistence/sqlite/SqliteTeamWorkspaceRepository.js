@@ -58,6 +58,7 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
         team.primary_colour,
         team.secondary_colour,
         team.tertiary_colour,
+        team.pattern_template,
         team.version AS team_version,
         CASE WHEN logo.id IS NULL THEN 0 ELSE 1 END AS has_logo
       FROM leagues AS league

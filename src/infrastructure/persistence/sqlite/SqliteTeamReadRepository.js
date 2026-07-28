@@ -34,6 +34,7 @@ const TEAM_SUMMARY_SELECT = `
     teams.primary_colour AS primary_colour,
     teams.secondary_colour AS secondary_colour,
     teams.tertiary_colour AS tertiary_colour,
+    teams.pattern_template AS pattern_template,
     teams.logo_reference AS logo_reference,
     teams.created_at_ms AS created_at_ms,
     teams.updated_at_ms AS updated_at_ms,

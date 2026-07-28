@@ -1,3 +1,7 @@
+const {
+  isTeamPatternTemplate,
+} = require("../leagues/teamPatternPolicy");
+
 const CANONICAL_UUID_PATTERN =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -189,11 +193,15 @@ function createPublicRosterProjection(input) {
   assertExactObject(input.team, [
     "id",
     "name",
+    "patternTemplate",
     "primaryColour",
     "secondaryColour",
     "tertiaryColour",
     "logoReference",
   ]);
+  if (!isTeamPatternTemplate(input.team.patternTemplate)) {
+    fail(PUBLIC_ROSTER_CODES.inputInvalid);
+  }
   if (!Array.isArray(input.players)) fail(PUBLIC_ROSTER_CODES.playerInvalid);
   const players = Object.freeze(
     input.players.map((value) => player(value, input.asOfDate))
@@ -235,6 +243,7 @@ function createPublicRosterProjection(input) {
     team: Object.freeze({
       id: stableId(input.team.id),
       name: text(input.team.name),
+      patternTemplate: input.team.patternTemplate,
       primaryColour: input.team.primaryColour,
       secondaryColour: input.team.secondaryColour,
       tertiaryColour: input.team.tertiaryColour,

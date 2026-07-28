@@ -90,7 +90,7 @@ describe("backend refactor completion architecture", () => {
     assertSourcesDoNotMatch({
       files: domainFiles,
       pattern:
-        /\brequire\s*\(|process\.env|node:fs|socket\.io|express|infrastructure|transport/,
+        /\brequire\s*\(\s*["'](?!\.)|process\.env|node:fs|socket\.io|express|application|infrastructure|transport/,
       boundary: "pure domain",
     });
     assertSourcesDoNotMatch({

@@ -1,6 +1,10 @@
 const {
   validateStableId,
 } = require("../../../domain/leagues/teamPolicy");
+const {
+  DEFAULT_THREE_TEAM_PATTERN,
+  DEFAULT_TWO_TEAM_PATTERN,
+} = require("../../../domain/leagues/teamPatternPolicy");
 
 class TeamNotFoundError extends Error {
   constructor() {
@@ -30,6 +34,11 @@ function safeTeam(row) {
     primaryColour: row.primary_colour,
     secondaryColour: row.secondary_colour,
     tertiaryColour: row.tertiary_colour,
+    patternTemplate:
+      row.pattern_template ||
+      (row.tertiary_colour
+        ? DEFAULT_THREE_TEAM_PATTERN
+        : DEFAULT_TWO_TEAM_PATTERN),
     logoReference: hasTargetLogo
       ? `/api/v1/leagues/${row.league_id}/teams/${row.team_id}/logo`
       : null,

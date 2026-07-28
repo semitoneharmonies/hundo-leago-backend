@@ -31,6 +31,7 @@ function createSqlitePublicRosterRepository({ database } = {}) {
         team.primary_colour,
         team.secondary_colour,
         team.tertiary_colour,
+        team.pattern_template,
         team.updated_at_ms AS team_updated_at_ms,
         CASE WHEN logo.id IS NULL THEN 0 ELSE 1 END AS has_public_logo
       FROM leagues AS league
@@ -197,6 +198,7 @@ function createSqlitePublicRosterRepository({ database } = {}) {
             primaryColour: scope.primary_colour,
             secondaryColour: scope.secondary_colour,
             tertiaryColour: scope.tertiary_colour,
+            patternTemplate: scope.pattern_template,
             logoReference:
               scope.has_public_logo === 1
                 ? `/api/v1/public/leagues/${scope.league_id}/teams/${scope.team_id}/logo`

@@ -305,7 +305,7 @@ function verifyAllApplicationTableCounts(
       },
       {
         metadata_key: "data_model_version",
-        metadata_value: "21",
+        metadata_value: "22",
         created_at_ms: 0,
         updated_at_ms: 1,
       },

@@ -1,3 +1,7 @@
+const {
+  isTeamPatternTemplate,
+} = require("./teamPatternPolicy");
+
 const MAXIMUM_LOGO_BYTES = 512 * 1024;
 const MAXIMUM_LOGO_DIMENSION = 2048;
 const MAXIMUM_TEAM_NAME_CODE_POINTS = 35;
@@ -16,6 +20,7 @@ const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/
 const PROFILE_KEYS = new Set([
   "logo",
   "name",
+  "patternTemplate",
   "primaryColour",
   "secondaryColour",
   "tertiaryColour",
@@ -406,6 +411,10 @@ function validateTeamProfileInput(input) {
     fail("team_profile_input_invalid");
   }
   const hasName = Object.prototype.hasOwnProperty.call(input, "name");
+  const hasPatternTemplate = Object.prototype.hasOwnProperty.call(
+    input,
+    "patternTemplate"
+  );
   const hasPrimary = Object.prototype.hasOwnProperty.call(
     input,
     "primaryColour"
@@ -423,6 +432,13 @@ function validateTeamProfileInput(input) {
   if (hasTertiary && !hasPrimary) fail("team_colours_incomplete");
   let name = null;
   if (hasName) name = validateTeamName(input.name);
+  let patternTemplate = null;
+  if (hasPatternTemplate) {
+    if (!isTeamPatternTemplate(input.patternTemplate)) {
+      fail("team_pattern_template_invalid");
+    }
+    patternTemplate = input.patternTemplate;
+  }
   let colours = null;
   if (hasPrimary) {
     if (input.primaryColour === null && input.secondaryColour === null) {
@@ -451,7 +467,15 @@ function validateTeamProfileInput(input) {
     : input.logo === null
       ? null
       : inspectTeamLogo(input.logo);
-  return Object.freeze({ colours, hasLogo, hasName, logo, name });
+  return Object.freeze({
+    colours,
+    hasLogo,
+    hasName,
+    hasPatternTemplate,
+    logo,
+    name,
+    patternTemplate,
+  });
 }
 
 module.exports = {

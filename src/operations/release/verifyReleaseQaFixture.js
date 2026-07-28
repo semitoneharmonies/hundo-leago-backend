@@ -644,7 +644,7 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
   try {
     assertEqual(database.pragma("integrity_check", { simple: true }), "ok", "SQLite integrity");
     assertEqual(database.pragma("foreign_key_check").length, 0, "foreign-key violation count");
-    assertEqual(database.pragma("user_version", { simple: true }), 21, "schema version");
+    assertEqual(database.pragma("user_version", { simple: true }), 22, "schema version");
 
     const metadata = Object.fromEntries(database.prepare(`
       SELECT metadata_key, metadata_value FROM application_metadata
@@ -733,7 +733,7 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
       fixtureBuildId: FIXTURE_BUILD_ID,
       fixtureCreatedAt: FIXTURE_CREATED_AT,
       environmentId: FIXTURE_ENVIRONMENT_ID,
-      schemaVersion: 21,
+      schemaVersion: 22,
       accounts,
       leagues: Object.freeze(leagues),
       global: Object.freeze({

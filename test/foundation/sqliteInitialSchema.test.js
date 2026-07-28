@@ -504,7 +504,7 @@ describe("M2-04 initial relational schema", () => {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     });
 
-    assert.equal(migrations.length, 21);
+    assert.equal(migrations.length, 22);
     assert.equal(migrations[0].id, 1);
     assert.equal(migrations[0].fileName, "0001_initial.sql");
     assert.equal(migrations[1].id, 2);
@@ -607,13 +607,18 @@ describe("M2-04 initial relational schema", () => {
       migrations[20].fileName,
       "0021_allow_confirmed_roster_overages.sql"
     );
+    assert.equal(migrations[21].id, 22);
+    assert.equal(
+      migrations[21].fileName,
+      "0022_add_team_pattern_template.sql"
+    );
     assert.equal(migrationResult.status, "exact");
-    assert.equal(database.pragma("user_version", { simple: true }), 21);
+    assert.equal(database.pragma("user_version", { simple: true }), 22);
 
     const ledgerBefore = database
       .prepare("SELECT * FROM schema_migrations")
       .all();
-    assert.equal(ledgerBefore.length, 21);
+    assert.equal(ledgerBefore.length, 22);
     assert.equal(ledgerBefore[0].checksum, migrations[0].checksum);
     assert.equal(ledgerBefore[1].checksum, migrations[1].checksum);
     assert.equal(ledgerBefore[2].checksum, migrations[2].checksum);
@@ -676,10 +681,10 @@ describe("M2-04 initial relational schema", () => {
           metadata_key: "application_compatibility_version",
           metadata_value: "1",
         },
-        {
-          metadata_key: "data_model_version",
-          metadata_value: "21",
-        },
+      {
+        metadata_key: "data_model_version",
+        metadata_value: "22",
+      },
       ]
     );
     assert.equal(

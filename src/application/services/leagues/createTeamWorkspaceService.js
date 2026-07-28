@@ -4,6 +4,10 @@ const {
 const {
   evaluateStructuralRosterLegality,
 } = require("../../../domain/rosters/rosterMovementPolicy");
+const {
+  DEFAULT_THREE_TEAM_PATTERN,
+  DEFAULT_TWO_TEAM_PATTERN,
+} = require("../../../domain/leagues/teamPatternPolicy");
 
 const RETENTION_SLOT_LIMIT = 3;
 
@@ -203,6 +207,11 @@ function safeWorkspace(record, nowMs, canManage) {
       primaryColour: scope.primary_colour,
       secondaryColour: scope.secondary_colour,
       tertiaryColour: scope.tertiary_colour,
+      patternTemplate:
+        scope.pattern_template ||
+        (scope.tertiary_colour
+          ? DEFAULT_THREE_TEAM_PATTERN
+          : DEFAULT_TWO_TEAM_PATTERN),
       logoReference:
         scope.has_logo === 1
           ? `/api/v1/leagues/${scope.league_id}/teams/${scope.team_id}/logo`

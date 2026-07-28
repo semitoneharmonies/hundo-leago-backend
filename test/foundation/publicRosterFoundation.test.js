@@ -155,8 +155,8 @@ function projectionInput(overrides = {}) {
     asOfDate: "2026-07-21",
     league: { id: IDS.league, name: "Public League" },
     season: { id: IDS.season, label: "Season 2" },
-    team: { id: IDS.team, name: "Public Team", primaryColour: "#112233",
-      secondaryColour: "#aabbcc", tertiaryColour: null,
+    team: { id: IDS.team, name: "Public Team", patternTemplate: "even-two",
+      primaryColour: "#112233", secondaryColour: "#aabbcc", tertiaryColour: null,
       logoReference: null },
     players: [{
       id: IDS.activePlayer, name: "Active Player", position: "F",
@@ -189,6 +189,7 @@ describe("M4-10 public roster projection policy", () => {
     const result = createPublicRosterProjection(projectionInput());
     assert.equal(result.players[0].age, 25);
     assert.equal(result.players[0].playerReference, IDS.activePlayer);
+    assert.equal(result.team.patternTemplate, "even-two");
     assert.deepEqual(Object.keys(result.cap), [
       "capLimitCents", "capUsageCents", "capSpaceCents",
       "retainedSalaryTotalCents", "buyoutPenaltyTotalCents",
