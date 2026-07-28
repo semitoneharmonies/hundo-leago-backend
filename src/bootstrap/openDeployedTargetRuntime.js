@@ -168,6 +168,7 @@ function openDeployedTargetRuntime({
     });
     const scheduler = createTargetScheduler({
       enabled: config.scheduledJobsEnabled,
+      emailEnabled: config.accountEmailDeliveryEnabled,
       leagueWriteMode: config.leagueWriteMode,
       jobs: runtime.services.league.scheduledJobs,
       emailJob: runtime.services.accountEmail.job,

@@ -212,6 +212,10 @@ function loadTargetRuntimeConfig({
 
   const sportsDataIoNhl = sportsDataIoNhlImport(env, security.appEnv);
   return Object.freeze({
+    accountEmailDeliveryEnabled: exactBoolean(
+      env,
+      "ACCOUNT_EMAIL_DELIVERY_ENABLED"
+    ),
     appEnv: security.appEnv,
     buildId: security.buildId,
     currentSeason: currentSeason(env),

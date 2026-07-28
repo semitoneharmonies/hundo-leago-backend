@@ -3,6 +3,7 @@ const MAXIMUM_INTERVAL_MS = 5 * 60_000;
 
 function createTargetScheduler({
   enabled,
+  emailEnabled,
   leagueWriteMode,
   jobs,
   emailJob = null,
@@ -14,6 +15,11 @@ function createTargetScheduler({
 } = {}) {
   if (typeof enabled !== "boolean") {
     throw new TypeError("target scheduler requires explicit enablement");
+  }
+  if (typeof emailEnabled !== "boolean") {
+    throw new TypeError(
+      "target scheduler requires explicit account-email enablement"
+    );
   }
   if (!["closed", "open"].includes(leagueWriteMode)) {
     throw new TypeError("target scheduler requires an explicit league write mode");
@@ -38,6 +44,11 @@ function createTargetScheduler({
       typeof emailJob.close !== "function")
   ) {
     throw new TypeError("target scheduler requires a controlled account-email job");
+  }
+  if (emailEnabled && emailJob === null) {
+    throw new TypeError(
+      "target scheduler requires an account-email job when delivery is enabled"
+    );
   }
   if (!health || typeof health.setSchedulerState !== "function") {
     throw new TypeError("target scheduler requires runtime health state");
@@ -64,6 +75,7 @@ function createTargetScheduler({
   let inFlight = null;
   let startResult = null;
   let closePromise = null;
+  let emailStarted = false;
 
   function transition(nextState) {
     state = nextState;
@@ -123,19 +135,24 @@ function createTargetScheduler({
     if (closePromise) {
       throw new Error("target scheduler is closed");
     }
-    if (state === "disabled") {
-      startResult = Object.freeze({ status: "disabled" });
-      return startResult;
-    }
-    if (state === "paused_maintenance") {
-      startResult = Object.freeze({ status: "paused_maintenance" });
-      return startResult;
-    }
-
-    transition("starting");
     let emailStart = null;
     try {
-      if (emailJob) emailStart = emailJob.start();
+      if (emailEnabled) {
+        emailStart = emailJob.start();
+        emailStarted = true;
+      }
+      if (state === "disabled" || state === "paused_maintenance") {
+        startResult = emailStarted
+          ? Object.freeze({
+              status: "email_only",
+              emailInitialRun: emailStart?.initialRun || null,
+              emailRecovered: emailStart?.recovered ?? null,
+            })
+          : Object.freeze({ status: state });
+        return startResult;
+      }
+
+      transition("starting");
       transition("running");
       const initialRun = runCycle();
       intervalHandle = setIntervalFunction(() => {
@@ -152,7 +169,9 @@ function createTargetScheduler({
       });
       return startResult;
     } catch (error) {
-      transition("failed");
+      if (!["disabled", "paused_maintenance"].includes(state)) {
+        transition("failed");
+      }
       throw error;
     }
   }
@@ -160,8 +179,12 @@ function createTargetScheduler({
   function close() {
     if (closePromise) return closePromise;
     closePromise = (async () => {
-      if (state === "disabled") return;
-      if (state !== "stopped") transition("stopping");
+      const leagueSchedulerActive = ![
+        "disabled",
+        "paused_maintenance",
+        "stopped",
+      ].includes(state);
+      if (leagueSchedulerActive) transition("stopping");
       if (intervalHandle !== null) {
         clearIntervalFunction(intervalHandle);
         intervalHandle = null;
@@ -174,14 +197,14 @@ function createTargetScheduler({
           errors.push(error);
         }
       }
-      if (emailJob) {
+      if (emailStarted) {
         try {
           await emailJob.close();
         } catch (error) {
           errors.push(error);
         }
       }
-      transition("stopped");
+      if (leagueSchedulerActive) transition("stopped");
       if (errors.length > 0) {
         throw new AggregateError(errors, "target scheduler shutdown failed");
       }

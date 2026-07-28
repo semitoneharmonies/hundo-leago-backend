@@ -31,6 +31,7 @@ function harness(overrides = {}) {
   };
   const scheduler = createTargetScheduler({
     enabled: true,
+    emailEnabled: true,
     leagueWriteMode: "open",
     jobs: [runner("domain"), runner("outbox")],
     emailJob: email,
@@ -54,7 +55,7 @@ test("disabled and maintenance-paused schedulers create no work", async () => {
     { enabled: false, leagueWriteMode: "open", expected: "disabled" },
     { enabled: true, leagueWriteMode: "closed", expected: "paused_maintenance" },
   ]) {
-    const evidence = harness(input);
+    const evidence = harness({ ...input, emailEnabled: false });
     assert.deepEqual(evidence.scheduler.start(), { status: input.expected });
     assert.equal(evidence.scheduler.getState(), input.expected);
     assert.deepEqual(evidence.calls, []);
@@ -63,6 +64,25 @@ test("disabled and maintenance-paused schedulers create no work", async () => {
     await evidence.scheduler.close();
     assert.deepEqual(evidence.calls, []);
   }
+});
+
+test("email-only scheduler starts and closes email without running league jobs", async () => {
+  const evidence = harness({
+    enabled: false,
+    emailEnabled: true,
+    leagueWriteMode: "open",
+  });
+  const started = evidence.scheduler.start();
+  assert.equal(started.status, "email_only");
+  assert.equal(started.emailRecovered, 2);
+  await started.emailInitialRun;
+  assert.deepEqual(evidence.calls, []);
+  assert.equal(evidence.email.starts, 1);
+  assert.equal(evidence.handles.length, 0);
+  assert.equal(evidence.scheduler.getState(), "disabled");
+  await evidence.scheduler.close();
+  assert.equal(evidence.email.closes, 1);
+  assert.equal(evidence.scheduler.getState(), "disabled");
 });
 
 test("enabled open scheduler starts email and runs jobs in declared order", async () => {
@@ -95,6 +115,7 @@ test("scheduler suppresses overlapping cycles and drains before close", async ()
   const evidence = harness();
   evidence.scheduler = createTargetScheduler({
     enabled: true,
+    emailEnabled: false,
     leagueWriteMode: "open",
     jobs: [
       evidence.runner("domain", async () => {
@@ -124,6 +145,7 @@ test("one failed job is contained and later jobs still run", async () => {
   const errors = [];
   const scheduler = createTargetScheduler({
     enabled: true,
+    emailEnabled: false,
     leagueWriteMode: "open",
     jobs: [
       evidence.runner("throws", async () => {

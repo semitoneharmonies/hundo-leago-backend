@@ -47,7 +47,8 @@ function createRuntimeHealthService({
     typeof runtimeConfig.buildId !== "string" ||
     typeof runtimeConfig.frontendBuildId !== "string" ||
     !["closed", "open"].includes(runtimeConfig.leagueWriteMode) ||
-    typeof runtimeConfig.scheduledJobsEnabled !== "boolean"
+    typeof runtimeConfig.scheduledJobsEnabled !== "boolean" ||
+    typeof runtimeConfig.accountEmailDeliveryEnabled !== "boolean"
   ) {
     throw new TypeError(
       "runtime health requires validated deployment configuration"
@@ -187,6 +188,9 @@ function createRuntimeHealthService({
       scheduler: Object.freeze({
         enabled: runtimeConfig.scheduledJobsEnabled,
         state: schedulerState,
+      }),
+      accountEmailDelivery: Object.freeze({
+        enabled: runtimeConfig.accountEmailDeliveryEnabled,
       }),
       maintenance: Object.freeze({ state: runtimeConfig.leagueWriteMode }),
       lastVerifiedBackup: backup ? Object.freeze({ ...backup }) : null,

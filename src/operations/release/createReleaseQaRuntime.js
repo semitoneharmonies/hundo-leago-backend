@@ -198,6 +198,7 @@ async function createReleaseQaRuntime({
       environmentId: databaseIdentity.environmentId,
       frontendBuildId: "m7-local-frontend",
       leagueWriteMode,
+      accountEmailDeliveryEnabled: false,
       scheduledJobsEnabled: false,
     });
     const health = createRuntimeHealthService({
@@ -208,6 +209,7 @@ async function createReleaseQaRuntime({
     });
     const scheduler = createTargetScheduler({
       enabled: false,
+      emailEnabled: false,
       leagueWriteMode,
       jobs: baseRuntime.services.league.scheduledJobs,
       emailJob: baseRuntime.services.accountEmail.job,

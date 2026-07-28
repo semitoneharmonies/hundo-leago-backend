@@ -60,6 +60,7 @@ function deployedEnvironment(overrides = {}) {
     PUBLIC_FRONTEND_ORIGIN: "https://staging-hundo.netlify.app",
     FRONTEND_ORIGINS: "https://staging-hundo.netlify.app",
     LOG_LEVEL: "info",
+    ACCOUNT_EMAIL_DELIVERY_ENABLED: "false",
     SCHEDULED_JOBS_ENABLED: "false",
     LEAGUE_WRITE_MODE: "closed",
     DEBUG_ROUTES_ENABLED: "false",
@@ -200,6 +201,7 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.equal(Object.isFrozen(config.currentSeason), true);
     assert.equal(config.appEnv, "staging");
     assert.equal(config.port, 4000);
+    assert.equal(config.accountEmailDeliveryEnabled, false);
     assert.equal(config.scheduledJobsEnabled, false);
     assert.equal(config.debugRoutesEnabled, false);
     assert.equal(config.leagueWriteMode, "closed");
@@ -287,6 +289,10 @@ describe("M7-01 deployed target runtime configuration", () => {
       "SCHEDULED_JOBS_ENABLED"
     );
     assertConfigError(
+      deployedEnvironment({ ACCOUNT_EMAIL_DELIVERY_ENABLED: "TRUE" }),
+      "ACCOUNT_EMAIL_DELIVERY_ENABLED"
+    );
+    assertConfigError(
       deployedEnvironment({ LEAGUE_WRITE_MODE: "maintenance" }),
       "LEAGUE_WRITE_MODE"
     );
@@ -346,6 +352,7 @@ describe("M7-01 deployed target runtime configuration", () => {
     const input = deployedRuntimeInput(t);
     input.config = Object.freeze({
       ...input.config,
+      accountEmailDeliveryEnabled: true,
       scheduledJobsEnabled: true,
       leagueWriteMode: "open",
     });
@@ -373,6 +380,28 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.equal(before.equals(runtime.database.serialize()), true);
     await runtime.scheduler.close();
     assert.equal(runtime.scheduler.getState(), "stopped");
+  });
+
+  test("starts account email without enabling league scheduled jobs", async (t) => {
+    const input = deployedRuntimeInput(t);
+    input.config = Object.freeze({
+      ...input.config,
+      accountEmailDeliveryEnabled: true,
+      scheduledJobsEnabled: false,
+      leagueWriteMode: "open",
+    });
+    const runtime = openDeployedTargetRuntime(input);
+    t.after(() => {
+      if (runtime.database.open) runtime.close();
+      fs.rmSync(input.persistentRoot, { recursive: true, force: true });
+    });
+    const before = runtime.database.serialize();
+    const started = runtime.scheduler.start();
+    assert.equal(started.status, "email_only");
+    if (started.emailInitialRun) await started.emailInitialRun;
+    assert.equal(runtime.scheduler.getState(), "disabled");
+    assert.equal(before.equals(runtime.database.serialize()), true);
+    await runtime.scheduler.close();
   });
 
   test("refuses missing, uninitialized, mismatched, and behind deployed databases", (t) => {
@@ -541,6 +570,7 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.deepEqual(
       Object.keys(body.data).sort(),
       [
+        "accountEmailDelivery",
         "backendBuildId",
         "databaseIdSuffix",
         "environment",
@@ -560,6 +590,7 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.equal(body.data.environment, "staging");
     assert.equal(body.data.schemaVersion, 21);
     assert.equal(body.data.scheduler.state, "disabled");
+    assert.deepEqual(body.data.accountEmailDelivery, { enabled: false });
     assert.deepEqual(body.data.maintenance, { state: "closed" });
     assert.deepEqual(body.data.sportsDataIoNhl, {
       provider: "sportsdataio-discovery-lab",

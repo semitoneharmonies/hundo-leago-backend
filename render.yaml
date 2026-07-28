@@ -75,6 +75,10 @@
           "value": "false"
         },
         {
+          "key": "ACCOUNT_EMAIL_DELIVERY_ENABLED",
+          "value": "true"
+        },
+        {
           "key": "LEAGUE_WRITE_MODE",
           "value": "open"
         },
