@@ -326,6 +326,13 @@ describe("M3-02 security configuration", () => {
     const production = loadSecurityConfig({
       env: deployedEnv("production"),
     });
+    const stagingSend = loadSecurityConfig({
+      env: deployedEnv("staging", {
+        EMAIL_DELIVERY_MODE: "send",
+        EMAIL_FROM: "Hundo Leago <accounts@staging.hundo.example>",
+        RESEND_API_KEY,
+      }),
+    });
     const allowlist = loadSecurityConfig({
       env: deployedEnv("staging", {
         EMAIL_DELIVERY_MODE: "allowlist",
@@ -343,16 +350,14 @@ describe("M3-02 security configuration", () => {
       "manager+one@example.test",
       "manager+two@example.test",
     ]);
+    assert.equal(stagingSend.email.deliveryMode, "send");
+    assert.deepEqual(stagingSend.email.recipientAllowlist, []);
     assert.equal(production.email.deliveryMode, "send");
     assert.equal(production.email.from.includes("accounts@"), true);
 
     const cases = [
       [localEnv({ EMAIL_DELIVERY_MODE: undefined }), "EMAIL_DELIVERY_MODE"],
       [localEnv({ EMAIL_DELIVERY_MODE: "send" }), "EMAIL_DELIVERY_MODE"],
-      [
-        deployedEnv("staging", { EMAIL_DELIVERY_MODE: "send" }),
-        "EMAIL_DELIVERY_MODE",
-      ],
       [
         deployedEnv("production", { EMAIL_DELIVERY_MODE: "capture" }),
         "EMAIL_DELIVERY_MODE",

@@ -92,11 +92,7 @@
         },
         {
           "key": "EMAIL_DELIVERY_MODE",
-          "value": "allowlist"
-        },
-        {
-          "key": "STAGING_EMAIL_RECIPIENT_ALLOWLIST",
-          "sync": false
+          "value": "send"
         },
         {
           "key": "RESEND_API_KEY",

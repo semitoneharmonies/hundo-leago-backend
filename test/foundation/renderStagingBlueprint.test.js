@@ -87,7 +87,7 @@ describe("M2 gate staging Render blueprint", () => {
     assert.equal(environment.get("NODE_ENV")?.value, "production");
   });
 
-  test("enables only allowlisted account email and keeps league jobs disabled", () => {
+  test("enables public account email and keeps league jobs disabled", () => {
     const [service] = loadBlueprint().services;
     const environment = environmentByKey(service);
 
@@ -113,9 +113,9 @@ describe("M2 gate staging Render blueprint", () => {
       environment.get("ACCOUNT_EMAIL_DELIVERY_ENABLED")?.value,
       "true"
     );
-    assert.equal(environment.get("EMAIL_DELIVERY_MODE")?.value, "allowlist");
+    assert.equal(environment.get("EMAIL_DELIVERY_MODE")?.value, "send");
     assert.equal(
-      environment.get("STAGING_EMAIL_RECIPIENT_ALLOWLIST")?.sync,
+      environment.has("STAGING_EMAIL_RECIPIENT_ALLOWLIST"),
       false
     );
     assert.equal(environment.get("RESEND_API_KEY")?.sync, false);

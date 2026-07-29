@@ -32,7 +32,7 @@ const EMAIL_DELIVERY_MODES = Object.freeze([
 const EMAIL_MODES_BY_ENVIRONMENT = Object.freeze({
   local: Object.freeze(["disabled", "capture"]),
   test: Object.freeze(["disabled", "capture"]),
-  staging: Object.freeze(["capture", "sandbox", "allowlist"]),
+  staging: Object.freeze(["capture", "sandbox", "allowlist", "send"]),
   production: Object.freeze(["send"]),
 });
 const RESEND_API_ORIGIN = "https://api.resend.com";
