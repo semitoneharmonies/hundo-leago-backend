@@ -107,6 +107,87 @@ test("enabled open scheduler starts email and runs jobs in declared order", asyn
   assert.deepEqual(evidence.states, ["starting", "running", "stopping", "stopped"]);
 });
 
+test("awaits the composed FAD auction chain before ordinary resolution and completion", async () => {
+  const order = [
+    "free_agent_draft_auction_resolution",
+    "free_agent_draft_restricted_activation",
+    "free_agent_draft_fallback_activation",
+    "free_agent_draft_queued_nomination_activation",
+    "free_agent_draft_rollover_finalization",
+    "auction_resolution",
+    "free_agent_draft_completion",
+  ];
+  const observations = [];
+  const completed = [];
+  const jobs = order.map((name, index) => ({
+    name,
+    runner: {
+      async run() {
+        assert.deepEqual(completed, order.slice(0, index));
+        observations.push(`start:${name}`);
+        await Promise.resolve();
+        completed.push(name);
+        observations.push(`complete:${name}`);
+        return { status: "succeeded" };
+      },
+    },
+  }));
+  const scheduler = createTargetScheduler({
+    enabled: true,
+    emailEnabled: false,
+    leagueWriteMode: "open",
+    jobs,
+    health: { setSchedulerState() {} },
+    logger: { error() {} },
+    setIntervalFunction: () => ({ unref() {} }),
+    clearIntervalFunction() {},
+  });
+
+  const cycle = await scheduler.start().initialRun;
+
+  assert.equal(cycle.status, "succeeded");
+  assert.deepEqual(
+    cycle.outcomes.map(({ name }) => name),
+    order
+  );
+  assert.deepEqual(
+    observations,
+    order.flatMap((name) => [
+      `start:${name}`,
+      `complete:${name}`,
+    ])
+  );
+  await scheduler.close();
+
+  const disabledCalls = [];
+  const disabledScheduler = createTargetScheduler({
+    enabled: false,
+    emailEnabled: false,
+    leagueWriteMode: "open",
+    jobs: order.map((name) => ({
+      name,
+      runner: {
+        async run() {
+          disabledCalls.push(name);
+          return { status: "succeeded" };
+        },
+      },
+    })),
+    health: { setSchedulerState() {} },
+    logger: { error() {} },
+  });
+  assert.deepEqual(
+    disabledScheduler.start(),
+    { status: "disabled" }
+  );
+  assert.deepEqual(
+    await disabledScheduler.runCycle(),
+    { status: "skipped", reason: "not_running" }
+  );
+  assert.deepEqual(disabledCalls, []);
+  await disabledScheduler.close();
+});
+
 test("scheduler suppresses overlapping cycles and drains before close", async () => {
   let release;
   const blocked = new Promise((resolve) => {

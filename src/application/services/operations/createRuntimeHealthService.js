@@ -1,7 +1,19 @@
 const crypto = require("node:crypto");
 
 const SPORTSDATAIO_PROVIDER = "sportsdataio-discovery-lab";
+const SPORTSDATAIO_LIVE_PROVIDER = "sportsdataio-live";
 const SPORTSDATAIO_STALE_AFTER_MS = 72 * 60 * 60 * 1000;
+const SPORTSDATAIO_LIVE_VERIFICATION_KEYS = Object.freeze([
+  "status",
+  "evidenceId",
+  "evidenceSha256",
+  "issuedAtMs",
+  "expiresAtMs",
+  "verifiedAtMs",
+]);
+const UUID_V4_PATTERN =
+  /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 function assertDatabase(database) {
   if (
@@ -33,6 +45,109 @@ function identitySuffix(databaseId) {
   return databaseId.slice(-8);
 }
 
+function isPlainObject(value) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function sanitizeLiveVerification(value) {
+  if (
+    !isPlainObject(value) ||
+    !Object.isFrozen(value) ||
+    Object.getOwnPropertySymbols(value).length !== 0
+  ) {
+    throw new TypeError(
+      "runtime health requires verified SportsDataIO live capability state"
+    );
+  }
+  const actualKeys = Object.getOwnPropertyNames(value).sort();
+  const expectedKeys = [...SPORTSDATAIO_LIVE_VERIFICATION_KEYS].sort();
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key, index) => key !== expectedKeys[index])
+  ) {
+    throw new TypeError(
+      "runtime health requires verified SportsDataIO live capability state"
+    );
+  }
+  for (const key of actualKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      !descriptor ||
+      descriptor.enumerable !== true ||
+      !Object.prototype.hasOwnProperty.call(descriptor, "value")
+    ) {
+      throw new TypeError(
+        "runtime health requires verified SportsDataIO live capability state"
+      );
+    }
+  }
+  if (
+    value.status !== "verified" ||
+    !UUID_V4_PATTERN.test(value.evidenceId) ||
+    !SHA256_PATTERN.test(value.evidenceSha256) ||
+    !Number.isSafeInteger(value.issuedAtMs) ||
+    value.issuedAtMs < 0 ||
+    !Number.isSafeInteger(value.expiresAtMs) ||
+    value.expiresAtMs <= value.issuedAtMs ||
+    !Number.isSafeInteger(value.verifiedAtMs) ||
+    value.verifiedAtMs < value.issuedAtMs ||
+    value.verifiedAtMs >= value.expiresAtMs
+  ) {
+    throw new TypeError(
+      "runtime health requires verified SportsDataIO live capability state"
+    );
+  }
+  return Object.freeze({
+    status: "verified",
+    evidenceId: value.evidenceId,
+    evidenceSha256: value.evidenceSha256,
+    issuedAtMs: value.issuedAtMs,
+    expiresAtMs: value.expiresAtMs,
+    verifiedAtMs: value.verifiedAtMs,
+  });
+}
+
+function sportsDataIoLiveNhlHealth(value) {
+  if (value === undefined) {
+    return Object.freeze({
+      provider: SPORTSDATAIO_LIVE_PROVIDER,
+      mode: "disabled",
+      enabled: false,
+      verified: false,
+      verification: null,
+    });
+  }
+  if (
+    !isPlainObject(value) ||
+    !["disabled", "probe", "required"].includes(value.mode) ||
+    typeof value.enabled !== "boolean" ||
+    typeof value.verified !== "boolean" ||
+    value.enabled !== value.verified ||
+    (value.enabled && value.mode !== "required")
+  ) {
+    throw new TypeError(
+      "runtime health requires verified SportsDataIO live capability state"
+    );
+  }
+  return Object.freeze({
+    provider: SPORTSDATAIO_LIVE_PROVIDER,
+    mode: value.mode,
+    enabled: value.enabled,
+    verified: value.verified,
+    verification: value.enabled
+      ? sanitizeLiveVerification(value.verification)
+      : null,
+  });
+}
+
 function createRuntimeHealthService({
   database,
   migrationState,
@@ -46,6 +161,7 @@ function createRuntimeHealthService({
     !["staging", "production"].includes(runtimeConfig.appEnv) ||
     typeof runtimeConfig.buildId !== "string" ||
     typeof runtimeConfig.frontendBuildId !== "string" ||
+    typeof runtimeConfig.freeAgentDraftRoutesEnabled !== "boolean" ||
     !["closed", "open"].includes(runtimeConfig.leagueWriteMode) ||
     typeof runtimeConfig.scheduledJobsEnabled !== "boolean" ||
     typeof runtimeConfig.accountEmailDeliveryEnabled !== "boolean"
@@ -59,6 +175,9 @@ function createRuntimeHealthService({
   }
   const checksumSetId = migrationChecksumSetId(migrationState);
   const databaseIdSuffix = identitySuffix(databaseIdentity?.databaseId);
+  const sportsDataIoLiveNhl = sportsDataIoLiveNhlHealth(
+    runtimeConfig.sportsDataIoLiveNhl
+  );
   let lifecycle = "starting";
   let schedulerState = runtimeConfig.scheduledJobsEnabled
     ? runtimeConfig.leagueWriteMode === "closed"
@@ -192,6 +311,9 @@ function createRuntimeHealthService({
       accountEmailDelivery: Object.freeze({
         enabled: runtimeConfig.accountEmailDeliveryEnabled,
       }),
+      freeAgentDraftRoutes: Object.freeze({
+        enabled: runtimeConfig.freeAgentDraftRoutesEnabled,
+      }),
       maintenance: Object.freeze({ state: runtimeConfig.leagueWriteMode }),
       lastVerifiedBackup: backup ? Object.freeze({ ...backup }) : null,
       lastValidStatisticsRefresh: statistics
@@ -209,6 +331,7 @@ function createRuntimeHealthService({
           !sportsDataIoImport ||
           now - sportsDataIoImport.completedAtMs > SPORTSDATAIO_STALE_AFTER_MS,
       }),
+      sportsDataIoLiveNhl,
       outbox: Object.freeze({
         pending: outbox?.pending || 0,
         publishing: outbox?.publishing || 0,
@@ -229,6 +352,7 @@ function createRuntimeHealthService({
 }
 
 module.exports = {
+  SPORTSDATAIO_LIVE_PROVIDER,
   SPORTSDATAIO_PROVIDER,
   SPORTSDATAIO_STALE_AFTER_MS,
   createRuntimeHealthService,

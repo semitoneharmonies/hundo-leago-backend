@@ -179,7 +179,10 @@ function seedFoundation(context) {
   });
 }
 
-function createRuntime(t) {
+function createRuntime(
+  t,
+  { candidateCardSummerSynchronizer } = {}
+) {
   const temporaryRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "hundo-m4-02-")
   );
@@ -206,6 +209,15 @@ function createRuntime(t) {
     database: connection.database,
     repository: createSqliteLeaguePlayerOwnershipRepository({
       database: connection.database,
+      candidateCardSummerSynchronizer:
+        candidateCardSummerSynchronizer ?? {
+          synchronize() {
+            return Object.freeze({
+              affectedCardCount: 0,
+              changedCardCount: 0,
+            });
+          },
+        },
     }),
   };
 }
@@ -340,6 +352,55 @@ describe("M4-02 league player ownership policy", () => {
 });
 
 describe("M4-02 league player ownership repository", () => {
+  test("synchronizes one position correction and its current owner inside the mutation transaction", (t) => {
+    const calls = [];
+    let runtime;
+    runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize(command) {
+          assert.equal(runtime.database.inTransaction, true);
+          calls.push(command);
+          return Object.freeze({
+            affectedCardCount: 0,
+            changedCardCount: 0,
+          });
+        },
+      },
+    });
+    runtime.context.repositories.player_ownerships.insert(
+      ownershipRecord()
+    );
+
+    runtime.repository.findCurrentPositionCorrection({
+      leagueId: IDS.leagueA,
+      playerId: IDS.player1,
+    });
+    runtime.repository.findOwnership({
+      leagueId: IDS.leagueA,
+      playerId: IDS.player1,
+    });
+    runtime.repository.listTeamOwnership({
+      leagueId: IDS.leagueA,
+      seasonId: IDS.seasonA,
+      teamId: IDS.teamA,
+    });
+    assert.equal(calls.length, 0);
+
+    runtime.repository.replaceCurrentPositionCorrection(
+      correctionInput()
+    );
+    assert.deepEqual(calls, [
+      {
+        leagueId: IDS.leagueA,
+        affectedTeamIds: [IDS.teamA],
+        affectedPlayerIds: [IDS.player1],
+        sourceOperationId: IDS.correctionA1,
+        sourceKind: "position_correction",
+        nowMs: NOW_MS,
+      },
+    ]);
+  });
+
   test("creates and reads a current correction without changing global player identity", (t) => {
     const runtime = createRuntime(t);
     const playerBefore = runtime.context.repositories.players.findByKey({
@@ -529,6 +590,54 @@ describe("M4-02 league player ownership repository", () => {
           })
         ),
       (error) => error.code === REPOSITORY_ERROR_CODES.constraint
+    );
+    assert.equal(databaseSemanticHash(runtime.database), before);
+    const current =
+      runtime.repository.findCurrentPositionCorrection({
+        leagueId: IDS.leagueA,
+        playerId: IDS.player1,
+      });
+    assert.equal(current.id, IDS.correctionA1);
+    assert.equal(current.ended_at_ms, null);
+    assert.equal(current.version, 1);
+  });
+
+  test("rolls the prior correction and replacement back when Candidate synchronization fails", (t) => {
+    let synchronizationMustFail = false;
+    const runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize() {
+          if (synchronizationMustFail) {
+            throw new Error(
+              "injected Candidate synchronization failure"
+            );
+          }
+          return Object.freeze({
+            affectedCardCount: 0,
+            changedCardCount: 0,
+          });
+        },
+      },
+    });
+    runtime.repository.replaceCurrentPositionCorrection(
+      correctionInput()
+    );
+    const before = databaseSemanticHash(runtime.database);
+    synchronizationMustFail = true;
+
+    assert.throws(
+      () =>
+        runtime.repository.replaceCurrentPositionCorrection(
+          correctionInput({
+            id: IDS.correctionA2,
+            positionGroup: "D",
+            effectiveAtMs: NOW_MS + 1_000,
+          })
+        ),
+      (error) =>
+        error.code === REPOSITORY_ERROR_CODES.operationFailed &&
+        error.cause?.message ===
+          "injected Candidate synchronization failure"
     );
     assert.equal(databaseSemanticHash(runtime.database), before);
     const current =

@@ -14,12 +14,27 @@ function stableId(value) {
   return value;
 }
 
-function createSqliteMatchupResultRepository({ database, beforeCommit } = {}) {
+function createSqliteMatchupResultRepository({
+  database,
+  beforeCommit,
+  occurrenceExecutionGuard,
+} = {}) {
   if (!database || typeof database.prepare !== "function") {
     throw new TypeError("createSqliteMatchupResultRepository requires a database");
   }
   if (beforeCommit !== undefined && typeof beforeCommit !== "function") {
     throw new TypeError("matchup-result beforeCommit must be a function");
+  }
+  if (
+    occurrenceExecutionGuard !== undefined &&
+    (
+      !occurrenceExecutionGuard ||
+      typeof occurrenceExecutionGuard.assertCurrent !== "function"
+    )
+  ) {
+    throw new TypeError(
+      "matchup-result occurrenceExecutionGuard must assert current execution"
+    );
   }
   const contextStatement = database.prepare(
     "SELECT matchups.*, matchup_weeks.status AS week_status, matchup_weeks.ends_at_ms, " +
@@ -157,6 +172,78 @@ function createSqliteMatchupResultRepository({ database, beforeCommit } = {}) {
   }
 
   const finalizeTransaction = database.transaction((command) => {
+    if (command.occurrenceExecution !== undefined) {
+      if (!occurrenceExecutionGuard) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.argumentInvalid,
+          "A matchup occurrence execution guard is required."
+        );
+      }
+      occurrenceExecutionGuard.assertCurrent(
+        command.occurrenceExecution
+      );
+      if (
+        command.leagueId !==
+          command.occurrenceExecution.leagueId ||
+        command.seasonId !==
+          command.occurrenceExecution.seasonId ||
+        command.weekId !==
+          command.occurrenceExecution.weekId
+      ) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.versionConflict,
+          "The matchup result execution scope changed."
+        );
+      }
+    }
+
+    const operationRows = operationStatement.all({
+      operationId: stableId(command.operationId),
+    });
+    if (operationRows.length > 1) {
+      throw repositoryError(
+        REPOSITORY_ERROR_CODES.schemaIncompatible,
+        "The matchup operation is ambiguous."
+      );
+    }
+    if (operationRows.length === 1) {
+      const operation = operationRows[0];
+      if (
+        operation.league_id !== command.leagueId ||
+        operation.season_id !== command.seasonId ||
+        operation.matchup_week_id !== command.weekId ||
+        operation.matchup_id !== command.matchupId ||
+        operation.operation_type !== "result_finalize"
+      ) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.versionConflict,
+          "The operation ID is already in use."
+        );
+      }
+      return readContext(command);
+    }
+    if (
+      command.occurrenceExecution !== undefined &&
+      [
+        "expectedMatchupVersion",
+        "refreshId",
+        "resultId",
+        "resultVersionId",
+        "snapshotId",
+        "homeTeamId",
+        "awayTeamId",
+        "homeScoreHundredths",
+        "awayScoreHundredths",
+        "outcome",
+        "nowMs",
+      ].some((field) => command[field] === undefined)
+    ) {
+      throw repositoryError(
+        REPOSITORY_ERROR_CODES.versionConflict,
+        "The guarded matchup-result replay is no longer present."
+      );
+    }
+
     const context = readContext(command);
     if (
       !context || context.result || context.matchup.status !== "awaiting_data" ||

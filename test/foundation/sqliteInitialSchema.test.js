@@ -18,13 +18,159 @@ const MIGRATIONS_DIRECTORY = path.join(
   "database",
   "migrations"
 );
+const FINAL_MIGRATION_0030 = Object.freeze({
+  byteLength: 636_077,
+  sha256:
+    "6f46b7a8c52108adfc0b51dc1eb9cdcab0ed274482ca396a31f7d45e42c07184",
+});
+const FINAL_MIGRATION_0031 = Object.freeze({
+  byteLength: 46_693,
+  sha256:
+    "f2c5104f2eb06e261cc902067bd4623b841f2c37a04f73d27487863077b2662a",
+});
+const FINAL_MIGRATION_0032 = Object.freeze({
+  byteLength: 27_882,
+  sha256:
+    "ec6bf25a00c2a279d5380a11cb99a3f9b8bc22b06e95ff0f2ef58519e786c7f5",
+});
+const FINAL_MIGRATION_0033 = Object.freeze({
+  byteLength: 56_084,
+  sha256:
+    "93714178a4c89687578ca340afbe69c317239118cb50765838e6123ff6faf7f1",
+});
+const FINAL_MIGRATION_0034 = Object.freeze({
+  byteLength: 1_158,
+  sha256:
+    "9347331419ada113707a4e71ef87c578ddd3cd0bd4ddb9578164f08b3307bb36",
+});
+const FINAL_MIGRATION_0037 = Object.freeze({
+  byteLength: 4_142,
+  sha256:
+    "33b8e7c3479f9a3dc64011a29ced6421a5cc59eca62da8b8144cf82b1d0d80b3",
+});
+const FINAL_MIGRATION_0038 = Object.freeze({
+  byteLength: 17_157,
+  sha256:
+    "b4567d087b31ff70dfa2776f2a15e6d22e182600d3dd5e5446a169bb64bb5ac5",
+});
+const FINAL_MIGRATION_0039 = Object.freeze({
+  byteLength: 201_713,
+  sha256:
+    "a176479f3eb3fc1183c595a68026a2e5b73d6b975b66b6bcab5de4954945ae6f",
+});
+const FINAL_MIGRATION_0040 = Object.freeze({
+  byteLength: 9_449,
+  sha256:
+    "cff71c33b628504d38b53cfe1621363740791c119c5b214d7d11e10f216a5a92",
+});
+const FINAL_MIGRATION_0041 = Object.freeze({
+  byteLength: 35_525,
+  sha256:
+    "00d6926934d46089df6581a8c3edc296394ce57958155e36da7d15b2be61111b",
+});
+const FINAL_MIGRATION_0042 = Object.freeze({
+  byteLength: 9_326,
+  sha256:
+    "4269c4a0c320364b65d20c01b167ff8738f1a67c7e4d52160e6e2245e201e537",
+});
+const FINAL_MIGRATION_0043 = Object.freeze({
+  byteLength: 92_011,
+  sha256:
+    "1623d40ffaa477e3ba0be6bdd7c831f3d16489b53e4befc03eb7aa0e6efa6ae3",
+});
+const FINAL_MIGRATION_0044 = Object.freeze({
+  byteLength: 32_654,
+  sha256:
+    "79f759030c01281f4a21aeba0584a3681d0ae84982d2b7a48dfcd7a5bf0274ee",
+});
+const FINAL_MIGRATION_0045 = Object.freeze({
+  byteLength: 74_289,
+  sha256:
+    "cd2a7d3059b6ab0f484267b6999cbadd6db1a86114fcdb67e4220296dca9ae37",
+});
+const FINAL_MIGRATION_0046 = Object.freeze({
+  byteLength: 18_329,
+  sha256:
+    "78626350a1efa3e76b09f3ba2dc812b135b1e2d19dd2c01d2e973a57a6a884bb",
+});
+const FINAL_MIGRATION_0047 = Object.freeze({
+  byteLength: 14_129,
+  sha256:
+    "bdabbcff52cd87c932c3f2e067d825786fd6dac6354ea4a3a90396ec972b0b2b",
+});
+const FINAL_MIGRATION_0048 = Object.freeze({
+  byteLength: 73_524,
+  sha256:
+    "c08445d1b3833343f9c276dff3cd9400ebce6e282665179b992f47919feceb21",
+});
+const FINAL_MIGRATION_0049 = Object.freeze({
+  byteLength: 29_571,
+  sha256:
+    "5109baabaeed39e06498c7c26274a41a48edfbbdee958e7dd6b278021a29ebc6",
+});
+const FROZEN_MIGRATIONS_0023_THROUGH_0029 = Object.freeze([
+  Object.freeze({
+    id: 23,
+    fileName: "0023_add_fad_lifecycle_prerequisites.sql",
+    byteLength: 11_207,
+    sha256:
+      "18d13850ea972784e2cffc63ba47bd8559c180c35b28dee18fdcf850b01db6f2",
+  }),
+  Object.freeze({
+    id: 24,
+    fileName: "0024_add_free_agent_draft_candidate_cards.sql",
+    byteLength: 98_741,
+    sha256:
+      "38dda0b2785c0247ca9fb87a57cd93dbf741fa118bf49f211bf04b6cfe2fd2b7",
+  }),
+  Object.freeze({
+    id: 25,
+    fileName:
+      "0025_add_free_agent_draft_allocations_rollovers_recoveries.sql",
+    byteLength: 219_874,
+    sha256:
+      "58757c41b08110758b18ef71e1e51a8d4f60b922f42647ebdb8f8fa7f3b2d802",
+  }),
+  Object.freeze({
+    id: 26,
+    fileName:
+      "0026_add_fad_auction_contexts_participants_and_draws.sql",
+    byteLength: 234_905,
+    sha256:
+      "012ea6a5a50ea2de8be622de3c232aae9484fdcee455469705c8f8c4ef1a345b",
+  }),
+  Object.freeze({
+    id: 27,
+    fileName:
+      "0027_add_scoped_outbox_audiences_and_notification_deduplication.sql",
+    byteLength: 3_959,
+    sha256:
+      "c8171f1fb530a83a52a11301d1bcf549337234241e8b58ff6ce9f625afc2cc28",
+  }),
+  Object.freeze({
+    id: 28,
+    fileName: "0028_add_final_standings_provenance.sql",
+    byteLength: 102_560,
+    sha256:
+      "4307b151beb2a2c29968f257400b716424906ddf5ab2d102e8f37cc5e8074d4e",
+  }),
+  Object.freeze({
+    id: 29,
+    fileName: "0029_add_lifecycle_transition_evidence.sql",
+    byteLength: 535_587,
+    sha256:
+      "eccdbd2d14b4a73fccf0929591ad373e47b0e44d17840dbb1141cb0ac7a70141",
+  }),
+]);
 
 const EXPECTED_TABLES = [
   "account_action_tokens",
   "account_events",
   "administrator_requests",
   "application_metadata",
+  "auction_administration_command_results",
   "auction_bids",
+  "auction_contexts",
   "auction_events",
   "auction_resolutions",
   "auctions",
@@ -32,6 +178,13 @@ const EXPECTED_TABLES = [
   "backup_catalog",
   "buyout_obligations",
   "buyout_years",
+  "candidate_card_entries",
+  "candidate_card_help_command_results",
+  "candidate_card_help_requests",
+  "candidate_card_revisions",
+  "candidate_card_snapshot_entries",
+  "candidate_card_snapshots",
+  "candidate_cards",
   "commissioner_corrections",
   "contract_events",
   "contract_years",
@@ -45,7 +198,32 @@ const EXPECTED_TABLES = [
   "draft_picks",
   "draft_queue_items",
   "draft_selections",
+  "entry_draft_on_clock_trades",
+  "entry_draft_pick_clocks",
+  "entry_draft_rollover_bindings",
+  "entry_draft_schedule_operations",
   "entry_drafts",
+  "free_agent_draft_allocation_correction_command_results",
+  "free_agent_draft_allocation_events",
+  "free_agent_draft_auction_participants",
+  "free_agent_draft_draws",
+  "free_agent_draft_eligibility_revalidation_occurrences",
+  "free_agent_draft_nomination_queue",
+  "free_agent_draft_player_allocations",
+  "free_agent_draft_readiness_attempts",
+  "free_agent_draft_readiness_corrective_requeues",
+  "free_agent_draft_readiness_operations",
+  "free_agent_draft_readiness_retry_receipts",
+  "free_agent_draft_recoveries",
+  "free_agent_draft_recovery_action_command_results",
+  "free_agent_draft_rollovers",
+  "free_agent_draft_schedule_recoveries",
+  "free_agent_draft_schedule_recovery_jobs",
+  "free_agent_draft_schedule_recovery_matchups",
+  "free_agent_draft_schedule_recovery_weeks",
+  "free_agent_draft_setup_exemptions",
+  "free_agent_draft_teams",
+  "free_agent_drafts",
   "future_considerations",
   "idempotency_requests",
   "job_runs",
@@ -60,17 +238,25 @@ const EXPECTED_TABLES = [
   "matchup_operations",
   "matchup_result_versions",
   "matchup_results",
+  "matchup_roster_game_exclusion_sets",
+  "matchup_roster_game_exclusions",
   "matchup_roster_locks",
   "matchup_roster_players",
+  "matchup_schedule_command_results",
+  "matchup_schedule_job_bindings",
   "matchup_weeks",
   "matchups",
   "migration_reports",
+  "nhl_game_state_observation_snapshots",
+  "nhl_game_state_observations",
   "notifications",
   "operational_events",
+  "outbox_event_audiences",
   "outbox_events",
   "ownership_events",
   "platform_roles",
   "player_external_ids",
+  "player_game_stat_observations",
   "player_names",
   "player_ownerships",
   "player_source_state",
@@ -81,12 +267,22 @@ const EXPECTED_TABLES = [
   "roster_display_order_entries",
   "roster_display_order_sets",
   "schema_migrations",
+  "season_matchup_schedule_generations",
+  "season_rollover_attempts",
+  "season_rollover_items",
+  "season_rollover_occurrences",
+  "season_rollovers",
   "seasons",
   "security_audit_events",
   "sessions",
   "standings_operations",
   "standings_rows",
+  "standings_snapshot_finalizations",
+  "standings_snapshot_result_versions",
+  "standings_snapshot_team_identities",
   "standings_snapshots",
+  "stat_refresh_player_game_coverage_entries",
+  "stat_refresh_player_game_sets",
   "stat_refreshes",
   "stat_snapshot_players",
   "stat_snapshots",
@@ -504,7 +700,7 @@ describe("M2-04 initial relational schema", () => {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     });
 
-    assert.equal(migrations.length, 22);
+    assert.equal(migrations.length, 49);
     assert.equal(migrations[0].id, 1);
     assert.equal(migrations[0].fileName, "0001_initial.sql");
     assert.equal(migrations[1].id, 2);
@@ -612,13 +808,302 @@ describe("M2-04 initial relational schema", () => {
       migrations[21].fileName,
       "0022_add_team_pattern_template.sql"
     );
+    assert.equal(migrations[22].id, 23);
+    assert.equal(
+      migrations[22].fileName,
+      "0023_add_fad_lifecycle_prerequisites.sql"
+    );
+    assert.equal(migrations[23].id, 24);
+    assert.equal(
+      migrations[23].fileName,
+      "0024_add_free_agent_draft_candidate_cards.sql"
+    );
+    assert.equal(migrations[24].id, 25);
+    assert.equal(
+      migrations[24].fileName,
+      "0025_add_free_agent_draft_allocations_rollovers_recoveries.sql"
+    );
+    assert.equal(migrations[25].id, 26);
+    assert.equal(
+      migrations[25].fileName,
+      "0026_add_fad_auction_contexts_participants_and_draws.sql"
+    );
+    assert.equal(migrations[26].id, 27);
+    assert.equal(
+      migrations[26].fileName,
+      "0027_add_scoped_outbox_audiences_and_notification_deduplication.sql"
+    );
+    assert.equal(migrations[27].id, 28);
+    assert.equal(
+      migrations[27].fileName,
+      "0028_add_final_standings_provenance.sql"
+    );
+    assert.equal(migrations[28].id, 29);
+    assert.equal(
+      migrations[28].fileName,
+      "0029_add_lifecycle_transition_evidence.sql"
+    );
+    assert.equal(migrations[29].id, 30);
+    assert.equal(
+      migrations[29].fileName,
+      "0030_apply_locked_fad_decision_package.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[29].filePath).size,
+      FINAL_MIGRATION_0030.byteLength
+    );
+    assert.equal(
+      migrations[29].checksum,
+      FINAL_MIGRATION_0030.sha256
+    );
+    assert.equal(migrations[30].id, 31);
+    assert.equal(
+      migrations[30].fileName,
+      "0031_add_fad_readiness_attempts_and_retry_receipts.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[30].filePath).size,
+      FINAL_MIGRATION_0031.byteLength
+    );
+    assert.equal(
+      migrations[30].checksum,
+      FINAL_MIGRATION_0031.sha256
+    );
+    assert.equal(migrations[31].id, 32);
+    assert.equal(
+      migrations[31].fileName,
+      "0032_add_fad_readiness_lease_reclaim.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[31].filePath).size,
+      FINAL_MIGRATION_0032.byteLength
+    );
+    assert.equal(
+      migrations[31].checksum,
+      FINAL_MIGRATION_0032.sha256
+    );
+    assert.equal(migrations[32].id, 33);
+    assert.equal(
+      migrations[32].fileName,
+      "0033_add_fad_readiness_corrective_requeues.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[32].filePath).size,
+      FINAL_MIGRATION_0033.byteLength
+    );
+    assert.equal(
+      migrations[32].checksum,
+      FINAL_MIGRATION_0033.sha256
+    );
+    assert.equal(migrations[33].id, 34);
+    assert.equal(
+      migrations[33].fileName,
+      "0034_add_candidate_eligibility_search_indexes.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[33].filePath).size,
+      FINAL_MIGRATION_0034.byteLength
+    );
+    assert.equal(
+      migrations[33].checksum,
+      FINAL_MIGRATION_0034.sha256
+    );
+    assert.equal(migrations[34].id, 35);
+    assert.equal(
+      migrations[34].fileName,
+      "0035_add_candidate_card_help_command_results.sql"
+    );
+    assert.equal(migrations[35].id, 36);
+    assert.equal(
+      migrations[35].fileName,
+      "0036_add_fad_eligibility_revalidation_occurrences.sql"
+    );
+    assert.equal(migrations[36].id, 37);
+    assert.equal(
+      migrations[36].fileName,
+      "0037_allow_atomic_fad_deadline_allocations.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[36].filePath).size,
+      FINAL_MIGRATION_0037.byteLength
+    );
+    assert.equal(
+      migrations[36].checksum,
+      FINAL_MIGRATION_0037.sha256
+    );
+    assert.equal(migrations[37].id, 38);
+    assert.equal(
+      migrations[37].fileName,
+      "0038_allow_pre_fad12_restricted_scheduling.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[37].filePath).size,
+      FINAL_MIGRATION_0038.byteLength
+    );
+    assert.equal(
+      migrations[37].checksum,
+      FINAL_MIGRATION_0038.sha256
+    );
+    assert.equal(migrations[38].id, 39);
+    assert.equal(
+      migrations[38].fileName,
+      "0039_add_fad_recovery_correction_evidence.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[38].filePath).size,
+      FINAL_MIGRATION_0039.byteLength
+    );
+    assert.equal(
+      migrations[38].checksum,
+      FINAL_MIGRATION_0039.sha256
+    );
+    assert.equal(migrations[39].id, 40);
+    assert.equal(
+      migrations[39].fileName,
+      "0040_allow_atomic_fad_restricted_fallback_overlap.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[39].filePath).size,
+      FINAL_MIGRATION_0040.byteLength
+    );
+    assert.equal(
+      migrations[39].checksum,
+      FINAL_MIGRATION_0040.sha256
+    );
+    assert.equal(migrations[40].id, 41);
+    assert.equal(
+      migrations[40].fileName,
+      "0041_allow_fad_auction_resolution_recovery_resume.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[40].filePath).size,
+      FINAL_MIGRATION_0041.byteLength
+    );
+    assert.equal(
+      migrations[40].checksum,
+      FINAL_MIGRATION_0041.sha256
+    );
+    assert.equal(migrations[41].id, 42);
+    assert.equal(
+      migrations[41].fileName,
+      "0042_use_current_aav_for_restricted_participant_floor.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[41].filePath).size,
+      FINAL_MIGRATION_0042.byteLength
+    );
+    assert.equal(
+      migrations[41].checksum,
+      FINAL_MIGRATION_0042.sha256
+    );
+    assert.equal(migrations[42].id, 43);
+    assert.equal(
+      migrations[42].fileName,
+      "0043_allow_repeat_fad_auction_resolution_recovery.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[42].filePath).size,
+      FINAL_MIGRATION_0043.byteLength
+    );
+    assert.equal(
+      migrations[42].checksum,
+      FINAL_MIGRATION_0043.sha256
+    );
+    assert.equal(migrations[43].id, 44);
+    assert.equal(
+      migrations[43].fileName,
+      "0044_allow_immediate_fad_open_rapid_starts.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[43].filePath).size,
+      FINAL_MIGRATION_0044.byteLength
+    );
+    assert.equal(
+      migrations[43].checksum,
+      FINAL_MIGRATION_0044.sha256
+    );
+    assert.equal(migrations[44].id, 45);
+    assert.equal(
+      migrations[44].fileName,
+      "0045_allow_restart_safe_fad_queued_nomination_activation.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[44].filePath).size,
+      FINAL_MIGRATION_0045.byteLength
+    );
+    assert.equal(
+      migrations[44].checksum,
+      FINAL_MIGRATION_0045.sha256
+    );
+    assert.equal(migrations[45].id, 46);
+    assert.equal(
+      migrations[45].fileName,
+      "0046_bind_fad_open_rapid_starter_edit_limit.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[45].filePath).size,
+      FINAL_MIGRATION_0046.byteLength
+    );
+    assert.equal(
+      migrations[45].checksum,
+      FINAL_MIGRATION_0046.sha256
+    );
+    assert.equal(migrations[46].id, 47);
+    assert.equal(
+      migrations[46].fileName,
+      "0047_allow_restart_safe_fad_rollover_finalization.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[46].filePath).size,
+      FINAL_MIGRATION_0047.byteLength
+    );
+    assert.equal(
+      migrations[46].checksum,
+      FINAL_MIGRATION_0047.sha256
+    );
+    assert.equal(migrations[47].id, 48);
+    assert.equal(
+      migrations[47].fileName,
+      "0048_require_canonical_fad_realtime_evidence.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[47].filePath).size,
+      FINAL_MIGRATION_0048.byteLength
+    );
+    assert.equal(
+      migrations[47].checksum,
+      FINAL_MIGRATION_0048.sha256
+    );
+    assert.equal(migrations[48].id, 49);
+    assert.equal(
+      migrations[48].fileName,
+      "0049_require_canonical_fad_setup_exemption_publications.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[48].filePath).size,
+      FINAL_MIGRATION_0049.byteLength
+    );
+    assert.equal(
+      migrations[48].checksum,
+      FINAL_MIGRATION_0049.sha256
+    );
+    for (const expected of FROZEN_MIGRATIONS_0023_THROUGH_0029) {
+      const migration = migrations[expected.id - 1];
+      assert.equal(migration.id, expected.id);
+      assert.equal(migration.fileName, expected.fileName);
+      assert.equal(
+        fs.statSync(migration.filePath).size,
+        expected.byteLength
+      );
+      assert.equal(migration.checksum, expected.sha256);
+    }
     assert.equal(migrationResult.status, "exact");
-    assert.equal(database.pragma("user_version", { simple: true }), 22);
+    assert.equal(database.pragma("user_version", { simple: true }), 49);
 
     const ledgerBefore = database
       .prepare("SELECT * FROM schema_migrations")
       .all();
-    assert.equal(ledgerBefore.length, 22);
+    assert.equal(ledgerBefore.length, 49);
     assert.equal(ledgerBefore[0].checksum, migrations[0].checksum);
     assert.equal(ledgerBefore[1].checksum, migrations[1].checksum);
     assert.equal(ledgerBefore[2].checksum, migrations[2].checksum);
@@ -634,6 +1119,120 @@ describe("M2-04 initial relational schema", () => {
     assert.equal(ledgerBefore[12].checksum, migrations[12].checksum);
     assert.equal(ledgerBefore[13].checksum, migrations[13].checksum);
     assert.equal(ledgerBefore[14].checksum, migrations[14].checksum);
+    assert.equal(ledgerBefore[25].checksum, migrations[25].checksum);
+    assert.equal(ledgerBefore[26].checksum, migrations[26].checksum);
+    assert.equal(ledgerBefore[27].checksum, migrations[27].checksum);
+    assert.equal(ledgerBefore[28].checksum, migrations[28].checksum);
+    assert.equal(ledgerBefore[29].checksum, migrations[29].checksum);
+    assert.equal(ledgerBefore[30].checksum, migrations[30].checksum);
+    assert.equal(ledgerBefore[31].checksum, migrations[31].checksum);
+    assert.equal(ledgerBefore[32].checksum, migrations[32].checksum);
+    assert.equal(ledgerBefore[33].checksum, migrations[33].checksum);
+    assert.equal(ledgerBefore[34].checksum, migrations[34].checksum);
+    assert.equal(ledgerBefore[35].checksum, migrations[35].checksum);
+    assert.equal(ledgerBefore[36].checksum, migrations[36].checksum);
+    assert.equal(ledgerBefore[37].checksum, migrations[37].checksum);
+    assert.equal(ledgerBefore[38].checksum, migrations[38].checksum);
+    assert.equal(ledgerBefore[39].checksum, migrations[39].checksum);
+    assert.equal(ledgerBefore[40].checksum, migrations[40].checksum);
+    assert.equal(ledgerBefore[41].checksum, migrations[41].checksum);
+    assert.equal(ledgerBefore[42].checksum, migrations[42].checksum);
+    assert.equal(ledgerBefore[43].checksum, migrations[43].checksum);
+    assert.equal(ledgerBefore[44].checksum, migrations[44].checksum);
+    assert.equal(ledgerBefore[45].checksum, migrations[45].checksum);
+    assert.equal(ledgerBefore[46].checksum, migrations[46].checksum);
+    assert.equal(ledgerBefore[47].checksum, migrations[47].checksum);
+    assert.equal(ledgerBefore[48].checksum, migrations[48].checksum);
+    assert.equal(ledgerBefore[39].migration_id, 40);
+    assert.equal(
+      ledgerBefore[39].file_name,
+      "0040_allow_atomic_fad_restricted_fallback_overlap.sql"
+    );
+    assert.equal(
+      ledgerBefore[39].checksum,
+      FINAL_MIGRATION_0040.sha256
+    );
+    assert.equal(ledgerBefore[40].migration_id, 41);
+    assert.equal(
+      ledgerBefore[40].file_name,
+      "0041_allow_fad_auction_resolution_recovery_resume.sql"
+    );
+    assert.equal(
+      ledgerBefore[40].checksum,
+      FINAL_MIGRATION_0041.sha256
+    );
+    assert.equal(ledgerBefore[41].migration_id, 42);
+    assert.equal(
+      ledgerBefore[41].file_name,
+      "0042_use_current_aav_for_restricted_participant_floor.sql"
+    );
+    assert.equal(
+      ledgerBefore[41].checksum,
+      FINAL_MIGRATION_0042.sha256
+    );
+    assert.equal(ledgerBefore[42].migration_id, 43);
+    assert.equal(
+      ledgerBefore[42].file_name,
+      "0043_allow_repeat_fad_auction_resolution_recovery.sql"
+    );
+    assert.equal(
+      ledgerBefore[42].checksum,
+      FINAL_MIGRATION_0043.sha256
+    );
+    assert.equal(ledgerBefore[43].migration_id, 44);
+    assert.equal(
+      ledgerBefore[43].file_name,
+      "0044_allow_immediate_fad_open_rapid_starts.sql"
+    );
+    assert.equal(
+      ledgerBefore[43].checksum,
+      FINAL_MIGRATION_0044.sha256
+    );
+    assert.equal(ledgerBefore[44].migration_id, 45);
+    assert.equal(
+      ledgerBefore[44].file_name,
+      "0045_allow_restart_safe_fad_queued_nomination_activation.sql"
+    );
+    assert.equal(
+      ledgerBefore[44].checksum,
+      FINAL_MIGRATION_0045.sha256
+    );
+    assert.equal(ledgerBefore[45].migration_id, 46);
+    assert.equal(
+      ledgerBefore[45].file_name,
+      "0046_bind_fad_open_rapid_starter_edit_limit.sql"
+    );
+    assert.equal(
+      ledgerBefore[45].checksum,
+      FINAL_MIGRATION_0046.sha256
+    );
+    assert.equal(ledgerBefore[46].migration_id, 47);
+    assert.equal(
+      ledgerBefore[46].file_name,
+      "0047_allow_restart_safe_fad_rollover_finalization.sql"
+    );
+    assert.equal(
+      ledgerBefore[46].checksum,
+      FINAL_MIGRATION_0047.sha256
+    );
+    assert.equal(ledgerBefore[47].migration_id, 48);
+    assert.equal(
+      ledgerBefore[47].file_name,
+      "0048_require_canonical_fad_realtime_evidence.sql"
+    );
+    assert.equal(
+      ledgerBefore[47].checksum,
+      FINAL_MIGRATION_0048.sha256
+    );
+    assert.equal(ledgerBefore[48].migration_id, 49);
+    assert.equal(
+      ledgerBefore[48].file_name,
+      "0049_require_canonical_fad_setup_exemption_publications.sql"
+    );
+    assert.equal(
+      ledgerBefore[48].checksum,
+      FINAL_MIGRATION_0049.sha256
+    );
 
     const rerun = migrateDatabase({
       database,
@@ -653,7 +1252,33 @@ describe("M2-04 initial relational schema", () => {
       )
       .all("table", "sqlite_%")
       .map(({ name }) => name);
+    assert.equal(EXPECTED_TABLES.length, 132);
+    assert.equal(
+      EXPECTED_TABLES.filter(
+        (tableName) =>
+          tableName !== "schema_migrations"
+      ).length,
+      131
+    );
     assert.deepEqual(tables, EXPECTED_TABLES);
+
+    const immutableDeleteGuards = database
+      .prepare(`
+        SELECT name
+        FROM sqlite_schema
+        WHERE type = 'trigger'
+          AND upper(sql) LIKE '%BEFORE DELETE ON%'
+        ORDER BY name
+      `)
+      .all();
+    assert.equal(immutableDeleteGuards.length, 76);
+    assert.ok(
+      immutableDeleteGuards.some(
+        ({ name }) =>
+          name ===
+          "idempotency_requests_fad_nomination_queue_delete"
+      )
+    );
 
     const tableList = new Map(
       database
@@ -671,6 +1296,39 @@ describe("M2-04 initial relational schema", () => {
 
     assert.deepEqual(
       database
+        .pragma("table_info(outbox_event_audiences)")
+        .map(({ name }) => name),
+      [
+        "id",
+        "league_id",
+        "outbox_event_id",
+        "audience_kind",
+        "team_id",
+        "user_id",
+        "created_at_ms",
+      ]
+    );
+    const notificationDeduplicationColumn = database
+      .pragma("table_info(notifications)")
+      .find(({ name }) => name === "deduplication_key");
+    assert.deepEqual(
+      {
+        type: notificationDeduplicationColumn?.type,
+        notnull: notificationDeduplicationColumn?.notnull,
+        defaultValue:
+          notificationDeduplicationColumn?.dflt_value,
+        primaryKey: notificationDeduplicationColumn?.pk,
+      },
+      {
+        type: "TEXT",
+        notnull: 0,
+        defaultValue: null,
+        primaryKey: 0,
+      }
+    );
+
+    assert.deepEqual(
+      database
         .prepare(
           "SELECT metadata_key, metadata_value " +
             "FROM application_metadata ORDER BY metadata_key"
@@ -683,7 +1341,7 @@ describe("M2-04 initial relational schema", () => {
         },
       {
         metadata_key: "data_model_version",
-        metadata_value: "22",
+        metadata_value: "49",
       },
       ]
     );
@@ -1305,6 +1963,17 @@ describe("M2-04 initial relational schema", () => {
       created_at_ms: 1_000,
       updated_at_ms: 1_000,
       version: 1,
+    });
+    insert(database, "auction_contexts", {
+      id: uuid(250),
+      league_id: ids.leagueA,
+      season_id: ids.seasonA,
+      auction_id: uuid(250),
+      source_kind: "ordinary_weekly",
+      fad_id: null,
+      fad_rollover_id: null,
+      fad_allocation_id: null,
+      created_at_ms: 1_000,
     });
     assertConstraint(() => {
       insert(database, "auctions", {

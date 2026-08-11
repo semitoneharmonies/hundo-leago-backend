@@ -71,19 +71,19 @@ test("matchup health recognizes release-QA and SportsDataIO refresh sources with
     "release_qa_fixture"
   );
 
-  const liveMatchupId = fixtureId("matchup:leagueA:current");
+  const currentMatchupId = fixtureId("matchup:leagueA:current");
   const alphaOwlsId = fixtureId("team:leagueA:1");
   connection.database.prepare(
     "UPDATE teams SET name='Renamed Alpha Owls', name_normalized='renamed alpha owls' WHERE id=?"
   ).run(alphaOwlsId);
   const renamedSchedule = repository.readSchedule(scope);
-  const liveMatchup = renamedSchedule.matchups.find(
-    ({ id }) => id === liveMatchupId
+  const currentMatchup = renamedSchedule.matchups.find(
+    ({ id }) => id === currentMatchupId
   );
   const finalMatchup = renamedSchedule.matchups.find(
     ({ id }) => id === fixtureId("matchup:leagueA:prior")
   );
-  assert.equal(liveMatchup.current_home_team_name, "Renamed Alpha Owls");
+  assert.equal(currentMatchup.current_home_team_name, "Renamed Alpha Owls");
   assert.equal(finalMatchup.home_team_name, "Alpha Owls");
 
   const providerSourceId = crypto.randomUUID();

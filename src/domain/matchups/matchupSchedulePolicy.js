@@ -5,6 +5,10 @@ const MATCHUP_SCHEDULE_CODES = Object.freeze({
 
 const UUID_PATTERN =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const NHL_SEASON_KEY_PATTERN = /^\d{8}$/;
+const MAXIMUM_UTC_TIMESTAMP_MS = 8_640_000_000_000_000;
+const FANTASY_PLAYOFF_DURATION_MS =
+  28 * 24 * 60 * 60 * 1000;
 const BYE = Symbol("matchup-bye");
 
 function getPartsInTZ(date, timeZone) {
@@ -98,6 +102,20 @@ function safeTimestamp(value) {
   return value;
 }
 
+function safeExplicitTimestamp(value) {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value > MAXIMUM_UTC_TIMESTAMP_MS
+  ) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.inputInvalid,
+      "A valid explicit UTC calendar timestamp is required."
+    );
+  }
+  return value;
+}
+
 function validateTimeZone(value) {
   if (typeof value !== "string" || value.length < 1 || value.length > 100) {
     fail(MATCHUP_SCHEDULE_CODES.inputInvalid, "A league timezone is required.");
@@ -170,6 +188,545 @@ function boundary(startAtMs, hour, timeZone) {
   );
 }
 
+function canonicalNhlSeasonStartYear(value) {
+  if (
+    typeof value !== "string" ||
+    !NHL_SEASON_KEY_PATTERN.test(value)
+  ) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.inputInvalid,
+      "A canonical NHL season key is required."
+    );
+  }
+  const startYear = Number(value.slice(0, 4));
+  const endYear = Number(value.slice(4));
+  if (endYear !== startYear + 1) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.calendarInvalid,
+      "The NHL season key must contain consecutive calendar years."
+    );
+  }
+  return startYear;
+}
+
+function utcYear(timestampMs) {
+  return new Date(timestampMs).getUTCFullYear();
+}
+
+function isLocalMondayMidnight(timestampMs, timeZone) {
+  return firstEligibleMonday(timestampMs, timeZone) === timestampMs;
+}
+
+function deepFreeze(value) {
+  if (
+    value === null ||
+    typeof value !== "object"
+  ) {
+    return value;
+  }
+  for (const child of Object.values(value)) {
+    deepFreeze(child);
+  }
+  return Object.isFrozen(value)
+    ? value
+    : Object.freeze(value);
+}
+
+function buildWeeks({
+  teams,
+  firstWeekStartsAtMs,
+  fantasyPlayoffsStartAtMs,
+  timeZone,
+}) {
+  const rounds = createRoundRobin(teams);
+  const weeks = [];
+  for (
+    let startsAtMs = firstWeekStartsAtMs, sequence = 1;
+    startsAtMs < fantasyPlayoffsStartAtMs;
+    startsAtMs = addLocalDays(startsAtMs, 7, timeZone), sequence += 1
+  ) {
+    const endsAtMs = addLocalDays(startsAtMs, 7, timeZone);
+    if (endsAtMs > fantasyPlayoffsStartAtMs) {
+      fail(
+        MATCHUP_SCHEDULE_CODES.calendarInvalid,
+        "A regular-season week overlaps playoffs."
+      );
+    }
+    const roundIndex = (sequence - 1) % rounds.length;
+    weeks.push({
+      sequence,
+      weekKey: `regular-${String(sequence).padStart(2, "0")}`,
+      startsAtMs,
+      baselineAtMs: boundary(startsAtMs, 1, timeZone),
+      locksAtMs: boundary(startsAtMs, 16, timeZone),
+      endsAtMs,
+      rollsOverAtMs: endsAtMs,
+      pairs: rounds[roundIndex].pairs,
+      byeTeamId: rounds[roundIndex].byeTeamId,
+    });
+  }
+  if (weeks.length < 1) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.calendarInvalid,
+      "The calendar has no regular-season weeks."
+    );
+  }
+  return weeks;
+}
+
+function stableScheduleId(value, description) {
+  if (
+    typeof value !== "string" ||
+    !UUID_PATTERN.test(value)
+  ) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.inputInvalid,
+      `A stable ${description} ID is required.`
+    );
+  }
+  return value;
+}
+
+function canonicalExistingScheduleWeeks(value, timeZone) {
+  if (!Array.isArray(value) || value.length < 1) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.inputInvalid,
+      "At least one existing matchup week is required."
+    );
+  }
+
+  const weekIds = new Set();
+  let participantSignature = null;
+  let previousStartsAtMs = null;
+  return value.map((week, index) => {
+    if (
+      week === null ||
+      typeof week !== "object" ||
+      Array.isArray(week)
+    ) {
+      fail(
+        MATCHUP_SCHEDULE_CODES.inputInvalid,
+        "Each existing matchup week must be an object."
+      );
+    }
+
+    const id = stableScheduleId(week.id, "matchup week");
+    if (weekIds.has(id)) {
+      fail(
+        MATCHUP_SCHEDULE_CODES.calendarInvalid,
+        "Existing matchup week IDs must be unique."
+      );
+    }
+    weekIds.add(id);
+
+    const sequence = week.sequence;
+    if (!Number.isSafeInteger(sequence) || sequence < 1) {
+      fail(
+        MATCHUP_SCHEDULE_CODES.inputInvalid,
+        "Each existing matchup week requires a positive sequence."
+      );
+    }
+    if (sequence !== index + 1) {
+      fail(
+        MATCHUP_SCHEDULE_CODES.calendarInvalid,
+        "Existing matchup week sequences must be contiguous from Week 1."
+      );
+    }
+
+    const expectedWeekKey =
+      `regular-${String(sequence).padStart(2, "0")}`;
+    if (
+      typeof week.weekKey !== "string" ||
+      week.weekKey !== expectedWeekKey
+    ) {
+      fail(
+        typeof week.weekKey === "string"
+          ? MATCHUP_SCHEDULE_CODES.calendarInvalid
+          : MATCHUP_SCHEDULE_CODES.inputInvalid,
+        "Each existing matchup week requires its canonical week key."
+      );
+    }
+
+    const startsAtMs = safeExplicitTimestamp(
+      week.startsAtMs
+    );
+    const baselineAtMs = safeExplicitTimestamp(
+      week.baselineAtMs
+    );
+    const locksAtMs = safeExplicitTimestamp(
+      week.locksAtMs
+    );
+    const endsAtMs = safeExplicitTimestamp(
+      week.endsAtMs
+    );
+    const rollsOverAtMs = safeExplicitTimestamp(
+      week.rollsOverAtMs
+    );
+    if (
+      !isLocalMondayMidnight(startsAtMs, timeZone) ||
+      (
+        previousStartsAtMs !== null &&
+        startsAtMs !==
+          addLocalDays(
+            previousStartsAtMs,
+            7,
+            timeZone
+          )
+      ) ||
+      baselineAtMs !== boundary(startsAtMs, 1, timeZone) ||
+      locksAtMs !== boundary(startsAtMs, 16, timeZone) ||
+      endsAtMs !== addLocalDays(startsAtMs, 7, timeZone) ||
+      rollsOverAtMs !== endsAtMs
+    ) {
+      fail(
+        MATCHUP_SCHEDULE_CODES.calendarInvalid,
+        "Existing matchup week boundaries are not canonical."
+      );
+    }
+    previousStartsAtMs = startsAtMs;
+
+    if (!Array.isArray(week.pairs) || week.pairs.length < 1) {
+      fail(
+        MATCHUP_SCHEDULE_CODES.inputInvalid,
+        "Each existing matchup week requires at least one pairing."
+      );
+    }
+    const participants = new Set();
+    const pairs = week.pairs.map((pair) => {
+      if (
+        pair === null ||
+        typeof pair !== "object" ||
+        Array.isArray(pair)
+      ) {
+        fail(
+          MATCHUP_SCHEDULE_CODES.inputInvalid,
+          "Each existing matchup pairing must be an object."
+        );
+      }
+      const homeTeamId = stableScheduleId(
+        pair.homeTeamId,
+        "home team"
+      );
+      const awayTeamId = stableScheduleId(
+        pair.awayTeamId,
+        "away team"
+      );
+      if (
+        homeTeamId === awayTeamId ||
+        participants.has(homeTeamId) ||
+        participants.has(awayTeamId)
+      ) {
+        fail(
+          MATCHUP_SCHEDULE_CODES.calendarInvalid,
+          "A team may appear only once in an existing matchup week."
+        );
+      }
+      participants.add(homeTeamId);
+      participants.add(awayTeamId);
+      return {
+        homeTeamId,
+        awayTeamId,
+      };
+    });
+
+    let byeTeamId = null;
+    if (week.byeTeamId !== null) {
+      byeTeamId = stableScheduleId(
+        week.byeTeamId,
+        "bye team"
+      );
+      if (participants.has(byeTeamId)) {
+        fail(
+          MATCHUP_SCHEDULE_CODES.calendarInvalid,
+          "A bye team cannot also appear in a matchup."
+        );
+      }
+      participants.add(byeTeamId);
+    }
+
+    const currentParticipantSignature =
+      [...participants].sort().join("|");
+    if (
+      participantSignature !== null &&
+      currentParticipantSignature !== participantSignature
+    ) {
+      fail(
+        MATCHUP_SCHEDULE_CODES.calendarInvalid,
+        "Every existing matchup week must contain the same team set."
+      );
+    }
+    participantSignature = currentParticipantSignature;
+
+    return {
+      id,
+      weekKey: week.weekKey,
+      sequence,
+      startsAtMs,
+      baselineAtMs,
+      locksAtMs,
+      endsAtMs,
+      rollsOverAtMs,
+      pairs,
+      byeTeamId,
+    };
+  });
+}
+
+function planExplicitMatchupSchedule({
+  teamIds,
+  nhlSeasonKey,
+  nhlRegularSeasonStartsAtMs,
+  nhlRegularSeasonEndsAtMs,
+  fantasyPlayoffsStartAtMs,
+  fantasyPlayoffsEndAtMs,
+  firstWeekStartsAtMs,
+  timeZone,
+  nowMs,
+} = {}) {
+  const teams = stableTeams(teamIds);
+  const zone = validateTimeZone(timeZone);
+  const seasonStartYear =
+    canonicalNhlSeasonStartYear(nhlSeasonKey);
+  const regularStartsAtMs = safeExplicitTimestamp(
+    nhlRegularSeasonStartsAtMs
+  );
+  const regularEndsAtMs = safeExplicitTimestamp(
+    nhlRegularSeasonEndsAtMs
+  );
+  const playoffsStartAtMs = safeExplicitTimestamp(
+    fantasyPlayoffsStartAtMs
+  );
+  const playoffsEndAtMs = safeExplicitTimestamp(
+    fantasyPlayoffsEndAtMs
+  );
+  const selectedFirstWeekStartsAtMs =
+    safeExplicitTimestamp(firstWeekStartsAtMs);
+  const plannedAtMs = safeExplicitTimestamp(nowMs);
+
+  if (
+    regularStartsAtMs >= playoffsStartAtMs ||
+    playoffsStartAtMs >= playoffsEndAtMs ||
+    playoffsEndAtMs !== regularEndsAtMs
+  ) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.calendarInvalid,
+      "The explicit NHL and fantasy playoff calendar is not ordered canonically."
+    );
+  }
+  if (
+    playoffsEndAtMs - playoffsStartAtMs !==
+    FANTASY_PLAYOFF_DURATION_MS
+  ) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.calendarInvalid,
+      "Fantasy playoffs must reserve exactly 28 elapsed days."
+    );
+  }
+
+  const seasonEndYear = seasonStartYear + 1;
+  if (
+    utcYear(regularStartsAtMs) !== seasonStartYear ||
+    utcYear(playoffsStartAtMs) !== seasonEndYear ||
+    utcYear(playoffsEndAtMs) !== seasonEndYear ||
+    utcYear(regularEndsAtMs) !== seasonEndYear
+  ) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.calendarInvalid,
+      "The explicit calendar does not match the NHL season key."
+    );
+  }
+  if (!isLocalMondayMidnight(playoffsStartAtMs, zone)) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.calendarInvalid,
+      "Fantasy playoffs must begin at league-local Monday midnight."
+    );
+  }
+  if (!isLocalMondayMidnight(selectedFirstWeekStartsAtMs, zone)) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.calendarInvalid,
+      "Week 1 must begin at league-local Monday midnight."
+    );
+  }
+  if (selectedFirstWeekStartsAtMs <= plannedAtMs) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.calendarInvalid,
+      "Week 1 must begin strictly after the current server time."
+    );
+  }
+  if (
+    selectedFirstWeekStartsAtMs < regularStartsAtMs ||
+    addLocalDays(selectedFirstWeekStartsAtMs, 7, zone) >
+      playoffsStartAtMs
+  ) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.calendarInvalid,
+      "Week 1 must fit wholly within the NHL regular-season scoring range."
+    );
+  }
+
+  const weeks = buildWeeks({
+    teams,
+    firstWeekStartsAtMs: selectedFirstWeekStartsAtMs,
+    fantasyPlayoffsStartAtMs: playoffsStartAtMs,
+    timeZone: zone,
+  });
+
+  return deepFreeze({
+    nhlSeasonKey,
+    timeZone: zone,
+    nhlRegularSeasonStartsAtMs: regularStartsAtMs,
+    nhlRegularSeasonEndsAtMs: regularEndsAtMs,
+    fantasyPlayoffsStartAtMs: playoffsStartAtMs,
+    fantasyPlayoffsEndAtMs: playoffsEndAtMs,
+    firstWeekStartsAtMs: selectedFirstWeekStartsAtMs,
+    teamIds: teams,
+    weeks,
+  });
+}
+
+function planMatchupWeekOneShift({
+  weeks,
+  nhlSeasonKey,
+  nhlRegularSeasonStartsAtMs,
+  nhlRegularSeasonEndsAtMs,
+  fantasyPlayoffsStartAtMs,
+  fantasyPlayoffsEndAtMs,
+  firstWeekStartsAtMs,
+  timeZone,
+  nowMs,
+} = {}) {
+  const zone = validateTimeZone(timeZone);
+  const existingWeeks =
+    canonicalExistingScheduleWeeks(weeks, zone);
+  const previousFirstWeekStartsAtMs =
+    existingWeeks[0].startsAtMs;
+  const selectedFirstWeekStartsAtMs =
+    safeExplicitTimestamp(firstWeekStartsAtMs);
+  const plannedAtMs = safeExplicitTimestamp(nowMs);
+
+  if (previousFirstWeekStartsAtMs <= plannedAtMs) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.calendarInvalid,
+      "The existing Week 1 must still be in the future."
+    );
+  }
+  if (
+    selectedFirstWeekStartsAtMs ===
+    previousFirstWeekStartsAtMs
+  ) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.calendarInvalid,
+      "The replacement Week 1 must change the existing start."
+    );
+  }
+
+  const teamIds = [
+    ...existingWeeks[0].pairs.flatMap(
+      ({ homeTeamId, awayTeamId }) => [
+        homeTeamId,
+        awayTeamId,
+      ]
+    ),
+    ...(existingWeeks[0].byeTeamId === null
+      ? []
+      : [existingWeeks[0].byeTeamId]),
+  ];
+  const calendar = planExplicitMatchupSchedule({
+    teamIds,
+    nhlSeasonKey,
+    nhlRegularSeasonStartsAtMs,
+    nhlRegularSeasonEndsAtMs,
+    fantasyPlayoffsStartAtMs,
+    fantasyPlayoffsEndAtMs,
+    firstWeekStartsAtMs:
+      selectedFirstWeekStartsAtMs,
+    timeZone: zone,
+    nowMs: plannedAtMs,
+  });
+
+  if (
+    existingWeeks[0].startsAtMs <
+      calendar.nhlRegularSeasonStartsAtMs ||
+    existingWeeks.at(-1).endsAtMs >
+      calendar.fantasyPlayoffsStartAtMs
+  ) {
+    fail(
+      MATCHUP_SCHEDULE_CODES.calendarInvalid,
+      "The existing matchup schedule falls outside its persisted scoring range."
+    );
+  }
+
+  const shiftedWeeks = existingWeeks.map(
+    (week, index) => {
+      const startsAtMs = addLocalDays(
+        selectedFirstWeekStartsAtMs,
+        index * 7,
+        zone
+      );
+      const endsAtMs = addLocalDays(
+        startsAtMs,
+        7,
+        zone
+      );
+      if (
+        startsAtMs <
+          calendar.nhlRegularSeasonStartsAtMs ||
+        endsAtMs >
+          calendar.fantasyPlayoffsStartAtMs
+      ) {
+        fail(
+          MATCHUP_SCHEDULE_CODES.calendarInvalid,
+          "A translated matchup week falls outside the persisted scoring range."
+        );
+      }
+      return {
+        id: week.id,
+        weekKey: week.weekKey,
+        sequence: week.sequence,
+        startsAtMs,
+        baselineAtMs: boundary(
+          startsAtMs,
+          1,
+          zone
+        ),
+        locksAtMs: boundary(
+          startsAtMs,
+          16,
+          zone
+        ),
+        endsAtMs,
+        rollsOverAtMs: endsAtMs,
+        pairs: week.pairs.map((pair) => ({
+          homeTeamId: pair.homeTeamId,
+          awayTeamId: pair.awayTeamId,
+        })),
+        byeTeamId: week.byeTeamId,
+      };
+    }
+  );
+
+  return deepFreeze({
+    nhlSeasonKey: calendar.nhlSeasonKey,
+    timeZone: calendar.timeZone,
+    nhlRegularSeasonStartsAtMs:
+      calendar.nhlRegularSeasonStartsAtMs,
+    nhlRegularSeasonEndsAtMs:
+      calendar.nhlRegularSeasonEndsAtMs,
+    fantasyPlayoffsStartAtMs:
+      calendar.fantasyPlayoffsStartAtMs,
+    fantasyPlayoffsEndAtMs:
+      calendar.fantasyPlayoffsEndAtMs,
+    previousFirstWeekStartsAtMs,
+    firstWeekStartsAtMs:
+      selectedFirstWeekStartsAtMs,
+    lastWeekEndsAtMs:
+      shiftedWeeks.at(-1).endsAtMs,
+    shiftedWeekCount: shiftedWeeks.length,
+    teamIds: calendar.teamIds,
+    weeks: shiftedWeeks,
+  });
+}
+
 function planMatchupSchedule({
   teamIds,
   nhlRegularSeasonStartsAtMs,
@@ -230,9 +787,13 @@ function planMatchupSchedule({
 }
 
 module.exports = {
+  FANTASY_PLAYOFF_DURATION_MS,
+  MAXIMUM_UTC_TIMESTAMP_MS,
   MATCHUP_SCHEDULE_CODES,
   MatchupSchedulePolicyError,
   addLocalDays,
   firstEligibleMonday,
+  planExplicitMatchupSchedule,
   planMatchupSchedule,
+  planMatchupWeekOneShift,
 };

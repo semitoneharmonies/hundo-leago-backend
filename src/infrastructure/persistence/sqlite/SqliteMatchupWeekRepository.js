@@ -21,12 +21,27 @@ function frozenWeek(row) {
   return row ? Object.freeze({ ...row }) : null;
 }
 
-function createSqliteMatchupWeekRepository({ database, beforeCommit } = {}) {
+function createSqliteMatchupWeekRepository({
+  database,
+  beforeCommit,
+  occurrenceExecutionGuard,
+} = {}) {
   if (!database || typeof database.prepare !== "function") {
     throw new TypeError("createSqliteMatchupWeekRepository requires a database");
   }
   if (beforeCommit !== undefined && typeof beforeCommit !== "function") {
     throw new TypeError("matchup-week beforeCommit must be a function");
+  }
+  if (
+    occurrenceExecutionGuard !== undefined &&
+    (
+      !occurrenceExecutionGuard ||
+      typeof occurrenceExecutionGuard.assertCurrent !== "function"
+    )
+  ) {
+    throw new TypeError(
+      "matchup-week occurrenceExecutionGuard must assert current execution"
+    );
   }
 
   const readWeekStatement = database.prepare(
@@ -114,6 +129,15 @@ function createSqliteMatchupWeekRepository({ database, beforeCommit } = {}) {
   }
 
   const transitionTransaction = database.transaction((command) => {
+    if (command.occurrenceExecution !== undefined) {
+      if (!occurrenceExecutionGuard) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.argumentInvalid,
+          "A matchup occurrence execution guard is required."
+        );
+      }
+      occurrenceExecutionGuard.assertCurrent(command.occurrenceExecution);
+    }
     const operationRows = readOperationStatement.all({
       operationId: stableId(command.operationId),
     });
@@ -141,6 +165,22 @@ function createSqliteMatchupWeekRepository({ database, beforeCommit } = {}) {
         operationId: operation.id,
         week: readWeek(command),
       });
+    }
+    if (
+      command.occurrenceExecution !== undefined &&
+      (
+        command.expectedVersion === undefined ||
+        command.fromStatus === undefined ||
+        command.toStatus === undefined ||
+        command.matchupStatus === undefined ||
+        command.effectiveAtMs === undefined ||
+        command.nowMs === undefined
+      )
+    ) {
+      throw repositoryError(
+        REPOSITORY_ERROR_CODES.versionConflict,
+        "The guarded matchup-week replay is no longer present."
+      );
     }
 
     const week = readWeek(command);

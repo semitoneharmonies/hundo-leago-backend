@@ -10,6 +10,16 @@ const {
 const {
   getRepositoryDefinition,
 } = require("./repositoryCatalog");
+const {
+  createEmptySocketRelated,
+  createSocketEventMetadata,
+} = require("../../../domain/leagues/socketInvalidation");
+const {
+  resolveSqliteLeagueOutboxWriter,
+} = require("./SqliteLeagueOutboxWriter");
+const {
+  resolveSqliteNotificationWriter,
+} = require("./SqliteNotificationWriter");
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -104,7 +114,11 @@ function freezeRow(row) {
   return row ? Object.freeze({ ...row }) : null;
 }
 
-function createSqliteLeagueInvitationRepository({ database } = {}) {
+function createSqliteLeagueInvitationRepository({
+  database,
+  leagueOutboxWriter,
+  notificationWriter,
+} = {}) {
   const memberships = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("league_memberships"),
@@ -121,9 +135,13 @@ function createSqliteLeagueInvitationRepository({ database } = {}) {
     database,
     definition: getRepositoryDefinition("team_manager_assignments"),
   });
-  const notifications = createSqliteRecordRepository({
+  const notifications = resolveSqliteNotificationWriter({
     database,
-    definition: getRepositoryDefinition("notifications"),
+    notificationWriter,
+  });
+  const outbox = resolveSqliteLeagueOutboxWriter({
+    database,
+    leagueOutboxWriter,
   });
   const activity = createSqliteRecordRepository({
     database,
@@ -455,18 +473,17 @@ function createSqliteLeagueInvitationRepository({ database } = {}) {
       return freezeRow(
         notifications.insert({
           id: stableId(options.id),
-          user_id: stableId(options.userId),
-          league_id: stableId(options.leagueId),
-          event_type: "league_invitation_created",
-          message_data_json: messageDataJson,
-          related_feature: "league_invitation",
-          related_record_id: stableId(options.invitationId),
-          delivery_status: "delivered",
-          created_at_ms: nowMs,
-          read_at_ms: null,
-          delivered_at_ms: nowMs,
-          version: 1,
-        })
+          userId: stableId(options.userId),
+          leagueId: stableId(options.leagueId),
+          eventType: "league_invitation_created",
+          messageDataJson,
+          relatedFeature: "league_invitation",
+          relatedRecordId: stableId(options.invitationId),
+          deliveryStatus: "delivered",
+          createdAtMs: nowMs,
+          deliveredAtMs: nowMs,
+          deduplicationKey: null,
+        }).notification
       );
     },
     appendInvitationActivity(options) {
@@ -552,6 +569,60 @@ function createSqliteLeagueInvitationRepository({ database } = {}) {
           },
         })
       );
+    },
+    appendMembershipChangedPublication(options) {
+      exactObject(
+        options,
+        ["id", "leagueId", "membershipId", "version", "nowMs"],
+        "An exact membership-change publication is required."
+      );
+      const nowMs = safeTimestamp(options.nowMs);
+      return outbox.write({
+        id: stableId(options.id),
+        leagueId: stableId(options.leagueId),
+        eventType: "league.changed",
+        aggregateType: "league_membership",
+        aggregateId: stableId(options.membershipId),
+        occurredAtMs: nowMs,
+        payload: createSocketEventMetadata({
+          eventType: "league.changed",
+          version: positiveInteger(options.version),
+          reasonCode: "membership_changed",
+          occurredAtMs: nowMs,
+          related: createEmptySocketRelated(),
+        }),
+      });
+    },
+    appendManagerAssignmentChangedPublication(options) {
+      exactObject(
+        options,
+        [
+          "id",
+          "leagueId",
+          "teamId",
+          "assignmentId",
+          "version",
+          "nowMs",
+        ],
+        "An exact manager-assignment publication is required."
+      );
+      const nowMs = safeTimestamp(options.nowMs);
+      const teamId = stableId(options.teamId);
+      return outbox.write({
+        id: stableId(options.id),
+        leagueId: stableId(options.leagueId),
+        eventType: "team.changed",
+        aggregateType: "team_manager_assignment",
+        aggregateId: stableId(options.assignmentId),
+        occurredAtMs: nowMs,
+        payload: createSocketEventMetadata({
+          eventType: "team.changed",
+          version: positiveInteger(options.version),
+          reasonCode: "manager_assignment_changed",
+          occurredAtMs: nowMs,
+          related: createEmptySocketRelated({ teamId }),
+        }),
+      });
     },
     endNeverActiveMembership(options) {
       exactObject(

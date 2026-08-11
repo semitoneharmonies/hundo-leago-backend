@@ -27,6 +27,10 @@
           "value": "production"
         },
         {
+          "key": "STAGING_MAINTENANCE_HOLD",
+          "value": "false"
+        },
+        {
           "key": "APP_BUILD_ID",
           "sync": false
         },
@@ -79,12 +83,16 @@
           "value": "false"
         },
         {
+          "key": "FREE_AGENT_DRAFT_ROUTES_ENABLED",
+          "value": "false"
+        },
+        {
           "key": "ACCOUNT_EMAIL_DELIVERY_ENABLED",
-          "value": "true"
+          "value": "false"
         },
         {
           "key": "LEAGUE_WRITE_MODE",
-          "value": "open"
+          "value": "closed"
         },
         {
           "key": "DEBUG_ROUTES_ENABLED",
@@ -92,11 +100,7 @@
         },
         {
           "key": "EMAIL_DELIVERY_MODE",
-          "value": "send"
-        },
-        {
-          "key": "RESEND_API_KEY",
-          "sync": false
+          "value": "capture"
         },
         {
           "key": "SPORTSDATAIO_NHL_API_KEY",
@@ -111,6 +115,30 @@
           "value": "2025"
         },
         {
+          "key": "SPORTSDATAIO_NHL_LIVE_MODE",
+          "value": "probe"
+        },
+        {
+          "key": "SPORTSDATAIO_NHL_LIVE_API_KEY",
+          "sync": false
+        },
+        {
+          "key": "SPORTSDATAIO_NHL_LIVE_API_ORIGIN",
+          "value": "https://api.sportsdata.io"
+        },
+        {
+          "key": "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
+          "generateValue": true
+        },
+        {
+          "key": "SPORTSDATAIO_NHL_LIVE_CAPABILITY_KEY_VERSION",
+          "value": "1"
+        },
+        {
+          "key": "SPORTSDATAIO_NHL_LIVE_CAPABILITY_ARTIFACT",
+          "value": "/opt/render/project/data/hundo-staging/provider-capability/sportsdataio-live-v1.json"
+        },
+        {
           "key": "RATE_LIMIT_KEY_SECRET",
           "generateValue": true
         },
@@ -121,14 +149,6 @@
         {
           "key": "ACTION_TOKEN_DELIVERY_KEY",
           "generateValue": true
-        },
-        {
-          "key": "EMAIL_FROM",
-          "sync": false
-        },
-        {
-          "key": "EMAIL_REPLY_TO",
-          "sync": false
         },
         {
           "key": "BACKUP_LOCAL_DIR",

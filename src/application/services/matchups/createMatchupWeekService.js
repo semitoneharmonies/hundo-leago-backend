@@ -60,6 +60,7 @@ function createMatchupWeekService({ repository, createId = randomUUID } = {}) {
 
   function advance(input) {
     const week = requireWeek(input);
+    const occurrenceExecution = input.occurrenceExecution;
     if (input.operationId) {
       const prior = repository.readTransitionOperation({
         leagueId: week.league_id,
@@ -68,6 +69,15 @@ function createMatchupWeekService({ repository, createId = randomUUID } = {}) {
         operationId: input.operationId,
       });
       if (prior) {
+        if (occurrenceExecution !== undefined) {
+          return repository.transitionWeek({
+            leagueId: week.league_id,
+            seasonId: week.season_id,
+            weekId: week.id,
+            operationId: input.operationId,
+            occurrenceExecution,
+          });
+        }
         return Object.freeze({
           replayed: true,
           operationId: prior.id,
@@ -95,6 +105,9 @@ function createMatchupWeekService({ repository, createId = randomUUID } = {}) {
       matchupStatus: transition.matchupStatus,
       effectiveAtMs: transition.effectiveAtMs,
       nowMs: input.nowMs,
+      ...(occurrenceExecution === undefined
+        ? {}
+        : { occurrenceExecution }),
     });
   }
 

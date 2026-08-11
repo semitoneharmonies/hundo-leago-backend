@@ -212,14 +212,19 @@ function createTradeRouter({
     "/api/v1/leagues/:leagueId/trades/:tradeId/accept",
     requestSecurity.authenticateUnsafe,
     requireEmptyBody,
-    (request, response) => {
+    async (request, response) => {
       try {
-        return success(request, response, 200, tradeAcceptanceService.accept({
-          leagueId: request.params.leagueId,
-          input: { tradeId: request.params.tradeId },
-          idempotencyKey: request.get("idempotency-key"),
-          authenticated: requestSecurity.getAuthenticatedSession(request),
-        }));
+        return success(
+          request,
+          response,
+          200,
+          await tradeAcceptanceService.accept({
+            leagueId: request.params.leagueId,
+            input: { tradeId: request.params.tradeId },
+            idempotencyKey: request.get("idempotency-key"),
+            authenticated: requestSecurity.getAuthenticatedSession(request),
+          })
+        );
       } catch (caught) {
         return mapError(request, response, caught);
       }

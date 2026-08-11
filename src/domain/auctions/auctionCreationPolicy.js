@@ -2,7 +2,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const UUID_PATTERN =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
-const ACTOR_AUTHORITIES = Object.freeze(["manager", "commissioner"]);
+const ACTOR_AUTHORITIES = Object.freeze([
+  "manager",
+  "commissioner",
+  "platform_administrator_as_commissioner",
+]);
 
 const AUCTION_CREATION_CODES = Object.freeze({
   inputInvalid: "AUCTION_CREATION_INPUT_INVALID",
@@ -20,6 +24,7 @@ const AUCTION_CREATION_CODES = Object.freeze({
   playerOwned: "AUCTION_CREATION_PLAYER_OWNED",
   releasedRightsExcluded: "AUCTION_CREATION_RELEASED_RIGHTS_EXCLUDED",
   activeAuctionExists: "AUCTION_CREATION_ACTIVE_AUCTION_EXISTS",
+  fadAllocationQuarantined: "FAD_ALLOCATION_QUARANTINED",
   idempotencyConflict: "AUCTION_CREATION_IDEMPOTENCY_CONFLICT",
 });
 
@@ -282,9 +287,19 @@ function assertAuctionStartState({ command, authority, player, window }) {
     authority.membership_status === "active" &&
     authority.membership_permission === "commissioner" &&
     authority.commissioner_membership_id === command.actorMembershipId;
+  const platformAdministratorAuthorized =
+    command.actorAuthority ===
+      "platform_administrator_as_commissioner" &&
+    ["active", "frozen"].includes(authority.league_status) &&
+    authority.membership_status === "active" &&
+    authority.is_platform_administrator === 1;
   if (
     authority.team_status !== "active" ||
-    (!managerAuthorized && !commissionerAuthorized)
+    (
+      !managerAuthorized &&
+      !commissionerAuthorized &&
+      !platformAdministratorAuthorized
+    )
   ) {
     fail(AUCTION_CREATION_CODES.authorizationDenied);
   }
@@ -309,6 +324,9 @@ function assertAuctionStartState({ command, authority, player, window }) {
     !["F", "D"].includes(player.position_group)
   ) {
     fail(AUCTION_CREATION_CODES.playerIneligible);
+  }
+  if (player.fad_allocation_quarantined === 1) {
+    fail(AUCTION_CREATION_CODES.fadAllocationQuarantined);
   }
   if (player.ownership_id !== null) fail(AUCTION_CREATION_CODES.playerOwned);
   if (player.released_rights_excluded === 1) {

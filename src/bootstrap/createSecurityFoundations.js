@@ -98,6 +98,8 @@ function createSecurityFoundations({
       config.auditMetadataKey.value,
       config.actionTokenDeliveryKey.value,
       config.email.apiKey.value,
+      config.sportsDataIoLive.apiKey.value,
+      config.sportsDataIoLive.capabilitySecret.value,
     ],
   };
   if (loggerSink !== undefined) {

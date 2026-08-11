@@ -98,6 +98,7 @@ function createLeagueMembershipService({
       membershipId: canonicalMembershipId,
       actorUserId: authority.actorUserId,
       activityId: secureRandom.id(),
+      publicationId: secureRandom.id(),
       expectedVersion: input.expectedVersion,
       occurredAtMs: clock.nowMs(),
     });

@@ -54,8 +54,25 @@ function createMatchupResultService({ repository, scoringService, createId = ran
   }
 
   function finalize(input) {
+    const occurrenceExecution = input.occurrenceExecution;
     const prior = replay(input, "result_finalize");
-    if (prior) return prior;
+    if (prior) {
+      if (occurrenceExecution !== undefined) {
+        return Object.freeze({
+          replayed: true,
+          operationId: prior.operationId,
+          context: repository.finalize({
+            leagueId: input.leagueId,
+            seasonId: input.seasonId,
+            weekId: input.weekId,
+            matchupId: input.matchupId,
+            operationId: input.operationId,
+            occurrenceExecution,
+          }),
+        });
+      }
+      return prior;
+    }
     const context = repository.readContext(input);
     if (!context) fail(MATCHUP_RESULT_SERVICE_CODES.contextMissing, "The matchup was not found.");
     if (context.result) fail(MATCHUP_RESULT_SERVICE_CODES.alreadyFinal, "The matchup already has a result.");
@@ -93,6 +110,9 @@ function createMatchupResultService({ repository, scoringService, createId = ran
       awayScoreHundredths: score.away.scoreHundredths,
       outcome: deriveMatchupOutcome(score.home.scoreHundredths, score.away.scoreHundredths),
       nowMs: input.nowMs,
+      ...(occurrenceExecution === undefined
+        ? {}
+        : { occurrenceExecution }),
     });
     return Object.freeze({ replayed: false, finalized: true, context: result });
   }

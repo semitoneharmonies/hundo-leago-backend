@@ -10,6 +10,16 @@ const {
 const {
   getRepositoryDefinition,
 } = require("./repositoryCatalog");
+const {
+  createEmptySocketRelated,
+  createSocketEventMetadata,
+} = require("../../../domain/leagues/socketInvalidation");
+const {
+  resolveSqliteLeagueOutboxWriter,
+} = require("./SqliteLeagueOutboxWriter");
+const {
+  resolveSqliteNotificationWriter,
+} = require("./SqliteNotificationWriter");
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -75,14 +85,22 @@ function freezeRow(row) {
   return row ? Object.freeze({ ...row }) : null;
 }
 
-function createSqliteTeamManagerAssignmentRepository({ database } = {}) {
+function createSqliteTeamManagerAssignmentRepository({
+  database,
+  leagueOutboxWriter,
+  notificationWriter,
+} = {}) {
   const assignments = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("team_manager_assignments"),
   });
-  const notifications = createSqliteRecordRepository({
+  const notifications = resolveSqliteNotificationWriter({
     database,
-    definition: getRepositoryDefinition("notifications"),
+    notificationWriter,
+  });
+  const outbox = resolveSqliteLeagueOutboxWriter({
+    database,
+    leagueOutboxWriter,
   });
   const activity = createSqliteRecordRepository({
     database,
@@ -359,6 +377,32 @@ function createSqliteTeamManagerAssignmentRepository({ database } = {}) {
         },
       }));
     },
+    appendManagerAssignmentChangedPublication(options) {
+      exactObject(
+        options,
+        [
+          "id", "leagueId", "teamId", "assignmentId", "version", "nowMs",
+        ],
+        "An exact manager-assignment publication is required."
+      );
+      const nowMs = safeTimestamp(options.nowMs);
+      const teamId = stableId(options.teamId);
+      return outbox.write({
+        id: stableId(options.id),
+        leagueId: stableId(options.leagueId),
+        eventType: "team.changed",
+        aggregateType: "team_manager_assignment",
+        aggregateId: stableId(options.assignmentId),
+        occurredAtMs: nowMs,
+        payload: createSocketEventMetadata({
+          eventType: "team.changed",
+          version: positiveInteger(options.version),
+          reasonCode: "manager_assignment_changed",
+          occurredAtMs: nowMs,
+          related: createEmptySocketRelated({ teamId }),
+        }),
+      });
+    },
     insertProposalNotification(options) {
       exactObject(
         options,
@@ -383,18 +427,17 @@ function createSqliteTeamManagerAssignmentRepository({ database } = {}) {
       const nowMs = safeTimestamp(options.nowMs);
       return freezeRow(notifications.insert({
         id: stableId(options.id),
-        user_id: stableId(options.userId),
-        league_id: stableId(options.leagueId),
-        event_type: "team_manager_assignment_proposed",
-        message_data_json: messageDataJson,
-        related_feature: "team_manager_assignment",
-        related_record_id: stableId(options.assignmentId),
-        delivery_status: "delivered",
-        created_at_ms: nowMs,
-        read_at_ms: null,
-        delivered_at_ms: nowMs,
-        version: 1,
-      }));
+        userId: stableId(options.userId),
+        leagueId: stableId(options.leagueId),
+        eventType: "team_manager_assignment_proposed",
+        messageDataJson,
+        relatedFeature: "team_manager_assignment",
+        relatedRecordId: stableId(options.assignmentId),
+        deliveryStatus: "delivered",
+        createdAtMs: nowMs,
+        deliveredAtMs: nowMs,
+        deduplicationKey: null,
+      }).notification);
     },
     appendAssignmentActivity(options) {
       exactObject(

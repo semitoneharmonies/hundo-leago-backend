@@ -395,6 +395,24 @@ describe("M2-09 JSON import dry-run", () => {
         "players",
         "player_external_ids",
         "player_source_state",
+        "candidate_card_entries",
+        "candidate_card_help_requests",
+        "candidate_card_revisions",
+        "candidate_card_snapshot_entries",
+        "candidate_card_snapshots",
+        "candidate_cards",
+        "auction_contexts",
+        "free_agent_draft_auction_participants",
+        "free_agent_draft_draws",
+        "free_agent_draft_allocation_events",
+        "free_agent_draft_player_allocations",
+        "free_agent_draft_recoveries",
+        "free_agent_draft_rollovers",
+        "free_agent_draft_setup_exemptions",
+        "free_agent_draft_teams",
+        "free_agent_drafts",
+        "outbox_event_audiences",
+        "season_rollovers",
       ]) {
         assert.equal(
           database
@@ -411,7 +429,7 @@ describe("M2-09 JSON import dry-run", () => {
             "SELECT COUNT(*) AS count FROM schema_migrations"
           )
           .get().count,
-        22
+          49
       );
       assert.equal(
         database.pragma("integrity_check", {

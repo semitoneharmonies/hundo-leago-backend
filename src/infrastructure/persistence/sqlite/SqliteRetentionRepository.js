@@ -25,7 +25,18 @@ function freezeRows(rows) {
   return Object.freeze(rows.map(freezeRow));
 }
 
-function createSqliteRetentionRepository({ database } = {}) {
+function createSqliteRetentionRepository({
+  database,
+  candidateCardSummerSynchronizer,
+} = {}) {
+  if (
+    !candidateCardSummerSynchronizer ||
+    typeof candidateCardSummerSynchronizer.synchronize !== "function"
+  ) {
+    throw new TypeError(
+      "createSqliteRetentionRepository requires a Candidate Card summer synchronizer"
+    );
+  }
   const obligations = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("retention_obligations"),
@@ -151,6 +162,14 @@ function createSqliteRetentionRepository({ database } = {}) {
           occurred_at_ms: command.occurredAtMs,
         })
       );
+      candidateCardSummerSynchronizer.synchronize({
+        leagueId: command.leagueId,
+        affectedTeamIds: [command.responsibleTeamId],
+        affectedPlayerIds: [],
+        sourceOperationId: command.retentionId,
+        sourceKind: "retention_change",
+        nowMs: command.occurredAtMs,
+      });
       return Object.freeze({
         obligation,
         years: retentionYears,

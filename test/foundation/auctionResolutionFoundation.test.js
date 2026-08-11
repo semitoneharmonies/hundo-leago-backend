@@ -126,6 +126,12 @@ function semanticHash(database) {
   return crypto.createHash("sha256").update(JSON.stringify(rows)).digest("hex");
 }
 
+function createNoopCandidateCardSummerSynchronizer() {
+  return Object.freeze({
+    synchronize() {},
+  });
+}
+
 function insertUser(repositories, id, name) {
   repositories.users.insert({
     id,
@@ -333,6 +339,8 @@ function createPersistenceRuntime(t) {
   });
   const repository = createSqliteAuctionResolutionRepository({
     database: connection.database,
+    candidateCardSummerSynchronizer:
+      createNoopCandidateCardSummerSynchronizer(),
   });
   return {
     database: connection.database,
@@ -343,6 +351,17 @@ function createPersistenceRuntime(t) {
 }
 
 describe("M5-03 deterministic auction resolution policy", () => {
+  test("requires the transaction-bound Candidate Card summer synchronizer", () => {
+    assert.throws(
+      () => createSqliteAuctionResolutionRepository({ database: {} }),
+      {
+        name: "TypeError",
+        message:
+          "createSqliteAuctionResolutionRepository requires a Candidate Card summer synchronizer",
+      }
+    );
+  });
+
   test("finds the smallest valid total that reaches a rounded AAV", () => {
     assert.equal(smallestValidTotalCents(167, 3), 500);
     assert.equal(smallestValidTotalCents(168, 3), 600);
@@ -770,6 +789,8 @@ describe("M5-03 durable auction resolution job-run leases", () => {
     );
     const restartedRepository = createSqliteAuctionResolutionRepository({
       database,
+      candidateCardSummerSynchronizer:
+        createNoopCandidateCardSummerSynchronizer(),
     });
     assert.deepEqual(
       restartedRepository.claimRun({

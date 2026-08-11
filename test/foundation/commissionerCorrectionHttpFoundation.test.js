@@ -136,6 +136,99 @@ test("M7-10 routes each commissioner correction command through unsafe authentic
   assert.equal(calls.unsafeAuthentication, 8);
 });
 
+test("FAD-05 awaits every commissioner write result and maps async failures safely", async (t) => {
+  const calls = { unsafeAuthentication: 0 };
+  const service = correctionService(calls);
+  service.applyAdd = async (input) => {
+    await Promise.resolve();
+    calls.applyAdd = input;
+    return {
+      code: "COMMISSIONER_ROSTER_ADD_CORRECTION_APPLIED",
+      lateLock: { status: "not_applicable" },
+    };
+  };
+  service.applyRemove = async () => {
+    await Promise.resolve();
+    const error = new Error("private stale-state detail");
+    error.reasonCode = "COMMISSIONER_CORRECTION_SOURCE_CHANGED";
+    throw error;
+  };
+  service.applyRoster = async (input) => {
+    await Promise.resolve();
+    calls.applyRoster = input;
+    return {
+      code: "COMMISSIONER_ROSTER_CORRECTION_APPLIED",
+      lateLock: { status: "still_illegal" },
+    };
+  };
+  service.applyContract = async (input) => {
+    await Promise.resolve();
+    calls.applyContract = input;
+    return {
+      code: "COMMISSIONER_CONTRACT_CORRECTION_APPLIED",
+      lateLock: { status: "awaiting_data" },
+    };
+  };
+  const baseUrl = await start(t, service, calls);
+
+  const addition = await post(
+    baseUrl,
+    `/api/v1/leagues/${LEAGUE_ID}/commissioner/roster-additions`,
+    { expectedVersion: 2 }
+  );
+  assert.equal(addition.response.status, 200);
+  assert.deepEqual(addition.body.data, {
+    code: "COMMISSIONER_ROSTER_ADD_CORRECTION_APPLIED",
+    lateLock: { status: "not_applicable" },
+  });
+  assert.deepEqual(calls.applyAdd, {
+    leagueId: LEAGUE_ID,
+    input: { expectedVersion: 2 },
+    idempotencyKey: undefined,
+    authenticated: { valid: true, session: { userId: "commissioner" } },
+  });
+
+  const removal = await post(
+    baseUrl,
+    `/api/v1/leagues/${LEAGUE_ID}/commissioner/roster-removals`,
+    { expectedVersion: 2 }
+  );
+  assert.equal(removal.response.status, 412);
+  assert.deepEqual(removal.body.error, {
+    code: "COMMISSIONER_CORRECTION_PRECONDITION_FAILED",
+    message: "The roster or contract changed; refetch it and try again.",
+    requestId: "commissioner-correction-request",
+  });
+  assert.equal(
+    JSON.stringify(removal.body).includes("private stale-state detail"),
+    false
+  );
+
+  const roster = await post(
+    baseUrl,
+    `/api/v1/leagues/${LEAGUE_ID}/commissioner/roster-corrections`,
+    { expectedVersion: 2 }
+  );
+  assert.equal(roster.response.status, 200);
+  assert.deepEqual(roster.body.data, {
+    code: "COMMISSIONER_ROSTER_CORRECTION_APPLIED",
+    lateLock: { status: "still_illegal" },
+  });
+  assert.equal(calls.applyRoster.input.expectedVersion, 2);
+
+  const contract = await post(
+    baseUrl,
+    `/api/v1/leagues/${LEAGUE_ID}/commissioner/contract-corrections`,
+    { expectedVersion: 2 }
+  );
+  assert.equal(contract.response.status, 200);
+  assert.deepEqual(contract.body.data, {
+    code: "COMMISSIONER_CONTRACT_CORRECTION_APPLIED",
+    lateLock: { status: "awaiting_data" },
+  });
+  assert.equal(calls.applyContract.input.expectedVersion, 2);
+});
+
 test("M7-10 maps stale correction state to a safe precondition response", async (t) => {
   const calls = { unsafeAuthentication: 0 };
   const service = correctionService(calls);

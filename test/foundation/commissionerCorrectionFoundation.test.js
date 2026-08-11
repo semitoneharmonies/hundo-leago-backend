@@ -30,6 +30,11 @@ const {
 } = require(
   "../../src/infrastructure/persistence/sqlite/createSqliteRepositoryContext"
 );
+const {
+  REPOSITORY_ERROR_CODES,
+} = require(
+  "../../src/infrastructure/persistence/sqlite/SqliteRepositoryError"
+);
 
 const ROOT_DIRECTORY = path.resolve(__dirname, "..", "..");
 const MIGRATIONS_DIRECTORY = path.join(
@@ -86,6 +91,8 @@ const IDS = Object.freeze({
   trade: uuid(80),
   tradeAsset: uuid(81),
   retention: uuid(85),
+  rosterOrderSet: uuid(86),
+  rosterOrderEntry: uuid(87),
 });
 
 function createConnection(t, prefix = "hundo-m4-11-") {
@@ -302,7 +309,10 @@ function seedRuntime(context) {
   });
 }
 
-function createRuntime(t) {
+function createRuntime(
+  t,
+  { candidateCardSummerSynchronizer } = {}
+) {
   const connection = createConnection(t);
   migrateDatabase({
     database: connection.database,
@@ -319,6 +329,10 @@ function createRuntime(t) {
     database: connection.database,
     repository: createSqliteCommissionerCorrectionRepository({
       database: connection.database,
+      candidateCardSummerSynchronizer:
+        candidateCardSummerSynchronizer ?? {
+          synchronize() {},
+        },
     }),
   };
 }
@@ -637,13 +651,22 @@ describe("M4-11 optional-reason migration", () => {
       IDS.commissioner,
       NOW_MS + 1
     );
-    assert.equal(database.pragma("user_version", { simple: true }), 22);
+    assert.equal(database.pragma("user_version", { simple: true }), 49);
   });
 });
 
 describe("M4-11 atomic SQLite commissioner corrections", () => {
   test("previews and applies an audited free-agent roster addition atomically", (t) => {
-    const runtime = createRuntime(t);
+    const synchronizationCalls = [];
+    let runtime;
+    runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize(command) {
+          assert.equal(runtime.database.inTransaction, true);
+          synchronizationCalls.push(command);
+        },
+      },
+    });
     seedFreeAgent(runtime);
     const before = runtime.database.serialize();
     const preview = runtime.repository.previewAdd(additionInput());
@@ -651,6 +674,7 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
     assert.equal(preview.authoritative.ownership.playerId, IDS.freePlayer);
     assert.equal(preview.authoritative.contract.aavCents, 200);
     assert.deepEqual(runtime.database.serialize(), before);
+    assert.deepEqual(synchronizationCalls, []);
 
     const applied = runtime.repository.applyAdd(
       additionInput(),
@@ -659,6 +683,16 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
     assert.equal(applied.preview, false);
     assert.equal(applied.correction.feature, "roster_add");
     assert.equal(applied.activity.event_type, "commissioner_player_added");
+    assert.deepEqual(synchronizationCalls, [
+      {
+        leagueId: IDS.league,
+        affectedTeamIds: [IDS.team1],
+        affectedPlayerIds: [IDS.freePlayer],
+        sourceOperationId: IDS.addCorrection,
+        sourceKind: "commissioner_correction",
+        nowMs: NOW_MS + 1,
+      },
+    ]);
     assert.equal(
       runtime.context.repositories.player_ownerships.findByKey({
         key: IDS.addedOwnership,
@@ -673,6 +707,22 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
       }).aav_cents,
       200
     );
+    assert.deepEqual(applied.committedRoster, {
+      teams: [
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.season1,
+          teamId: IDS.team1,
+          ownershipWitnesses: [
+            {
+              ownershipId: IDS.addedOwnership,
+              ownershipVersion: 1,
+              state: "present",
+            },
+          ],
+        },
+      ],
+    });
     const replay = runtime.repository.applyAdd(
       additionInput({
         correctionId: uuid(100),
@@ -692,12 +742,38 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
     );
     assert.equal(replay.replayed, true);
     assert.equal(replay.correction.id, IDS.addCorrection);
+    assert.deepEqual(replay.committedRoster, applied.committedRoster);
+    assert.equal(synchronizationCalls.length, 1);
     assert.equal(
       runtime.database
         .prepare("SELECT COUNT(*) AS count FROM idempotency_requests")
         .get().count,
       1
     );
+  });
+
+  test("rolls back a commissioner correction when Candidate Card synchronization fails", (t) => {
+    const runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize() {
+          throw new Error("forced Candidate Card synchronization failure");
+        },
+      },
+    });
+    seedFreeAgent(runtime);
+    const before = runtime.database.serialize();
+
+    assert.throws(
+      () =>
+        runtime.repository.applyAdd(
+          additionInput(),
+          correctionIdempotency("commissioner_roster_add", 90)
+        ),
+      (error) =>
+        error.code === REPOSITORY_ERROR_CODES.operationFailed &&
+        error.details?.operation === "commissioner_roster_add"
+    );
+    assert.deepEqual(runtime.database.serialize(), before);
   });
 
   test("keeps unresolved or goalie-source players out of commissioner roster additions", (t) => {
@@ -759,6 +835,39 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
       }).status,
       "cancelled"
     );
+    assert.deepEqual(applied.committedRoster, {
+      teams: [
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.season1,
+          teamId: IDS.team1,
+          ownershipWitnesses: [
+            {
+              ownershipId: IDS.ownership,
+              ownershipVersion: 1,
+              state: "deleted",
+            },
+          ],
+        },
+      ],
+    });
+
+    const stateAfterInitial = runtime.database.serialize();
+    const replay = runtime.repository.applyRemove(
+      removalInput({
+        correctionId: uuid(123),
+        ownershipEventId: uuid(124),
+        contractEventId: uuid(125),
+        activityId: uuid(126),
+        occurredAtMs: NOW_MS + 2,
+      }),
+      correctionIdempotency("commissioner_roster_remove", 127, {
+        expiresAtMs: NOW_MS + 86_400_001,
+      })
+    );
+    assert.equal(replay.replayed, true);
+    assert.deepEqual(replay.committedRoster, applied.committedRoster);
+    assert.deepEqual(runtime.database.serialize(), stateAfterInitial);
   });
 
   test("reads authoritative correction inputs and honors inherited platform-admin authority", (t) => {
@@ -866,11 +975,43 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
       IDS.commissionerMembership
     );
     assert.equal(result.ownershipEvent.event_type, "commissioner_roster_corrected");
+    assert.deepEqual(result.committedRoster, {
+      teams: [
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.season1,
+          teamId: IDS.team1,
+          ownershipWitnesses: [
+            {
+              ownershipId: IDS.ownership,
+              ownershipVersion: 2,
+              state: "present",
+            },
+          ],
+        },
+      ],
+    });
     assert.equal(result.activity.actor_authority, "commissioner");
     assert.equal(
       runtime.database.prepare("SELECT COUNT(*) AS count FROM matchup_roster_players").get().count,
       0
     );
+    const stateAfterInitial = runtime.database.serialize();
+    const replay = runtime.repository.applyRoster(
+      rosterInput({
+        correctionId: uuid(114),
+        ownershipEventId: uuid(115),
+        activityId: uuid(116),
+        confirmWarnings: true,
+        occurredAtMs: NOW_MS + 2,
+      }),
+      correctionIdempotency("commissioner_roster_correction", 117, {
+        expiresAtMs: NOW_MS + 86_400_001,
+      })
+    );
+    assert.equal(replay.replayed, true);
+    assert.deepEqual(replay.committedRoster, result.committedRoster);
+    assert.deepEqual(runtime.database.serialize(), stateAfterInitial);
   });
 
   test("corrects contract terms and schedule while preserving stable IDs and history", (t) => {
@@ -903,6 +1044,375 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
     assert.equal(result.contractEvent.event_type, "commissioner_contract_corrected");
     assert.equal(result.correction.feature, "contract");
     assert.equal(result.activity.related_id, IDS.contract);
+    assert.deepEqual(result.committedRoster, {
+      teams: [
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.season1,
+          teamId: IDS.team1,
+          ownershipWitnesses: [
+            {
+              ownershipId: IDS.ownership,
+              ownershipVersion: 1,
+              state: "present",
+            },
+          ],
+        },
+      ],
+    });
+    assert.deepEqual(
+      JSON.parse(result.correction.after_snapshot_json).committedRoster,
+      result.committedRoster
+    );
+    const stateAfterInitial = runtime.database.serialize();
+    const replay = runtime.repository.applyContract(
+      contractInput({
+        correctionId: uuid(118),
+        contractEventId: uuid(119),
+        activityId: uuid(120),
+        occurredAtMs: NOW_MS + 2,
+      }),
+      correctionIdempotency("commissioner_contract_correction", 121, {
+        expiresAtMs: NOW_MS + 86_400_001,
+      })
+    );
+    assert.equal(replay.replayed, true);
+    assert.deepEqual(replay.committedRoster, result.committedRoster);
+    assert.deepEqual(runtime.database.serialize(), stateAfterInitial);
+  });
+
+  test("transfers commissioner-corrected ownership into a distinct replay-stable tenure", (t) => {
+    const runtime = createRuntime(t);
+    runtime.context.repositories.roster_display_order_sets.insert({
+      id: IDS.rosterOrderSet,
+      league_id: IDS.league,
+      season_id: IDS.season1,
+      team_id: IDS.team1,
+      updated_by_user_id: IDS.commissioner,
+      created_at_ms: NOW_MS,
+      updated_at_ms: NOW_MS,
+      version: 1,
+    });
+    runtime.context.repositories.roster_display_order_entries.insert({
+      id: IDS.rosterOrderEntry,
+      league_id: IDS.league,
+      order_set_id: IDS.rosterOrderSet,
+      ownership_id: IDS.ownership,
+      position_group: "F",
+      display_order: 1,
+      created_at_ms: NOW_MS,
+    });
+    const command = rosterInput({
+      correctedTeamId: IDS.team2,
+      confirmWarnings: true,
+    });
+
+    const beforePreview = runtime.database.serialize();
+    const preview = runtime.repository.previewRoster(command);
+    assert.equal(preview.preview, true);
+    assert.notEqual(
+      preview.ownershipTransfer.destinationOwnershipId,
+      IDS.ownership
+    );
+    assert.equal(
+      runtime.context.repositories.player_ownerships.findByKey({
+        key: IDS.ownership,
+        leagueId: IDS.league,
+      }).team_id,
+      IDS.team1
+    );
+    assert.deepEqual(runtime.database.serialize(), beforePreview);
+
+    const applied = runtime.repository.applyRoster(
+      command,
+      correctionIdempotency("commissioner_roster_correction", 94)
+    );
+    const destinationOwnershipId =
+      applied.ownershipTransfer.destinationOwnershipId;
+    assert.deepEqual(applied.ownershipTransfer, {
+      sourceOwnershipId: IDS.ownership,
+      sourceOwnershipVersion: 1,
+      destinationOwnershipId,
+      destinationOwnershipVersion: 1,
+    });
+    assert.equal(
+      runtime.context.repositories.player_ownerships.findByKey({
+        key: IDS.ownership,
+        leagueId: IDS.league,
+      }),
+      null
+    );
+    const destination =
+      runtime.context.repositories.player_ownerships.findByKey({
+        key: destinationOwnershipId,
+        leagueId: IDS.league,
+      });
+    assert.equal(destination.team_id, IDS.team2);
+    assert.equal(destination.version, 1);
+    const contract = runtime.context.repositories.contracts.findByKey({
+      key: IDS.contract,
+      leagueId: IDS.league,
+    });
+    assert.equal(contract.id, IDS.contract);
+    assert.equal(contract.current_team_id, IDS.team2);
+    assert.equal(contract.version, 2);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM roster_display_order_entries")
+        .get().count,
+      0
+    );
+    assert.deepEqual(
+      applied.ownershipEvents.map((event) => event.event_type),
+      [
+        "commissioner_roster_transfer_out",
+        "commissioner_roster_transfer_in",
+      ]
+    );
+    const [transferOutEvent, transferInEvent] = applied.ownershipEvents;
+    assert.equal(transferOutEvent.source_type, "commissioner_correction");
+    assert.deepEqual(
+      JSON.parse(transferOutEvent.before_metadata_json),
+      {
+        schemaVersion: 2,
+        exists: true,
+        ownership: applied.before,
+      }
+    );
+    assert.deepEqual(
+      JSON.parse(transferOutEvent.after_metadata_json),
+      {
+        schemaVersion: 2,
+        exists: false,
+        destinationOwnershipId,
+      }
+    );
+    assert.equal(transferInEvent.source_type, "commissioner_correction");
+    assert.deepEqual(
+      JSON.parse(transferInEvent.before_metadata_json),
+      {
+        schemaVersion: 2,
+        exists: false,
+        sourceOwnershipId: IDS.ownership,
+      }
+    );
+    assert.deepEqual(
+      JSON.parse(transferInEvent.after_metadata_json),
+      {
+        schemaVersion: 2,
+        exists: true,
+        ownership: applied.authoritative,
+      }
+    );
+    assert.equal(applied.contractEvent.event_type, "commissioner_contract_transferred");
+    assert.equal(applied.contractEvent.source_type, "commissioner_correction");
+    assert.deepEqual(
+      JSON.parse(applied.contractEvent.metadata_json),
+      {
+        ownershipTransfer: applied.ownershipTransfer,
+        before: { teamId: IDS.team1, version: 1 },
+        after: { teamId: IDS.team2, version: 2 },
+      }
+    );
+    assert.deepEqual(applied.committedRoster, {
+      teams: [
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.season1,
+          teamId: IDS.team1,
+          ownershipWitnesses: [
+            {
+              ownershipId: IDS.ownership,
+              ownershipVersion: 1,
+              state: "deleted",
+            },
+          ],
+        },
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.season1,
+          teamId: IDS.team2,
+          ownershipWitnesses: [
+            {
+              ownershipId: destinationOwnershipId,
+              ownershipVersion: 1,
+              state: "present",
+            },
+          ],
+        },
+      ],
+      ownershipTransfer: applied.ownershipTransfer,
+    });
+    assert.deepEqual(
+      JSON.parse(applied.correction.after_snapshot_json).committedRoster,
+      applied.committedRoster
+    );
+
+    const replay = runtime.repository.applyRoster(
+      rosterInput({
+        correctionId: uuid(110),
+        ownershipEventId: uuid(111),
+        activityId: uuid(112),
+        correctedTeamId: IDS.team2,
+        confirmWarnings: true,
+        occurredAtMs: NOW_MS + 2,
+      }),
+      correctionIdempotency("commissioner_roster_correction", 113, {
+        expiresAtMs: NOW_MS + 86_400_001,
+      })
+    );
+    assert.equal(replay.replayed, true);
+    assert.deepEqual(replay.ownershipTransfer, applied.ownershipTransfer);
+    assert.deepEqual(replay.committedRoster, applied.committedRoster);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM ownership_events")
+        .get().count,
+      2
+    );
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM contract_events")
+        .get().count,
+      1
+    );
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM league_activity")
+        .get().count,
+      1
+    );
+    assert.equal(
+      runtime.context.repositories.player_ownerships.findByKey({
+        key: IDS.ownership,
+        leagueId: IDS.league,
+      }),
+      null
+    );
+    assert.equal(
+      runtime.database
+        .prepare(`
+          SELECT COUNT(*) AS count
+          FROM player_ownerships
+          WHERE league_id = ? AND player_id = ?
+        `)
+        .get(IDS.league, IDS.player).count,
+      1
+    );
+
+    const snapshot = JSON.parse(applied.correction.after_snapshot_json);
+    snapshot.committedRoster.ownershipTransfer
+      .destinationOwnershipVersion = 2;
+    runtime.database
+      .prepare(`
+        UPDATE commissioner_corrections
+        SET after_snapshot_json = ?
+        WHERE league_id = ? AND id = ?
+      `)
+      .run(
+        JSON.stringify(snapshot),
+        IDS.league,
+        applied.correction.id
+      );
+    const stateAfterTamper = runtime.database.serialize();
+    assert.throws(
+      () =>
+        runtime.repository.applyRoster(
+          command,
+          correctionIdempotency("commissioner_roster_correction", 94)
+        ),
+      { code: REPOSITORY_ERROR_CODES.schemaIncompatible }
+    );
+    assert.deepEqual(runtime.database.serialize(), stateAfterTamper);
+  });
+
+  test("transfers a commissioner-corrected prospect right without inventing a contract", (t) => {
+    const runtime = createRuntime(t);
+    seedFreeAgent(runtime);
+    runtime.context.repositories.player_ownerships.insert({
+      id: IDS.addedOwnership,
+      league_id: IDS.league,
+      season_id: IDS.season1,
+      player_id: IDS.freePlayer,
+      team_id: IDS.team1,
+      ownership_kind: "Prospect Right",
+      roster_category: "Prospect",
+      position_group: "F",
+      slot_number: null,
+      acquired_transaction_type: "entry_draft",
+      acquired_transaction_id: null,
+      created_at_ms: NOW_MS,
+      updated_at_ms: NOW_MS,
+      version: 1,
+    });
+
+    const result = runtime.repository.applyRoster(
+      rosterInput({
+        ownershipId: IDS.addedOwnership,
+        playerId: IDS.freePlayer,
+        correctedTeamId: IDS.team2,
+        correctedOwnershipKind: "Prospect Right",
+        correctedRosterCategory: "Prospect",
+        correctedSlotNumber: null,
+        confirmWarnings: true,
+      }),
+      correctionIdempotency("commissioner_roster_correction", 122)
+    );
+    const destinationId = result.ownershipTransfer.destinationOwnershipId;
+
+    assert.equal(
+      runtime.context.repositories.player_ownerships.findByKey({
+        key: IDS.addedOwnership,
+        leagueId: IDS.league,
+      }),
+      null
+    );
+    const destination =
+      runtime.context.repositories.player_ownerships.findByKey({
+        key: destinationId,
+        leagueId: IDS.league,
+      });
+    assert.equal(destination.player_id, IDS.freePlayer);
+    assert.equal(destination.team_id, IDS.team2);
+    assert.equal(destination.ownership_kind, "Prospect Right");
+    assert.equal(destination.version, 1);
+    assert.equal(result.contractEvent, null);
+    assert.deepEqual(result.committedRoster.teams, [
+      {
+        leagueId: IDS.league,
+        seasonId: IDS.season1,
+        teamId: IDS.team1,
+        ownershipWitnesses: [
+          {
+            ownershipId: IDS.addedOwnership,
+            ownershipVersion: 1,
+            state: "deleted",
+          },
+        ],
+      },
+      {
+        leagueId: IDS.league,
+        seasonId: IDS.season1,
+        teamId: IDS.team2,
+        ownershipWitnesses: [
+          {
+            ownershipId: destinationId,
+            ownershipVersion: 1,
+            state: "present",
+          },
+        ],
+      },
+    ]);
+    assert.equal(
+      runtime.database
+        .prepare(`
+          SELECT COUNT(*) AS count
+          FROM contracts
+          WHERE league_id = ? AND player_id = ?
+        `)
+        .get(IDS.league, IDS.freePlayer).count,
+      0
+    );
   });
 
   test("rejects non-current commissioner authority and stale versions without writes", (t) => {
@@ -931,13 +1441,6 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
           )
         ),
       COMMISSIONER_CORRECTION_CODES.sourceChanged
-    );
-    assertPolicyError(
-      () =>
-        runtime.repository.previewRoster(
-          rosterInput({ correctedTeamId: IDS.team2 })
-        ),
-      COMMISSIONER_CORRECTION_CODES.scopeMismatch
     );
     assertPolicyError(
       () =>
@@ -1115,6 +1618,70 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
     );
     assert.equal(
       runtime.database.prepare("SELECT COUNT(*) AS count FROM ownership_events").get().count,
+      0
+    );
+  });
+
+  test("rolls back a failed commissioner tenure transfer without resurrecting a destination", (t) => {
+    const runtime = createRuntime(t);
+    runtime.context.repositories.league_activity.insert({
+      id: IDS.activity,
+      league_id: IDS.league,
+      season_id: IDS.season1,
+      event_type: "existing",
+      actor_user_id: IDS.commissioner,
+      actor_authority: "commissioner",
+      team_id: IDS.team1,
+      player_id: IDS.player,
+      related_type: null,
+      related_id: null,
+      display_summary: "Existing activity.",
+      reason: null,
+      metadata_json: null,
+      occurred_at_ms: NOW_MS,
+    });
+
+    assert.throws(() =>
+      runtime.repository.applyRoster(
+        rosterInput({
+          correctedTeamId: IDS.team2,
+          confirmWarnings: true,
+        }),
+        correctionIdempotency("commissioner_roster_correction", 122)
+      )
+    );
+    const ownerships = runtime.database
+      .prepare(`
+        SELECT id, team_id, version
+        FROM player_ownerships
+        WHERE league_id = ? AND player_id = ?
+      `)
+      .all(IDS.league, IDS.player);
+    assert.deepEqual(ownerships, [
+      { id: IDS.ownership, team_id: IDS.team1, version: 1 },
+    ]);
+    const contract = runtime.context.repositories.contracts.findByKey({
+      key: IDS.contract,
+      leagueId: IDS.league,
+    });
+    assert.equal(contract.current_team_id, IDS.team1);
+    assert.equal(contract.version, 1);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM commissioner_corrections")
+        .get().count,
+      0
+    );
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM ownership_events")
+        .get().count,
+      0
+    );
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM contract_events")
+        .get().count,
       0
     );
   });

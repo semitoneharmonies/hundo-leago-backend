@@ -56,6 +56,27 @@ function assertSocket(socket) {
   return socket;
 }
 
+function isManagedRoom(room) {
+  return (
+    typeof room === "string" &&
+    (room.startsWith("user:") ||
+      room.startsWith("league:") ||
+      room.startsWith("team:"))
+  );
+}
+
+function currentManagedRooms(socket) {
+  const retained = socket[MANAGED_ROOMS];
+  if (retained instanceof Set) {
+    return new Set(retained);
+  }
+  const joined = socket.rooms;
+  if (!joined || typeof joined[Symbol.iterator] !== "function") {
+    return new Set();
+  }
+  return new Set([...joined].filter(isManagedRoom));
+}
+
 function createAuthenticatedSocketRooms({
   authorizationService,
 } = {}) {
@@ -71,7 +92,7 @@ function createAuthenticatedSocketRooms({
 
   async function applyAuthority(socket, authority) {
     const desired = new Set(authority.rooms);
-    const previous = socket[MANAGED_ROOMS] || new Set();
+    const previous = currentManagedRooms(socket);
 
     for (const room of previous) {
       if (!desired.has(room)) {

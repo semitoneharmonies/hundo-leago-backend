@@ -2,10 +2,159 @@ const crypto = require("node:crypto");
 
 const {
   M6_JOB_TYPES,
+  parseMatchupOccurrenceKey,
 } = require("../../../domain/matchups/matchupJobPolicy");
 
 const UUID_PATTERN =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const OCCURRENCE_EXECUTION_FIELDS = Object.freeze([
+  "bindingId",
+  "claimedJobVersion",
+  "jobType",
+  "leagueId",
+  "leaseExpiresAtMs",
+  "leaseOwner",
+  "leaseToken",
+  "occurrenceKey",
+  "runId",
+  "scheduleOperationId",
+  "scheduleVersion",
+  "scheduledForMs",
+  "seasonId",
+  "weekId",
+]);
+
+function invalidExecution(message) {
+  const error = new TypeError(message);
+  error.code = "MATCHUP_OCCURRENCE_EXECUTION_INVALID";
+  throw error;
+}
+
+function requireStableId(value, description) {
+  if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
+    invalidExecution(`A stable ${description} identifier is required.`);
+  }
+}
+
+function requireBoundedText(value, maximum, description) {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > maximum ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f-\u009f]/u.test(value)
+  ) {
+    invalidExecution(`A canonical ${description} is required.`);
+  }
+}
+
+function requireOccurrenceExecution(
+  occurrenceExecution,
+  expectedJobType,
+  observedAtMs
+) {
+  if (
+    occurrenceExecution === null ||
+    typeof occurrenceExecution !== "object" ||
+    Array.isArray(occurrenceExecution) ||
+    !Object.isFrozen(occurrenceExecution) ||
+    Object.keys(occurrenceExecution).sort().join("|") !==
+      OCCURRENCE_EXECUTION_FIELDS.join("|")
+  ) {
+    invalidExecution(
+      "An exact frozen matchup occurrence execution context is required."
+    );
+  }
+  if (
+    !M6_JOB_TYPES.includes(occurrenceExecution.jobType) ||
+    occurrenceExecution.jobType !== expectedJobType
+  ) {
+    invalidExecution(
+      "The matchup occurrence execution job identity is invalid."
+    );
+  }
+  for (const [value, description] of [
+    [occurrenceExecution.bindingId, "binding"],
+    [occurrenceExecution.leagueId, "league"],
+    [occurrenceExecution.runId, "job run"],
+    [occurrenceExecution.scheduleOperationId, "schedule operation"],
+    [occurrenceExecution.seasonId, "season"],
+    [occurrenceExecution.weekId, "matchup week"],
+  ]) {
+    requireStableId(value, description);
+  }
+  for (const [value, description] of [
+    [occurrenceExecution.leaseOwner, "lease owner"],
+    [occurrenceExecution.leaseToken, "lease token"],
+    [occurrenceExecution.occurrenceKey, "occurrence key"],
+  ]) {
+    requireBoundedText(
+      value,
+      description === "lease owner" ? 128 : description === "lease token" ? 200 : 512,
+      description
+    );
+  }
+  if (
+    !Number.isSafeInteger(occurrenceExecution.claimedJobVersion) ||
+    occurrenceExecution.claimedJobVersion < 1 ||
+    !Number.isSafeInteger(occurrenceExecution.scheduleVersion) ||
+    occurrenceExecution.scheduleVersion < 1
+  ) {
+    invalidExecution(
+      "Positive safe matchup occurrence execution versions are required."
+    );
+  }
+  if (
+    !Number.isSafeInteger(occurrenceExecution.leaseExpiresAtMs) ||
+    occurrenceExecution.leaseExpiresAtMs < 0 ||
+    !Number.isSafeInteger(occurrenceExecution.scheduledForMs) ||
+    occurrenceExecution.scheduledForMs < 0 ||
+    !Number.isSafeInteger(observedAtMs) ||
+    observedAtMs < 0
+  ) {
+    invalidExecution(
+      "Safe matchup occurrence execution instants are required."
+    );
+  }
+
+  let parsed;
+  try {
+    parsed = parseMatchupOccurrenceKey({
+      jobType: occurrenceExecution.jobType,
+      leagueId: occurrenceExecution.leagueId,
+      seasonId: occurrenceExecution.seasonId,
+      occurrenceKey: occurrenceExecution.occurrenceKey,
+      scheduledForMs: occurrenceExecution.scheduledForMs,
+    });
+  } catch (error) {
+    invalidExecution(
+      "The matchup occurrence execution key is not canonical."
+    );
+  }
+  if (
+    parsed.weekId !== occurrenceExecution.weekId ||
+    (
+      parsed.scheduleOperationId !== null &&
+      (
+        parsed.scheduleOperationId !==
+          occurrenceExecution.scheduleOperationId ||
+        parsed.scheduleVersion !== occurrenceExecution.scheduleVersion
+      )
+    )
+  ) {
+    invalidExecution(
+      "The matchup occurrence execution scope does not match its key."
+    );
+  }
+  return Object.freeze({
+    ...parsed,
+    occurrenceExecution,
+    runId: occurrenceExecution.runId,
+    scheduleOperationId: occurrenceExecution.scheduleOperationId,
+    scheduleVersion: occurrenceExecution.scheduleVersion,
+    observedAtMs,
+  });
+}
 
 function deterministicEffectId(runId, effect) {
   if (
@@ -32,6 +181,7 @@ function deterministicEffectId(runId, effect) {
 
 function createMatchupOccurrenceHandlers({
   statisticsService,
+  lateLockCoordinator,
   readRepository,
   weekService,
   legalityService,
@@ -40,6 +190,14 @@ function createMatchupOccurrenceHandlers({
 } = {}) {
   if (!statisticsService || typeof statisticsService.refresh !== "function") {
     throw new TypeError("matchup occurrence handlers require target statistics");
+  }
+  if (
+    !lateLockCoordinator ||
+    typeof lateLockCoordinator.retryEligibleLateLocks !== "function"
+  ) {
+    throw new TypeError(
+      "matchup occurrence handlers require late-lock retry coordination"
+    );
   }
   if (
     !readRepository ||
@@ -73,6 +231,7 @@ function createMatchupOccurrenceHandlers({
       weekId: input.weekId,
       operationId: deterministicEffectId(input.runId, effect),
       nowMs: input.observedAtMs,
+      occurrenceExecution: input.occurrenceExecution,
     });
   }
 
@@ -101,6 +260,7 @@ function createMatchupOccurrenceHandlers({
           `${effectPrefix}:${matchup.id}`
         ),
         nowMs: input.observedAtMs,
+        occurrenceExecution: input.occurrenceExecution,
       });
       outcomes.push(result);
       if (result.finalized === false) {
@@ -113,14 +273,42 @@ function createMatchupOccurrenceHandlers({
   }
 
   const handlers = {
-    async "matchup:statistics_refresh"() {
-      return statisticsService.refresh();
+    async "matchup:statistics_refresh"(
+      occurrenceExecution,
+      observedAtMs
+    ) {
+      const input = requireOccurrenceExecution(
+        occurrenceExecution,
+        "matchup:statistics_refresh",
+        observedAtMs
+      );
+      const refreshResult = await statisticsService.refresh({
+        occurrenceExecution: input.occurrenceExecution,
+      });
+      try {
+        await lateLockCoordinator.retryEligibleLateLocks({
+          occurrenceExecution: input.occurrenceExecution,
+        });
+      } catch {
+        // A post-refresh late-lock retry cannot fail the committed refresh.
+      }
+      return refreshResult;
     },
-    async "matchup:baseline"(input) {
+    async "matchup:baseline"(occurrenceExecution, observedAtMs) {
+      const input = requireOccurrenceExecution(
+        occurrenceExecution,
+        "matchup:baseline",
+        observedAtMs
+      );
       const outcome = transition(input, "baseline_transition");
       return Object.freeze({ status: outcome.week?.status || "baseline_ready" });
     },
-    async "matchup:lock"(input) {
+    async "matchup:lock"(occurrenceExecution, observedAtMs) {
+      const input = requireOccurrenceExecution(
+        occurrenceExecution,
+        "matchup:lock",
+        observedAtMs
+      );
       transition(input, "lock_transition");
       const context = requireWeek(input);
       const teamIds = [
@@ -140,16 +328,27 @@ function createMatchupOccurrenceHandlers({
           provider,
           lockId: deterministicEffectId(input.runId, `lock:${teamId}`),
           nowMs: input.observedAtMs,
+          occurrenceExecution: input.occurrenceExecution,
         })
       );
       return Object.freeze({ lockedTeams: locks.length });
     },
-    async "matchup:finalize"(input) {
+    async "matchup:finalize"(occurrenceExecution, observedAtMs) {
+      const input = requireOccurrenceExecution(
+        occurrenceExecution,
+        "matchup:finalize",
+        observedAtMs
+      );
       transition(input, "finalize_transition");
       const outcomes = finalizeOutstanding(input, "finalize");
       return Object.freeze({ finalizedMatchups: outcomes.length });
     },
-    async "matchup:rollover"(input) {
+    async "matchup:rollover"(occurrenceExecution, observedAtMs) {
+      const input = requireOccurrenceExecution(
+        occurrenceExecution,
+        "matchup:rollover",
+        observedAtMs
+      );
       let context = requireWeek(input);
       if (context.week.status !== "final") {
         finalizeOutstanding(input, "rollover_finalize");

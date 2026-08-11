@@ -1,6 +1,6 @@
 const {
-  planAuctionContractSeasons,
-} = require("../../../domain/auctions/auctionCompletionPolicy");
+  planContractSeasons,
+} = require("../../../domain/contracts/contractSeasonPlanner");
 const {
   buildAuctionResolutionOccurrenceKey,
   evaluateAuctionResolution,
@@ -9,7 +9,8 @@ const {
   createNormalContractAggregate,
 } = require("../../../domain/contracts/contractPolicy");
 const {
-  createSocketInvalidation,
+  createEmptySocketRelated,
+  createSocketEventMetadata,
 } = require("../../../domain/leagues/socketInvalidation");
 const {
   createRosterAssignmentRecord,
@@ -25,6 +26,9 @@ const {
 const {
   createSqliteCapReadRepository,
 } = require("./SqliteCapReadRepository");
+const {
+  resolveSqliteLeagueOutboxWriter,
+} = require("./SqliteLeagueOutboxWriter");
 const {
   createSqliteRecordRepository,
 } = require("./createSqliteRecordRepository");
@@ -179,7 +183,7 @@ function completionStatus(row) {
 }
 
 function safeCompletionResult(row, replayed) {
-  return freeze({
+  const result = {
     completed: true,
     replayed,
     status: completionStatus(row),
@@ -190,10 +194,43 @@ function safeCompletionResult(row, replayed) {
     ownershipId: row.ownership_id,
     generalIllegal: row.general_illegal === 1,
     warnings: freeze(JSON.parse(row.warnings_json).map((value) => freeze(value))),
+  };
+  const committedRoster = row.ownership_id === null
+    ? null
+    : freeze({
+      leagueId: row.league_id,
+      seasonId: row.season_id,
+      teamId: row.winning_team_id,
+      ownershipWitnesses: freeze([
+        freeze({
+          ownershipId: row.ownership_id,
+          ownershipVersion: 1,
+          state: "present",
+        }),
+      ]),
+    });
+  Object.defineProperty(result, "committedRoster", {
+    configurable: false,
+    enumerable: false,
+    value: committedRoster,
+    writable: false,
   });
+  return freeze(result);
 }
 
-function createSqliteAuctionResolutionRepository({ database } = {}) {
+function createSqliteAuctionResolutionRepository({
+  database,
+  candidateCardSummerSynchronizer,
+  leagueOutboxWriter,
+} = {}) {
+  if (
+    !candidateCardSummerSynchronizer ||
+    typeof candidateCardSummerSynchronizer.synchronize !== "function"
+  ) {
+    throw new TypeError(
+      "createSqliteAuctionResolutionRepository requires a Candidate Card summer synchronizer"
+    );
+  }
   let seasonsRepository;
   let contractsRepository;
   let contractYearsRepository;
@@ -203,7 +240,7 @@ function createSqliteAuctionResolutionRepository({ database } = {}) {
   let auctionEventsRepository;
   let resolutionsRepository;
   let activityRepository;
-  let outboxRepository;
+  let outboxWriter;
   let capRepository;
   let listDueStatement;
   let findAuctionStatement;
@@ -276,9 +313,9 @@ function createSqliteAuctionResolutionRepository({ database } = {}) {
       database,
       definition: getRepositoryDefinition("league_activity"),
     });
-    outboxRepository = createSqliteRecordRepository({
+    outboxWriter = resolveSqliteLeagueOutboxWriter({
       database,
-      definition: getRepositoryDefinition("outbox_events"),
+      leagueOutboxWriter,
     });
     capRepository = createSqliteCapReadRepository({ database });
     listDueStatement = database.prepare(`
@@ -296,6 +333,15 @@ function createSqliteAuctionResolutionRepository({ database } = {}) {
           ELSE auctions.resolves_at_ms
         END AS due_at_ms
       FROM auctions
+      JOIN auction_contexts
+        ON auction_contexts.league_id = auctions.league_id
+       AND auction_contexts.season_id = auctions.season_id
+       AND auction_contexts.auction_id = auctions.id
+       AND auction_contexts.source_kind = 'ordinary_weekly'
+       AND auction_contexts.fad_id IS NULL
+       AND auction_contexts.fad_rollover_id IS NULL
+       AND auction_contexts.fad_allocation_id IS NULL
+       AND auction_contexts.fad_origin IS NULL
       JOIN seasons
         ON seasons.league_id = auctions.league_id
        AND seasons.id = auctions.season_id
@@ -329,6 +375,15 @@ function createSqliteAuctionResolutionRepository({ database } = {}) {
         players.status AS player_status,
         CASE WHEN player_ownerships.id IS NULL THEN 0 ELSE 1 END AS player_owned
       FROM auctions
+      JOIN auction_contexts
+        ON auction_contexts.league_id = auctions.league_id
+       AND auction_contexts.season_id = auctions.season_id
+       AND auction_contexts.auction_id = auctions.id
+       AND auction_contexts.source_kind = 'ordinary_weekly'
+       AND auction_contexts.fad_id IS NULL
+       AND auction_contexts.fad_rollover_id IS NULL
+       AND auction_contexts.fad_allocation_id IS NULL
+       AND auction_contexts.fad_origin IS NULL
       JOIN leagues
         ON leagues.id = auctions.league_id
       JOIN seasons
@@ -394,7 +449,7 @@ function createSqliteAuctionResolutionRepository({ database } = {}) {
       LIMIT 3
     `);
     listSeasonsStatement = database.prepare(`
-      SELECT id, label, nhl_season_key, status
+      SELECT id, league_id, label, nhl_season_key, status
       FROM seasons
       WHERE league_id = @leagueId
       ORDER BY nhl_season_key, id
@@ -784,6 +839,7 @@ function createSqliteAuctionResolutionRepository({ database } = {}) {
       currentSeasonId: auction.current_season_id,
       currentSeason: freeze({
         id: auction.season_id,
+        leagueId: auction.league_id,
         label: auction.season_label,
         nhlSeasonKey: auction.nhl_season_key,
         status: auction.season_status,
@@ -966,37 +1022,33 @@ function createSqliteAuctionResolutionRepository({ database } = {}) {
   }
 
   function insertOutbox(command, auctionVersion) {
-    const payload = createSocketInvalidation({
-      eventType: "auction.updated",
-      scope: "league",
-      scopeId: command.leagueId,
+    const payload = createSocketEventMetadata({
+      eventType: "auction.changed",
       version: auctionVersion,
-      changedAtMs: command.nowMs,
+      reasonCode: "auction_changed",
+      occurredAtMs: command.nowMs,
+      related: createEmptySocketRelated({
+        auctionId: command.auctionId,
+      }),
     });
-    return outboxRepository.insert({
+    return outboxWriter.write({
       id: command.outboxEventId,
-      league_id: command.leagueId,
-      event_type: "auction.updated",
-      aggregate_type: "auction",
-      aggregate_id: command.auctionId,
-      payload_json: JSON.stringify(payload),
-      status: "pending",
-      attempt_count: 0,
-      available_at_ms: command.nowMs,
-      published_at_ms: null,
-      last_error_code: null,
-      created_at_ms: command.nowMs,
-      updated_at_ms: command.nowMs,
-      version: 1,
+      leagueId: command.leagueId,
+      eventType: "auction.changed",
+      aggregateType: "auction",
+      aggregateId: command.auctionId,
+      payload,
+      occurredAtMs: command.nowMs,
     });
   }
 
   function persistWinner(command, candidate, decision) {
-    const seasonPlan = planAuctionContractSeasons({
+    const seasonPlan = planContractSeasons({
       leagueId: command.leagueId,
-      currentSeason: candidate.currentSeason,
+      targetSeason: candidate.currentSeason,
       existingSeasons: listSeasonsStatement.all(command).map((row) => ({
         id: row.id,
+        leagueId: row.league_id,
         label: row.label,
         nhlSeasonKey: row.nhl_season_key,
         status: row.status,
@@ -1012,14 +1064,19 @@ function createSqliteAuctionResolutionRepository({ database } = {}) {
         label: planned.label,
         nhl_season_key: planned.nhlSeasonKey,
         status: planned.status,
-        regular_season_starts_at_ms: null,
-        regular_season_ends_at_ms: null,
-        fantasy_playoffs_start_at_ms: null,
-        fantasy_playoffs_end_at_ms: null,
-        free_agent_draft_completed_at_ms: null,
+        regular_season_starts_at_ms:
+          planned.regularSeasonStartsAtMs,
+        regular_season_ends_at_ms:
+          planned.regularSeasonEndsAtMs,
+        fantasy_playoffs_start_at_ms:
+          planned.fantasyPlayoffsStartAtMs,
+        fantasy_playoffs_end_at_ms:
+          planned.fantasyPlayoffsEndAtMs,
+        free_agent_draft_completed_at_ms:
+          planned.freeAgentDraftCompletedAtMs,
         created_at_ms: planned.createdAtMs,
         updated_at_ms: planned.updatedAtMs,
-        version: 1,
+        version: planned.version,
       });
     }
     const contract = createNormalContractAggregate({
@@ -1188,6 +1245,14 @@ function createSqliteAuctionResolutionRepository({ database } = {}) {
       occurred_at_ms: command.nowMs,
     });
     insertOutbox(command, command.expectedAuctionVersion + 1);
+    candidateCardSummerSynchronizer.synchronize({
+      leagueId: command.leagueId,
+      affectedTeamIds: [decision.winner.teamId],
+      affectedPlayerIds: [candidate.auction.playerId],
+      sourceOperationId: command.resolutionId,
+      sourceKind: "auction_allocation",
+      nowMs: command.nowMs,
+    });
     return safeCompletionResult(resolution, false);
   }
 

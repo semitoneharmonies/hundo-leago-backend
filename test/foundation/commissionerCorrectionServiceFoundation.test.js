@@ -15,11 +15,14 @@ const IDS = Object.freeze({
   contract: "00000000-0000-4000-8000-000000000004",
   player: "00000000-0000-4000-8000-000000000005",
   team: "00000000-0000-4000-8000-000000000006",
+  teamTwo: "00000000-0000-4000-8000-000000000013",
+  ownershipTwo: "00000000-0000-4000-8000-000000000014",
   user: "00000000-0000-4000-8000-000000000007",
   membership: "00000000-0000-4000-8000-000000000008",
   seasonTwo: "00000000-0000-4000-8000-000000000009",
   seasonThree: "00000000-0000-4000-8000-000000000010",
   contractYear: "00000000-0000-4000-8000-000000000011",
+  lock: "00000000-0000-4000-8000-000000000012",
 });
 
 function ids() {
@@ -77,12 +80,67 @@ function addBody(overrides = {}) {
   };
 }
 
-function result(preview) {
+function removeBody(overrides = {}) {
+  return {
+    seasonId: IDS.season,
+    ownershipId: IDS.ownership,
+    playerId: IDS.player,
+    expectedVersion: 2,
+    contractId: IDS.contract,
+    expectedContractVersion: 2,
+    reason: null,
+    ...overrides,
+  };
+}
+
+function committedOwnership(version) {
+  return Object.freeze({
+    id: IDS.ownership,
+    leagueId: IDS.league,
+    seasonId: IDS.season,
+    playerId: IDS.player,
+    teamId: IDS.team,
+    ownershipKind: "Rostered",
+    rosterCategory: "Active",
+    positionGroup: "F",
+    slotNumber: 1,
+    version,
+  });
+}
+
+function result(preview, kind = "roster") {
+  const before = kind === "add"
+    ? { ownership: null, contract: null }
+    : kind === "remove"
+      ? { ownership: committedOwnership(2), contract: { id: IDS.contract } }
+      : { version: 2 };
+  const authoritative = kind === "add"
+    ? { ownership: committedOwnership(1), contract: { id: IDS.contract } }
+    : kind === "remove"
+      ? { ownership: null, contract: { id: IDS.contract, status: "cancelled" } }
+      : { version: 3 };
+  const witness = kind === "add"
+    ? {
+        ownershipId: IDS.ownership,
+        ownershipVersion: 1,
+        state: "present",
+      }
+    : kind === "remove"
+      ? {
+          ownershipId: IDS.ownership,
+          ownershipVersion: 2,
+          state: "deleted",
+        }
+      : {
+          ownershipId: IDS.ownership,
+          ownershipVersion: kind === "contract" ? 2 : 3,
+          state: "present",
+        };
   return {
     preview,
-    before: { version: 2 },
+    before,
     requested: { aavCents: 400 },
-    authoritative: { version: 3 },
+    authoritative,
     warnings: [{ code: "TEAM_OVER_CAP", teamId: IDS.team }],
     teamEvaluations: [
       {
@@ -91,6 +149,16 @@ function result(preview) {
         warnings: [{ code: "TEAM_OVER_CAP", teamId: IDS.team }],
       },
     ],
+    committedRoster: {
+      teams: [
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.season,
+          teamId: IDS.team,
+          ownershipWitnesses: kind === "contract" ? [] : [witness],
+        },
+      ],
+    },
     ...(preview
       ? {}
       : {
@@ -104,7 +172,11 @@ function result(preview) {
   };
 }
 
-function createService(calls, workspaceOverride = null) {
+function createService(
+  calls,
+  workspaceOverride = null,
+  lateLockCoordinatorOverride = null
+) {
   return createCommissionerCorrectionService({
     leagueAuthorization: {
       requireCommissioner(authenticated, leagueId) {
@@ -164,21 +236,21 @@ function createService(calls, workspaceOverride = null) {
       },
       previewAdd(input) {
         calls.previewAdd = input;
-        return result(true);
+        return result(true, "add");
       },
       applyAdd(input, idempotency) {
         calls.applyAdd = input;
         calls.applyAddIdempotency = idempotency;
-        return result(false);
+        return result(false, "add");
       },
       previewRemove(input) {
         calls.previewRemove = input;
-        return result(true);
+        return result(true, "remove");
       },
       applyRemove(input, idempotency) {
         calls.applyRemove = input;
         calls.applyRemoveIdempotency = idempotency;
-        return result(false);
+        return result(false, "remove");
       },
       previewRoster(input) {
         calls.previewRoster = input;
@@ -187,16 +259,22 @@ function createService(calls, workspaceOverride = null) {
       applyRoster(input, idempotency) {
         calls.applyRoster = input;
         calls.applyRosterIdempotency = idempotency;
-        return result(false);
+        return calls.applyRosterResult || result(false);
       },
       previewContract(input) {
         calls.previewContract = input;
-        return result(true);
+        return result(true, "contract");
       },
       applyContract(input, idempotency) {
         calls.applyContract = input;
         calls.applyContractIdempotency = idempotency;
-        return result(false);
+        return result(false, "contract");
+      },
+    },
+    lateLockCoordinator: lateLockCoordinatorOverride || {
+      async coordinateCommittedRoster(input) {
+        calls.coordinateCommittedRoster = input;
+        return Object.freeze({ status: "not_applicable" });
       },
     },
     clock: { nowMs: () => 1_700_000_000_000 },
@@ -249,10 +327,258 @@ test("M7-10 previews a commissioner roster change using server-owned identity an
   assert.equal(calls.previewRoster.occurredAtMs, 1_700_000_000_000);
 });
 
-test("M7-10 applies a confirmed contract correction and returns durable audit evidence", () => {
+test("FAD-05 coordinates a committed commissioner addition with its exact present ownership", async () => {
+  const calls = {};
+  const service = createService(calls, null, {
+    async coordinateCommittedRoster(input) {
+      calls.coordinateCommittedRoster = input;
+      return Object.freeze({ status: "completed", lockId: IDS.lock });
+    },
+  });
+
+  const response = await service.applyAdd({
+    leagueId: IDS.league,
+    input: addBody({ confirmWarnings: true }),
+    idempotencyKey: "commissioner-add-one",
+    authenticated: { valid: true },
+  });
+
+  assert.deepEqual(calls.coordinateCommittedRoster, {
+    mutationKind: "commissioner_addition",
+    teams: [
+      {
+        leagueId: IDS.league,
+        seasonId: IDS.season,
+        teamId: IDS.team,
+        ownershipWitnesses: [
+          {
+            ownershipId: IDS.ownership,
+            ownershipVersion: 1,
+            state: "present",
+          },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(response.lateLock, {
+    status: "completed",
+    lockId: IDS.lock,
+  });
+  assert.equal(response.authoritative.ownership.version, 1);
+});
+
+test("FAD-05 coordinates a committed commissioner removal with its exact deleted last version", async () => {
   const calls = {};
   const service = createService(calls);
-  const response = service.applyContract({
+
+  const response = await service.applyRemove({
+    leagueId: IDS.league,
+    input: removeBody({ confirmWarnings: true }),
+    idempotencyKey: "commissioner-remove-one",
+    authenticated: { valid: true },
+  });
+
+  assert.deepEqual(calls.coordinateCommittedRoster, {
+    mutationKind: "commissioner_removal",
+    teams: [
+      {
+        leagueId: IDS.league,
+        seasonId: IDS.season,
+        teamId: IDS.team,
+        ownershipWitnesses: [
+          {
+            ownershipId: IDS.ownership,
+            ownershipVersion: 2,
+            state: "deleted",
+          },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(response.lateLock, { status: "not_applicable" });
+  assert.equal(response.before.ownership.version, 2);
+  assert.equal(response.authoritative.ownership, null);
+});
+
+test("FAD-05 coordinates a committed same-team commissioner correction with its updated tenure", async () => {
+  const calls = {};
+  const service = createService(calls);
+
+  const response = await service.applyRoster({
+    leagueId: IDS.league,
+    input: rosterBody({ confirmWarnings: true }),
+    idempotencyKey: "commissioner-roster-correction-one",
+    authenticated: { valid: true },
+  });
+
+  assert.deepEqual(calls.coordinateCommittedRoster, {
+    mutationKind: "commissioner_correction",
+    teams: [
+      {
+        leagueId: IDS.league,
+        seasonId: IDS.season,
+        teamId: IDS.team,
+        ownershipWitnesses: [
+          {
+            ownershipId: IDS.ownership,
+            ownershipVersion: 3,
+            state: "present",
+          },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(response.lateLock, { status: "not_applicable" });
+  assert.equal(Object.isFrozen(response), true);
+});
+
+test("FAD-05 coordinates both committed teams for a commissioner tenure transfer", async () => {
+  const calls = {};
+  calls.applyRosterResult = {
+    ...result(false),
+    committedRoster: {
+      teams: [
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.season,
+          teamId: IDS.team,
+          ownershipWitnesses: [
+            {
+              ownershipId: IDS.ownership,
+              ownershipVersion: 2,
+              state: "deleted",
+            },
+          ],
+        },
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.season,
+          teamId: IDS.teamTwo,
+          ownershipWitnesses: [
+            {
+              ownershipId: IDS.ownershipTwo,
+              ownershipVersion: 1,
+              state: "present",
+            },
+          ],
+        },
+      ],
+      ownershipTransfer: {
+        sourceOwnershipId: IDS.ownership,
+        sourceOwnershipVersion: 2,
+        destinationOwnershipId: IDS.ownershipTwo,
+        destinationOwnershipVersion: 1,
+      },
+    },
+  };
+  const service = createService(calls);
+
+  const response = await service.applyRoster({
+    leagueId: IDS.league,
+    input: rosterBody({
+      correctedTeamId: IDS.teamTwo,
+      confirmWarnings: true,
+    }),
+    idempotencyKey: "commissioner-roster-transfer-one",
+    authenticated: { valid: true },
+  });
+
+  assert.deepEqual(calls.coordinateCommittedRoster, {
+    mutationKind: "commissioner_correction",
+    teams: calls.applyRosterResult.committedRoster.teams,
+  });
+  assert.deepEqual(response.lateLock, { status: "not_applicable" });
+  assert.equal(Object.isFrozen(response), true);
+});
+
+test("FAD-05 commissioner previews remain synchronous and never coordinate", () => {
+  const calls = {};
+  const service = createService(calls);
+
+  const add = service.previewAdd({
+    leagueId: IDS.league,
+    input: addBody(),
+    authenticated: { valid: true },
+  });
+  const remove = service.previewRemove({
+    leagueId: IDS.league,
+    input: removeBody(),
+    authenticated: { valid: true },
+  });
+  const roster = service.previewRoster({
+    leagueId: IDS.league,
+    input: rosterBody(),
+    authenticated: { valid: true },
+  });
+  const contract = service.previewContract({
+    leagueId: IDS.league,
+    input: contractBody(),
+    authenticated: { valid: true },
+  });
+
+  assert.equal(add.preview, true);
+  assert.equal(remove.preview, true);
+  assert.equal(roster.preview, true);
+  assert.equal(contract.preview, true);
+  assert.equal(typeof add?.then, "undefined");
+  assert.equal(typeof remove?.then, "undefined");
+  assert.equal(Object.hasOwn(add, "lateLock"), false);
+  assert.equal(Object.hasOwn(remove, "lateLock"), false);
+  assert.equal(Object.hasOwn(roster, "lateLock"), false);
+  assert.equal(Object.hasOwn(contract, "lateLock"), false);
+  assert.equal(calls.coordinateCommittedRoster, undefined);
+});
+
+test("FAD-05 contains commissioner post-commit coordination failures as awaiting data", async () => {
+  const calls = {};
+  const service = createService(calls, null, {
+    async coordinateCommittedRoster(input) {
+      calls.coordinateCommittedRoster = input;
+      throw new Error("private late-lock failure");
+    },
+  });
+
+  const response = await service.applyAdd({
+    leagueId: IDS.league,
+    input: addBody({ confirmWarnings: true }),
+    idempotencyKey: "commissioner-add-fallback",
+    authenticated: { valid: true },
+  });
+
+  assert.ok(calls.applyAdd);
+  assert.ok(calls.coordinateCommittedRoster);
+  assert.deepEqual(response.lateLock, { status: "awaiting_data" });
+  assert.equal(JSON.stringify(response).includes("private late-lock failure"), false);
+});
+
+test("FAD-05 rejects unsafe commissioner late-lock details from the response", async () => {
+  const calls = {};
+  const service = createService(calls, null, {
+    async coordinateCommittedRoster(input) {
+      calls.coordinateCommittedRoster = input;
+      return {
+        status: "completed",
+        lockId: IDS.lock,
+        internalFailure: "must not escape",
+      };
+    },
+  });
+
+  const response = await service.applyRemove({
+    leagueId: IDS.league,
+    input: removeBody({ confirmWarnings: true }),
+    idempotencyKey: "commissioner-remove-safe-projection",
+    authenticated: { valid: true },
+  });
+
+  assert.deepEqual(response.lateLock, { status: "awaiting_data" });
+  assert.equal(JSON.stringify(response).includes("must not escape"), false);
+});
+
+test("M7-10 applies a confirmed contract correction and returns durable audit evidence", async () => {
+  const calls = {};
+  const service = createService(calls);
+  const response = await service.applyContract({
     leagueId: IDS.league,
     input: contractBody({ confirmWarnings: true }),
     idempotencyKey: "contract-correction-one",
@@ -312,9 +638,21 @@ test("M7-10 applies a confirmed contract correction and returns durable audit ev
     calls.applyContractIdempotency.requestHash,
     /^[a-f0-9]{64}$/
   );
+  assert.deepEqual(calls.coordinateCommittedRoster, {
+    mutationKind: "contract_correction",
+    teams: [
+      {
+        leagueId: IDS.league,
+        seasonId: IDS.season,
+        teamId: IDS.team,
+        ownershipWitnesses: [],
+      },
+    ],
+  });
+  assert.deepEqual(response.lateLock, { status: "not_applicable" });
 });
 
-test("M7-10 revives a previously omitted future year when a contract term is restored", () => {
+test("M7-10 revives a previously omitted future year when a contract term is restored", async () => {
   const calls = {};
   const workspace = {
     league: {
@@ -374,7 +712,7 @@ test("M7-10 revives a previously omitted future year when a contract term is res
   };
   const service = createService(calls, workspace);
 
-  service.applyContract({
+  await service.applyContract({
     leagueId: IDS.league,
     input: contractBody({
       expectedVersion: 3,
@@ -412,11 +750,11 @@ test("M7-10 revives a previously omitted future year when a contract term is res
   );
 });
 
-test("M7-10 fails closed before authorization or persistence when a body includes untrusted fields", () => {
+test("M7-10 fails closed before authorization or persistence when a body includes untrusted fields", async () => {
   const calls = {};
   const service = createService(calls);
-  assert.throws(
-    () =>
+  await assert.rejects(
+    async () =>
       service.applyRoster({
         leagueId: IDS.league,
         input: rosterBody({

@@ -11,6 +11,12 @@ const {
   buildLockedPlayerBaselines,
 } = require("../../src/domain/matchups/matchupLockPolicy");
 const {
+  createPlayerGameCoverageSetEvidence,
+} = require("../../src/domain/statistics/playerGameCoveragePolicy");
+const {
+  createPlayerGameObservationSetEvidence,
+} = require("../../src/domain/statistics/playerGameStatisticsPolicy");
+const {
   MATCHUP_LOCK_SERVICE_CODES,
   createMatchupLockService,
 } = require("../../src/application/services/matchups/createMatchupLockService");
@@ -31,13 +37,18 @@ const IDS = Object.freeze({
   matchup: uuid(6), forward: uuid(7), defence: uuid(8), bench: uuid(9),
   ownershipF: uuid(10), ownershipD: uuid(11), ownershipBench: uuid(12),
   source: uuid(13), refresh: uuid(14), total: uuid(15),
+  playerGameSet: uuid(16),
 });
 
 function uuid(value) {
   return `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 }
 
-function seed(database, refreshCompletedAtMs) {
+function seed(
+  database,
+  refreshCompletedAtMs,
+  { withPlayerGameSet = true } = {}
+) {
   database.prepare(
     "INSERT INTO leagues (id, name, name_normalized, status, timezone, created_at_ms, updated_at_ms, version) " +
       "VALUES (?, 'Lock League', 'lock league', 'active', 'America/Vancouver', 1, 1, 1)"
@@ -90,9 +101,99 @@ function seed(database, refreshCompletedAtMs) {
       "games_played, goals, assists, nhl_points, fantasy_points_hundredths, source_updated_at_ms, created_at_ms) " +
       "VALUES (?, ?, ?, '20262027', ?, 10, 3, 4, 7, 775, ?, ?)"
   ).run(IDS.total, IDS.source, IDS.refresh, IDS.forward, refreshCompletedAtMs, refreshCompletedAtMs);
+  if (withPlayerGameSet) {
+    const coverage = [
+      {
+        coverageEntryId: uuid(17),
+        playerId: IDS.forward,
+        providerPlayerId: "provider-forward",
+        providerTeamId: "TEST",
+        disposition: "no_due_game",
+        nhlGameId: null,
+        nhlGameScheduledStartsAtMs: null,
+      },
+      {
+        coverageEntryId: uuid(18),
+        playerId: IDS.defence,
+        providerPlayerId: "provider-defence",
+        providerTeamId: "TEST",
+        disposition: "no_due_game",
+        nhlGameId: null,
+        nhlGameScheduledStartsAtMs: null,
+      },
+    ];
+    const requiredPlayers = coverage.map((row) => ({
+      playerId: row.playerId,
+      providerPlayerId: row.providerPlayerId,
+    }));
+    const coverageEvidence = createPlayerGameCoverageSetEvidence({
+      setId: IDS.playerGameSet,
+      statSourceId: IDS.source,
+      refreshId: IDS.refresh,
+      nhlSeasonKey: "20262027",
+      provider: "nhl",
+      sourceVersion: "v1",
+      capturedAtMs: refreshCompletedAtMs,
+      requiredPlayers,
+      coverage,
+    });
+    const observationEvidence =
+      createPlayerGameObservationSetEvidence({
+        setId: IDS.playerGameSet,
+        statSourceId: IDS.source,
+        refreshId: IDS.refresh,
+        nhlSeasonKey: "20262027",
+        provider: "nhl",
+        sourceVersion: "v1",
+        capturedAtMs: refreshCompletedAtMs,
+        observations: [],
+      });
+    const insertEvidence = database.transaction(() => {
+      const insertCoverage = database.prepare(
+        "INSERT INTO stat_refresh_player_game_coverage_entries " +
+          "(id, stat_source_id, refresh_id, observation_set_id, nhl_season_key, " +
+          "player_id, provider_player_id, provider_team_id, disposition, " +
+          "nhl_game_id, nhl_game_scheduled_starts_at_ms, created_at_ms, version) " +
+          "VALUES (?, ?, ?, ?, '20262027', ?, ?, 'TEST', 'no_due_game', " +
+          "NULL, NULL, ?, 1)"
+      );
+      insertCoverage.run(
+        uuid(17), IDS.source, IDS.refresh, IDS.playerGameSet,
+        IDS.forward, "provider-forward", refreshCompletedAtMs
+      );
+      insertCoverage.run(
+        uuid(18), IDS.source, IDS.refresh, IDS.playerGameSet,
+        IDS.defence, "provider-defence", refreshCompletedAtMs
+      );
+      database.prepare(
+        "INSERT INTO stat_refresh_player_game_sets (id, stat_source_id, refresh_id, nhl_season_key, " +
+          "provider, source_version, captured_at_ms, required_player_count, " +
+          "coverage_entry_count, expected_player_game_count, coverage_schema_version, " +
+          "coverage_sha256, observation_count, evidence_schema_version, evidence_sha256, " +
+          "created_at_ms, version) VALUES (?, ?, ?, '20262027', 'nhl', 'v1', ?, " +
+          "2, 2, 0, 1, ?, 0, 1, ?, ?, 1)"
+      ).run(
+        IDS.playerGameSet,
+        IDS.source,
+        IDS.refresh,
+        refreshCompletedAtMs,
+        coverageEvidence.coverageSha256,
+        observationEvidence.evidenceSha256,
+        refreshCompletedAtMs
+      );
+    });
+    insertEvidence.immediate();
+  }
 }
 
-function createRuntime(t, { refreshCompletedAtMs = BASELINE_MS, failBeforeCommit = () => false } = {}) {
+function createRuntime(
+  t,
+  {
+    refreshCompletedAtMs = BASELINE_MS,
+    failBeforeCommit = () => false,
+    withPlayerGameSet = true,
+  } = {}
+) {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m6-04-"));
   const connection = openDatabase({
     databasePath: path.join(temporaryRoot, "lock.sqlite3"),
@@ -104,7 +205,11 @@ function createRuntime(t, { refreshCompletedAtMs = BASELINE_MS, failBeforeCommit
     applicationBuildId: "m6-04-test",
     now: () => 1,
   });
-  seed(connection.database, refreshCompletedAtMs);
+  seed(
+    connection.database,
+    refreshCompletedAtMs,
+    { withPlayerGameSet }
+  );
   const repository = createSqliteMatchupLockRepository({
     database: connection.database,
     beforeCommit() {
@@ -231,6 +336,84 @@ describe("M6-04 atomic immutable matchup locks", () => {
       { code: MATCHUP_LOCK_SERVICE_CODES.contextMissing }
     );
     assert.equal(stale.database.prepare("SELECT COUNT(*) AS count FROM matchup_roster_locks").get().count, 0);
+  });
+
+  test("keeps normal locks compatible with cumulative-only baselines", (t) => {
+    const { database, service } = createRuntime(t, {
+      withPlayerGameSet: false,
+    });
+    const result = service.lock(lockInput());
+    assert.equal(result.replayed, false);
+    assert.equal(result.playerCount, 2);
+    assert.equal(
+      database.prepare(
+        "SELECT COUNT(*) AS count FROM matchup_roster_locks"
+      ).get().count,
+      1
+    );
+    assert.equal(
+      database.prepare(
+        "SELECT COUNT(*) AS count FROM stat_snapshots"
+      ).get().count,
+      1
+    );
+  });
+
+  test("normal locks do not depend on late-only player-game evidence", (t) => {
+    const { database, service } = createRuntime(t);
+    database.prepare(
+      "DROP TRIGGER stat_refresh_player_game_sets_immutable_update"
+    ).run();
+    database.prepare(
+      "UPDATE stat_refresh_player_game_sets " +
+        "SET coverage_sha256 = ? WHERE id = ?"
+    ).run("0".repeat(64), IDS.playerGameSet);
+
+    assert.equal(service.lock(lockInput()).replayed, false);
+    assert.equal(
+      database.prepare(
+        "SELECT COUNT(*) AS count FROM matchup_roster_locks"
+      ).get().count,
+      1
+    );
+  });
+
+  test("normal locks select a newer totals-only refresh over an older sealed refresh", (t) => {
+    const { database, service } = createRuntime(t, {
+      refreshCompletedAtMs: BASELINE_MS - 1,
+    });
+    const refreshId = uuid(90);
+    database.prepare(
+      "INSERT INTO stat_refreshes (id, stat_source_id, nhl_season_key, source_version, status, started_at_ms, " +
+        "completed_at_ms, player_count, version) VALUES (?, ?, '20262027', 'v2', 'succeeded', ?, ?, 1, 1)"
+    ).run(refreshId, IDS.source, BASELINE_MS - 1, BASELINE_MS);
+    database.prepare(
+      "INSERT INTO player_stat_totals (id, stat_source_id, refresh_id, nhl_season_key, player_id, " +
+        "games_played, goals, assists, nhl_points, fantasy_points_hundredths, source_updated_at_ms, created_at_ms) " +
+        "VALUES (?, ?, ?, '20262027', ?, 11, 5, 6, 11, 1234, ?, ?)"
+    ).run(
+      uuid(91),
+      IDS.source,
+      refreshId,
+      IDS.forward,
+      BASELINE_MS,
+      BASELINE_MS
+    );
+
+    assert.equal(service.lock(lockInput()).replayed, false);
+    assert.equal(
+      database.prepare(
+        "SELECT source_refresh_id FROM stat_snapshots"
+      ).get().source_refresh_id,
+      refreshId
+    );
+    assert.equal(
+      database.prepare(
+        "SELECT baseline_fantasy_points_hundredths " +
+          "FROM matchup_roster_players WHERE player_id = ?"
+      ).get(IDS.forward).baseline_fantasy_points_hundredths,
+      1234
+    );
   });
 
   test("rolls every snapshot and lock row back after a late failure", (t) => {

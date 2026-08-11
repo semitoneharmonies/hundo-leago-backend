@@ -65,6 +65,10 @@ const {
   createSessionCookie,
 } = require("../../src/transport/http/sessionCookie");
 const {
+  assertCanonicalAuthorityPublication,
+  readCanonicalAuthorityPublications,
+} = require("../helpers/canonicalAuthorityPublication");
+const {
   createTeamManagerAssignmentRouter,
   parseIfMatch,
 } = require(
@@ -458,6 +462,20 @@ describe("M3-17 active-member manager assignment", () => {
     assert.equal(accepted.assignment.status, "accepted");
     assert.equal(accepted.team.currentManager.userId, MANAGER_B_ID);
     assert.equal(accepted.team.currentManager.assignmentId, proposed.assignment.id);
+    const publications = readCanonicalAuthorityPublications(
+      runtime.database
+    );
+    assert.equal(publications.length, 1);
+    assertCanonicalAuthorityPublication(publications[0], {
+      leagueId: LEAGUE_ID,
+      eventType: "team.changed",
+      aggregateType: "team_manager_assignment",
+      resourceId: accepted.assignment.id,
+      resourceVersion: accepted.assignment.version,
+      reasonCode: "manager_assignment_changed",
+      occurredAtMs: NOW_MS + 100,
+      teamId: TEAM_A_ID,
+    });
     assert.equal(
       runtime.database
         .prepare("SELECT status FROM league_memberships WHERE id = ?")
@@ -475,6 +493,10 @@ describe("M3-17 active-member manager assignment", () => {
     );
     assert.deepEqual(acceptedReplay, accepted);
     assert.equal(acceptedReplay.replayed, true);
+    assert.equal(
+      readCanonicalAuthorityPublications(runtime.database).length,
+      1
+    );
     assert.deepEqual(writeCounts(runtime.database), {
       team_manager_assignments: 1,
       notifications: 1,
@@ -503,6 +525,20 @@ describe("M3-17 active-member manager assignment", () => {
       decisionCommand(transfer.assignment.id, MANAGER_B_ID, "accept")
     );
     assert.equal(accepted.team.currentManager.userId, MANAGER_B_ID);
+    const publications = readCanonicalAuthorityPublications(
+      runtime.database
+    );
+    assert.equal(publications.length, 1);
+    assertCanonicalAuthorityPublication(publications[0], {
+      leagueId: LEAGUE_ID,
+      eventType: "team.changed",
+      aggregateType: "team_manager_assignment",
+      resourceId: accepted.assignment.id,
+      resourceVersion: accepted.assignment.version,
+      reasonCode: "manager_assignment_changed",
+      occurredAtMs: NOW_MS + 100,
+      teamId: TEAM_A_ID,
+    });
     assert.deepEqual(
       runtime.database
         .prepare(`
@@ -561,6 +597,10 @@ describe("M3-17 active-member manager assignment", () => {
     );
     assert.equal(declined.assignment.status, "declined");
     assert.equal(declined.team.currentManager.userId, MANAGER_A_ID);
+    assert.equal(
+      readCanonicalAuthorityPublications(declinedRuntime.database).length,
+      0
+    );
 
     const staleRuntime = createRuntime(t);
     const staleService = createService(staleRuntime);
@@ -603,6 +643,20 @@ describe("M3-17 active-member manager assignment", () => {
     assert.equal(removed.code, "TEAM_MANAGER_ASSIGNMENT_REMOVED");
     assert.equal(removed.assignment.status, "ended");
     assert.equal(removed.team.currentManager, null);
+    const publications = readCanonicalAuthorityPublications(
+      runtime.database
+    );
+    assert.equal(publications.length, 1);
+    assertCanonicalAuthorityPublication(publications[0], {
+      leagueId: LEAGUE_ID,
+      eventType: "team.changed",
+      aggregateType: "team_manager_assignment",
+      resourceId: removed.assignment.id,
+      resourceVersion: removed.assignment.version,
+      reasonCode: "manager_assignment_changed",
+      occurredAtMs: NOW_MS + 100,
+      teamId: TEAM_A_ID,
+    });
     assert.equal(
       runtime.database
         .prepare("SELECT status FROM league_memberships WHERE id = ?")
@@ -626,6 +680,10 @@ describe("M3-17 active-member manager assignment", () => {
     });
     assert.deepEqual(replay, removed);
     assert.equal(replay.replayed, true);
+    assert.equal(
+      readCanonicalAuthorityPublications(runtime.database).length,
+      1
+    );
 
     const stale = createRuntime(t);
     const staleBefore = writeCounts(stale.database);
@@ -731,6 +789,7 @@ describe("M3-17 active-member manager assignment", () => {
     for (const seam of [
       "endAssignment",
       "acceptAssignment",
+      "appendManagerAssignmentChangedPublication",
       "appendAssignmentActivity",
       "completeIdempotency",
     ]) {
@@ -738,6 +797,9 @@ describe("M3-17 active-member manager assignment", () => {
       const service = createService(runtime);
       const proposed = service.propose(proposalCommand());
       const before = writeCounts(runtime.database);
+      const beforePublications = readCanonicalAuthorityPublications(
+        runtime.database
+      );
       assert.throws(
         () =>
           createService(runtime, {
@@ -753,6 +815,10 @@ describe("M3-17 active-member manager assignment", () => {
         /repository operation failed/i
       );
       assert.deepEqual(writeCounts(runtime.database), before);
+      assert.deepEqual(
+        readCanonicalAuthorityPublications(runtime.database),
+        beforePublications
+      );
       assert.equal(
         runtime.assignmentRepository.findCurrentAssignment({
           leagueId: LEAGUE_ID,
@@ -765,6 +831,51 @@ describe("M3-17 active-member manager assignment", () => {
           .prepare("SELECT status FROM team_manager_assignments WHERE id = ?")
           .get(proposed.assignment.id).status,
         "pending"
+      );
+    }
+
+    for (const seam of [
+      "endAssignment",
+      "appendManagerAssignmentChangedPublication",
+      "appendAssignmentActivity",
+      "completeIdempotency",
+    ]) {
+      const runtime = createRuntime(t);
+      const before = writeCounts(runtime.database);
+      const beforePublications = readCanonicalAuthorityPublications(
+        runtime.database
+      );
+      assert.throws(
+        () =>
+          createService(runtime, {
+            assignmentRepository: {
+              ...runtime.assignmentRepository,
+              [seam]() {
+                throw new Error(`injected removal ${seam} failure`);
+              },
+            },
+          }).remove({
+            leagueId: LEAGUE_ID,
+            teamId: TEAM_A_ID,
+            input: { assignmentId: CURRENT_ASSIGNMENT_ID },
+            expectedVersion: 1,
+            idempotencyKey: `manager-remove-${seam}`,
+            authenticated: authenticated(COMMISSIONER_ID),
+            auditContext: auditContext(),
+          }),
+        /repository operation failed/i
+      );
+      assert.deepEqual(writeCounts(runtime.database), before);
+      assert.deepEqual(
+        readCanonicalAuthorityPublications(runtime.database),
+        beforePublications
+      );
+      assert.equal(
+        runtime.assignmentRepository.findCurrentAssignment({
+          leagueId: LEAGUE_ID,
+          teamId: TEAM_A_ID,
+        }).id,
+        CURRENT_ASSIGNMENT_ID
       );
     }
   });

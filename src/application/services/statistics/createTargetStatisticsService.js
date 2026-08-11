@@ -60,7 +60,11 @@ function createTargetStatisticsService({
         "target statistics persistence authorization must be callable"
       );
     }
-    if (authorizePersist) await authorizePersist();
+    const authorizeWrite = async () => {
+      if (authorizePersist) await authorizePersist();
+    };
+
+    await authorizeWrite();
     const startedAtMs = nowMs();
     const source = repository.ensureSource({
       id: createId(),
@@ -68,6 +72,7 @@ function createTargetStatisticsService({
       nowMs: startedAtMs,
     });
     const refreshId = createId();
+    await authorizeWrite();
     repository.startRefresh({
       id: refreshId,
       statSourceId: source.id,
@@ -79,6 +84,7 @@ function createTargetStatisticsService({
     try {
       providerResult = await provider.fetchRows();
     } catch (error) {
+      await authorizeWrite();
       repository.rejectRefresh({
         refreshId,
         status: "failed",
@@ -114,6 +120,7 @@ function createTargetStatisticsService({
         error instanceof StatisticsPolicyError
           ? error.code
           : STATISTICS_CODES.inputInvalid;
+      await authorizeWrite();
       repository.rejectRefresh({
         refreshId,
         status: "rejected",
@@ -123,19 +130,7 @@ function createTargetStatisticsService({
       throw error;
     }
 
-    if (authorizePersist) {
-      try {
-        await authorizePersist();
-      } catch (error) {
-        repository.rejectRefresh({
-          refreshId,
-          status: "rejected",
-          errorCode: TARGET_STATISTICS_CODES.persistenceFailed,
-          completedAtMs: nowMs(),
-        });
-        throw error;
-      }
-    }
+    await authorizeWrite();
 
     try {
       const refresh = repository.completeRefresh({
@@ -154,6 +149,7 @@ function createTargetStatisticsService({
         sourceVersion: refresh.source_version,
       });
     } catch (error) {
+      await authorizeWrite();
       repository.rejectRefresh({
         refreshId,
         status: "rejected",

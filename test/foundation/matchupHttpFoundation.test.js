@@ -6,6 +6,15 @@ const {
   createMatchupIntegrationService,
 } = require("../../src/application/services/matchups/createMatchupIntegrationService");
 const {
+  createMatchupScheduleService,
+} = require("../../src/application/services/matchups/createMatchupScheduleService");
+const {
+  MATCHUP_SCHEDULE_COMMAND_OPERATION,
+  MATCHUP_SCHEDULE_SHIFT_WEEK_ONE_OPERATION,
+  hashMatchupScheduleCommandRequest,
+  hashMatchupScheduleShiftWeekOneRequest,
+} = require("../../src/domain/matchups/matchupScheduleCommandPolicy");
+const {
   createMatchupRouter,
   optionalIfMatch,
 } = require("../../src/transport/http/createMatchupRouter");
@@ -18,7 +27,109 @@ const RESULT_ID = "00000000-0000-4000-8000-000000000005";
 const HOME_ID = "00000000-0000-4000-8000-000000000006";
 const AWAY_ID = "00000000-0000-4000-8000-000000000007";
 const OPERATION_ID = "00000000-0000-4000-8000-000000000008";
+const COMMAND_ACTOR_ID =
+  "00000000-0000-4000-8000-000000000009";
+const COMMAND_MEMBERSHIP_ID =
+  "00000000-0000-4000-8000-000000000010";
+const COMMAND_IDEMPOTENCY_ID =
+  "00000000-0000-4000-8000-000000000011";
+const COMMAND_RESULT_ID =
+  "00000000-0000-4000-8000-000000000012";
 const NOW_MS = 10_000;
+const NHL_REGULAR_SEASON_STARTS_AT_MS =
+  Date.parse("2026-10-06T07:00:00.000Z");
+const NHL_REGULAR_SEASON_ENDS_AT_MS =
+  Date.parse("2027-04-12T07:00:00.000Z");
+const FANTASY_PLAYOFFS_START_AT_MS =
+  Date.parse("2027-03-15T07:00:00.000Z");
+const FANTASY_PLAYOFFS_END_AT_MS =
+  NHL_REGULAR_SEASON_ENDS_AT_MS;
+const FIRST_WEEK_STARTS_AT_MS =
+  Date.parse("2026-10-12T07:00:00.000Z");
+const LAST_WEEK_ENDS_AT_MS =
+  FANTASY_PLAYOFFS_START_AT_MS;
+const AUDIT_CONTEXT = Object.freeze({
+  clientMetadataJson:
+    '{"networkSourceCategory":"unknown","origin":"https://app.example.test"}',
+  networkKeyVersion: 1,
+  networkMetadataDigest: "a".repeat(64),
+  requestCorrelationId:
+    "matchup-result-correction-request",
+});
+
+function matchupScheduleInput(
+  confirmed = false,
+  overrides = {}
+) {
+  return {
+    nhlRegularSeasonStartsAtMs:
+      NHL_REGULAR_SEASON_STARTS_AT_MS,
+    nhlRegularSeasonEndsAtMs:
+      NHL_REGULAR_SEASON_ENDS_AT_MS,
+    fantasyPlayoffsStartAtMs:
+      FANTASY_PLAYOFFS_START_AT_MS,
+    fantasyPlayoffsEndAtMs:
+      FANTASY_PLAYOFFS_END_AT_MS,
+    firstWeekStartsAtMs: FIRST_WEEK_STARTS_AT_MS,
+    confirmed,
+    ...overrides,
+  };
+}
+
+function matchupScheduleResult() {
+  return {
+    operationId: OPERATION_ID,
+    seasonId: SEASON_ID,
+    seasonVersion: 4,
+    nhlRegularSeasonStartsAtMs:
+      NHL_REGULAR_SEASON_STARTS_AT_MS,
+    nhlRegularSeasonEndsAtMs:
+      NHL_REGULAR_SEASON_ENDS_AT_MS,
+    fantasyPlayoffsStartAtMs:
+      FANTASY_PLAYOFFS_START_AT_MS,
+    fantasyPlayoffsEndAtMs:
+      FANTASY_PLAYOFFS_END_AT_MS,
+    calendarPersisted: true,
+    firstWeekId: WEEK_ID,
+    firstWeekStartsAtMs:
+      FIRST_WEEK_STARTS_AT_MS,
+    participantCount: 2,
+    weekCount: 1,
+    matchupCount: 1,
+    byeCount: 0,
+    lastWeekEndsAtMs: LAST_WEEK_ENDS_AT_MS,
+  };
+}
+
+function matchupShiftInput(overrides = {}) {
+  return {
+    action: "shift_week_one",
+    confirmation: "CHANGE WEEK 1 START",
+    firstWeekStartsAtMs:
+      FIRST_WEEK_STARTS_AT_MS +
+      7 * 24 * 60 * 60 * 1000,
+    ...overrides,
+  };
+}
+
+function matchupShiftResult() {
+  return {
+    operationId: OPERATION_ID,
+    seasonId: SEASON_ID,
+    seasonVersion: 4,
+    weekId: WEEK_ID,
+    weekVersion: 5,
+    previousFirstWeekStartsAtMs:
+      FIRST_WEEK_STARTS_AT_MS,
+    firstWeekStartsAtMs:
+      matchupShiftInput()
+        .firstWeekStartsAtMs,
+    lastWeekEndsAtMs:
+      LAST_WEEK_ENDS_AT_MS,
+    shiftedWeekCount: 21,
+    replacedJobOccurrenceCount: 126,
+  };
+}
 
 function rawWeek() {
   return {
@@ -68,6 +179,7 @@ function integrationFixture({
     actorUserId: "commissioner",
     authority: "commissioner",
   },
+  scheduleServiceOverride = null,
 } = {}) {
   const calls = [];
   const authority = {
@@ -110,26 +222,58 @@ function integrationFixture({
         result_version: 3,
         week_id: WEEK_ID,
         matchup_id: MATCHUP_ID,
+        result_version_id: OPERATION_ID,
+        version_number: 3,
+        home_score_hundredths: 450,
+        away_score_hundredths: 375,
+        outcome: "home_win",
       };
     },
   };
-  const scheduleService = {
+  const scheduleService = scheduleServiceOverride || {
     preview(input) {
       calls.push({ method: "schedulePreview", input });
       return {
-        context: { season_version: 3 },
+        calendarWillBePersisted: true,
+        context: {
+          season_id: SEASON_ID,
+          season_version: 3,
+        },
         plan: {
           teamIds: [HOME_ID, AWAY_ID],
-          firstWeekStartsAtMs: 1_000,
+          nhlRegularSeasonStartsAtMs:
+            NHL_REGULAR_SEASON_STARTS_AT_MS,
+          nhlRegularSeasonEndsAtMs:
+            NHL_REGULAR_SEASON_ENDS_AT_MS,
+          fantasyPlayoffsStartAtMs:
+            FANTASY_PLAYOFFS_START_AT_MS,
+          fantasyPlayoffsEndAtMs:
+            FANTASY_PLAYOFFS_END_AT_MS,
+          firstWeekStartsAtMs:
+            FIRST_WEEK_STARTS_AT_MS,
           weeks: [
-            { pairs: [{ homeTeamId: HOME_ID, awayTeamId: AWAY_ID }], byeTeamId: null, endsAtMs: 20_000 },
+            {
+              pairs: [{
+                homeTeamId: HOME_ID,
+                awayTeamId: AWAY_ID,
+              }],
+              byeTeamId: null,
+              endsAtMs: LAST_WEEK_ENDS_AT_MS,
+            },
           ],
         },
       };
     },
     generate(input) {
       calls.push({ method: "scheduleGenerate", input });
-      return { weekCount: 1 };
+      return matchupScheduleResult();
+    },
+    shiftWeekOne(input) {
+      calls.push({
+        method: "scheduleShiftWeekOne",
+        input,
+      });
+      return matchupShiftResult();
     },
   };
   const weekService = {
@@ -150,10 +294,24 @@ function integrationFixture({
       throw new Error("scheduled matchups do not score");
     },
   };
-  const resultService = {
+  const resultCorrectionService = {
     correct(input) {
       calls.push({ method: "correct", input });
-      return { corrected: true };
+      return {
+        code: "MATCHUP_RESULT_CORRECTED",
+        result: {
+          resultId: RESULT_ID,
+          resultVersionId: OPERATION_ID,
+          resultVersionNumber: 4,
+          resultVersion: 4,
+          leagueId: LEAGUE_ID,
+          seasonId: SEASON_ID,
+          weekId: WEEK_ID,
+          matchupId: MATCHUP_ID,
+          correctedAtMs: NOW_MS,
+          standingsReplacement: null,
+        },
+      };
     },
   };
   const standingsService = {
@@ -189,13 +347,413 @@ function integrationFixture({
     scheduleService,
     weekService,
     scoringService,
-    resultService,
+    resultCorrectionService,
     standingsService,
     recoveryService,
     clock: { nowMs: () => NOW_MS },
     createId: () => OPERATION_ID,
   });
   return { calls, service };
+}
+
+function actualConfirmedScheduleFixture(
+  mode = "replay"
+) {
+  const calls = [];
+  const requestHash =
+    hashMatchupScheduleCommandRequest({
+      leagueId: LEAGUE_ID,
+      seasonId: SEASON_ID,
+      expectedSeasonVersion: 3,
+      input: matchupScheduleInput(true),
+    });
+  const scheduleService =
+    createMatchupScheduleService({
+      repositoryContext: {
+        transaction(action) {
+          calls.push("transaction");
+          return action();
+        },
+      },
+      leagueAuthorization: {
+        requireCommissioner() {
+          calls.push("authorize");
+          if (mode === "denied") {
+            const error = new Error(
+              "private authority detail"
+            );
+            error.code =
+              "LEAGUE_COMMISSIONER_REQUIRED";
+            throw error;
+          }
+          return {
+            actorUserId: COMMAND_ACTOR_ID,
+            membershipId:
+              COMMAND_MEMBERSHIP_ID,
+            authority: "commissioner",
+            leagueId: LEAGUE_ID,
+          };
+        },
+      },
+      repository: {
+        findIdempotency() {
+          calls.push("findIdempotency");
+          if (
+            mode !== "replay" &&
+            mode !== "incomplete"
+          ) {
+            return null;
+          }
+          return {
+            id: COMMAND_IDEMPOTENCY_ID,
+            leagueId: LEAGUE_ID,
+            actorUserId: COMMAND_ACTOR_ID,
+            operation:
+              MATCHUP_SCHEDULE_COMMAND_OPERATION,
+            clientKey:
+              "opaque-http-schedule-key",
+            requestHash,
+            status:
+              mode === "replay"
+                ? "completed"
+                : "started",
+            resultType:
+              mode === "replay"
+                ? "matchup_schedule_command"
+                : null,
+            resultId:
+              mode === "replay"
+                ? COMMAND_RESULT_ID
+                : null,
+            createdAtMs: NOW_MS,
+            completedAtMs:
+              mode === "replay" ? NOW_MS : null,
+            expiresAtMs: NOW_MS + 1,
+          };
+        },
+        findCommandResult() {
+          calls.push("findCommandResult");
+          return {
+            id: COMMAND_RESULT_ID,
+            leagueId: LEAGUE_ID,
+            seasonId: SEASON_ID,
+            action: "generate",
+            idempotencyRequestId:
+              COMMAND_IDEMPOTENCY_ID,
+            idempotencyOperation:
+              MATCHUP_SCHEDULE_COMMAND_OPERATION,
+            requestSha256: requestHash,
+            matchupOperationId: OPERATION_ID,
+            actorUserId: COMMAND_ACTOR_ID,
+            actorMembershipId:
+              COMMAND_MEMBERSHIP_ID,
+            actorAuthority: "commissioner",
+            oldScheduleOperationId: null,
+            oldScheduleVersion: null,
+            newScheduleOperationId:
+              OPERATION_ID,
+            newScheduleVersion: 1,
+            seasonVersionBefore: 3,
+            seasonVersionAfter: 4,
+            weekOneMatchupWeekId: WEEK_ID,
+            weekVersionBefore: null,
+            weekVersionAfter: 1,
+            previousFirstWeekStartsAtMs:
+              null,
+            firstWeekStartsAtMs:
+              FIRST_WEEK_STARTS_AT_MS,
+            lastWeekEndsAtMs:
+              LAST_WEEK_ENDS_AT_MS,
+            nhlRegularSeasonStartsAtMs:
+              NHL_REGULAR_SEASON_STARTS_AT_MS,
+            nhlRegularSeasonEndsAtMs:
+              NHL_REGULAR_SEASON_ENDS_AT_MS,
+            fantasyPlayoffsStartAtMs:
+              FANTASY_PLAYOFFS_START_AT_MS,
+            fantasyPlayoffsEndAtMs:
+              FANTASY_PLAYOFFS_END_AT_MS,
+            calendarPersisted: 1,
+            participantCount: 2,
+            weekCount: 1,
+            matchupCount: 1,
+            byeCount: 0,
+            shiftedWeekCount: null,
+            replacedJobOccurrenceCount: null,
+            responseHttpStatus: 201,
+            responseCode:
+              "MATCHUP_SCHEDULE_GENERATED",
+            resultSchemaVersion: 1,
+            createdAtMs: NOW_MS,
+            version: 1,
+          };
+        },
+        readContext() {
+          calls.push("readContext");
+          if (mode === "missing") return null;
+          return {
+            league_id: LEAGUE_ID,
+            timezone: "America/Vancouver",
+            commissioner_membership_id:
+              COMMAND_MEMBERSHIP_ID,
+            season_id: SEASON_ID,
+            season_status: "planned",
+            season_version:
+              mode === "stale" ? 4 : 3,
+            nhl_season_key: "20262027",
+            regular_season_starts_at_ms:
+              NHL_REGULAR_SEASON_STARTS_AT_MS,
+            regular_season_ends_at_ms:
+              NHL_REGULAR_SEASON_ENDS_AT_MS,
+            fantasy_playoffs_start_at_ms:
+              FANTASY_PLAYOFFS_START_AT_MS,
+            fantasy_playoffs_end_at_ms:
+              FANTASY_PLAYOFFS_END_AT_MS,
+            scoring_rule_version: 1,
+            commissioner_user_id:
+              COMMAND_ACTOR_ID,
+            teams: [
+              {
+                id: HOME_ID,
+                name: "Home",
+                primary_colour: null,
+                secondary_colour: null,
+                logo_reference: null,
+                version: 1,
+              },
+              {
+                id: AWAY_ID,
+                name: "Away",
+                primary_colour: null,
+                secondary_colour: null,
+                logo_reference: null,
+                version: 1,
+              },
+            ],
+            existingWeekCount: 0,
+            existingGenerationCount: 0,
+          };
+        },
+        applyConfirmedSchedulePlan() {
+          throw new Error(
+            "The HTTP error fixture must not persist."
+          );
+        },
+        readShiftContext() {
+          throw new Error(
+            "The confirmed-schedule fixture must not read shift context."
+          );
+        },
+        applyWeekOneShiftPlan() {
+          throw new Error(
+            "The confirmed-schedule fixture must not shift Week 1."
+          );
+        },
+      },
+      clock: {
+        nowMs() {
+          calls.push("clock");
+          return NOW_MS;
+        },
+      },
+      secureRandom: {
+        id() {
+          throw new Error(
+            "The HTTP error fixture must not allocate identifiers."
+          );
+        },
+      },
+    });
+  return {
+    calls,
+    service: integrationFixture({
+      scheduleServiceOverride: scheduleService,
+    }).service,
+  };
+}
+
+function actualShiftFixture(
+  mode = "replay"
+) {
+  const calls = [];
+  const input = matchupShiftInput();
+  const requestHash =
+    hashMatchupScheduleShiftWeekOneRequest({
+      leagueId: LEAGUE_ID,
+      seasonId: SEASON_ID,
+      weekId: WEEK_ID,
+      expectedWeekVersion: 4,
+      input,
+    });
+  const scheduleService =
+    createMatchupScheduleService({
+      repositoryContext: {
+        transaction(action) {
+          calls.push("transaction");
+          return action();
+        },
+      },
+      leagueAuthorization: {
+        requireCommissioner() {
+          calls.push("authorize");
+          if (mode === "denied") {
+            const error = new Error(
+              "private shift authority detail"
+            );
+            error.code =
+              "LEAGUE_COMMISSIONER_REQUIRED";
+            throw error;
+          }
+          return {
+            actorUserId: COMMAND_ACTOR_ID,
+            membershipId:
+              COMMAND_MEMBERSHIP_ID,
+            authority: "commissioner",
+            leagueId: LEAGUE_ID,
+          };
+        },
+      },
+      repository: {
+        findIdempotency() {
+          calls.push("findIdempotency");
+          if (
+            mode !== "replay" &&
+            mode !== "incomplete"
+          ) {
+            return null;
+          }
+          return {
+            id: COMMAND_IDEMPOTENCY_ID,
+            leagueId: LEAGUE_ID,
+            actorUserId: COMMAND_ACTOR_ID,
+            operation:
+              MATCHUP_SCHEDULE_SHIFT_WEEK_ONE_OPERATION,
+            clientKey:
+              "opaque-http-shift-key",
+            requestHash,
+            status:
+              mode === "replay"
+                ? "completed"
+                : "started",
+            resultType:
+              mode === "replay"
+                ? "matchup_schedule_command"
+                : null,
+            resultId:
+              mode === "replay"
+                ? COMMAND_RESULT_ID
+                : null,
+            createdAtMs: NOW_MS,
+            completedAtMs:
+              mode === "replay"
+                ? NOW_MS
+                : null,
+            expiresAtMs: NOW_MS + 1,
+          };
+        },
+        findCommandResult() {
+          calls.push("findCommandResult");
+          return {
+            id: COMMAND_RESULT_ID,
+            leagueId: LEAGUE_ID,
+            seasonId: SEASON_ID,
+            action: "shift_week_one",
+            idempotencyRequestId:
+              COMMAND_IDEMPOTENCY_ID,
+            idempotencyOperation:
+              MATCHUP_SCHEDULE_SHIFT_WEEK_ONE_OPERATION,
+            requestSha256: requestHash,
+            matchupOperationId:
+              OPERATION_ID,
+            actorUserId: COMMAND_ACTOR_ID,
+            actorMembershipId:
+              COMMAND_MEMBERSHIP_ID,
+            actorAuthority: "commissioner",
+            oldScheduleOperationId:
+              RESULT_ID,
+            oldScheduleVersion: 1,
+            newScheduleOperationId:
+              OPERATION_ID,
+            newScheduleVersion: 2,
+            seasonVersionBefore: 3,
+            seasonVersionAfter: 4,
+            weekOneMatchupWeekId:
+              WEEK_ID,
+            weekVersionBefore: 4,
+            weekVersionAfter: 5,
+            previousFirstWeekStartsAtMs:
+              FIRST_WEEK_STARTS_AT_MS,
+            firstWeekStartsAtMs:
+              input.firstWeekStartsAtMs,
+            lastWeekEndsAtMs:
+              LAST_WEEK_ENDS_AT_MS,
+            nhlRegularSeasonStartsAtMs:
+              null,
+            nhlRegularSeasonEndsAtMs: null,
+            fantasyPlayoffsStartAtMs: null,
+            fantasyPlayoffsEndAtMs: null,
+            calendarPersisted: null,
+            participantCount: null,
+            weekCount: null,
+            matchupCount: null,
+            byeCount: null,
+            shiftedWeekCount: 21,
+            replacedJobOccurrenceCount:
+              126,
+            responseHttpStatus: 200,
+            responseCode: null,
+            resultSchemaVersion: 1,
+            createdAtMs: NOW_MS,
+            version: 1,
+          };
+        },
+        readContext() {
+          throw new Error(
+            "The shift fixture must not read generation context."
+          );
+        },
+        applyConfirmedSchedulePlan() {
+          throw new Error(
+            "The shift fixture must not generate a schedule."
+          );
+        },
+        readShiftContext() {
+          calls.push("readShiftContext");
+          if (mode === "frozen") {
+            return {
+              leagueId: LEAGUE_ID,
+              seasonId: SEASON_ID,
+              fadCount: 1,
+            };
+          }
+          return null;
+        },
+        applyWeekOneShiftPlan() {
+          throw new Error(
+            "The shift HTTP error fixture must not persist."
+          );
+        },
+      },
+      clock: {
+        nowMs() {
+          calls.push("clock");
+          return NOW_MS;
+        },
+      },
+      secureRandom: {
+        id() {
+          throw new Error(
+            "The shift HTTP fixture must not allocate identifiers."
+          );
+        },
+      },
+    });
+  return {
+    calls,
+    input,
+    service: integrationFixture({
+      scheduleServiceOverride: scheduleService,
+    }).service,
+  };
 }
 
 describe("M6-12 matchup HTTP integration service", () => {
@@ -262,17 +820,63 @@ describe("M6-12 matchup HTTP integration service", () => {
   test("uses commissioner authority and explicit previews before all four writes", () => {
     const { calls, service } = integrationFixture();
     const base = { leagueId: LEAGUE_ID, seasonId: SEASON_ID, authenticated: { valid: true } };
-    assert.equal(
-      service.generateSchedule({ ...base, input: { confirmed: false } }).code,
-      "MATCHUP_SCHEDULE_PREVIEWED"
+    assert.deepEqual(
+      service.generateSchedule({
+        ...base,
+        input: matchupScheduleInput(false),
+      }),
+      {
+        code: "MATCHUP_SCHEDULE_PREVIEWED",
+        preview: {
+          seasonId: SEASON_ID,
+          expectedSeasonVersion: 3,
+          nhlRegularSeasonStartsAtMs:
+            NHL_REGULAR_SEASON_STARTS_AT_MS,
+          nhlRegularSeasonEndsAtMs:
+            NHL_REGULAR_SEASON_ENDS_AT_MS,
+          fantasyPlayoffsStartAtMs:
+            FANTASY_PLAYOFFS_START_AT_MS,
+          fantasyPlayoffsEndAtMs:
+            FANTASY_PLAYOFFS_END_AT_MS,
+          calendarWillBePersisted: true,
+          firstWeekStartsAtMs:
+            FIRST_WEEK_STARTS_AT_MS,
+          participantCount: 2,
+          weekCount: 1,
+          matchupCount: 1,
+          byeCount: 0,
+          lastWeekEndsAtMs:
+            LAST_WEEK_ENDS_AT_MS,
+        },
+      }
     );
     assert.equal(
       service.transitionWeek({ ...base, weekId: WEEK_ID, input: { confirmed: false } }).code,
       "MATCHUP_WEEK_TRANSITION_PREVIEWED"
     );
-    assert.equal(
-      service.correctResult({ ...base, resultId: RESULT_ID, input: { confirmed: false } }).code,
-      "MATCHUP_RESULT_CORRECTION_PREVIEWED"
+    assert.deepEqual(
+      service.correctResult({
+        ...base,
+        resultId: RESULT_ID,
+        input: { confirmed: false },
+      }),
+      {
+        code:
+          "MATCHUP_RESULT_CORRECTION_PREVIEWED",
+        preview: {
+          resultId: RESULT_ID,
+          expectedVersion: 3,
+          weekId: WEEK_ID,
+          matchupId: MATCHUP_ID,
+          currentVersion: {
+            id: OPERATION_ID,
+            versionNumber: 3,
+            homeScoreHundredths: 450,
+            awayScoreHundredths: 375,
+            outcome: "home_win",
+          },
+        },
+      }
     );
     assert.equal(
       service.rebuildStandings({ ...base, input: { confirmed: false } }).code,
@@ -299,7 +903,7 @@ describe("M6-12 matchup HTTP integration service", () => {
 
     service.generateSchedule({
       ...base,
-      input: { confirmed: false },
+      input: matchupScheduleInput(false),
     });
     service.rebuildStandings({
       ...base,
@@ -310,6 +914,7 @@ describe("M6-12 matchup HTTP integration service", () => {
       resultId: RESULT_ID,
       expectedVersion: 3,
       idempotencyKey: OPERATION_ID,
+      auditContext: AUDIT_CONTEXT,
       input: {
         confirmed: true,
         homeScoreHundredths: 500,
@@ -321,12 +926,31 @@ describe("M6-12 matchup HTTP integration service", () => {
     for (const method of [
       "schedulePreview",
       "standingsPreview",
-      "correct",
     ]) {
       const call = calls.find((candidate) => candidate.method === method);
       assert.equal(call.input.actorUserId, "platform-admin");
       assert.equal(call.input.authorizedAsPlatformAdministrator, true);
     }
+    const correction = calls.find(
+      (candidate) =>
+        candidate.method === "correct"
+    ).input;
+    assert.deepEqual(
+      correction.authenticated,
+      base.authenticated
+    );
+    assert.equal(
+      correction.expectedResultVersion,
+      3
+    );
+    assert.equal(
+      correction.auditContext,
+      AUDIT_CONTEXT
+    );
+    assert.equal(
+      Object.hasOwn(correction, "actorUserId"),
+      false
+    );
   });
 
   test("projects a finalized player breakdown from the result's exact statistics refresh", () => {
@@ -408,12 +1032,21 @@ describe("M6-12 matchup HTTP integration service", () => {
     assert.equal(result.matchup.result.currentVersion.homeScoreHundredths, 325);
   });
 
-  test("executes confirmed versioned writes with opaque authenticated authority", () => {
+  test("routes confirmed schedules through the canonical command while preserving other confirmed versioned writes", () => {
     const { calls, service } = integrationFixture();
     const base = { leagueId: LEAGUE_ID, seasonId: SEASON_ID, authenticated: { valid: true } };
-    assert.equal(
-      service.generateSchedule({ ...base, expectedVersion: 3, input: { confirmed: true } }).code,
-      "MATCHUP_SCHEDULE_GENERATED"
+    assert.deepEqual(
+      service.generateSchedule({
+        ...base,
+        expectedVersion: 3,
+        idempotencyKey:
+          "opaque-matchup-schedule-key",
+        input: matchupScheduleInput(true),
+      }),
+      {
+        code: "MATCHUP_SCHEDULE_GENERATED",
+        result: matchupScheduleResult(),
+      }
     );
     assert.equal(
       service.transitionWeek({
@@ -431,6 +1064,7 @@ describe("M6-12 matchup HTTP integration service", () => {
         resultId: RESULT_ID,
         expectedVersion: 3,
         idempotencyKey: OPERATION_ID,
+        auditContext: AUDIT_CONTEXT,
         input: {
           confirmed: true,
           homeScoreHundredths: 500,
@@ -453,16 +1087,158 @@ describe("M6-12 matchup HTTP integration service", () => {
       }).code,
       "MATCHUP_STANDINGS_REBUILT"
     );
-    assert.equal(calls.find(({ method }) => method === "correct").input.actorUserId, "commissioner");
+    assert.deepEqual(
+      calls.find(({ method }) => method === "correct")
+        .input.authenticated,
+      base.authenticated
+    );
     assert.equal(calls.find(({ method }) => method === "weekAdvance").input.operationId, OPERATION_ID);
+    assert.deepEqual(
+      calls.find(
+        ({ method }) =>
+          method === "scheduleGenerate"
+      ).input,
+      {
+        leagueId: LEAGUE_ID,
+        seasonId: SEASON_ID,
+        input: matchupScheduleInput(true),
+        expectedSeasonVersion: 3,
+        idempotencyKey:
+          "opaque-matchup-schedule-key",
+        authenticated: base.authenticated,
+      }
+    );
   });
 
-  test("rejects stale, unversioned, unconfirmed, and overposted write input before mutation", () => {
+  test("forwards only the exact shift action to the canonical Week 1 command and returns its raw result", () => {
+    const { calls, service } =
+      integrationFixture();
+    const authenticated = {
+      valid: true,
+      sessionId: "shift-session",
+    };
+    const input = matchupShiftInput();
+
+    assert.deepEqual(
+      service.transitionWeek({
+        leagueId: LEAGUE_ID,
+        seasonId: SEASON_ID,
+        weekId: WEEK_ID,
+        input,
+        expectedVersion: 4,
+        idempotencyKey:
+          "opaque-http-shift-key",
+        authenticated,
+      }),
+      matchupShiftResult()
+    );
+    const shiftCall = calls.find(
+      ({ method }) =>
+        method ===
+        "scheduleShiftWeekOne"
+    );
+    assert.deepEqual(shiftCall.input, {
+      leagueId: LEAGUE_ID,
+      seasonId: SEASON_ID,
+      weekId: WEEK_ID,
+      input,
+      expectedWeekVersion: 4,
+      idempotencyKey:
+        "opaque-http-shift-key",
+      authenticated,
+    });
+    assert.equal(
+      shiftCall.input.input,
+      input
+    );
+    assert.equal(
+      shiftCall.input.authenticated,
+      authenticated
+    );
+    assert.equal(
+      calls.some(
+        ({ method }) =>
+          method === "commissioner" ||
+          method === "readWeek" ||
+          method === "weekAdvance"
+      ),
+      false
+    );
+
+    assert.throws(
+      () =>
+        service.transitionWeek({
+          leagueId: LEAGUE_ID,
+          seasonId: SEASON_ID,
+          weekId: WEEK_ID,
+          input: {
+            action: "shift-week-one",
+            confirmed: true,
+          },
+          expectedVersion: 4,
+          authenticated,
+        }),
+      {
+        code:
+          "MATCHUP_INTEGRATION_INPUT_INVALID",
+      }
+    );
+    assert.equal(
+      calls.filter(
+        ({ method }) =>
+          method ===
+          "scheduleShiftWeekOne"
+      ).length,
+      1
+    );
+  });
+
+  test("requires the schedule dependency to expose Week 1 shifting", () => {
+    assert.throws(
+      () =>
+        integrationFixture({
+          scheduleServiceOverride: {
+            preview() {},
+            generate() {},
+          },
+        }),
+      {
+        name: "TypeError",
+        message:
+          "matchup integration requires a schedule service",
+      }
+    );
+  });
+
+  test("rejects incomplete, overposted, and unversioned write input before mutation", () => {
     const { calls, service } = integrationFixture();
     const base = { leagueId: LEAGUE_ID, seasonId: SEASON_ID, authenticated: { valid: true } };
     assert.throws(
-      () => service.generateSchedule({ ...base, expectedVersion: 2, input: { confirmed: true } }),
-      { code: "MATCHUP_INTEGRATION_VERSION_CONFLICT" }
+      () => service.generateSchedule({
+        ...base,
+        input: { confirmed: false },
+      }),
+      { code: "MATCHUP_INTEGRATION_INPUT_INVALID" }
+    );
+    assert.throws(
+      () => service.generateSchedule({
+        ...base,
+        input: matchupScheduleInput(false, {
+          unsupported: true,
+        }),
+      }),
+      { code: "MATCHUP_INTEGRATION_INPUT_INVALID" }
+    );
+    assert.throws(
+      () => service.generateSchedule({
+        ...base,
+        idempotencyKey:
+          "opaque-matchup-schedule-key",
+        input: matchupScheduleInput(true),
+      }),
+      {
+        code: "MATCHUP_INTEGRATION_INPUT_INVALID",
+      }
     );
     assert.throws(
       () => service.transitionWeek({ ...base, weekId: WEEK_ID, input: { confirmed: true } }),
@@ -532,11 +1308,26 @@ function serviceStub(calls, overrides = {}) {
   );
 }
 
-async function startApi(t, service, securityCalls = []) {
+async function startApi(
+  t,
+  service,
+  securityCalls = [],
+  auditCalls = []
+) {
   const app = express();
   app.use(createMatchupRouter({
     requestSecurity: requestSecurity(securityCalls),
     matchupService: service,
+    auditPrivacyDigest: {
+      digest(value) {
+        auditCalls.push(value);
+        return {
+          keyVersion: 7,
+          digest: "b".repeat(64),
+        };
+      },
+    },
+    networkSourceResolver: () => "127.0.0.1",
   }));
   const server = app.listen(0, "127.0.0.1");
   await new Promise((resolve, reject) => {
@@ -566,7 +1357,13 @@ describe("M6-12 isolated matchup HTTP contract", () => {
   test("routes all nine approved contracts with authenticated scope and request envelopes", async (t) => {
     const calls = [];
     const securityCalls = [];
-    const baseUrl = await startApi(t, serviceStub(calls), securityCalls);
+    const auditCalls = [];
+    const baseUrl = await startApi(
+      t,
+      serviceStub(calls),
+      securityCalls,
+      auditCalls
+    );
     const base = `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/seasons/${SEASON_ID}`;
     const responses = await Promise.all([
       fetch(`${base}/matchup-weeks`, { headers: authHeaders() }),
@@ -575,7 +1372,11 @@ describe("M6-12 isolated matchup HTTP contract", () => {
       fetch(`${base}/matchup-weeks/${WEEK_ID}/matchups/${MATCHUP_ID}`, { headers: authHeaders() }),
       fetch(`${base}/standings`, { headers: authHeaders() }),
       fetch(`${base}/matchup-schedules`, {
-        method: "POST", headers: writeHeaders(), body: JSON.stringify({ confirmed: false }),
+        method: "POST",
+        headers: writeHeaders(),
+        body: JSON.stringify(
+          matchupScheduleInput(false)
+        ),
       }),
       fetch(`${base}/matchup-weeks/${WEEK_ID}`, {
         method: "PATCH", headers: writeHeaders(), body: JSON.stringify({ confirmed: false }),
@@ -588,6 +1389,15 @@ describe("M6-12 isolated matchup HTTP contract", () => {
       }),
     ]);
     assert.deepEqual(responses.map(({ status }) => status), Array(9).fill(200));
+    assert.equal(
+      responses.every(
+        (response) =>
+          response.headers.get("cache-control") ===
+          "no-store"
+      ),
+      true
+    );
+    assert.deepEqual(auditCalls, []);
     assert.equal(calls.length, 9);
     assert.deepEqual(
       calls.map(({ method }) => method).sort(),
@@ -606,6 +1416,21 @@ describe("M6-12 isolated matchup HTTP contract", () => {
     const correction = calls.find(({ method }) => method === "correctResult").input;
     assert.equal(correction.resultId, RESULT_ID);
     assert.deepEqual(correction.input, { confirmed: false });
+    const scheduleRequest = calls.find(
+      ({ method }) => method === "generateSchedule"
+    ).input;
+    assert.deepEqual(
+      scheduleRequest.input,
+      matchupScheduleInput(false)
+    );
+    assert.equal(
+      scheduleRequest.expectedVersion,
+      null
+    );
+    assert.equal(
+      scheduleRequest.idempotencyKey,
+      undefined
+    );
   });
 
   test("blocks unauthenticated reads and writes without CSRF before service access", async (t) => {
@@ -625,8 +1450,17 @@ describe("M6-12 isolated matchup HTTP contract", () => {
 
   test("passes version and idempotency preconditions and rejects malformed If-Match", async (t) => {
     const calls = [];
-    const baseUrl = await startApi(t, serviceStub(calls));
+    const auditCalls = [];
+    const baseUrl = await startApi(
+      t,
+      serviceStub(calls),
+      [],
+      auditCalls
+    );
     const url = `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/seasons/${SEASON_ID}/matchup-weeks/${WEEK_ID}`;
+    const correctionUrl =
+      `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/seasons/${SEASON_ID}` +
+      `/matchup-results/${RESULT_ID}/corrections`;
     const valid = await fetch(url, {
       method: "PATCH",
       headers: writeHeaders({ "if-match": '"4"', "idempotency-key": OPERATION_ID }),
@@ -637,25 +1471,599 @@ describe("M6-12 isolated matchup HTTP contract", () => {
       headers: writeHeaders({ "if-match": "4" }),
       body: JSON.stringify({ confirmed: true }),
     });
+    const correction = await fetch(correctionUrl, {
+      method: "POST",
+      headers: writeHeaders({
+        "if-match": '"3"',
+        "idempotency-key": "opaque-correction-key",
+        origin: "https://app.example.test",
+      }),
+      body: JSON.stringify({
+        confirmed: true,
+        homeScoreHundredths: 500,
+        awayScoreHundredths: 400,
+      }),
+    });
     assert.equal(valid.status, 200);
     assert.equal(invalid.status, 400);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].input.expectedVersion, 4);
-    assert.equal(calls[0].input.idempotencyKey, OPERATION_ID);
+    assert.equal(correction.status, 200);
+    assert.equal(calls.length, 2);
+    const transition = calls.find(
+      ({ method }) => method === "transitionWeek"
+    );
+    assert.equal(
+      transition.input.expectedVersion,
+      4
+    );
+    assert.equal(
+      transition.input.idempotencyKey,
+      OPERATION_ID
+    );
+    const correctionCall = calls.find(
+      ({ method }) => method === "correctResult"
+    );
+    assert.equal(
+      correctionCall.input.expectedVersion,
+      3
+    );
+    assert.equal(
+      correctionCall.input.idempotencyKey,
+      "opaque-correction-key"
+    );
+    assert.deepEqual(
+      correctionCall.input.auditContext,
+      {
+        clientMetadataJson:
+          '{"networkSourceCategory":"unknown","origin":"https://app.example.test"}',
+        networkKeyVersion: 7,
+        networkMetadataDigest: "b".repeat(64),
+        requestCorrelationId: "m6-12-request",
+      }
+    );
+    assert.deepEqual(
+      auditCalls,
+      ["network\u0000127.0.0.1"]
+    );
+  });
+
+  test("returns and replays the raw ten-field Week 1 shift result with status 200", async (t) => {
+    const fixture =
+      actualShiftFixture("replay");
+    const baseUrl = await startApi(
+      t,
+      fixture.service
+    );
+    const url =
+      `${baseUrl}/api/v1/leagues/${LEAGUE_ID}` +
+      `/seasons/${SEASON_ID}` +
+      `/matchup-weeks/${WEEK_ID}`;
+    const options = {
+      method: "PATCH",
+      headers: writeHeaders({
+        "if-match": '"4"',
+        "idempotency-key":
+          "opaque-http-shift-key",
+      }),
+      body: JSON.stringify(fixture.input),
+    };
+    const first = await fetch(url, options);
+    const firstBody = await first.json();
+    const second = await fetch(url, options);
+    const secondBody = await second.json();
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.deepEqual(
+      firstBody.data,
+      matchupShiftResult()
+    );
+    assert.deepEqual(
+      secondBody.data,
+      firstBody.data
+    );
+    assert.deepEqual(
+      Object.keys(firstBody.data).sort(),
+      [
+        "firstWeekStartsAtMs",
+        "lastWeekEndsAtMs",
+        "operationId",
+        "previousFirstWeekStartsAtMs",
+        "replacedJobOccurrenceCount",
+        "seasonId",
+        "seasonVersion",
+        "shiftedWeekCount",
+        "weekId",
+        "weekVersion",
+      ]
+    );
+    assert.equal(
+      Object.hasOwn(firstBody.data, "code"),
+      false
+    );
+    assert.equal(
+      Object.hasOwn(firstBody.data, "result"),
+      false
+    );
+    assert.deepEqual(fixture.calls, [
+      "transaction",
+      "authorize",
+      "findIdempotency",
+      "findCommandResult",
+      "transaction",
+      "authorize",
+      "findIdempotency",
+      "findCommandResult",
+    ]);
+  });
+
+  test("rejects missing or malformed Week 1 shift headers and bodies before command work", async (t) => {
+    const fixture =
+      actualShiftFixture("replay");
+    const baseUrl = await startApi(
+      t,
+      fixture.service
+    );
+    const url =
+      `${baseUrl}/api/v1/leagues/${LEAGUE_ID}` +
+      `/seasons/${SEASON_ID}` +
+      `/matchup-weeks/${WEEK_ID}`;
+    const requests = [
+      {
+        headers: writeHeaders({
+          "idempotency-key":
+            "opaque-http-shift-key",
+        }),
+        body: fixture.input,
+      },
+      {
+        headers: writeHeaders({
+          "if-match": "4",
+          "idempotency-key":
+            "opaque-http-shift-key",
+        }),
+        body: fixture.input,
+      },
+      {
+        headers: writeHeaders({
+          "if-match": '"4"',
+        }),
+        body: fixture.input,
+      },
+      {
+        headers: writeHeaders({
+          "if-match": '"4"',
+          "idempotency-key": " ",
+        }),
+        body: fixture.input,
+      },
+      {
+        headers: writeHeaders({
+          "if-match": '"4"',
+          "idempotency-key":
+            "opaque-http-shift-key",
+        }),
+        body: {
+          action: "shift_week_one",
+          firstWeekStartsAtMs:
+            fixture.input
+              .firstWeekStartsAtMs,
+        },
+      },
+      {
+        headers: writeHeaders({
+          "if-match": '"4"',
+          "idempotency-key":
+            "opaque-http-shift-key",
+        }),
+        body: {
+          ...fixture.input,
+          extra: true,
+        },
+      },
+    ];
+    for (const request of requests) {
+      const response = await fetch(url, {
+        method: "PATCH",
+        headers: request.headers,
+        body: JSON.stringify(request.body),
+      });
+      const responseBody =
+        await response.json();
+      assert.equal(response.status, 400);
+      assert.equal(
+        responseBody.error.code,
+        "MATCHUP_INPUT_INVALID"
+      );
+    }
+    assert.deepEqual(fixture.calls, []);
+  });
+
+  test("maps Week 1 shift validation, authority, missing, frozen, conflict, and stale failures safely", async (t) => {
+    const cases = [
+      [
+        "MATCHUP_SCHEDULE_COMMAND_INPUT_INVALID",
+        400,
+        "MATCHUP_INPUT_INVALID",
+      ],
+      [
+        "LEAGUE_COMMISSIONER_REQUIRED",
+        403,
+        "MATCHUP_AUTHORITY_DENIED",
+      ],
+      [
+        "MATCHUP_SCHEDULE_WEEK_MISSING",
+        404,
+        "MATCHUP_NOT_FOUND",
+      ],
+      [
+        "FAD_WEEK_ONE_FROZEN",
+        409,
+        "FAD_WEEK_ONE_FROZEN",
+      ],
+      [
+        "MATCHUP_SCHEDULE_WEEK_INVALID",
+        409,
+        "MATCHUP_CONFLICT",
+      ],
+      [
+        "MATCHUP_SCHEDULE_PRECONDITION_FAILED",
+        412,
+        "MATCHUP_PRECONDITION_FAILED",
+      ],
+    ];
+    for (const [
+      privateCode,
+      status,
+      publicCode,
+    ] of cases) {
+      const error = new Error(
+        "private Week 1 shift detail"
+      );
+      error.code = privateCode;
+      const baseUrl = await startApi(
+        t,
+        serviceStub([], {
+          transitionWeek() {
+            throw error;
+          },
+        })
+      );
+      const response = await fetch(
+        `${baseUrl}/api/v1/leagues/${LEAGUE_ID}` +
+          `/seasons/${SEASON_ID}` +
+          `/matchup-weeks/${WEEK_ID}`,
+        {
+          method: "PATCH",
+          headers: writeHeaders({
+            "if-match": '"4"',
+            "idempotency-key":
+              "opaque-http-shift-key",
+          }),
+          body: JSON.stringify(
+            matchupShiftInput()
+          ),
+        }
+      );
+      const body = await response.json();
+      assert.equal(
+        response.status,
+        status,
+        privateCode
+      );
+      assert.equal(
+        body.error.code,
+        publicCode,
+        privateCode
+      );
+      assert.equal(
+        JSON.stringify(body).includes(
+          "private Week 1 shift detail"
+        ),
+        false
+      );
+      if (
+        privateCode ===
+        "FAD_WEEK_ONE_FROZEN"
+      ) {
+        assert.equal(
+          body.error.message,
+          "Week 1 is frozen after Candidate Card opening."
+        );
+      }
+    }
+
+    const frozen =
+      actualShiftFixture("frozen");
+    const baseUrl = await startApi(
+      t,
+      frozen.service
+    );
+    const response = await fetch(
+      `${baseUrl}/api/v1/leagues/${LEAGUE_ID}` +
+        `/seasons/${SEASON_ID}` +
+        `/matchup-weeks/${WEEK_ID}`,
+      {
+        method: "PATCH",
+        headers: writeHeaders({
+          "if-match": '"4"',
+          "idempotency-key":
+            "opaque-http-shift-key",
+        }),
+        body: JSON.stringify(frozen.input),
+      }
+    );
+    const body = await response.json();
+    assert.equal(response.status, 409);
+    assert.equal(
+      body.error.code,
+      "FAD_WEEK_ONE_FROZEN"
+    );
+    assert.deepEqual(frozen.calls, [
+      "transaction",
+      "authorize",
+      "findIdempotency",
+      "clock",
+      "readShiftContext",
+    ]);
+  });
+
+  test("returns 201 for a confirmed schedule and preserves its opaque idempotency key", async (t) => {
+    const calls = [];
+    const baseUrl = await startApi(
+      t,
+      serviceStub(calls, {
+        generateSchedule(input) {
+          calls.push({
+            method: "generateSchedule",
+            input,
+          });
+          return {
+            code: "MATCHUP_SCHEDULE_GENERATED",
+            result: matchupScheduleResult(),
+          };
+        },
+      })
+    );
+    const response = await fetch(
+      `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/seasons/${SEASON_ID}/matchup-schedules`,
+      {
+        method: "POST",
+        headers: writeHeaders({
+          "if-match": '"3"',
+          "idempotency-key":
+            "opaque-matchup-schedule-key",
+        }),
+        body: JSON.stringify(
+          matchupScheduleInput(true)
+        ),
+      }
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 201);
+    assert.equal(
+      body.data.code,
+      "MATCHUP_SCHEDULE_GENERATED"
+    );
+    assert.deepEqual(
+      body.data.result,
+      matchupScheduleResult()
+    );
+    assert.equal(
+      calls[0].input.expectedVersion,
+      3
+    );
+    assert.equal(
+      calls[0].input.idempotencyKey,
+      "opaque-matchup-schedule-key"
+    );
+  });
+
+  test("requires valid confirmed-schedule If-Match and Idempotency-Key headers before command work", async (t) => {
+    const fixture =
+      actualConfirmedScheduleFixture("replay");
+    const baseUrl = await startApi(
+      t,
+      fixture.service
+    );
+    const url =
+      `${baseUrl}/api/v1/leagues/${LEAGUE_ID}` +
+      `/seasons/${SEASON_ID}/matchup-schedules`;
+    const requests = [
+      writeHeaders({
+        "idempotency-key":
+          "opaque-http-schedule-key",
+      }),
+      writeHeaders({
+        "if-match": "3",
+        "idempotency-key":
+          "opaque-http-schedule-key",
+      }),
+      writeHeaders({
+        "if-match": '"3"',
+      }),
+      writeHeaders({
+        "if-match": '"3"',
+        "idempotency-key": "x".repeat(129),
+      }),
+    ];
+    const responses = [];
+    for (const headers of requests) {
+      responses.push(
+        await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(
+            matchupScheduleInput(true)
+          ),
+        })
+      );
+    }
+    assert.deepEqual(
+      responses.map(({ status }) => status),
+      [400, 400, 400, 400]
+    );
+    assert.deepEqual(fixture.calls, []);
+  });
+
+  test("replays the immutable confirmed-schedule response over HTTP without clock or identifier work", async (t) => {
+    const fixture =
+      actualConfirmedScheduleFixture("replay");
+    const baseUrl = await startApi(
+      t,
+      fixture.service
+    );
+    const url =
+      `${baseUrl}/api/v1/leagues/${LEAGUE_ID}` +
+      `/seasons/${SEASON_ID}/matchup-schedules`;
+    const options = {
+      method: "POST",
+      headers: writeHeaders({
+        "if-match": '"3"',
+        "idempotency-key":
+          "opaque-http-schedule-key",
+      }),
+      body: JSON.stringify(
+        matchupScheduleInput(true)
+      ),
+    };
+    const first = await fetch(url, options);
+    const firstBody = await first.json();
+    const second = await fetch(url, options);
+    const secondBody = await second.json();
+
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 201);
+    assert.deepEqual(
+      firstBody.data,
+      secondBody.data
+    );
+    assert.deepEqual(firstBody.data, {
+      code: "MATCHUP_SCHEDULE_GENERATED",
+      result: matchupScheduleResult(),
+    });
+    assert.deepEqual(fixture.calls, [
+      "transaction",
+      "authorize",
+      "findIdempotency",
+      "findCommandResult",
+      "transaction",
+      "authorize",
+      "findIdempotency",
+      "findCommandResult",
+    ]);
+  });
+
+  test("maps actual confirmed-schedule authority, context, idempotency, and precondition failures", async (t) => {
+    const cases = [
+      [
+        "denied",
+        403,
+        "MATCHUP_AUTHORITY_DENIED",
+      ],
+      ["missing", 404, "MATCHUP_NOT_FOUND"],
+      [
+        "incomplete",
+        409,
+        "IDEMPOTENCY_REQUEST_UNAVAILABLE",
+      ],
+      [
+        "stale",
+        412,
+        "MATCHUP_PRECONDITION_FAILED",
+      ],
+    ];
+    for (const [mode, status, publicCode] of cases) {
+      const fixture =
+        actualConfirmedScheduleFixture(mode);
+      const baseUrl = await startApi(
+        t,
+        fixture.service
+      );
+      const response = await fetch(
+        `${baseUrl}/api/v1/leagues/${LEAGUE_ID}` +
+          `/seasons/${SEASON_ID}/matchup-schedules`,
+        {
+          method: "POST",
+          headers: writeHeaders({
+            "if-match": '"3"',
+            "idempotency-key":
+              "opaque-http-schedule-key",
+          }),
+          body: JSON.stringify(
+            matchupScheduleInput(true)
+          ),
+        }
+      );
+      const body = await response.json();
+      assert.equal(response.status, status, mode);
+      assert.equal(
+        body.error.code,
+        publicCode,
+        mode
+      );
+      assert.equal(
+        JSON.stringify(body).includes("private"),
+        false,
+        mode
+      );
+    }
   });
 
   test("maps validation, authority, missing, stale, conflict, and internal failures safely", async (t) => {
     const cases = [
       ["MATCHUP_INTEGRATION_INPUT_INVALID", 400, "MATCHUP_INPUT_INVALID"],
+      [
+        "MATCHUP_SCHEDULE_CALENDAR_INVALID",
+        400,
+        "MATCHUP_INPUT_INVALID",
+      ],
+      [
+        "MATCHUP_RESULT_CORRECTION_INPUT_INVALID",
+        400,
+        "MATCHUP_INPUT_INVALID",
+        "body_invalid",
+      ],
       ["LEAGUE_COMMISSIONER_REQUIRED", 403, "MATCHUP_AUTHORITY_DENIED"],
       ["MATCHUP_INTEGRATION_MATCHUP_MISSING", 404, "MATCHUP_NOT_FOUND"],
+      ["MATCHUP_RESULT_CORRECTION_NOT_FOUND", 404, "MATCHUP_NOT_FOUND"],
       ["MATCHUP_INTEGRATION_VERSION_CONFLICT", 412, "MATCHUP_PRECONDITION_FAILED"],
+      [
+        "MATCHUP_SCHEDULE_PRECONDITION_FAILED",
+        412,
+        "MATCHUP_PRECONDITION_FAILED",
+      ],
+      ["MATCHUP_RESULT_CORRECTION_PRECONDITION_FAILED", 412, "MATCHUP_PRECONDITION_FAILED"],
+      ["REPOSITORY_VERSION_CONFLICT", 412, "MATCHUP_PRECONDITION_FAILED"],
+      ["IDEMPOTENCY_KEY_REUSED", 409, "IDEMPOTENCY_KEY_REUSED"],
+      [
+        "IDEMPOTENCY_REQUEST_UNAVAILABLE",
+        409,
+        "IDEMPOTENCY_REQUEST_UNAVAILABLE",
+      ],
+      [
+        "MATCHUP_RESULT_CORRECTION_STATE_INVALID",
+        409,
+        "MATCHUP_CONFLICT",
+        "season_state_invalid",
+      ],
+      [
+        "MATCHUP_SCHEDULE_CALENDAR_CONFLICT",
+        409,
+        "MATCHUP_CONFLICT",
+      ],
       ["MATCHUP_WEEK_STATE_INVALID", 409, "MATCHUP_CONFLICT"],
       ["REPOSITORY_OPERATION_FAILED", 500, "MATCHUP_FAILED"],
     ];
-    for (const [errorCode, status, publicCode] of cases) {
+    for (const [
+      errorCode,
+      status,
+      publicCode,
+      reasonCode,
+    ] of cases) {
       const error = new Error("private database detail");
       error.code = errorCode;
+      if (reasonCode) error.reasonCode = reasonCode;
       const baseUrl = await startApi(t, serviceStub([], {
         listWeeks() { throw error; },
       }));
@@ -668,6 +2076,30 @@ describe("M6-12 isolated matchup HTTP contract", () => {
       assert.equal(body.error.code, publicCode, errorCode);
       assert.equal(JSON.stringify(body).includes("private database detail"), false);
     }
+  });
+
+  test("maps a finalized standings rebuild to a safe conflict on the rebuild route", async (t) => {
+    const error = new Error("private canonical standings detail");
+    error.code = "MATCHUP_RECOVERY_STATE_INVALID";
+    const baseUrl = await startApi(t, serviceStub([], {
+      rebuildStandings() { throw error; },
+    }));
+    const response = await fetch(
+      `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/seasons/${SEASON_ID}/standings/rebuilds`,
+      {
+        method: "POST",
+        headers: writeHeaders(),
+        body: JSON.stringify({ confirmed: false }),
+      }
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.equal(body.error.code, "MATCHUP_CONFLICT");
+    assert.equal(
+      JSON.stringify(body).includes("private canonical standings detail"),
+      false
+    );
   });
 
   test("validates the isolated If-Match parser", () => {

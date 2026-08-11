@@ -52,8 +52,10 @@ function createSqliteAuctionRepository({ database } = {}) {
   let findOwnership;
   let findReleasedRights;
   let findActiveAuction;
+  let findFadAllocationQuarantine;
   let insertIdempotency;
   let insertAuction;
+  let insertAuctionContext;
   let insertBid;
   let insertEvent;
   let completeIdempotency;
@@ -84,7 +86,14 @@ function createSqliteAuctionRepository({ database } = {}) {
         league_memberships.permission_category AS membership_permission,
         league_memberships.status AS membership_status,
         team_manager_assignments.status AS assignment_status,
-        team_manager_assignments.ended_at_ms AS assignment_ended_at_ms
+        team_manager_assignments.ended_at_ms AS assignment_ended_at_ms,
+        CASE WHEN EXISTS (
+          SELECT 1
+          FROM platform_roles
+          WHERE platform_roles.user_id = @actorUserId
+            AND platform_roles.role = 'platform_administrator'
+            AND platform_roles.status = 'active'
+        ) THEN 1 ELSE 0 END AS is_platform_administrator
       FROM leagues
       JOIN seasons
         ON seasons.league_id = leagues.id
@@ -156,6 +165,83 @@ function createSqliteAuctionRepository({ database } = {}) {
         AND status IN ('open', 'resolving')
       LIMIT 2
     `);
+    findFadAllocationQuarantine = database.prepare(`
+      SELECT 1 AS fad_allocation_quarantined
+      FROM free_agent_draft_player_allocations AS allocation
+      WHERE allocation.league_id = @leagueId
+        AND allocation.season_id = @seasonId
+        AND allocation.player_id = @playerId
+        AND allocation.status IN (
+          'pending',
+          'restricted_scheduled',
+          'restricted_active',
+          'restricted_fallback_open',
+          'correction_required'
+        )
+      UNION ALL
+      SELECT 1 AS fad_allocation_quarantined
+      FROM free_agent_draft_recoveries AS recovery
+      WHERE recovery.league_id = @leagueId
+        AND recovery.season_id = @seasonId
+        AND recovery.player_id = @playerId
+        AND recovery.status IN (
+          'pending',
+          'ready',
+          'running',
+          'correction_required'
+        )
+      UNION ALL
+      SELECT 1 AS fad_allocation_quarantined
+      FROM free_agent_draft_nomination_queue AS nomination
+      WHERE nomination.league_id = @leagueId
+        AND nomination.season_id = @seasonId
+        AND nomination.player_id = @playerId
+        AND nomination.status = 'queued'
+      UNION ALL
+      SELECT 1 AS fad_allocation_quarantined
+      FROM auctions AS fad_auction
+      JOIN auction_contexts AS context
+        ON context.league_id = fad_auction.league_id
+       AND context.season_id = fad_auction.season_id
+       AND context.auction_id = fad_auction.id
+       AND context.source_kind IN ('fad_open_rapid', 'fad_restricted')
+      WHERE fad_auction.league_id = @leagueId
+        AND fad_auction.season_id = @seasonId
+        AND fad_auction.player_id = @playerId
+        AND (
+          fad_auction.status IN ('open', 'resolving', 'failed')
+          OR EXISTS (
+            SELECT 1
+            FROM free_agent_draft_recoveries AS auction_recovery
+            WHERE auction_recovery.league_id = fad_auction.league_id
+              AND auction_recovery.season_id = fad_auction.season_id
+              AND auction_recovery.auction_id = fad_auction.id
+              AND auction_recovery.status IN (
+                'pending',
+                'ready',
+                'running',
+                'correction_required'
+              )
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM free_agent_draft_rollovers AS rollover
+            WHERE rollover.league_id = context.league_id
+              AND rollover.season_id = context.season_id
+              AND rollover.id = context.fad_rollover_id
+              AND rollover.status = 'recovery_required'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM free_agent_draft_recoveries AS resolved_recovery
+                WHERE resolved_recovery.league_id = rollover.league_id
+                  AND resolved_recovery.season_id = rollover.season_id
+                  AND resolved_recovery.rollover_id = rollover.id
+                  AND resolved_recovery.status = 'resolved'
+              )
+          )
+        )
+      LIMIT 1
+    `);
     insertIdempotency = database.prepare(`
       INSERT INTO idempotency_requests (
         id, league_id, actor_user_id, operation, client_key,
@@ -176,6 +262,15 @@ function createSqliteAuctionRepository({ database } = {}) {
         @auctionId, @leagueId, @seasonId, @playerId, 'open',
         @occurredAtMs, @bidClosesAtMs, @actorUserId,
         @occurredAtMs, @occurredAtMs, 1
+      )
+    `);
+    insertAuctionContext = database.prepare(`
+      INSERT INTO auction_contexts (
+        id, league_id, season_id, auction_id, source_kind,
+        fad_id, fad_rollover_id, fad_allocation_id, created_at_ms
+      ) VALUES (
+        @auctionId, @leagueId, @seasonId, @auctionId, 'ordinary_weekly',
+        NULL, NULL, NULL, @occurredAtMs
       )
     `);
     insertBid = database.prepare(`
@@ -235,6 +330,15 @@ function createSqliteAuctionRepository({ database } = {}) {
         auction_events.id AS event_id,
         auction_events.occurred_at_ms AS event_occurred_at_ms
       FROM auctions
+      JOIN auction_contexts
+        ON auction_contexts.league_id = auctions.league_id
+       AND auction_contexts.season_id = auctions.season_id
+       AND auction_contexts.auction_id = auctions.id
+       AND auction_contexts.source_kind = 'ordinary_weekly'
+       AND auction_contexts.fad_id IS NULL
+       AND auction_contexts.fad_rollover_id IS NULL
+       AND auction_contexts.fad_allocation_id IS NULL
+       AND auction_contexts.created_at_ms = auctions.created_at_ms
       JOIN auction_bids
         ON auction_bids.league_id = auctions.league_id
        AND auction_bids.auction_id = auctions.id
@@ -361,6 +465,8 @@ function createSqliteAuctionRepository({ database } = {}) {
         command,
         "A player has multiple active league auctions."
       );
+      const fadAllocationQuarantine =
+        findFadAllocationQuarantine.get(command);
       const player = basePlayer
         ? {
             ...basePlayer,
@@ -369,12 +475,15 @@ function createSqliteAuctionRepository({ database } = {}) {
             released_rights_excluded:
               findReleasedRights.get(command)?.released_rights_excluded || 0,
             active_auction_id: activeAuction?.active_auction_id || null,
+            fad_allocation_quarantined:
+              fadAllocationQuarantine?.fad_allocation_quarantined || 0,
           }
         : null;
       assertAuctionStartState({ command, authority, player, window });
 
       insertIdempotency.run({ ...command, requestHash });
       insertAuction.run({ ...command, bidClosesAtMs: window.bidClosesAtMs });
+      insertAuctionContext.run(command);
       insertBid.run(command);
       insertEvent.run({
         ...command,

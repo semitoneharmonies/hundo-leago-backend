@@ -74,6 +74,8 @@ const IDS = Object.freeze({
   managerMembership: uuid(40),
   commissionerMembership: uuid(41),
   otherMembership: uuid(42),
+  platformMembership: uuid(43),
+  platformRole: uuid(44),
   assignment: uuid(50),
   player1: uuid(60),
   player2: uuid(61),
@@ -258,6 +260,28 @@ function createRuntime(t) {
     updated_at_ms: NOW_MS - 1000,
     version: 1,
   });
+  repositories.league_memberships.insert({
+    id: IDS.platformMembership,
+    league_id: IDS.leagueA,
+    user_id: IDS.otherUser,
+    permission_category: "member",
+    status: "active",
+    joined_at_ms: NOW_MS - 1000,
+    ended_at_ms: null,
+    created_at_ms: NOW_MS - 1000,
+    updated_at_ms: NOW_MS - 1000,
+    version: 1,
+  });
+  repositories.platform_roles.insert({
+    id: IDS.platformRole,
+    user_id: IDS.otherUser,
+    role: "platform_administrator",
+    status: "active",
+    granted_by_user_id: null,
+    granted_at_ms: NOW_MS - 1000,
+    ended_at_ms: null,
+    version: 1,
+  });
   repositories.leagues.updateVersioned({
     key: IDS.leagueA,
     expectedVersion: 2,
@@ -319,6 +343,148 @@ function command(overrides = {}) {
     idempotencyExpiresAtMs: IDEMPOTENCY_EXPIRY_MS,
     ...overrides,
   };
+}
+
+function disableFixtureGuards(database, tableName) {
+  for (const { name } of database.prepare(`
+    SELECT name
+    FROM sqlite_schema
+    WHERE type = 'trigger'
+      AND tbl_name = ?
+    ORDER BY name
+  `).all(tableName)) {
+    database.exec(`DROP TRIGGER "${name}"`);
+  }
+  database.pragma("foreign_keys = OFF");
+}
+
+function finishFixtureSeed(database) {
+  database.pragma("foreign_keys = ON");
+}
+
+function seedAllocationQuarantine(database, status) {
+  disableFixtureGuards(database, "free_agent_draft_player_allocations");
+  const restricted = [
+    "restricted_scheduled",
+    "restricted_active",
+    "restricted_fallback_open",
+  ].includes(status);
+  const fallback = status === "restricted_fallback_open";
+  database.prepare(`
+    INSERT INTO free_agent_draft_player_allocations (
+      id, league_id, season_id, fad_id, player_id, status,
+      decision_code, winning_snapshot_entry_id, winning_team_id,
+      contract_id, ownership_id, restricted_auction_id,
+      fallback_open_auction_id, restricted_minimum_total_cents,
+      restricted_minimum_term_years, restricted_minimum_aav_cents,
+      accounted_at_ms, last_error_code, created_at_ms, updated_at_ms,
+      version
+    ) VALUES (
+      @id, @leagueId, @seasonId, @fadId, @playerId, @status,
+      @decisionCode, NULL, NULL,
+      NULL, NULL, @restrictedAuctionId,
+      @fallbackAuctionId, @minimumTotalCents,
+      @minimumTermYears, @minimumAavCents,
+      @accountedAtMs, @lastErrorCode, @createdAtMs, @updatedAtMs,
+      1
+    )
+  `).run({
+    id: uuid(300),
+    leagueId: IDS.leagueA,
+    seasonId: IDS.seasonA,
+    fadId: uuid(301),
+    playerId: IDS.player1,
+    status,
+    decisionCode: fallback
+      ? "restricted_no_improvement_fallback"
+      : restricted
+        ? "exact_total_and_term_tie"
+        : null,
+    restrictedAuctionId: restricted ? uuid(302) : null,
+    fallbackAuctionId: fallback ? uuid(303) : null,
+    minimumTotalCents: restricted ? 600 : null,
+    minimumTermYears: restricted ? 2 : null,
+    minimumAavCents: restricted ? 300 : null,
+    accountedAtMs: status === "pending" ? null : NOW_MS - 500,
+    lastErrorCode:
+      status === "correction_required" ? "ALLOCATION_RETRY_REQUIRED" : null,
+    createdAtMs: NOW_MS - 1000,
+    updatedAtMs: NOW_MS - 500,
+  });
+  finishFixtureSeed(database);
+}
+
+function seedRecoveryQuarantine(database) {
+  disableFixtureGuards(database, "free_agent_draft_recoveries");
+  database.prepare(`
+    INSERT INTO free_agent_draft_recoveries (
+      id, league_id, season_id, fad_id, player_id, allocation_id,
+      job_run_id, kind, status, earliest_activation_at_ms,
+      target_resolution_at_ms, last_error_code, commissioner_reason,
+      created_by_operation_id, resolved_by_user_id,
+      resolved_by_membership_id, resolved_authority, created_at_ms,
+      updated_at_ms, resolved_at_ms, version
+    ) VALUES (
+      @id, @leagueId, @seasonId, @fadId, @playerId, @allocationId,
+      @jobRunId, 'allocation_retry', 'correction_required', NULL,
+      NULL, 'ALLOCATION_RETRY_REQUIRED', NULL,
+      @jobRunId, NULL,
+      NULL, NULL, @createdAtMs,
+      @updatedAtMs, NULL, 1
+    )
+  `).run({
+    id: uuid(310),
+    leagueId: IDS.leagueA,
+    seasonId: IDS.seasonA,
+    fadId: uuid(311),
+    playerId: IDS.player1,
+    allocationId: uuid(312),
+    jobRunId: uuid(313),
+    createdAtMs: NOW_MS - 1000,
+    updatedAtMs: NOW_MS - 500,
+  });
+  finishFixtureSeed(database);
+}
+
+function seedPrivateNominationQuarantine(database) {
+  disableFixtureGuards(database, "free_agent_draft_nomination_queue");
+  database.prepare(`
+    INSERT INTO free_agent_draft_nomination_queue (
+      id, league_id, season_id, fad_id, team_id, player_id,
+      source_rollover_id, target_opening_rollover_id,
+      resolution_rollover_id, opening_total_value_cents,
+      opening_term_years, opening_aav_cents,
+      binding_illegality_confirmed, binding_confirmed_at_ms,
+      submitted_by_user_id, submitted_by_membership_id, accepted_at_ms,
+      candidate_card_version_observed, team_version_observed, status,
+      opened_auction_id, opened_starter_bid_id, opened_at_ms,
+      terminal_at_ms, validation_code, created_at_ms, updated_at_ms,
+      version
+    ) VALUES (
+      @id, @leagueId, @seasonId, @fadId, @teamId, @playerId,
+      @rolloverId, @rolloverId,
+      NULL, 600,
+      2, 300,
+      1, @acceptedAtMs,
+      @userId, @membershipId, @acceptedAtMs,
+      1, 1, 'queued',
+      NULL, NULL, NULL,
+      NULL, NULL, @acceptedAtMs, @acceptedAtMs,
+      1
+    )
+  `).run({
+    id: uuid(320),
+    leagueId: IDS.leagueA,
+    seasonId: IDS.seasonA,
+    fadId: uuid(321),
+    teamId: IDS.teamA,
+    playerId: IDS.player1,
+    rolloverId: uuid(322),
+    userId: IDS.manager,
+    membershipId: IDS.managerMembership,
+    acceptedAtMs: NOW_MS - 500,
+  });
+  finishFixtureSeed(database);
 }
 
 function assertPolicyError(callback, reasonCode) {
@@ -450,7 +616,7 @@ describe("M5-01 auction persistence foundation", () => {
     assert.equal(connection.database.pragma("user_version", { simple: true }), 9);
   });
 
-  test("creates one auction, opening bid, event, and completed idempotency atomically", (t) => {
+  test("creates one ordinary auction context, opening bid, event, and completed idempotency atomically", (t) => {
     const runtime = createRuntime(t);
     const result = runtime.repository.startAuction(command());
     assert.equal(result.replayed, false);
@@ -472,6 +638,32 @@ describe("M5-01 auction persistence foundation", () => {
     assert.equal(
       runtime.database.prepare("SELECT status FROM idempotency_requests").get().status,
       "completed"
+    );
+    assert.deepEqual(
+      runtime.database.prepare(`
+        SELECT
+          id,
+          league_id,
+          season_id,
+          auction_id,
+          source_kind,
+          fad_id,
+          fad_rollover_id,
+          fad_allocation_id,
+          created_at_ms
+        FROM auction_contexts
+      `).get(),
+      {
+        id: IDS.auction,
+        league_id: IDS.leagueA,
+        season_id: IDS.seasonA,
+        auction_id: IDS.auction,
+        source_kind: "ordinary_weekly",
+        fad_id: null,
+        fad_rollover_id: null,
+        fad_allocation_id: null,
+        created_at_ms: NOW_MS,
+      }
     );
     assert.equal(runtime.database.prepare("SELECT COUNT(*) AS count FROM league_activity").get().count, 0);
     assert.equal(runtime.database.prepare("SELECT COUNT(*) AS count FROM outbox_events").get().count, 0);
@@ -516,6 +708,31 @@ describe("M5-01 auction persistence foundation", () => {
       actorAuthority: "commissioner",
     }));
     assert.equal(commissionerResult.auction.playerId, IDS.player1);
+  });
+
+  test("allows an active member platform administrator to act as commissioner", (t) => {
+    const runtime = createRuntime(t);
+    runtime.context.repositories.leagues.updateVersioned({
+      key: IDS.leagueA,
+      expectedVersion: 3,
+      changes: { status: "frozen", updated_at_ms: NOW_MS + 2 },
+    });
+    const result = runtime.repository.startAuction(command({
+      actorUserId: IDS.otherUser,
+      actorMembershipId: IDS.platformMembership,
+      actorAuthority: "platform_administrator_as_commissioner",
+      idempotencyKey: "m5-01-platform-admin-start",
+    }));
+    assert.equal(result.auction.playerId, IDS.player1);
+    const event = runtime.database.prepare(`
+      SELECT metadata_json
+      FROM auction_events
+      WHERE id = ?
+    `).get(IDS.event);
+    assert.equal(
+      JSON.parse(event.metadata_json).actorAuthority,
+      "platform_administrator_as_commissioner"
+    );
   });
 
   test("rejects closed seasonal and weekly windows without writing", (t) => {
@@ -589,6 +806,38 @@ describe("M5-01 auction persistence foundation", () => {
         entry.reason
       );
       assert.equal(semanticHash(runtime.database), before);
+    }
+  });
+
+  test("rejects every FAD allocation, recovery, and private-queue quarantine without writing", (t) => {
+    const fixtures = [
+      ...[
+        "pending",
+        "restricted_scheduled",
+        "restricted_active",
+        "restricted_fallback_open",
+        "correction_required",
+      ].map((status) => (database) => seedAllocationQuarantine(database, status)),
+      seedRecoveryQuarantine,
+      seedPrivateNominationQuarantine,
+    ];
+    for (const seed of fixtures) {
+      const runtime = createRuntime(t);
+      seed(runtime.database);
+      const before = semanticHash(runtime.database);
+      assertPolicyError(
+        () => runtime.repository.startAuction(command()),
+        AUCTION_CREATION_CODES.fadAllocationQuarantined
+      );
+      assert.equal(semanticHash(runtime.database), before);
+      assert.equal(
+        runtime.database.prepare(`
+          SELECT COUNT(*) AS count
+          FROM idempotency_requests
+          WHERE operation = 'auction.start'
+        `).get().count,
+        0
+      );
     }
   });
 

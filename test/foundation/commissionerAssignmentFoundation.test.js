@@ -70,6 +70,10 @@ const {
 const {
   createSessionCookie,
 } = require("../../src/transport/http/sessionCookie");
+const {
+  assertCanonicalAuthorityPublication,
+  readCanonicalAuthorityPublications,
+} = require("../helpers/canonicalAuthorityPublication");
 
 const ROOT_DIRECTORY = path.resolve(__dirname, "..", "..");
 const MIGRATIONS_DIRECTORY = path.join(
@@ -630,6 +634,28 @@ describe("M3-11 commissioner acceptance and decline", () => {
       accepted.league.commissionerMembershipId,
       accepted.membership.id
     );
+    const publications = readCanonicalAuthorityPublications(
+      runtime.database
+    );
+    assert.equal(publications.length, 2);
+    assertCanonicalAuthorityPublication(publications[0], {
+      leagueId: LEAGUE_ID,
+      eventType: "league.changed",
+      aggregateType: "commissioner_assignment",
+      resourceId: accepted.assignment.id,
+      resourceVersion: accepted.assignment.version,
+      reasonCode: "commissioner_assignment_changed",
+      occurredAtMs: NOW_MS,
+    });
+    assertCanonicalAuthorityPublication(publications[1], {
+      leagueId: LEAGUE_ID,
+      eventType: "league.changed",
+      aggregateType: "league_membership",
+      resourceId: accepted.membership.id,
+      resourceVersion: accepted.membership.version,
+      reasonCode: "membership_changed",
+      occurredAtMs: NOW_MS,
+    });
     const counts = proposalCounts(runtime.database);
     assert.deepEqual(counts, {
       league_memberships: 1,
@@ -647,6 +673,10 @@ describe("M3-11 commissioner acceptance and decline", () => {
     assert.deepEqual(replay, accepted);
     assert.equal(replay.replayed, true);
     assert.deepEqual(proposalCounts(runtime.database), counts);
+    assert.equal(
+      readCanonicalAuthorityPublications(runtime.database).length,
+      2
+    );
     assert.throws(
       () =>
         service.decline({
@@ -673,6 +703,10 @@ describe("M3-11 commissioner acceptance and decline", () => {
     assert.equal(declined.membership.status, "ended");
     assert.equal(declined.membership.joinedAtMs, null);
     assert.equal(declined.league.commissionerMembershipId, null);
+    assert.equal(
+      readCanonicalAuthorityPublications(runtime.database).length,
+      0
+    );
     const membership = runtime.database
       .prepare("SELECT * FROM league_memberships")
       .get();
@@ -811,6 +845,8 @@ describe("M3-11 commissioner acceptance and decline", () => {
         "activateMembership",
         "setLeagueCommissioner",
         "acceptInvitation",
+        "appendMembershipChangedPublication",
+        "appendCommissionerAssignmentChangedPublication",
         "appendAssignmentActivity",
       ],
       decline: [
@@ -825,6 +861,9 @@ describe("M3-11 commissioner acceptance and decline", () => {
         const setupService = createService(runtime);
         const proposed = setupService.propose(proposalCommand());
         const before = proposalCounts(runtime.database);
+        const beforePublications = readCanonicalAuthorityPublications(
+          runtime.database
+        );
         const repository = {
           ...runtime.assignmentRepository,
           [seam]() {
@@ -851,6 +890,10 @@ describe("M3-11 commissioner acceptance and decline", () => {
         assert.equal(aggregate.membership_status, "invited");
         assert.equal(aggregate.commissioner_membership_id, null);
         assert.deepEqual(proposalCounts(runtime.database), before);
+        assert.deepEqual(
+          readCanonicalAuthorityPublications(runtime.database),
+          beforePublications
+        );
       }
     }
 
@@ -858,6 +901,9 @@ describe("M3-11 commissioner acceptance and decline", () => {
       const runtime = createRuntime(t);
       const proposed = createService(runtime).propose(proposalCommand());
       const before = proposalCounts(runtime.database);
+      const beforePublications = readCanonicalAuthorityPublications(
+        runtime.database
+      );
       const service = createService(runtime, {
         auditRepository: {
           append() {
@@ -882,6 +928,10 @@ describe("M3-11 commissioner acceptance and decline", () => {
       assert.equal(aggregate.membership_status, "invited");
       assert.equal(aggregate.commissioner_membership_id, null);
       assert.deepEqual(proposalCounts(runtime.database), before);
+      assert.deepEqual(
+        readCanonicalAuthorityPublications(runtime.database),
+        beforePublications
+      );
     }
   });
 });

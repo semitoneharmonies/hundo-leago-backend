@@ -158,7 +158,10 @@ function ownership(overrides = {}) {
   };
 }
 
-function createRuntime(t) {
+function createRuntime(
+  t,
+  { candidateCardSummerSynchronizer } = {}
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m4-04-"));
   const connection = openDatabase({
     databasePath: path.join(root, "league.sqlite3"),
@@ -183,6 +186,15 @@ function createRuntime(t) {
     database: connection.database,
     repository: createSqliteRosterMovementRepository({
       database: connection.database,
+      candidateCardSummerSynchronizer:
+        candidateCardSummerSynchronizer ?? {
+          synchronize() {
+            return Object.freeze({
+              affectedCardCount: 0,
+              changedCardCount: 0,
+            });
+          },
+        },
     }),
   };
 }
@@ -297,6 +309,44 @@ describe("M4-04 roster movement policy", () => {
 });
 
 describe("M4-04 atomic roster movement repository", () => {
+  test("synchronizes the moved and automatically placed players inside the roster transaction", (t) => {
+    const calls = [];
+    let runtime;
+    runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize(command) {
+          assert.equal(runtime.database.inTransaction, true);
+          calls.push(command);
+          return Object.freeze({
+            affectedCardCount: 0,
+            changedCardCount: 0,
+          });
+        },
+      },
+    });
+    runtime.context.repositories.player_ownerships.insert(ownership());
+    runtime.context.repositories.player_ownerships.insert(
+      ownership({
+        id: IDS.ownership2,
+        player_id: IDS.player2,
+        slot_number: null,
+      })
+    );
+
+    runtime.repository.move(moveInput());
+
+    assert.deepEqual(calls, [
+      {
+        leagueId: IDS.league,
+        affectedTeamIds: [IDS.team],
+        affectedPlayerIds: [IDS.player1, IDS.player2],
+        sourceOperationId: IDS.event1,
+        sourceKind: "roster_movement",
+        nowMs: NOW_MS + 1,
+      },
+    ]);
+  });
+
   test("moves one ownership and appends both required histories atomically", (t) => {
     const runtime = createRuntime(t);
     runtime.context.repositories.player_ownerships.insert(ownership());
@@ -305,6 +355,11 @@ describe("M4-04 atomic roster movement repository", () => {
     assert.equal(result.ownership.id, IDS.ownership1);
     assert.equal(result.ownership.roster_category, "Bench");
     assert.equal(result.ownership.version, 2);
+    assert.deepEqual(
+      result.affectedOwnerships.map(({ id, version }) => ({ id, version })),
+      [{ id: IDS.ownership1, version: 2 }]
+    );
+    assert.equal(Object.isFrozen(result.affectedOwnerships), true);
     assert.equal(result.ownershipEvent.event_type, "roster_category_moved");
     assert.equal(result.activity.event_type, "roster_moved");
     assert.equal(Object.isFrozen(result), true);
@@ -319,6 +374,41 @@ describe("M4-04 atomic roster movement repository", () => {
         .prepare("SELECT COUNT(*) AS count FROM league_activity")
         .get().count,
       1
+    );
+  });
+
+  test("returns every ownership changed by automatic source-slot placement", (t) => {
+    const runtime = createRuntime(t);
+    runtime.context.repositories.player_ownerships.insert(ownership());
+    runtime.context.repositories.player_ownerships.insert(
+      ownership({
+        id: IDS.ownership2,
+        player_id: IDS.player2,
+        slot_number: null,
+      })
+    );
+
+    const result = runtime.repository.move(moveInput());
+
+    assert.deepEqual(
+      result.affectedOwnerships.map((row) => ({
+        id: row.id,
+        slotNumber: row.slot_number,
+        version: row.version,
+      })),
+      [
+        { id: IDS.ownership1, slotNumber: 1, version: 2 },
+        { id: IDS.ownership2, slotNumber: 1, version: 2 },
+      ]
+    );
+    assert.equal(Object.isFrozen(result.affectedOwnerships), true);
+    assert.equal(
+      Object.isFrozen(result.affectedOwnerships[0]),
+      true
+    );
+    assert.equal(
+      Object.isFrozen(result.affectedOwnerships[1]),
+      true
     );
   });
 
@@ -464,6 +554,41 @@ describe("M4-04 atomic roster movement repository", () => {
       });
     assert.equal(current.roster_category, "Active");
     assert.equal(current.version, 1);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM league_activity")
+        .get().count,
+      0
+    );
+  });
+
+  test("rolls back ownership, history, and activity when Candidate synchronization fails", (t) => {
+    const runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize() {
+          throw new Error("injected Candidate synchronization failure");
+        },
+      },
+    });
+    runtime.context.repositories.player_ownerships.insert(ownership());
+
+    assert.throws(
+      () => runtime.repository.move(moveInput()),
+      (error) => error.code === REPOSITORY_ERROR_CODES.operationFailed
+    );
+    assert.equal(
+      runtime.context.repositories.player_ownerships.findByKey({
+        key: IDS.ownership1,
+        leagueId: IDS.league,
+      }).version,
+      1
+    );
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM ownership_events")
+        .get().count,
+      0
+    );
     assert.equal(
       runtime.database
         .prepare("SELECT COUNT(*) AS count FROM league_activity")

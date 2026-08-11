@@ -24,7 +24,18 @@ function freezeRows(rows) {
   return Object.freeze(rows.map(freezeRow));
 }
 
-function createSqliteContractRepository({ database } = {}) {
+function createSqliteContractRepository({
+  database,
+  candidateCardSummerSynchronizer,
+} = {}) {
+  if (
+    !candidateCardSummerSynchronizer ||
+    typeof candidateCardSummerSynchronizer.synchronize !== "function"
+  ) {
+    throw new TypeError(
+      "createSqliteContractRepository requires a Candidate Card summer synchronizer"
+    );
+  }
   const contracts = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("contracts"),
@@ -62,6 +73,14 @@ function createSqliteContractRepository({ database } = {}) {
       const event = freezeRow(
         contractEvents.insert(aggregate.event)
       );
+      candidateCardSummerSynchronizer.synchronize({
+        leagueId: contract.league_id,
+        affectedTeamIds: [contract.current_team_id],
+        affectedPlayerIds: [contract.player_id],
+        sourceOperationId: event.id,
+        sourceKind: "contract_change",
+        nowMs: event.occurred_at_ms,
+      });
       return Object.freeze({ contract, years, event });
     });
   } catch (error) {

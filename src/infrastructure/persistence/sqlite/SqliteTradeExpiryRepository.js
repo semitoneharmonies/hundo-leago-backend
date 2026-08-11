@@ -6,13 +6,17 @@ const {
   validateTradeExpiryCommand,
 } = require("../../../domain/trades/tradeLifecyclePolicy");
 const {
-  createSocketInvalidation,
+  createEmptySocketRelated,
+  createSocketEventMetadata,
 } = require("../../../domain/leagues/socketInvalidation");
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
   repositoryError,
 } = require("./SqliteRepositoryError");
+const {
+  resolveSqliteLeagueOutboxWriter,
+} = require("./SqliteLeagueOutboxWriter");
 const {
   createSqliteRecordRepository,
 } = require("./createSqliteRecordRepository");
@@ -108,9 +112,12 @@ function deterministicUuid(value) {
     `8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-function createSqliteTradeExpiryRepository({ database } = {}) {
+function createSqliteTradeExpiryRepository({
+  database,
+  leagueOutboxWriter,
+} = {}) {
   let activityRepository;
-  let outboxRepository;
+  let outboxWriter;
   let listDueStatement;
   let findTradeStatement;
   let updateTradeStatement;
@@ -125,9 +132,9 @@ function createSqliteTradeExpiryRepository({ database } = {}) {
       database,
       definition: getRepositoryDefinition("league_activity"),
     });
-    outboxRepository = createSqliteRecordRepository({
+    outboxWriter = resolveSqliteLeagueOutboxWriter({
       database,
-      definition: getRepositoryDefinition("outbox_events"),
+      leagueOutboxWriter,
     });
     listDueStatement = database.prepare(`
       SELECT
@@ -368,28 +375,21 @@ function createSqliteTradeExpiryRepository({ database } = {}) {
       }),
       occurred_at_ms: command.occurredAtMs,
     });
-    const payload = createSocketInvalidation({
+    const payload = createSocketEventMetadata({
       eventType: "trade.changed",
-      scope: "league",
-      scopeId: command.leagueId,
       version: command.expectedVersion + 1,
-      changedAtMs: command.occurredAtMs,
+      reasonCode: "trade_changed",
+      occurredAtMs: command.occurredAtMs,
+      related: createEmptySocketRelated(),
     });
-    outboxRepository.insert({
+    outboxWriter.write({
       id: deterministicUuid(`outbox:${command.eventId}:trade.changed`),
-      league_id: command.leagueId,
-      event_type: "trade.changed",
-      aggregate_type: "trade",
-      aggregate_id: command.tradeId,
-      payload_json: JSON.stringify(payload),
-      status: "pending",
-      attempt_count: 0,
-      available_at_ms: command.occurredAtMs,
-      published_at_ms: null,
-      last_error_code: null,
-      created_at_ms: command.occurredAtMs,
-      updated_at_ms: command.occurredAtMs,
-      version: 1,
+      leagueId: command.leagueId,
+      eventType: "trade.changed",
+      aggregateType: "trade",
+      aggregateId: command.tradeId,
+      payload,
+      occurredAtMs: command.occurredAtMs,
     });
     return freeze({
       completed: true,

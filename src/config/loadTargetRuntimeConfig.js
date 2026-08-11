@@ -8,6 +8,17 @@ const DEPLOYED_ENVIRONMENTS = Object.freeze([
   "staging",
   "production",
 ]);
+const SPORTSDATAIO_NHL_LIVE_MODES = Object.freeze([
+  "disabled",
+  "probe",
+  "required",
+]);
+const SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST_RELATIVE_PATH =
+  path.join(
+    "config",
+    "provider-capability",
+    "sportsdataio-live-probe-v1.json"
+  );
 const IDENTITY_PATTERN =
   /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 
@@ -126,6 +137,36 @@ function approvedSportsDataIoOrigin(env) {
   return parsed.toString().replace(/\/$/, "");
 }
 
+function approvedSportsDataIoLiveOrigin(env) {
+  const field = "SPORTSDATAIO_NHL_LIVE_API_ORIGIN";
+  const value = requiredString(env, field);
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    fail(
+      field,
+      "the canonical SportsDataIO HTTPS origin is required"
+    );
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.origin !== "https://api.sportsdata.io" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash ||
+    value !== parsed.origin
+  ) {
+    fail(
+      field,
+      "the canonical SportsDataIO HTTPS origin is required"
+    );
+  }
+  return parsed.origin;
+}
+
 function sportsDataIoNhlImport(env, appEnv) {
   const apiKey = env.SPORTSDATAIO_NHL_API_KEY;
   if (apiKey === undefined || apiKey === null || apiKey === "") {
@@ -172,6 +213,162 @@ function sportsDataIoNhlImport(env, appEnv) {
   return Object.freeze(result);
 }
 
+function isStrictChildPath(parentPath, childPath) {
+  const relative = path.relative(parentPath, childPath);
+  return (
+    relative !== "" &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+function isSupplied(env, field) {
+  return env[field] !== undefined && env[field] !== null;
+}
+
+function positiveCanonicalInteger(env, field) {
+  const value = requiredString(env, field);
+  if (!/^[1-9]\d*$/.test(value)) {
+    fail(field, "a positive canonical decimal integer is required");
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    fail(field, "a safe positive integer is required");
+  }
+  return parsed;
+}
+
+function resolveSportsDataIoLiveProbeManifestPath(backendRoot) {
+  if (typeof backendRoot !== "string" || backendRoot === "") {
+    fail("BACKEND_ROOT", "an application root is required");
+  }
+  return path.join(
+    path.resolve(backendRoot),
+    SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST_RELATIVE_PATH
+  );
+}
+
+function requireConfiguredLiveSecret(
+  security,
+  key,
+  field
+) {
+  const slot = security?.sportsDataIoLive?.[key];
+  if (
+    !slot ||
+    slot.configured !== true ||
+    typeof slot.value !== "string" ||
+    slot.value === ""
+  ) {
+    fail(field, "a dedicated configured secret is required");
+  }
+}
+
+function sportsDataIoLiveNhlConfig({
+  env,
+  appEnv,
+  nhlSeasonKey,
+  persistentRoot,
+  probeManifestPath,
+  security,
+} = {}) {
+  const mode = exactEnum(
+    env,
+    "SPORTSDATAIO_NHL_LIVE_MODE",
+    SPORTSDATAIO_NHL_LIVE_MODES
+  );
+  if (!DEPLOYED_ENVIRONMENTS.includes(appEnv)) {
+    fail(
+      "APP_ENV",
+      "SportsDataIO live NHL configuration is authorized only for deployed environments"
+    );
+  }
+  if (
+    typeof probeManifestPath !== "string" ||
+    !path.isAbsolute(probeManifestPath) ||
+    path.normalize(probeManifestPath) !== probeManifestPath
+  ) {
+    fail(
+      "SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST",
+      "the build-owned probe manifest path is invalid"
+    );
+  }
+  if (
+    isSupplied(
+      env,
+      "SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST"
+    )
+  ) {
+    fail(
+      "SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST",
+      "the build-owned probe manifest is not environment-configurable"
+    );
+  }
+
+  if (mode === "disabled") {
+    for (const field of [
+      "SPORTSDATAIO_NHL_LIVE_API_KEY",
+      "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
+      "SPORTSDATAIO_NHL_LIVE_CAPABILITY_KEY_VERSION",
+      "SPORTSDATAIO_NHL_LIVE_CAPABILITY_ARTIFACT",
+    ]) {
+      if (isSupplied(env, field)) {
+        fail(field, "the value is forbidden while live mode is disabled");
+      }
+    }
+    return Object.freeze({
+      mode,
+      enabled: false,
+      verified: false,
+      probeManifestPath,
+    });
+  }
+
+  requireConfiguredLiveSecret(
+    security,
+    "apiKey",
+    "SPORTSDATAIO_NHL_LIVE_API_KEY"
+  );
+  requireConfiguredLiveSecret(
+    security,
+    "capabilitySecret",
+    "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET"
+  );
+  if (
+    typeof nhlSeasonKey !== "string" ||
+    !/^\d{8}$/.test(nhlSeasonKey)
+  ) {
+    fail(
+      "CURRENT_NHL_SEASON_KEY",
+      "a current eight-digit NHL season key is required"
+    );
+  }
+  const artifactPath = absolutePath(
+    env,
+    "SPORTSDATAIO_NHL_LIVE_CAPABILITY_ARTIFACT"
+  );
+  if (!isStrictChildPath(persistentRoot, artifactPath)) {
+    fail(
+      "SPORTSDATAIO_NHL_LIVE_CAPABILITY_ARTIFACT",
+      "the artifact must be a strict child of PERSISTENT_DATA_ROOT"
+    );
+  }
+  return Object.freeze({
+    mode,
+    enabled: false,
+    verified: false,
+    origin: approvedSportsDataIoLiveOrigin(env),
+    nhlSeasonKey,
+    capabilityKeyVersion: positiveCanonicalInteger(
+      env,
+      "SPORTSDATAIO_NHL_LIVE_CAPABILITY_KEY_VERSION"
+    ),
+    artifactPath,
+    probeManifestPath,
+  });
+}
+
 function loadTargetRuntimeConfig({
   env,
   backendRoot = path.resolve(__dirname, "..", ".."),
@@ -211,6 +408,31 @@ function loadTargetRuntimeConfig({
   }
 
   const sportsDataIoNhl = sportsDataIoNhlImport(env, security.appEnv);
+  const configuredCurrentSeason = currentSeason(env);
+  const probeManifestPath =
+    resolveSportsDataIoLiveProbeManifestPath(backendRoot);
+  const sportsDataIoLiveNhl =
+    sportsDataIoLiveNhlConfig({
+      env,
+      appEnv: security.appEnv,
+      nhlSeasonKey: configuredCurrentSeason.nhlSeasonKey,
+      persistentRoot,
+      probeManifestPath,
+      security,
+    });
+  const freeAgentDraftRoutesEnabled = exactBoolean(
+    env,
+    "FREE_AGENT_DRAFT_ROUTES_ENABLED"
+  );
+  if (
+    freeAgentDraftRoutesEnabled &&
+    sportsDataIoLiveNhl.mode !== "required"
+  ) {
+    fail(
+      "FREE_AGENT_DRAFT_ROUTES_ENABLED",
+      "dedicated Free Agent Draft routes require live provider mode required"
+    );
+  }
   return Object.freeze({
     accountEmailDeliveryEnabled: exactBoolean(
       env,
@@ -218,12 +440,13 @@ function loadTargetRuntimeConfig({
     ),
     appEnv: security.appEnv,
     buildId: security.buildId,
-    currentSeason: currentSeason(env),
+    currentSeason: configuredCurrentSeason,
     databaseId: deployedIdentity(env, "DATABASE_ID"),
     databasePath,
     debugRoutesEnabled: exactBoolean(env, "DEBUG_ROUTES_ENABLED"),
     environmentId: deployedIdentity(env, "APP_ENVIRONMENT_ID"),
     frontendBuildId: deployedIdentity(env, "FRONTEND_BUILD_ID"),
+    freeAgentDraftRoutesEnabled,
     leagueWriteMode: exactEnum(env, "LEAGUE_WRITE_MODE", ["closed", "open"]),
     migrationsDirectory: path.join(
       path.resolve(backendRoot),
@@ -237,6 +460,7 @@ function loadTargetRuntimeConfig({
       "SCHEDULED_JOBS_ENABLED"
     ),
     security,
+    sportsDataIoLiveNhl,
     sportsDataIoNhl,
   });
 }
@@ -244,7 +468,11 @@ function loadTargetRuntimeConfig({
 module.exports = {
   DEPLOYED_ENVIRONMENTS,
   IDENTITY_PATTERN,
+  SPORTSDATAIO_NHL_LIVE_MODES,
+  SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST_RELATIVE_PATH,
   TargetRuntimeConfigError,
   loadTargetRuntimeConfig,
+  resolveSportsDataIoLiveProbeManifestPath,
+  sportsDataIoLiveNhlConfig,
   sportsDataIoNhlImport,
 };

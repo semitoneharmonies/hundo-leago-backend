@@ -35,6 +35,8 @@ const {
   adaptVerifiedSourceBundle,
 } = require("./sourceShapeAdapters");
 
+const REQUIRED_APPLICATION_TABLE_COUNT = 131;
+const REQUIRED_SCHEMA_VERSION = 49;
 const STAGING_VERIFICATION_VERSION = 1;
 const STAGING_VERIFICATION_ERROR_CODES = Object.freeze({
   argumentInvalid: "STAGING_VERIFY_ARGUMENT_INVALID",
@@ -267,6 +269,34 @@ function verifyAllApplicationTableCounts(
   database,
   adapted
 ) {
+  const expectedTableNames = REPOSITORY_CATALOG.map(
+    ({ tableName }) => tableName
+  ).sort();
+  const actualTableNames = database.prepare(
+    "SELECT name FROM sqlite_schema " +
+      "WHERE type = 'table' " +
+      "AND name NOT LIKE 'sqlite_%' " +
+      "AND name <> 'schema_migrations' " +
+      "ORDER BY name ASC"
+  ).all().map(({ name }) => name);
+  if (
+    database.pragma("user_version", {
+      simple: true,
+    }) !== REQUIRED_SCHEMA_VERSION ||
+    expectedTableNames.length !==
+      REQUIRED_APPLICATION_TABLE_COUNT ||
+    actualTableNames.length !==
+      REQUIRED_APPLICATION_TABLE_COUNT ||
+    actualTableNames.some(
+      (tableName, index) =>
+        tableName !== expectedTableNames[index]
+    )
+  ) {
+    fail(
+      STAGING_VERIFICATION_ERROR_CODES.databaseMismatch,
+      "The application schema does not match the approved catalog."
+    );
+  }
   const expectedCounts = new Map(
     Object.entries(adapted.rows).map(([table, rows]) => [
       table,
@@ -305,9 +335,9 @@ function verifyAllApplicationTableCounts(
       },
       {
         metadata_key: "data_model_version",
-        metadata_value: "22",
+        metadata_value: String(REQUIRED_SCHEMA_VERSION),
         created_at_ms: 0,
-        updated_at_ms: 1,
+        updated_at_ms: REQUIRED_SCHEMA_VERSION,
       },
     ],
     STAGING_VERIFICATION_ERROR_CODES.databaseMismatch,
@@ -695,6 +725,8 @@ function verifyStagingImport({
 }
 
 module.exports = {
+  REQUIRED_APPLICATION_TABLE_COUNT,
+  REQUIRED_SCHEMA_VERSION,
   STAGING_VERIFICATION_ERROR_CODES,
   STAGING_VERIFICATION_VERSION,
   StagingImportVerificationError,

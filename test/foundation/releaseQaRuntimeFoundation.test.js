@@ -138,6 +138,10 @@ test("M7 release-QA runtime passes full-stack role, isolation, privacy, health, 
   assert.equal(started.address.host, "127.0.0.1");
   assert.equal(started.schedulerStart.status, "disabled");
   assert.equal(fs.existsSync(started.databasePath), true);
+  assert.equal(
+    started.runtime.database.pragma("user_version", { simple: true }),
+    49
+  );
 
   const report = await verifyReleaseQaRuntime({
     baseUrl: started.baseUrl,
@@ -158,12 +162,13 @@ test("M7 release-QA runtime passes full-stack role, isolation, privacy, health, 
 
   await assert.rejects(
     started.runtime.services.league.statistics.refresh(),
-    { code: "STATISTICS_PROVIDER_FAILED" }
+    { code: "LIVE_STATISTICS_PROVIDER_FAILED" }
   );
   assert.equal(
     started.runtime.database.prepare(`
       SELECT COUNT(*) AS count FROM stat_refreshes
-      WHERE status='failed' AND error_code='STATISTICS_PROVIDER_FAILED'
+      WHERE status='failed'
+        AND error_code='LIVE_STATISTICS_PROVIDER_FAILED'
     `).get().count,
     1
   );

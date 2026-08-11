@@ -18,6 +18,12 @@ const {
   DATABASE_IDENTITY_KEYS,
 } = require("../../src/infrastructure/database/databaseIdentity");
 const {
+  StagingMaintenanceExclusionError,
+  createStagingMaintenanceExclusionGuard,
+} = require(
+  "../../src/application/services/operations/createStagingMaintenanceExclusionGuard"
+);
+const {
   openDatabase,
 } = require("../../src/infrastructure/database/connection");
 const {
@@ -107,6 +113,59 @@ function request(key, reason = "Populate deterministic staging player data.") {
   };
 }
 
+function allowProviderImportExclusion(onAssert = () => undefined) {
+  return Object.freeze({
+    assertExclusion(exclusionName) {
+      assert.equal(
+        exclusionName,
+        "staging_provider_catalog_import"
+      );
+      return onAssert();
+    },
+  });
+}
+
+function maintenanceExclusionFailure() {
+  return new StagingMaintenanceExclusionError(
+    "STAGING_MAINTENANCE_EXCLUSION_MATCHUP_ACTIVE",
+    "Injected provider-import maintenance race."
+  );
+}
+
+function importMutationProjection(database) {
+  return {
+    totalChanges: database
+      .prepare("SELECT total_changes() AS count")
+      .get().count,
+    playerCount: database
+      .prepare("SELECT COUNT(*) AS count FROM players")
+      .get().count,
+    externalIdCount: database
+      .prepare("SELECT COUNT(*) AS count FROM player_external_ids")
+      .get().count,
+    refreshCount: database
+      .prepare("SELECT COUNT(*) AS count FROM stat_refreshes")
+      .get().count,
+    totalCount: database
+      .prepare("SELECT COUNT(*) AS count FROM player_stat_totals")
+      .get().count,
+    importEventCount: database
+      .prepare(`
+        SELECT COUNT(*) AS count
+        FROM operational_events
+        WHERE event_type = ?
+      `)
+      .get(EVENT_TYPE).count,
+    importIdempotencyCount: database
+      .prepare(`
+        SELECT COUNT(*) AS count
+        FROM idempotency_requests
+        WHERE operation = ?
+      `)
+      .get(OPERATION).count,
+  };
+}
+
 function service(database, overrides = {}) {
   let time = FIXTURE_NOW_MS + 100_000;
   return createStagingSportsDataIoImportService({
@@ -117,6 +176,15 @@ function service(database, overrides = {}) {
     leagueWriteMode: "closed",
     scheduledJobsEnabled: false,
     providerEnabled: true,
+    maintenanceExclusionGuard:
+      createStagingMaintenanceExclusionGuard({
+        database,
+        appEnv: "staging",
+        environmentId: FIXTURE_ENVIRONMENT_ID,
+        databaseId: FIXTURE_DATABASE_ID,
+        leagueWriteMode: "closed",
+        scheduledJobsEnabled: false,
+      }),
     platformAuthorization: {
       requireAdministrator() {
         return authority();
@@ -152,13 +220,207 @@ test("staging SportsDataIO import is constructed only for the exact closed fixtu
       /requires the exact closed release-QA staging target/
     );
   }
+  assert.throws(
+    () => service(database, { maintenanceExclusionGuard: null }),
+    /requires a staging maintenance-exclusion guard/
+  );
+});
+
+test("staging SportsDataIO import rejects active matchups before provider access or persistence", async (t) => {
+  const database = await runtime(t);
+
+  for (const [tableName, status] of [
+    ["matchup_weeks", "live"],
+    ["matchup_weeks", "correction_required"],
+    ["matchups", "live"],
+    ["matchups", "correction_required"],
+  ]) {
+    const row = database
+      .prepare(`SELECT id, status FROM ${tableName} ORDER BY id LIMIT 1`)
+      .get();
+    database
+      .prepare(`UPDATE ${tableName} SET status = ? WHERE id = ?`)
+      .run(status, row.id);
+    const before = database.serialize();
+    let importCalls = 0;
+    const target = service(database, {
+      importService: {
+        async importLastSeason() {
+          importCalls += 1;
+          return importedResult();
+        },
+      },
+    });
+
+    await assert.rejects(
+      target.run(
+        request(`maintenance-${tableName}-${status}`)
+      ),
+      (error) =>
+        error instanceof StagingMaintenanceExclusionError &&
+        error.code ===
+          "STAGING_MAINTENANCE_EXCLUSION_MATCHUP_ACTIVE"
+    );
+    assert.equal(importCalls, 0);
+    assert.equal(before.equals(database.serialize()), true);
+
+    database
+      .prepare(`UPDATE ${tableName} SET status = ? WHERE id = ?`)
+      .run(row.status, row.id);
+  }
+});
+
+test("staging SportsDataIO import reasserts maintenance exclusion across every persistence race seam", async (t) => {
+  await t.test("before provider access", async (child) => {
+    const database = await runtime(child);
+    const before = importMutationProjection(database);
+    const failure = maintenanceExclusionFailure();
+    let guardCalls = 0;
+    let importCalls = 0;
+    const target = service(database, {
+      maintenanceExclusionGuard: allowProviderImportExclusion(() => {
+        guardCalls += 1;
+        throw failure;
+      }),
+      importService: {
+        async importLastSeason() {
+          importCalls += 1;
+          return importedResult();
+        },
+      },
+    });
+
+    await assert.rejects(
+      target.run(request("guard-before-provider")),
+      (error) => error === failure
+    );
+    assert.equal(guardCalls, 1);
+    assert.equal(importCalls, 0);
+    assert.deepEqual(importMutationProjection(database), before);
+  });
+
+  await t.test("before failure bookkeeping", async (child) => {
+    const database = await runtime(child);
+    const before = importMutationProjection(database);
+    const failure = maintenanceExclusionFailure();
+    let guardCalls = 0;
+    const target = service(database, {
+      maintenanceExclusionGuard: allowProviderImportExclusion(() => {
+        guardCalls += 1;
+        if (guardCalls === 2) throw failure;
+      }),
+      importService: {
+        async importLastSeason() {
+          throw new Error("provider failed after maintenance opened");
+        },
+      },
+    });
+
+    await assert.rejects(
+      target.run(request("guard-before-failure-bookkeeping")),
+      (error) =>
+        error instanceof StagingSportsDataIoImportError &&
+        error.code === "STAGING_SPORTSDATAIO_IMPORT_FAILED"
+    );
+    assert.equal(guardCalls, 2);
+    assert.deepEqual(importMutationProjection(database), before);
+  });
+
+  await t.test("during persistence authorization", async (child) => {
+    const database = await runtime(child);
+    const before = importMutationProjection(database);
+    const failure = maintenanceExclusionFailure();
+    let guardCalls = 0;
+    let importCalls = 0;
+    const target = service(database, {
+      maintenanceExclusionGuard: allowProviderImportExclusion(() => {
+        guardCalls += 1;
+        if (guardCalls === 2) throw failure;
+      }),
+      importService: {
+        async importLastSeason({ authorizePersist }) {
+          importCalls += 1;
+          await authorizePersist();
+          return importedResult();
+        },
+      },
+    });
+
+    await assert.rejects(
+      target.run(request("guard-during-authorization")),
+      (error) => error === failure
+    );
+    assert.equal(guardCalls, 2);
+    assert.equal(importCalls, 1);
+    assert.deepEqual(importMutationProjection(database), before);
+  });
+
+  await t.test("after provider return", async (child) => {
+    const database = await runtime(child);
+    const before = importMutationProjection(database);
+    const failure = maintenanceExclusionFailure();
+    let guardCalls = 0;
+    const target = service(database, {
+      maintenanceExclusionGuard: allowProviderImportExclusion(() => {
+        guardCalls += 1;
+        if (guardCalls === 3) throw failure;
+      }),
+      importService: {
+        async importLastSeason({ authorizePersist }) {
+          await authorizePersist();
+          return importedResult();
+        },
+      },
+    });
+
+    await assert.rejects(
+      target.run(request("guard-after-provider")),
+      (error) => error === failure
+    );
+    assert.equal(guardCalls, 3);
+    assert.deepEqual(importMutationProjection(database), before);
+  });
+
+  await t.test("inside success transaction", async (child) => {
+    const database = await runtime(child);
+    const before = importMutationProjection(database);
+    const failure = maintenanceExclusionFailure();
+    let guardCalls = 0;
+    const target = service(database, {
+      maintenanceExclusionGuard: allowProviderImportExclusion(() => {
+        guardCalls += 1;
+        if (guardCalls === 4) {
+          assert.equal(database.inTransaction, true);
+          throw failure;
+        }
+      }),
+      importService: {
+        async importLastSeason({ authorizePersist }) {
+          await authorizePersist();
+          return importedResult();
+        },
+      },
+    });
+
+    await assert.rejects(
+      target.run(request("guard-inside-success")),
+      (error) => error === failure
+    );
+    assert.equal(guardCalls, 4);
+    assert.equal(database.inTransaction, false);
+    assert.deepEqual(importMutationProjection(database), before);
+  });
 });
 
 test("staging SportsDataIO import revalidates authority, audits success, and replays idempotently", async (t) => {
   const database = await runtime(t);
   let authorizationCalls = 0;
   let importCalls = 0;
+  let guardCalls = 0;
   const target = service(database, {
+    maintenanceExclusionGuard: allowProviderImportExclusion(() => {
+      guardCalls += 1;
+    }),
     platformAuthorization: {
       requireAdministrator(authenticated) {
         authorizationCalls += 1;
@@ -183,6 +445,7 @@ test("staging SportsDataIO import revalidates authority, audits success, and rep
   assert.equal(result.statistics.playerCount, 800);
   assert.equal(importCalls, 1);
   assert.equal(authorizationCalls, 4);
+  assert.equal(guardCalls, 5);
 
   const event = database.prepare(`
     SELECT outcome, actor_user_id, details_json
@@ -216,6 +479,7 @@ test("staging SportsDataIO import revalidates authority, audits success, and rep
     { ...result, replayed: true }
   );
   assert.equal(importCalls, 1);
+  assert.equal(guardCalls, 5);
 });
 
 test("staging SportsDataIO import rejects changed authority without success state and records only a sanitized failure", async (t) => {

@@ -11,6 +11,8 @@ const {
 } = require("../../src/infrastructure/persistence/sqlite/repositoryCatalog");
 const {
   RESET_MANIFEST_ERROR_CODES,
+  RESET_V1_POST_RESET_TABLE_POLICY,
+  assertPolicyCatalogCoverage,
   calculateResetManifestChecksum,
   createResetManifest,
   loadAndValidateResetManifest,
@@ -151,7 +153,7 @@ function collectRepositoryDataArtifacts() {
 }
 
 describe("M2-07 explicit Season 1 reset manifest", () => {
-  test("validates the canonical committed policy and classifies every application table exactly once", () => {
+  test("validates the signed policy and explicit post-reset table boundary", () => {
     const manifestBytesBefore = fs.readFileSync(MANIFEST_PATH);
     const manifest = loadAndValidateResetManifest({
       manifestPath: MANIFEST_PATH,
@@ -164,9 +166,17 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
       manifest.protectedFamilies.flatMap(
         (family) => family.targetTables
       );
-    const policyTables = [
+    const signedPolicyTables = [
       ...omittedTables,
       ...protectedTables,
+    ];
+    const postResetTables =
+      RESET_V1_POST_RESET_TABLE_POLICY.map(
+        ({ tableName }) => tableName
+      );
+    const classifiedTables = [
+      ...signedPolicyTables,
+      ...postResetTables,
     ];
     const catalogTables = REPOSITORY_CATALOG.map(
       (definition) => definition.tableName
@@ -176,16 +186,322 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
     assert.equal(manifest.omissionFamilies.length, 12);
     assert.equal(manifest.protectedFamilies.length, 9);
     assert.equal(manifest.neverImportFamilies.length, 1);
-    assert.equal(policyTables.length, 79);
-    assert.equal(new Set(policyTables).size, 79);
+    assert.equal(manifest.checksum,
+      "5a8153bf2554cbd89590b50a7a38a8c9036c737221de83d32ccb6fd2045c0489");
+    assert.equal(signedPolicyTables.length, 82);
+    assert.equal(new Set(signedPolicyTables).size, 82);
     assert.deepEqual(
-      [...policyTables].sort(),
+      RESET_V1_POST_RESET_TABLE_POLICY,
+      [
+        {
+          tableName: "auction_administration_command_results",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "auction_contexts",
+          introducedByMigrationId: 26,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "candidate_card_entries",
+          introducedByMigrationId: 24,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "candidate_card_help_command_results",
+          introducedByMigrationId: 35,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "candidate_card_help_requests",
+          introducedByMigrationId: 24,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "candidate_card_revisions",
+          introducedByMigrationId: 24,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "candidate_card_snapshot_entries",
+          introducedByMigrationId: 24,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "candidate_card_snapshots",
+          introducedByMigrationId: 24,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "candidate_cards",
+          introducedByMigrationId: 24,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "entry_draft_on_clock_trades",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "entry_draft_pick_clocks",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "entry_draft_rollover_bindings",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "entry_draft_schedule_operations",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "free_agent_draft_allocation_events",
+          introducedByMigrationId: 25,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_allocation_correction_command_results",
+          introducedByMigrationId: 39,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_auction_participants",
+          introducedByMigrationId: 26,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "free_agent_draft_draws",
+          introducedByMigrationId: 26,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_eligibility_revalidation_occurrences",
+          introducedByMigrationId: 36,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_nomination_queue",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "free_agent_draft_player_allocations",
+          introducedByMigrationId: 25,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_readiness_attempts",
+          introducedByMigrationId: 31,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_readiness_corrective_requeues",
+          introducedByMigrationId: 33,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_readiness_operations",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_readiness_retry_receipts",
+          introducedByMigrationId: 31,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "free_agent_draft_recoveries",
+          introducedByMigrationId: 25,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_recovery_action_command_results",
+          introducedByMigrationId: 39,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "free_agent_draft_rollovers",
+          introducedByMigrationId: 25,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "free_agent_draft_schedule_recoveries",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_schedule_recovery_jobs",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_schedule_recovery_matchups",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_schedule_recovery_weeks",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "free_agent_draft_setup_exemptions",
+          introducedByMigrationId: 23,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "free_agent_draft_teams",
+          introducedByMigrationId: 24,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "free_agent_drafts",
+          introducedByMigrationId: 24,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "matchup_roster_game_exclusion_sets",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "matchup_roster_game_exclusions",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "matchup_schedule_command_results",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "matchup_schedule_job_bindings",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName:
+            "nhl_game_state_observation_snapshots",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "nhl_game_state_observations",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "outbox_event_audiences",
+          introducedByMigrationId: 27,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "player_game_stat_observations",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "season_matchup_schedule_generations",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "season_rollover_attempts",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "season_rollover_items",
+          introducedByMigrationId: 29,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "season_rollover_occurrences",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "season_rollovers",
+          introducedByMigrationId: 23,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "stat_refresh_player_game_coverage_entries",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "stat_refresh_player_game_sets",
+          introducedByMigrationId: 30,
+          treatment: "require_empty",
+        },
+      ]
+    );
+    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 49);
+    assert.equal(classifiedTables.length, 131);
+    assert.equal(new Set(classifiedTables).size, 131);
+    assert.deepEqual(
+      [...classifiedTables].sort(),
       [...catalogTables].sort()
     );
+    assert.equal(assertPolicyCatalogCoverage(), true);
     assert.deepEqual(
       fs.readFileSync(MANIFEST_PATH),
       manifestBytesBefore
     );
+  });
+
+  test("fails closed for unclassified, duplicate, or overlapping post-reset tables", () => {
+    assert.throws(() => {
+      assertPolicyCatalogCoverage({
+        repositoryCatalog: [
+          ...REPOSITORY_CATALOG,
+          { tableName: "unclassified_table" },
+        ],
+      });
+    }, /classify every repository table exactly once/i);
+
+    assert.throws(() => {
+      assertPolicyCatalogCoverage({
+        postResetPolicy: [
+          ...RESET_V1_POST_RESET_TABLE_POLICY,
+          RESET_V1_POST_RESET_TABLE_POLICY[0],
+        ],
+      });
+    }, /classify every repository table exactly once/i);
+
+    assert.throws(() => {
+      assertPolicyCatalogCoverage({
+        postResetPolicy: [
+          {
+            tableName: "seasons",
+            introducedByMigrationId: 23,
+            treatment: "require_empty",
+          },
+          RESET_V1_POST_RESET_TABLE_POLICY[1],
+        ],
+      });
+    }, /classify every repository table exactly once/i);
   });
 
   test("rejects checksum and exact-policy tampering", () => {

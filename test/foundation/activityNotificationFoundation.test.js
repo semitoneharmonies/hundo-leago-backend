@@ -32,6 +32,10 @@ const {
   validatePageInput,
 } = require("../../src/domain/activity/activityPolicy");
 const {
+  createEmptySocketRelated,
+  createSocketEventEnvelope,
+} = require("../../src/domain/leagues/socketInvalidation");
+const {
   openDatabase,
 } = require("../../src/infrastructure/database/connection");
 const {
@@ -286,6 +290,15 @@ function insertOutbox(context, {
     updated_at_ms: availableAtMs,
     version: 1,
   });
+  context.repositories.outbox_event_audiences.insert({
+    id,
+    league_id: leagueId,
+    outbox_event_id: id,
+    audience_kind: "league",
+    team_id: null,
+    user_id: null,
+    created_at_ms: availableAtMs,
+  });
 }
 
 describe("M5-09 activity and notification policy", () => {
@@ -444,7 +457,7 @@ describe("M5-09 retry-safe league outbox publication", () => {
       publisher: {
         async publish(event) {
           captured.push(event);
-          if (event.eventType === "auction.updated" && failAuctionOnce) {
+          if (event.eventType === "auction.changed" && failAuctionOnce) {
             failAuctionOnce = false;
             const error = new Error("temporary socket failure");
             error.code = "SOCKET_TEMPORARY";
@@ -552,14 +565,24 @@ describe("M5-09 retry-safe league outbox publication", () => {
       leagueId: LEAGUE_A,
       aggregateType: "trade",
       aggregateId: uuid(711),
-      payload: {
-        kind: "invalidation",
-        eventType: "trade.changed",
-        scope: "league",
-        scopeId: LEAGUE_A,
+      audiences: [
+        {
+          kind: "league",
+          leagueId: LEAGUE_A,
+          teamId: null,
+          userId: null,
+        },
+      ],
+      payload: createSocketEventEnvelope({
+        eventId: uuid(710),
+        type: "trade.changed",
+        leagueId: LEAGUE_A,
+        resourceId: uuid(711),
         version: 2,
-        changedAtMs: NOW_MS,
-      },
+        reasonCode: "trade_changed",
+        occurredAt: NOW_MS,
+        related: createEmptySocketRelated(),
+      }),
     });
     assert.deepEqual(emissions, [
       {
@@ -571,7 +594,9 @@ describe("M5-09 retry-safe league outbox publication", () => {
           leagueId: LEAGUE_A,
           resourceId: uuid(711),
           version: 2,
+          reasonCode: "trade_changed",
           occurredAt: NOW_MS,
+          related: createEmptySocketRelated(),
         },
       },
     ]);

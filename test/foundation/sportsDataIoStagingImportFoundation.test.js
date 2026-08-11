@@ -20,6 +20,13 @@ const {
 const {
   migrateDatabase,
 } = require("../../src/infrastructure/database/migrate");
+const {
+  createStagingMaintenanceExclusionGuard,
+} = require("../../src/application/services/operations/createStagingMaintenanceExclusionGuard");
+const {
+  FIXTURE_DATABASE_ID,
+  FIXTURE_ENVIRONMENT_ID,
+} = require("../../src/operations/release/releaseQaFixtureContract");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 
@@ -35,6 +42,8 @@ test("SportsDataIO staging import requires one explicit staging-only confirmatio
 test("SportsDataIO staging import refuses production, missing keys, jobs, and open writes", () => {
   const base = {
     appEnv: "staging",
+    databaseId: FIXTURE_DATABASE_ID,
+    environmentId: FIXTURE_ENVIRONMENT_ID,
     sportsDataIoNhl: { enabled: true },
     scheduledJobsEnabled: false,
     leagueWriteMode: "closed",
@@ -42,6 +51,8 @@ test("SportsDataIO staging import refuses production, missing keys, jobs, and op
   assert.equal(assertSafeStagingImportConfig(base), base);
   for (const [override, code] of [
     [{ appEnv: "production" }, "SPORTSDATAIO_STAGING_ENVIRONMENT_REQUIRED"],
+    [{ databaseId: "another-database" }, "SPORTSDATAIO_STAGING_FIXTURE_REQUIRED"],
+    [{ environmentId: "another-environment" }, "SPORTSDATAIO_STAGING_FIXTURE_REQUIRED"],
     [{ sportsDataIoNhl: { enabled: false } }, "SPORTSDATAIO_NHL_API_KEY_REQUIRED"],
     [{ scheduledJobsEnabled: true }, "SPORTSDATAIO_STAGING_MAINTENANCE_REQUIRED"],
     [{ leagueWriteMode: "open" }, "SPORTSDATAIO_STAGING_MAINTENANCE_REQUIRED"],
@@ -70,8 +81,8 @@ test("SportsDataIO staging import persists a complete synthetic catalog before i
   const insertMetadata = seed.database.prepare(
     "INSERT INTO application_metadata (metadata_key, metadata_value, created_at_ms, updated_at_ms) VALUES (?, ?, 0, 0)"
   );
-  insertMetadata.run(DATABASE_IDENTITY_KEYS.environmentId, "staging-test-environment");
-  insertMetadata.run(DATABASE_IDENTITY_KEYS.databaseId, "staging-test-database");
+  insertMetadata.run(DATABASE_IDENTITY_KEYS.environmentId, FIXTURE_ENVIRONMENT_ID);
+  insertMetadata.run(DATABASE_IDENTITY_KEYS.databaseId, FIXTURE_DATABASE_ID);
   insertMetadata.run(DATABASE_IDENTITY_KEYS.createdAt, "2025-07-25T00:00:00.000Z");
   seed.database.close();
   t.after(() => fs.rmSync(persistentRoot, { recursive: true, force: true }));
@@ -106,14 +117,15 @@ test("SportsDataIO staging import persists a complete synthetic catalog before i
     Updated: "2025-04-18T12:00:00Z",
   }));
   const calls = [];
+  const operationOrder = [];
   const result = await importSportsDataIoStaging({
     argv: [STAGING_CONFIRMATION],
     nowMs: () => 1_700_000_000_000,
     loadConfig: () => ({
       appEnv: "staging",
-      databaseId: "staging-test-database",
+      databaseId: FIXTURE_DATABASE_ID,
       databasePath,
-      environmentId: "staging-test-environment",
+      environmentId: FIXTURE_ENVIRONMENT_ID,
       leagueWriteMode: "closed",
       migrationsDirectory: path.join(ROOT, "database", "migrations"),
       persistentRoot,
@@ -126,7 +138,17 @@ test("SportsDataIO staging import persists a complete synthetic catalog before i
         seasonStartYear: "2025",
       },
     }),
+    createMaintenanceExclusionGuard: (options) => {
+      const guard = createStagingMaintenanceExclusionGuard(options);
+      return Object.freeze({
+        assertExclusion(exclusionName) {
+          operationOrder.push("guard");
+          return guard.assertExclusion(exclusionName);
+        },
+      });
+    },
     fetchImplementation: async (url, options) => {
+      operationOrder.push("fetch");
       calls.push({ url, options });
       return {
         ok: true,
@@ -143,6 +165,11 @@ test("SportsDataIO staging import persists a complete synthetic catalog before i
   assert.equal(result.statistics.status, "succeeded");
   assert.equal(result.statistics.playerCount, 800);
   assert.equal(calls.length, 4);
+  assert.equal(operationOrder[0], "guard");
+  assert.equal(
+    operationOrder.filter((operation) => operation === "guard").length,
+    5
+  );
   assert.equal(calls.every(({ url }) => !url.includes("test-key")), true);
   assert.equal(
     calls.every(({ options }) => options.headers["Ocp-Apim-Subscription-Key"] === "test-key"),

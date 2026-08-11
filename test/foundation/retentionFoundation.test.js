@@ -135,7 +135,10 @@ function seed(context) {
   }
 }
 
-function createRuntime(t) {
+function createRuntime(
+  t,
+  { candidateCardSummerSynchronizer } = {}
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m4-07-"));
   const connection = openDatabase({
     databasePath: path.join(root, "league.sqlite3"), environment: "test",
@@ -152,7 +155,13 @@ function createRuntime(t) {
   seed(context);
   return {
     context, database: connection.database,
-    repository: createSqliteRetentionRepository({ database: connection.database }),
+    repository: createSqliteRetentionRepository({
+      database: connection.database,
+      candidateCardSummerSynchronizer:
+        candidateCardSummerSynchronizer ?? {
+          synchronize() {},
+        },
+    }),
   };
 }
 
@@ -232,7 +241,17 @@ describe("M4-07 retained-salary policy", () => {
 
 describe("M4-07 SQLite retained-salary persistence", () => {
   test("creates one obligation, every remaining-year charge, and activity atomically", (t) => {
-    const { database, repository } = createRuntime(t);
+    const synchronizationCalls = [];
+    let runtime;
+    runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize(input) {
+          assert.equal(runtime.database.inTransaction, true);
+          synchronizationCalls.push(input);
+        },
+      },
+    });
+    const { database, repository } = runtime;
     const result = repository.create(command());
     assert.equal(result.obligation.retained_aav_cents, 100);
     assert.equal(result.years.length, 3);
@@ -241,6 +260,35 @@ describe("M4-07 SQLite retained-salary persistence", () => {
     assert.equal(count(database, "retention_obligations"), 1);
     assert.equal(count(database, "retention_years"), 3);
     assert.equal(count(database, "league_activity"), 1);
+    assert.deepEqual(synchronizationCalls, [
+      {
+        leagueId: IDS.league,
+        affectedTeamIds: [IDS.team1],
+        affectedPlayerIds: [],
+        sourceOperationId: IDS.retention1,
+        sourceKind: "retention_change",
+        nowMs: NOW_MS + 1,
+      },
+    ]);
+  });
+
+  test("rolls back retained salary when Candidate Card synchronization fails", (t) => {
+    const { database, repository } = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize() {
+          throw new Error("forced Candidate Card synchronization failure");
+        },
+      },
+    });
+    const before = database.serialize();
+
+    assert.throws(
+      () => repository.create(command()),
+      (error) =>
+        error.code === REPOSITORY_ERROR_CODES.operationFailed &&
+        error.details?.operation === "createRetentionObligation"
+    );
+    assert.deepEqual(database.serialize(), before);
   });
 
   test("derives cumulative retention across successive responsible teams", (t) => {

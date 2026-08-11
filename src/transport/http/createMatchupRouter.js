@@ -1,6 +1,12 @@
 const express = require("express");
 
 const SAFE_MESSAGES = Object.freeze({
+  IDEMPOTENCY_KEY_REUSED:
+    "The idempotency key was already used for a different request.",
+  IDEMPOTENCY_REQUEST_UNAVAILABLE:
+    "The earlier request result is unavailable.",
+  FAD_WEEK_ONE_FROZEN:
+    "Week 1 is frozen after Candidate Card opening.",
   MATCHUP_AUTHORITY_DENIED: "Current commissioner authority is required.",
   MATCHUP_CONFLICT: "The matchup request conflicts with current state.",
   MATCHUP_FAILED: "The matchup request could not be completed.",
@@ -25,7 +31,12 @@ function optionalIfMatch(request) {
   return Object.freeze({ valid: Number.isSafeInteger(version), version });
 }
 
-function createMatchupRouter({ requestSecurity, matchupService } = {}) {
+function createMatchupRouter({
+  requestSecurity,
+  matchupService,
+  auditPrivacyDigest,
+  networkSourceResolver = (request) => request.ip,
+} = {}) {
   for (const method of [
     "assignRequestId",
     "authenticateBootstrap",
@@ -54,28 +65,72 @@ function createMatchupRouter({ requestSecurity, matchupService } = {}) {
   ]) {
     assertMethod(matchupService, method, "a matchup integration service");
   }
+  assertMethod(
+    auditPrivacyDigest,
+    "digest",
+    "an audit privacy digest"
+  );
+  if (typeof networkSourceResolver !== "function") {
+    throw new TypeError(
+      "matchup routes require a network-source resolver"
+    );
+  }
 
   function requestId(request) {
     return requestSecurity.getRequestId(request);
   }
 
   function success(request, response, status, data) {
-    return response.status(status).json({
-      data,
-      meta: { requestId: requestId(request) },
-    });
+    return response
+      .status(status)
+      .set("Cache-Control", "no-store")
+      .json({
+        data,
+        meta: { requestId: requestId(request) },
+      });
   }
 
   function failure(request, response, status, code) {
-    return response.status(status).json({
-      error: { code, message: SAFE_MESSAGES[code], requestId: requestId(request) },
+    return response
+      .status(status)
+      .set("Cache-Control", "no-store")
+      .json({
+        error: { code, message: SAFE_MESSAGES[code], requestId: requestId(request) },
+      });
+  }
+
+  function auditContext(request) {
+    const networkSource =
+      networkSourceResolver(request);
+    if (
+      typeof networkSource !== "string" ||
+      networkSource.length < 1 ||
+      networkSource.length > 128 ||
+      networkSource !== networkSource.trim()
+    ) {
+      throw new TypeError(
+        "the canonical network source is unavailable"
+      );
+    }
+    const network = auditPrivacyDigest.digest(
+      `network\0${networkSource}`
+    );
+    return Object.freeze({
+      clientMetadataJson: JSON.stringify({
+        networkSourceCategory: "unknown",
+        origin: request.get("origin"),
+      }),
+      networkKeyVersion: network.keyVersion,
+      networkMetadataDigest: network.digest,
+      requestCorrelationId: requestId(request),
     });
   }
 
   function mapError(request, response, error) {
-    const code = error?.reasonCode || error?.code || "";
+    const code = error?.code || error?.reasonCode || "";
     if (
       code === "MATCHUP_INTEGRATION_INPUT_INVALID" ||
+      code === "MATCHUP_SCHEDULE_CALENDAR_INVALID" ||
       code === "LEAGUE_ID_INVALID" ||
       code === "REPOSITORY_ARGUMENT_INVALID" ||
       code.endsWith("_INPUT_INVALID") ||
@@ -93,6 +148,8 @@ function createMatchupRouter({ requestSecurity, matchupService } = {}) {
     }
     if (
       code === "LEAGUE_NOT_FOUND" ||
+      code ===
+        "MATCHUP_RESULT_CORRECTION_NOT_FOUND" ||
       code.endsWith("_MISSING") ||
       code === "REPOSITORY_RECORD_NOT_FOUND"
     ) {
@@ -100,11 +157,36 @@ function createMatchupRouter({ requestSecurity, matchupService } = {}) {
     }
     if (
       code === "MATCHUP_INTEGRATION_VERSION_CONFLICT" ||
+      code ===
+        "MATCHUP_SCHEDULE_PRECONDITION_FAILED" ||
+      code ===
+        "MATCHUP_RESULT_CORRECTION_PRECONDITION_FAILED" ||
       code === "REPOSITORY_VERSION_CONFLICT"
     ) {
       return failure(request, response, 412, "MATCHUP_PRECONDITION_FAILED");
     }
     if (
+      code === "IDEMPOTENCY_KEY_REUSED" ||
+      code === "IDEMPOTENCY_REQUEST_UNAVAILABLE"
+    ) {
+      return failure(
+        request,
+        response,
+        409,
+        code
+      );
+    }
+    if (code === "FAD_WEEK_ONE_FROZEN") {
+      return failure(
+        request,
+        response,
+        409,
+        "FAD_WEEK_ONE_FROZEN"
+      );
+    }
+    if (
+      code ===
+        "MATCHUP_RESULT_CORRECTION_RESULT_UNAVAILABLE" ||
       code.startsWith("MATCHUP_") ||
       code.startsWith("REPOSITORY_CONSTRAINT_")
     ) {
@@ -154,6 +236,10 @@ function createMatchupRouter({ requestSecurity, matchupService } = {}) {
           expectedVersion: precondition.version,
           idempotencyKey: request.get("idempotency-key"),
           authenticated: requestSecurity.getAuthenticatedSession(request),
+          ...(method === "correctResult" &&
+          request.body?.confirmed === true
+            ? { auditContext: auditContext(request) }
+            : {}),
         });
         const created = result.code === "MATCHUP_SCHEDULE_GENERATED";
         return success(request, response, created ? 201 : 200, result);

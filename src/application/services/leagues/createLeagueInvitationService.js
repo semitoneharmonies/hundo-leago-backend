@@ -186,6 +186,8 @@ function createLeagueInvitationService({
   for (const method of [
     "acceptInvitation",
     "activateMembership",
+    "appendManagerAssignmentChangedPublication",
+    "appendMembershipChangedPublication",
     "appendInvitationActivity",
     "cancelInvitation",
     "completeIdempotency",
@@ -490,6 +492,8 @@ function createLeagueInvitationService({
       activity: secureRandom.id(),
       assignment: secureRandom.id(),
       audit: secureRandom.id(),
+      managerAssignmentPublication: secureRandom.id(),
+      membershipPublication: secureRandom.id(),
       team: secureRandom.id(),
     });
     const audit = auditContext || {};
@@ -569,26 +573,42 @@ function createLeagueInvitationService({
             nowMs,
           });
         }
-        invitationRepository.activateMembership({
+        const membership = invitationRepository.activateMembership({
           leagueId: row.league_id,
           membershipId: row.membership_id,
           expectedVersion: row.membership_version,
           nowMs,
         });
-        invitationRepository.insertAcceptedManagerAssignment({
-          id: ids.assignment,
-          leagueId: row.league_id,
-          teamId,
-          userId: user.id,
-          membershipId: row.membership_id,
-          assignedByUserId: row.inviting_user_id,
-          nowMs,
-        });
+        const managerAssignment =
+          invitationRepository.insertAcceptedManagerAssignment({
+            id: ids.assignment,
+            leagueId: row.league_id,
+            teamId,
+            userId: user.id,
+            membershipId: row.membership_id,
+            assignedByUserId: row.inviting_user_id,
+            nowMs,
+          });
         invitationRepository.acceptInvitation({
           leagueId: row.league_id,
           invitationId: row.invitation_id,
           teamId,
           expectedVersion: row.invitation_version,
+          nowMs,
+        });
+        invitationRepository.appendMembershipChangedPublication({
+          id: ids.membershipPublication,
+          leagueId: row.league_id,
+          membershipId: membership.id,
+          version: membership.version,
+          nowMs,
+        });
+        invitationRepository.appendManagerAssignmentChangedPublication({
+          id: ids.managerAssignmentPublication,
+          leagueId: row.league_id,
+          teamId,
+          assignmentId: managerAssignment.id,
+          version: managerAssignment.version,
           nowMs,
         });
         invitationRepository.appendInvitationActivity({

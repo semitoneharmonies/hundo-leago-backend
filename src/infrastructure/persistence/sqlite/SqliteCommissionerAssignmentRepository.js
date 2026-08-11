@@ -10,6 +10,16 @@ const {
 const {
   getRepositoryDefinition,
 } = require("./repositoryCatalog");
+const {
+  createEmptySocketRelated,
+  createSocketEventMetadata,
+} = require("../../../domain/leagues/socketInvalidation");
+const {
+  resolveSqliteLeagueOutboxWriter,
+} = require("./SqliteLeagueOutboxWriter");
+const {
+  resolveSqliteNotificationWriter,
+} = require("./SqliteNotificationWriter");
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -95,6 +105,8 @@ function freezeRow(row) {
 
 function createSqliteCommissionerAssignmentRepository({
   database,
+  leagueOutboxWriter,
+  notificationWriter,
 } = {}) {
   const leagues = createSqliteRecordRepository({
     database,
@@ -108,9 +120,13 @@ function createSqliteCommissionerAssignmentRepository({
     database,
     definition: getRepositoryDefinition("league_invitations"),
   });
-  const notifications = createSqliteRecordRepository({
+  const notifications = resolveSqliteNotificationWriter({
     database,
-    definition: getRepositoryDefinition("notifications"),
+    notificationWriter,
+  });
+  const outbox = resolveSqliteLeagueOutboxWriter({
+    database,
+    leagueOutboxWriter,
   });
   const activity = createSqliteRecordRepository({
     database,
@@ -409,18 +425,17 @@ function createSqliteCommissionerAssignmentRepository({
       return freezeRow(
         notifications.insert({
           id: stableId(options.id),
-          user_id: stableId(options.userId),
-          league_id: stableId(options.leagueId),
-          event_type: "commissioner_assignment_proposed",
-          message_data_json: messageDataJson,
-          related_feature: "commissioner_assignment",
-          related_record_id: stableId(options.assignmentId),
-          delivery_status: "delivered",
-          created_at_ms: nowMs,
-          read_at_ms: null,
-          delivered_at_ms: nowMs,
-          version: 1,
-        })
+          userId: stableId(options.userId),
+          leagueId: stableId(options.leagueId),
+          eventType: "commissioner_assignment_proposed",
+          messageDataJson,
+          relatedFeature: "commissioner_assignment",
+          relatedRecordId: stableId(options.assignmentId),
+          deliveryStatus: "delivered",
+          createdAtMs: nowMs,
+          deliveredAtMs: nowMs,
+          deduplicationKey: null,
+        }).notification
       );
     },
     appendAssignmentActivity(options) {
@@ -507,6 +522,52 @@ function createSqliteCommissionerAssignmentRepository({
           },
         })
       );
+    },
+    appendMembershipChangedPublication(options) {
+      exactObject(
+        options,
+        ["id", "leagueId", "membershipId", "version", "nowMs"],
+        "An exact membership-change publication is required."
+      );
+      const nowMs = safeTimestamp(options.nowMs);
+      return outbox.write({
+        id: stableId(options.id),
+        leagueId: stableId(options.leagueId),
+        eventType: "league.changed",
+        aggregateType: "league_membership",
+        aggregateId: stableId(options.membershipId),
+        occurredAtMs: nowMs,
+        payload: createSocketEventMetadata({
+          eventType: "league.changed",
+          version: positiveInteger(options.version),
+          reasonCode: "membership_changed",
+          occurredAtMs: nowMs,
+          related: createEmptySocketRelated(),
+        }),
+      });
+    },
+    appendCommissionerAssignmentChangedPublication(options) {
+      exactObject(
+        options,
+        ["id", "leagueId", "assignmentId", "version", "nowMs"],
+        "An exact commissioner-assignment publication is required."
+      );
+      const nowMs = safeTimestamp(options.nowMs);
+      return outbox.write({
+        id: stableId(options.id),
+        leagueId: stableId(options.leagueId),
+        eventType: "league.changed",
+        aggregateType: "commissioner_assignment",
+        aggregateId: stableId(options.assignmentId),
+        occurredAtMs: nowMs,
+        payload: createSocketEventMetadata({
+          eventType: "league.changed",
+          version: positiveInteger(options.version),
+          reasonCode: "commissioner_assignment_changed",
+          occurredAtMs: nowMs,
+          related: createEmptySocketRelated(),
+        }),
+      });
     },
     endNeverActiveMembership(options) {
       exactObject(

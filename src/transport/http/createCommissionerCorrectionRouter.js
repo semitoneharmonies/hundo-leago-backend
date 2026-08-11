@@ -136,6 +136,25 @@ function createCommissionerCorrectionRouter({
     };
   }
 
+  function asyncCommand(method) {
+    return async (request, response) => {
+      try {
+        return success(
+          request,
+          response,
+          await commissionerCorrectionService[method]({
+            leagueId: request.params.leagueId,
+            input: request.body,
+            idempotencyKey: request.get("idempotency-key"),
+            authenticated: requestSecurity.getAuthenticatedSession(request),
+          })
+        );
+      } catch (error) {
+        return mapError(request, response, error);
+      }
+    };
+  }
+
   const router = express.Router();
   router.use(requestSecurity.assignRequestId);
   router.use(requestSecurity.securityHeaders);
@@ -173,7 +192,7 @@ function createCommissionerCorrectionRouter({
   router.post(
     `${base}/roster-additions`,
     requestSecurity.authenticateUnsafe,
-    command("applyAdd")
+    asyncCommand("applyAdd")
   );
   router.post(
     `${base}/roster-removals/previews`,
@@ -183,7 +202,7 @@ function createCommissionerCorrectionRouter({
   router.post(
     `${base}/roster-removals`,
     requestSecurity.authenticateUnsafe,
-    command("applyRemove")
+    asyncCommand("applyRemove")
   );
   router.post(
     `${base}/roster-corrections/previews`,
@@ -193,7 +212,7 @@ function createCommissionerCorrectionRouter({
   router.post(
     `${base}/roster-corrections`,
     requestSecurity.authenticateUnsafe,
-    command("applyRoster")
+    asyncCommand("applyRoster")
   );
   router.post(
     `${base}/contract-corrections/previews`,
@@ -203,7 +222,7 @@ function createCommissionerCorrectionRouter({
   router.post(
     `${base}/contract-corrections`,
     requestSecurity.authenticateUnsafe,
-    command("applyContract")
+    asyncCommand("applyContract")
   );
 
   router.use((error, request, response, next) => {

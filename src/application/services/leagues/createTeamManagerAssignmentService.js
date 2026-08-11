@@ -181,6 +181,7 @@ function createTeamManagerAssignmentService({
   for (const method of [
     "acceptAssignment",
     "appendAssignmentActivity",
+    "appendManagerAssignmentChangedPublication",
     "completeIdempotency",
     "declineAssignment",
     "endAssignment",
@@ -479,6 +480,7 @@ function createTeamManagerAssignmentService({
       activity: secureRandom.id(),
       audit: secureRandom.id(),
       idempotency: secureRandom.id(),
+      publication: secureRandom.id(),
     });
     const audit = auditContext || {};
 
@@ -559,10 +561,18 @@ function createTeamManagerAssignmentService({
               nowMs,
             });
           }
-          assignmentRepository.acceptAssignment({
+          const acceptedAssignment = assignmentRepository.acceptAssignment({
             leagueId: row.league_id,
             assignmentId: row.assignment_id,
             expectedVersion: row.assignment_version,
+            nowMs,
+          });
+          assignmentRepository.appendManagerAssignmentChangedPublication({
+            id: ids.publication,
+            leagueId: row.league_id,
+            teamId: row.team_id,
+            assignmentId: acceptedAssignment.id,
+            version: acceptedAssignment.version,
             nowMs,
           });
         } else {
@@ -640,6 +650,7 @@ function createTeamManagerAssignmentService({
       activity: secureRandom.id(),
       audit: secureRandom.id(),
       idempotency: secureRandom.id(),
+      publication: secureRandom.id(),
     });
     const audit = auditContext || {};
 
@@ -692,10 +703,18 @@ function createTeamManagerAssignmentService({
           digest,
           nowMs,
         });
-        assignmentRepository.endAssignment({
+        const endedAssignment = assignmentRepository.endAssignment({
           leagueId: canonicalLeagueId,
           assignmentId: current.id,
           expectedVersion: version,
+          nowMs,
+        });
+        assignmentRepository.appendManagerAssignmentChangedPublication({
+          id: ids.publication,
+          leagueId: canonicalLeagueId,
+          teamId: canonicalTeamId,
+          assignmentId: endedAssignment.id,
+          version: endedAssignment.version,
           nowMs,
         });
         assignmentRepository.appendAssignmentActivity({

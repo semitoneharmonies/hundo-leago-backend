@@ -7,6 +7,7 @@ const test = require("node:test");
 
 const {
   CONFIRMATION,
+  FIXTURE_RESET_PROTECTED_TRIGGER_NAMES,
   createStagingFixtureResetService,
   resetFixtureRows,
 } = require(
@@ -15,6 +16,12 @@ const {
 const {
   openDatabase,
 } = require("../../src/infrastructure/database/connection");
+const {
+  StagingMaintenanceExclusionError,
+  createStagingMaintenanceExclusionGuard,
+} = require(
+  "../../src/application/services/operations/createStagingMaintenanceExclusionGuard"
+);
 const {
   createReleaseQaFixture,
 } = require("../../src/operations/release/createReleaseQaFixture");
@@ -65,6 +72,50 @@ function resetRequest(key, reason = "Restore deterministic test state.") {
   };
 }
 
+function allowFixtureResetExclusion(onAssert = () => undefined) {
+  return Object.freeze({
+    assertExclusion(exclusionName) {
+      assert.equal(exclusionName, "release_qa_fixture_reset");
+      return onAssert();
+    },
+  });
+}
+
+function maintenanceExclusionFailure() {
+  return new StagingMaintenanceExclusionError(
+    "STAGING_MAINTENANCE_EXCLUSION_MATCHUP_ACTIVE",
+    "Injected maintenance-exclusion race."
+  );
+}
+
+function resetMutationProjection(database) {
+  return {
+    totalChanges: database
+      .prepare("SELECT total_changes() AS count")
+      .get().count,
+    team: database
+      .prepare("SELECT name, version FROM teams WHERE id = ?")
+      .get(fixtureId("team:leagueA:1")),
+    backupCatalogCount: database
+      .prepare("SELECT COUNT(*) AS count FROM backup_catalog")
+      .get().count,
+    resetEventCount: database
+      .prepare(`
+        SELECT COUNT(*) AS count
+        FROM operational_events
+        WHERE event_type = 'staging_fixture_reset'
+      `)
+      .get().count,
+    resetIdempotencyCount: database
+      .prepare(`
+        SELECT COUNT(*) AS count
+        FROM idempotency_requests
+        WHERE operation = 'staging_fixture_reset'
+      `)
+      .get().count,
+  };
+}
+
 function insertExternalLeague(database) {
   const leagueId = crypto.randomUUID();
   database
@@ -88,13 +139,15 @@ function insertExternalLeague(database) {
 }
 
 function resetService(target, overrides = {}) {
-  return createStagingFixtureResetService({
+  const options = {
     database: target.database,
     databasePath: target.databasePath,
     persistentRoot: target.root,
     appEnv: "staging",
     environmentId: FIXTURE_ENVIRONMENT_ID,
     databaseId: FIXTURE_DATABASE_ID,
+    leagueWriteMode: "closed",
+    scheduledJobsEnabled: false,
     platformAuthorization: {
       requireAdministrator() {
         return platformAdministrator();
@@ -104,7 +157,19 @@ function resetService(target, overrides = {}) {
     createBackup: async ({ outputDirectory }) =>
       fakeBackup(outputDirectory),
     ...overrides,
-  });
+  };
+  if (!Object.hasOwn(options, "maintenanceExclusionGuard")) {
+    options.maintenanceExclusionGuard =
+      createStagingMaintenanceExclusionGuard({
+        database: target.database,
+        appEnv: options.appEnv,
+        environmentId: options.environmentId,
+        databaseId: options.databaseId,
+        leagueWriteMode: options.leagueWriteMode,
+        scheduledJobsEnabled: options.scheduledJobsEnabled,
+      });
+  }
+  return createStagingFixtureResetService(options);
 }
 
 async function runtime(t) {
@@ -136,6 +201,136 @@ async function runtime(t) {
 
 test("M7-10 resets only the exact staging fixture after a verified backup and preserves the imported catalog", async (t) => {
   const target = await runtime(t);
+  assert.deepEqual(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES,
+    [...FIXTURE_RESET_PROTECTED_TRIGGER_NAMES].sort(),
+    "the approved protected-trigger catalogue must remain deterministic"
+  );
+  assert.deepEqual(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES,
+    target.database
+      .prepare(`
+        SELECT name
+        FROM sqlite_schema
+        WHERE type = 'trigger'
+          AND (
+            upper(sql) LIKE '%BEFORE DELETE ON%'
+            OR name IN (?, ?)
+          )
+        ORDER BY name ASC
+      `)
+      .all(
+        "stat_refresh_player_game_coverage_immutable_update",
+        "stat_refresh_player_game_coverage_stage_before_set"
+      )
+      .map(({ name }) => name),
+    "the reset must suspend every installed delete guard and coverage write guard exactly"
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "auction_administration_command_results_immutable_delete"
+    ),
+    "the reset must suspend immutable auction-administration replay evidence"
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "idempotency_requests_auction_administration_result_delete"
+    ),
+    "the reset must suspend the auction-administration idempotency guard"
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "idempotency_requests_fad_nomination_queue_delete"
+    ),
+    "the reset must suspend immutable queued-nomination acceptance evidence"
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "idempotency_requests_fad_open_rapid_start_delete"
+    ),
+    "the reset must suspend immutable immediate-start replay evidence"
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "fad_auction_events_immutable_delete"
+    ),
+    "the reset must suspend immutable FAD auction events"
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "fad_auction_resolutions_immutable_delete"
+    ),
+    "the reset must suspend immutable FAD auction resolutions"
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "matchup_result_versions_immutable_delete"
+    ),
+    "the reset must suspend the global append-only result-version guard"
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "matchup_operations_schedule_generate_immutable_delete"
+    ),
+    "the reset must suspend the immutable schedule-root guard"
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "idempotency_requests_matchup_schedule_result_delete"
+    ),
+    "the reset must suspend immutable matchup-schedule replay evidence"
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "matchup_operations_result_correct_immutable_delete"
+    ),
+    "the reset must suspend immutable result-correction evidence"
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "season_rollovers_immutable_delete"
+    )
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "free_agent_draft_setup_exemptions_immutable_delete"
+    )
+  );
+  for (const triggerName of [
+    "free_agent_draft_readiness_attempts_immutable_delete",
+    "free_agent_draft_readiness_corrective_requeues_immutable_delete",
+    "free_agent_draft_readiness_retry_receipts_immutable_delete",
+  ]) {
+    assert.ok(
+      FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(triggerName),
+      `the reset must suspend and restore ${triggerName}`
+    );
+  }
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "standings_snapshot_finalizations_immutable_delete"
+    )
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "player_game_stat_observations_immutable_delete"
+    )
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "stat_refresh_player_game_sets_immutable_delete"
+    )
+  );
+  for (const triggerName of [
+    "stat_refresh_player_game_coverage_immutable_delete",
+    "stat_refresh_player_game_coverage_immutable_update",
+    "stat_refresh_player_game_coverage_stage_before_set",
+  ]) {
+    assert.ok(
+      FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(triggerName),
+      `the reset must suspend and restore ${triggerName}`
+    );
+  }
   const providerPlayerId = crypto.randomUUID();
   const providerExternalId = crypto.randomUUID();
   target.database
@@ -153,6 +348,183 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
       ) VALUES (?, ?, 'sportsdataio-discovery-lab', '123456', ?)
     `)
     .run(providerExternalId, providerPlayerId, FIXTURE_NOW_MS);
+  const providerCatalogPlayerCount = target.database
+    .prepare(`
+      SELECT COUNT(*) AS count
+      FROM player_external_ids
+      WHERE provider = 'sportsdataio-discovery-lab'
+    `)
+    .get().count;
+  const fixtureStatSourceId = fixtureId("stat-source");
+  const scoringRefresh = target.database
+    .prepare(`
+      SELECT
+        id,
+        nhl_season_key,
+        source_version,
+        completed_at_ms
+      FROM stat_refreshes
+      WHERE stat_source_id = ?
+      ORDER BY id ASC
+      LIMIT 1
+    `)
+    .get(fixtureStatSourceId);
+  const scoringPlayerId = target.database
+    .prepare(`
+      SELECT player_id
+      FROM player_stat_totals
+      WHERE refresh_id = ?
+      ORDER BY player_id ASC
+      LIMIT 1
+    `)
+    .get(scoringRefresh.id).player_id;
+  const playerGameCoverageId = crypto.randomUUID();
+  const playerGameObservationId = crypto.randomUUID();
+  const playerGameSetId = crypto.randomUUID();
+  target.database.transaction(() => {
+    target.database
+      .prepare(`
+        INSERT INTO stat_refresh_player_game_coverage_entries (
+          id,
+          stat_source_id,
+          refresh_id,
+          observation_set_id,
+          nhl_season_key,
+          player_id,
+          provider_player_id,
+          provider_team_id,
+          disposition,
+          nhl_game_id,
+          nhl_game_scheduled_starts_at_ms,
+          created_at_ms,
+          version
+        ) VALUES (
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          'reset-test-player',
+          'reset-test-team',
+          'expected_game',
+          'reset-test-game',
+          ?,
+          ?,
+          1
+        )
+      `)
+      .run(
+        playerGameCoverageId,
+        fixtureStatSourceId,
+        scoringRefresh.id,
+        playerGameSetId,
+        scoringRefresh.nhl_season_key,
+        scoringPlayerId,
+        scoringRefresh.completed_at_ms,
+        scoringRefresh.completed_at_ms
+      );
+    target.database
+      .prepare(`
+        INSERT INTO player_game_stat_observations (
+          id,
+          stat_source_id,
+          refresh_id,
+          observation_set_id,
+          nhl_season_key,
+          player_id,
+          nhl_game_id,
+          nhl_game_scheduled_starts_at_ms,
+          observed_game_state,
+          goals,
+          assists,
+          nhl_points,
+          fantasy_points_hundredths,
+          source_updated_at_ms,
+          created_at_ms,
+          version
+        ) VALUES (
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          'reset-test-game',
+          ?,
+          'scheduled',
+          0,
+          0,
+          0,
+          0,
+          ?,
+          ?,
+          1
+        )
+      `)
+      .run(
+        playerGameObservationId,
+        fixtureStatSourceId,
+        scoringRefresh.id,
+        playerGameSetId,
+        scoringRefresh.nhl_season_key,
+        scoringPlayerId,
+        scoringRefresh.completed_at_ms,
+        scoringRefresh.completed_at_ms,
+        scoringRefresh.completed_at_ms
+      );
+    target.database
+      .prepare(`
+        INSERT INTO stat_refresh_player_game_sets (
+          id,
+          stat_source_id,
+          refresh_id,
+          nhl_season_key,
+          provider,
+          source_version,
+          captured_at_ms,
+          required_player_count,
+          coverage_entry_count,
+          expected_player_game_count,
+          coverage_schema_version,
+          coverage_sha256,
+          observation_count,
+          evidence_schema_version,
+          evidence_sha256,
+          created_at_ms,
+          version
+        ) VALUES (
+          ?,
+          ?,
+          ?,
+          ?,
+          'release_qa_fixture',
+          ?,
+          ?,
+          1,
+          1,
+          1,
+          1,
+          ?,
+          1,
+          1,
+          ?,
+          ?,
+          1
+        )
+      `)
+      .run(
+        playerGameSetId,
+        fixtureStatSourceId,
+        scoringRefresh.id,
+        scoringRefresh.nhl_season_key,
+        scoringRefresh.source_version,
+        scoringRefresh.completed_at_ms,
+        "b".repeat(64),
+        "c".repeat(64),
+        scoringRefresh.completed_at_ms
+      );
+  })();
   target.database
     .prepare(`
       UPDATE teams
@@ -164,6 +536,17 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
       FIXTURE_NOW_MS + 1,
       fixtureId("team:leagueA:1")
     );
+  const protectedTriggerSqlBefore = target.database
+    .prepare(`
+      SELECT name, sql
+      FROM sqlite_schema
+      WHERE type = 'trigger'
+        AND name IN (
+          ${FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.map(() => "?").join(", ")}
+        )
+      ORDER BY name ASC
+    `)
+    .all(...FIXTURE_RESET_PROTECTED_TRIGGER_NAMES);
 
   let authorizationCalls = 0;
   const service = createStagingFixtureResetService({
@@ -173,6 +556,17 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
     appEnv: "staging",
     environmentId: FIXTURE_ENVIRONMENT_ID,
     databaseId: FIXTURE_DATABASE_ID,
+    leagueWriteMode: "closed",
+    scheduledJobsEnabled: false,
+    maintenanceExclusionGuard:
+      createStagingMaintenanceExclusionGuard({
+        database: target.database,
+        appEnv: "staging",
+        environmentId: FIXTURE_ENVIRONMENT_ID,
+        databaseId: FIXTURE_DATABASE_ID,
+        leagueWriteMode: "closed",
+        scheduledJobsEnabled: false,
+      }),
     platformAuthorization: {
       requireAdministrator(authenticated) {
         authorizationCalls += 1;
@@ -195,8 +589,21 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
   };
   const result = await service.reset(request);
   assert.equal(result.code, "STAGING_FIXTURE_RESET_COMPLETED");
-  assert.equal(result.providerCatalogPlayerCount, 1);
+  assert.equal(
+    result.providerCatalogPlayerCount,
+    providerCatalogPlayerCount
+  );
   assert.equal(result.sessionInvalidated, true);
+  assert.equal(
+    target.database
+      .prepare(`
+        SELECT COUNT(*) AS count
+        FROM stat_refresh_player_game_coverage_entries
+        WHERE id = ?
+      `)
+      .get(playerGameCoverageId).count,
+    0
+  );
   assert.equal(
     target.database
       .prepare("SELECT name FROM teams WHERE id = ?")
@@ -210,8 +617,42 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
     1
   );
   assert.equal(
+    target.database
+      .prepare(`
+        SELECT COUNT(*) AS count
+        FROM stat_refresh_player_game_sets
+        WHERE id = ?
+      `)
+      .get(playerGameSetId).count,
+    0
+  );
+  assert.equal(
     target.database.pragma("foreign_key_check").length,
     0
+  );
+  assert.deepEqual(
+    target.database
+      .prepare(`
+        SELECT name, sql
+        FROM sqlite_schema
+        WHERE type = 'trigger'
+          AND name IN (
+            ${FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.map(() => "?").join(", ")}
+          )
+        ORDER BY name ASC
+      `)
+      .all(...FIXTURE_RESET_PROTECTED_TRIGGER_NAMES),
+    protectedTriggerSqlBefore
+  );
+  assert.equal(
+    target.database
+      .prepare(`
+        SELECT COUNT(*) AS count
+        FROM auction_contexts
+        WHERE source_kind = 'ordinary_weekly'
+      `)
+      .get().count,
+    2
   );
   assert.equal(
     target.database
@@ -250,6 +691,158 @@ test("M7-10 does not construct a reset capability for production or a non-fixtur
   );
 });
 
+test("M7-10 fixture reset requires the closed maintenance window and rejects active matchups before backup", async (t) => {
+  const target = await runtime(t);
+  assert.throws(
+    () =>
+      resetService(target, {
+        maintenanceExclusionGuard: null,
+      }),
+    /requires a staging maintenance-exclusion guard/
+  );
+  for (const override of [
+    { leagueWriteMode: "open" },
+    { scheduledJobsEnabled: true },
+  ]) {
+    assert.throws(
+      () => resetService(target, override),
+      (error) =>
+        error instanceof StagingMaintenanceExclusionError &&
+        error.code ===
+          "STAGING_MAINTENANCE_EXCLUSION_CONFIG_INVALID"
+    );
+  }
+
+  for (const [tableName, status] of [
+    ["matchup_weeks", "live"],
+    ["matchup_weeks", "correction_required"],
+    ["matchups", "live"],
+    ["matchups", "correction_required"],
+  ]) {
+    const row = target.database
+      .prepare(`SELECT id, status FROM ${tableName} ORDER BY id LIMIT 1`)
+      .get();
+    target.database
+      .prepare(`UPDATE ${tableName} SET status = ? WHERE id = ?`)
+      .run(status, row.id);
+    const before = target.database.serialize();
+    let backupCalls = 0;
+    let mkdirCalls = 0;
+    const service = resetService(target, {
+      fsModule: {
+        mkdirSync() {
+          mkdirCalls += 1;
+        },
+      },
+      async createBackup() {
+        backupCalls += 1;
+        return fakeBackup();
+      },
+    });
+
+    await assert.rejects(
+      service.reset(
+        resetRequest(`maintenance-${tableName}-${status}`)
+      ),
+      (error) =>
+        error instanceof StagingMaintenanceExclusionError &&
+        error.code ===
+          "STAGING_MAINTENANCE_EXCLUSION_MATCHUP_ACTIVE"
+    );
+    assert.equal(mkdirCalls, 0);
+    assert.equal(backupCalls, 0);
+    assert.equal(before.equals(target.database.serialize()), true);
+
+    target.database
+      .prepare(`UPDATE ${tableName} SET status = ? WHERE id = ?`)
+      .run(row.status, row.id);
+  }
+});
+
+test("M7-10 fixture reset reasserts maintenance exclusion across every mutation race seam", async (t) => {
+  await t.test("before backup", async (child) => {
+    const target = await runtime(child);
+    const before = resetMutationProjection(target.database);
+    const failure = maintenanceExclusionFailure();
+    let guardCalls = 0;
+    let backupCalls = 0;
+    const service = resetService(target, {
+      maintenanceExclusionGuard: allowFixtureResetExclusion(() => {
+        guardCalls += 1;
+        throw failure;
+      }),
+      async createBackup() {
+        backupCalls += 1;
+        return fakeBackup();
+      },
+    });
+
+    await assert.rejects(
+      service.reset(resetRequest("guard-before-backup")),
+      (error) => error === failure
+    );
+    assert.equal(guardCalls, 1);
+    assert.equal(backupCalls, 0);
+    assert.deepEqual(resetMutationProjection(target.database), before);
+  });
+
+  await t.test("after awaited backup", async (child) => {
+    const target = await runtime(child);
+    const before = resetMutationProjection(target.database);
+    const failure = maintenanceExclusionFailure();
+    let guardCalls = 0;
+    let backupArtifactPath;
+    const service = resetService(target, {
+      maintenanceExclusionGuard: allowFixtureResetExclusion(() => {
+        guardCalls += 1;
+        if (guardCalls === 2) throw failure;
+      }),
+      async createBackup({ outputDirectory }) {
+        fs.mkdirSync(outputDirectory, { recursive: true });
+        backupArtifactPath = path.join(outputDirectory, "backup.marker");
+        fs.writeFileSync(backupArtifactPath, "verified backup artifact");
+        return fakeBackup(outputDirectory);
+      },
+    });
+
+    await assert.rejects(
+      service.reset(resetRequest("guard-after-backup")),
+      (error) => error === failure
+    );
+    assert.equal(guardCalls, 2);
+    assert.equal(fs.existsSync(backupArtifactPath), true);
+    assert.deepEqual(resetMutationProjection(target.database), before);
+  });
+
+  await t.test("inside immediate transaction", async (child) => {
+    const target = await runtime(child);
+    const before = resetMutationProjection(target.database);
+    const failure = maintenanceExclusionFailure();
+    let guardCalls = 0;
+    const service = resetService(target, {
+      maintenanceExclusionGuard: allowFixtureResetExclusion(() => {
+        guardCalls += 1;
+        if (guardCalls === 3) {
+          assert.equal(target.database.inTransaction, true);
+          throw failure;
+        }
+      }),
+    });
+
+    await assert.rejects(
+      service.reset(resetRequest("guard-inside-transaction")),
+      (error) => error === failure
+    );
+    assert.equal(guardCalls, 3);
+    assert.equal(target.database.inTransaction, false);
+    assert.equal(
+      target.database.pragma("foreign_keys", { simple: true }),
+      1
+    );
+    assert.deepEqual(resetMutationProjection(target.database), before);
+  });
+});
+
 test("M7-10 restores the connection foreign-key guard when the reset transaction cannot begin", async (t) => {
   const target = await runtime(t);
   const blocker = openDatabase({
@@ -271,6 +864,8 @@ test("M7-10 restores the connection foreign-key guard when the reset transaction
       () =>
         resetFixtureRows({
           database: target.database,
+          maintenanceExclusionGuard:
+            allowFixtureResetExclusion(),
           passwordHash,
           actorUserId: fixtureId("account:platformAdmin"),
           backup: fakeBackup(),
@@ -393,7 +988,7 @@ test("M7-10 revalidates authority, identity, and fixture scope after the awaited
     });
     await assert.rejects(
       service.reset(resetRequest("post-backup-identity")),
-      { code: "STAGING_FIXTURE_RESET_IDENTITY_MISMATCH" }
+      { code: "STAGING_MAINTENANCE_EXCLUSION_IDENTITY_INVALID" }
     );
   });
 

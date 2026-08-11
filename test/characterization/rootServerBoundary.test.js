@@ -172,8 +172,9 @@ describe("root server boundary", () => {
       lines.length <= 80,
       `server.js still has ${lines.length} lines`
     );
-    assert.match(source, /startTargetProcess/);
+    assert.match(source, /startBackendProcess/);
     assert.match(source, /reportTargetStartupFailure/);
+    assert.doesNotMatch(source, /startTargetProcess/);
     assert.doesNotMatch(source, /createCompatibilityRuntime/);
     assert.doesNotMatch(
       source,

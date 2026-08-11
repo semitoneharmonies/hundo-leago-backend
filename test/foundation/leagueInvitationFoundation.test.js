@@ -65,6 +65,10 @@ const {
 const {
   createSessionCookie,
 } = require("../../src/transport/http/sessionCookie");
+const {
+  assertCanonicalAuthorityPublication,
+  readCanonicalAuthorityPublications,
+} = require("../helpers/canonicalAuthorityPublication");
 
 const ROOT_DIRECTORY = path.resolve(__dirname, "..", "..");
 const MIGRATIONS_DIRECTORY = path.join(
@@ -629,6 +633,29 @@ describe("M3-15 invitation acceptance and decline", () => {
     assert.equal(accepted.team.secondaryColour, null);
     assert.equal(accepted.team.logoReference, null);
     assert.equal(accepted.managerAssignment.status, "accepted");
+    const publications = readCanonicalAuthorityPublications(
+      runtime.database
+    );
+    assert.equal(publications.length, 2);
+    assertCanonicalAuthorityPublication(publications[0], {
+      leagueId: LEAGUE_ID,
+      eventType: "team.changed",
+      aggregateType: "team_manager_assignment",
+      resourceId: accepted.managerAssignment.id,
+      resourceVersion: accepted.managerAssignment.version,
+      reasonCode: "manager_assignment_changed",
+      occurredAtMs: NOW_MS,
+      teamId: accepted.team.id,
+    });
+    assertCanonicalAuthorityPublication(publications[1], {
+      leagueId: LEAGUE_ID,
+      eventType: "league.changed",
+      aggregateType: "league_membership",
+      resourceId: accepted.membership.id,
+      resourceVersion: accepted.membership.version,
+      reasonCode: "membership_changed",
+      occurredAtMs: NOW_MS,
+    });
     assert.equal(
       runtime.database
         .prepare("SELECT team_id FROM league_invitations")
@@ -655,6 +682,10 @@ describe("M3-15 invitation acceptance and decline", () => {
     assert.deepEqual(replay, accepted);
     assert.equal(replay.replayed, true);
     assert.deepEqual(invitationCounts(runtime.database), counts);
+    assert.equal(
+      readCanonicalAuthorityPublications(runtime.database).length,
+      2
+    );
     assert.throws(
       () =>
         service.accept({
@@ -706,6 +737,10 @@ describe("M3-15 invitation acceptance and decline", () => {
     assert.equal(declined.membership.status, "ended");
     assert.equal(declined.membership.joinedAtMs, null);
     assert.equal(declined.managerAssignment, null);
+    assert.equal(
+      readCanonicalAuthorityPublications(runtime.database).length,
+      0
+    );
     assert.equal(tableCount(runtime.database, "team_manager_assignments"), 0);
     const counts = invitationCounts(runtime.database);
     const replay = service.decline({
@@ -802,6 +837,8 @@ describe("M3-15 invitation acceptance and decline", () => {
       "activateMembership",
       "insertAcceptedManagerAssignment",
       "acceptInvitation",
+      "appendMembershipChangedPublication",
+      "appendManagerAssignmentChangedPublication",
       "appendInvitationActivity",
     ]) {
       const runtime = createRuntime(t);
@@ -810,6 +847,9 @@ describe("M3-15 invitation acceptance and decline", () => {
         invitationCommand(createTeamInput())
       );
       const before = invitationCounts(runtime.database);
+      const beforePublications = readCanonicalAuthorityPublications(
+        runtime.database
+      );
       const repository = {
         ...runtime.invitationRepository,
         [seam]() {
@@ -828,6 +868,10 @@ describe("M3-15 invitation acceptance and decline", () => {
         /repository operation failed/i
       );
       assert.deepEqual(invitationCounts(runtime.database), before);
+      assert.deepEqual(
+        readCanonicalAuthorityPublications(runtime.database),
+        beforePublications
+      );
       const row = runtime.invitationRepository.findInvitationAggregate(
         invited.invitation.id
       );
@@ -849,6 +893,9 @@ describe("M3-15 invitation acceptance and decline", () => {
         invitationCommand(manageTeamInput())
       );
       const before = invitationCounts(runtime.database);
+      const beforePublications = readCanonicalAuthorityPublications(
+        runtime.database
+      );
       const repository = {
         ...runtime.invitationRepository,
         [seam]() {
@@ -867,6 +914,10 @@ describe("M3-15 invitation acceptance and decline", () => {
         /repository operation failed/i
       );
       assert.deepEqual(invitationCounts(runtime.database), before);
+      assert.deepEqual(
+        readCanonicalAuthorityPublications(runtime.database),
+        beforePublications
+      );
     }
 
     for (const action of ["invite", "accept", "decline"]) {
@@ -883,6 +934,9 @@ describe("M3-15 invitation acceptance and decline", () => {
               )
             );
       const before = invitationCounts(runtime.database);
+      const beforePublications = readCanonicalAuthorityPublications(
+        runtime.database
+      );
       const service = createService(runtime, {
         auditRepository: {
           append() {
@@ -908,6 +962,10 @@ describe("M3-15 invitation acceptance and decline", () => {
         /repository operation failed/i
       );
       assert.deepEqual(invitationCounts(runtime.database), before);
+      assert.deepEqual(
+        readCanonicalAuthorityPublications(runtime.database),
+        beforePublications
+      );
       if (invited) {
         const row = runtime.invitationRepository.findInvitationAggregate(
           invited.invitation.id

@@ -3,7 +3,6 @@ const crypto = require("node:crypto");
 const {
   AUCTION_BID_CODES,
   AuctionBidPolicyError,
-  COOLDOWN_MS,
   assertAuctionBidState,
   validateAuctionBidCommand,
 } = require("../../../domain/auctions/auctionBidPolicy");
@@ -14,8 +13,6 @@ const {
 } = require("./SqliteRepositoryError");
 
 const OPERATION = "auction.bid.put";
-const UUID_PATTERN =
-  /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
 function freeze(value) {
   return Object.freeze(value);
@@ -25,39 +22,96 @@ function policyFail(reasonCode) {
   throw new AuctionBidPolicyError(reasonCode);
 }
 
-function canonicalReadInput(input, { detail = false } = {}) {
-  const keys = detail
-    ? ["auctionId", "leagueId", "viewerMembershipId", "viewerUserId"]
-    : ["leagueId", "viewerMembershipId", "viewerUserId"];
-  if (
-    !input ||
-    typeof input !== "object" ||
-    Array.isArray(input) ||
-    Object.keys(input).sort().join("|") !== keys.sort().join("|") ||
-    keys.some((key) => !UUID_PATTERN.test(input[key] || ""))
-  ) {
-    policyFail(AUCTION_BID_CODES.inputInvalid);
-  }
-  return freeze({ ...input });
+function isFadContext(auction) {
+  return ["fad_open_rapid", "fad_restricted"].includes(
+    auction?.source_kind
+  );
 }
 
-function createRequestHash(command) {
+function isNominatedOpenRapidBidContext(auction) {
+  if (
+    auction?.source_kind !== "fad_open_rapid" ||
+    !["manager_nomination", "queued_nomination"].includes(
+      auction.fad_origin
+    ) ||
+    auction.fad_allocation_id !== null ||
+    auction.fad_started_event_count !== 1 ||
+    auction.fad_starter_bid_count !== 1 ||
+    !auction.fad_starter_bid_id ||
+    !auction.fad_starter_team_id
+  ) {
+    return false;
+  }
+  return auction.fad_origin === "manager_nomination"
+    ? (
+        auction.queued_starter_count === 0 &&
+        auction.queued_starter_bid_id === null &&
+        auction.queued_starter_team_id === null
+      )
+    : (
+        auction.queued_starter_count === 1 &&
+        auction.queued_starter_bid_id ===
+          auction.fad_starter_bid_id &&
+        auction.queued_starter_team_id ===
+          auction.fad_starter_team_id
+      );
+}
+
+function isSupportedFadBidContext(auction) {
+  return isNominatedOpenRapidBidContext(auction) || (
+    auction?.source_kind === "fad_restricted" &&
+    auction.fad_origin === "candidate_tie_restricted" &&
+    auction.allocation_status === "restricted_active" &&
+    auction.restricted_auction_id === auction.id
+  ) || (
+    auction?.source_kind === "fad_open_rapid" &&
+    auction.fad_origin ===
+      "restricted_no_improvement_fallback" &&
+    auction.allocation_status === "restricted_fallback_open" &&
+    auction.fallback_open_auction_id === auction.id
+  );
+}
+
+function isReplayableFadBidContext(auction) {
+  return isNominatedOpenRapidBidContext(auction) || (
+    auction?.source_kind === "fad_restricted" &&
+    auction.fad_origin === "candidate_tie_restricted" &&
+    auction.fad_allocation_id !== null &&
+    auction.restricted_auction_id === auction.id
+  ) || (
+    auction?.source_kind === "fad_open_rapid" &&
+    auction.fad_origin ===
+      "restricted_no_improvement_fallback" &&
+    auction.fad_allocation_id !== null &&
+    auction.fallback_open_auction_id === auction.id
+  );
+}
+
+function createRequestHash(command, auction) {
+  const payload = {
+    leagueId: command.leagueId,
+    auctionId: command.auctionId,
+    teamId: command.teamId,
+    actorUserId: command.actorUserId,
+    actorMembershipId: command.actorMembershipId,
+    actorAuthority: command.actorAuthority,
+    totalValueCents: command.totalValueCents,
+    termYears: command.termYears,
+    expectedBidVersion: command.expectedBidVersion,
+  };
+  if (
+    isFadContext(auction) ||
+    Object.prototype.hasOwnProperty.call(
+      command,
+      "bindingIllegalityConfirmed"
+    )
+  ) {
+    payload.bindingIllegalityConfirmed =
+      command.bindingIllegalityConfirmed;
+  }
   return crypto
     .createHash("sha256")
-    .update(
-      JSON.stringify({
-        leagueId: command.leagueId,
-        auctionId: command.auctionId,
-        teamId: command.teamId,
-        actorUserId: command.actorUserId,
-        actorMembershipId: command.actorMembershipId,
-        actorAuthority: command.actorAuthority,
-        totalValueCents: command.totalValueCents,
-        termYears: command.termYears,
-        expectedBidVersion: command.expectedBidVersion,
-      }),
-      "utf8"
-    )
+    .update(JSON.stringify(payload), "utf8")
     .digest("hex");
 }
 
@@ -71,19 +125,17 @@ function createSqliteAuctionBidRepository({ database } = {}) {
   let findIdempotency;
   let findAuthority;
   let findAuction;
+  let findParticipant;
   let findCurrentTeamBid;
-  let findBidById;
   let insertIdempotency;
   let insertBid;
   let updateBid;
   let insertEvent;
-  let completeIdempotency;
+  let completeBidIdempotency;
   let findResultBid;
-  let findReadAuthority;
-  let listManagedTeams;
-  let listOpenAuctions;
-  let findOpenAuction;
-  let listParticipants;
+  let findReplayEvents;
+  let updateParticipant;
+  let findParticipantById;
   let putTransaction;
 
   function unique(statement, parameters, message) {
@@ -95,6 +147,34 @@ function createSqliteAuctionBidRepository({ database } = {}) {
       );
     }
     return rows[0] || null;
+  }
+
+  function requireCurrentAuthority(command) {
+    const authority = unique(
+      findAuthority,
+      command,
+      "Auction bid authority is not unique."
+    );
+    if (
+      !authority ||
+      authority.user_status !== "active" ||
+      authority.league_status !== "active" ||
+      authority.membership_status !== "active" ||
+      authority.membership_permission !== "manager" ||
+      !Number.isSafeInteger(authority.membership_joined_at_ms) ||
+      authority.membership_joined_at_ms > command.occurredAtMs ||
+      authority.membership_ended_at_ms !== null ||
+      authority.assignment_status !== "accepted" ||
+      !Number.isSafeInteger(authority.assignment_accepted_at_ms) ||
+      authority.assignment_accepted_at_ms > command.occurredAtMs ||
+      authority.assignment_ended_at_ms !== null ||
+      authority.team_id !== command.teamId ||
+      authority.team_status !== "active" ||
+      command.actorAuthority !== "manager"
+    ) {
+      policyFail(AUCTION_BID_CODES.authorizationDenied);
+    }
+    return authority;
   }
 
   function safeWriteResult(row, replayed, eventType = null) {
@@ -133,72 +213,109 @@ function createSqliteAuctionBidRepository({ database } = {}) {
     });
   }
 
-  function requireReadAuthority(input) {
-    const authority = unique(
-      findReadAuthority,
-      input,
-      "Auction read membership is not unique."
-    );
-    if (
-      !authority ||
-      authority.league_status === "deleted" ||
-      authority.membership_status !== "active"
-    ) {
-      policyFail(AUCTION_BID_CODES.authorizationDenied);
+  function replayMetadata(row, command, idempotency, auction) {
+    let metadata;
+    try {
+      metadata = JSON.parse(row.metadata_json);
+    } catch {
+      throw repositoryError(
+        REPOSITORY_ERROR_CODES.schemaIncompatible,
+        "The replayed auction bid event metadata is invalid."
+      );
     }
-    return authority;
+    const action = command.expectedBidVersion === null
+      ? "submitted"
+      : "edited";
+    const eventType = action === "submitted"
+      ? "bid_submitted"
+      : "bid_edited";
+    const after = metadata?.after;
+    const before = metadata?.before;
+    if (
+      row.auction_id !== command.auctionId ||
+      row.season_id !== auction.season_id ||
+      row.team_id !== command.teamId ||
+      row.event_type !== eventType ||
+      metadata?.actorAuthority !== command.actorAuthority ||
+      metadata?.actorMembershipId !== command.actorMembershipId ||
+      !after ||
+      after.totalValueCents !== command.totalValueCents ||
+      after.termYears !== command.termYears ||
+      after.aavCents !== roundedAav(
+        command.totalValueCents,
+        command.termYears
+      ) ||
+      after.version !== (command.expectedBidVersion ?? 0) + 1 ||
+      !Number.isSafeInteger(after.lowestOfferedAavCents) ||
+      !Number.isSafeInteger(after.editCount) ||
+      (action === "submitted" && before !== null) ||
+      (
+        action === "edited" &&
+        before?.version !== command.expectedBidVersion
+      ) ||
+      !Number.isSafeInteger(row.first_submitted_at_ms) ||
+      row.first_submitted_at_ms > idempotency.created_at_ms ||
+      idempotency.completed_at_ms !== idempotency.created_at_ms ||
+      (isFadContext(auction) &&
+        command.bindingIllegalityConfirmed !== true)
+    ) {
+      return null;
+    }
+    return freeze({
+      action,
+      after,
+      firstSubmittedAtMs: row.first_submitted_at_ms,
+    });
   }
 
-  function projectAuction(row, participants, managedTeamIds) {
-    const ownRow = participants.find(({ team_id: teamId }) =>
-      managedTeamIds.has(teamId)
-    );
-    const ownBidIsStarter = ownRow
-      ? ownRow.first_submitted_at_ms === row.opened_at_ms
-      : false;
-    const ownBidManagerEditLimit = ownBidIsStarter ? 2 : 1;
+  function replayResult(command, idempotency, auction) {
+    const matches = findReplayEvents
+      .all({
+        leagueId: command.leagueId,
+        effectiveBidId: idempotency.result_id,
+        actorUserId: command.actorUserId,
+        occurredAtMs: idempotency.created_at_ms,
+      })
+      .map((row) => ({
+        row,
+        metadata: replayMetadata(
+          row,
+          command,
+          idempotency,
+          auction
+        ),
+      }))
+      .filter(({ metadata }) => metadata !== null);
+    if (matches.length !== 1) {
+      throw repositoryError(
+        REPOSITORY_ERROR_CODES.schemaIncompatible,
+        "The replayed auction bid event is unavailable or ambiguous."
+      );
+    }
+    const { row, metadata } = matches[0];
     return freeze({
-      id: row.auction_id,
-      leagueId: row.league_id,
-      seasonId: row.season_id,
-      player: freeze({
-        id: row.player_id,
-        fullName: row.player_full_name,
-        positionGroup: row.position_group,
+      replayed: true,
+      action: metadata.action,
+      auction: freeze({
+        id: auction.id,
+        leagueId: auction.league_id,
+        seasonId: auction.season_id,
+        status: "open",
+        openedAtMs: auction.opened_at_ms,
+        bidClosesAtMs: auction.resolves_at_ms,
       }),
-      status: row.auction_status === "open" ? "Active" : row.auction_status,
-      openedAtMs: row.opened_at_ms,
-      bidClosesAtMs: row.resolves_at_ms,
-      participantCount: participants.length,
-      participants: freeze(
-        participants.map((participant) =>
-          freeze({
-            teamId: participant.team_id,
-            teamName: participant.team_name,
-          })
-        )
-      ),
-      ownBid: ownRow
-        ? freeze({
-            id: ownRow.bid_id,
-            teamId: ownRow.team_id,
-            totalValueCents: ownRow.total_value_cents,
-            termYears: ownRow.term_years,
-            aavCents: roundedAav(
-              ownRow.total_value_cents,
-              ownRow.term_years
-            ),
-            firstSubmittedAtMs: ownRow.first_submitted_at_ms,
-            lastEditedAtMs: ownRow.last_edited_at_ms,
-            editCount: ownRow.edit_count,
-            remainingManagerEdits: Math.max(
-              0,
-              ownBidManagerEditLimit - ownRow.edit_count
-            ),
-            cooldownEndsAtMs: ownRow.last_edited_at_ms + COOLDOWN_MS,
-            version: ownRow.bid_version,
-          })
-        : null,
+      bid: freeze({
+        id: idempotency.result_id,
+        teamId: row.team_id,
+        totalValueCents: metadata.after.totalValueCents,
+        termYears: metadata.after.termYears,
+        aavCents: metadata.after.aavCents,
+        firstSubmittedAtMs: metadata.firstSubmittedAtMs,
+        lastEditedAtMs: idempotency.created_at_ms,
+        editCount: metadata.after.editCount,
+        status: "active",
+        version: metadata.after.version,
+      }),
     });
   }
 
@@ -215,13 +332,20 @@ function createSqliteAuctionBidRepository({ database } = {}) {
       SELECT
         leagues.status AS league_status,
         leagues.commissioner_membership_id AS commissioner_membership_id,
+        users.status AS user_status,
         league_memberships.permission_category AS membership_permission,
         league_memberships.status AS membership_status,
+        league_memberships.joined_at_ms AS membership_joined_at_ms,
+        league_memberships.ended_at_ms AS membership_ended_at_ms,
         teams.id AS team_id,
         teams.status AS team_status,
         team_manager_assignments.status AS assignment_status,
+        team_manager_assignments.accepted_at_ms
+          AS assignment_accepted_at_ms,
         team_manager_assignments.ended_at_ms AS assignment_ended_at_ms
       FROM leagues
+      JOIN users
+        ON users.id = @actorUserId
       JOIN teams
         ON teams.league_id = leagues.id
        AND teams.id = @teamId
@@ -241,9 +365,121 @@ function createSqliteAuctionBidRepository({ database } = {}) {
       LIMIT 2
     `);
     findAuction = database.prepare(`
-      SELECT * FROM auctions
+      SELECT
+        auctions.*,
+        auction_contexts.source_kind,
+        auction_contexts.fad_id,
+        auction_contexts.fad_rollover_id,
+        auction_contexts.fad_allocation_id,
+        auction_contexts.fad_origin,
+        free_agent_draft_player_allocations.status
+          AS allocation_status,
+        free_agent_draft_player_allocations.restricted_auction_id,
+        free_agent_draft_player_allocations.fallback_open_auction_id,
+        free_agent_draft_player_allocations
+          .restricted_minimum_total_cents,
+        free_agent_draft_player_allocations
+          .restricted_minimum_aav_cents,
+        (
+          SELECT COUNT(*)
+          FROM auction_events AS started_event
+          WHERE started_event.league_id = auctions.league_id
+            AND started_event.season_id = auctions.season_id
+            AND started_event.auction_id = auctions.id
+            AND started_event.event_type = 'auction_started'
+        ) AS fad_started_event_count,
+        (
+          SELECT COUNT(*)
+          FROM auction_events AS started_event
+          JOIN auction_bids AS starter_bid
+            ON starter_bid.league_id = started_event.league_id
+           AND starter_bid.season_id = started_event.season_id
+           AND starter_bid.auction_id = started_event.auction_id
+           AND starter_bid.id = started_event.bid_id
+           AND starter_bid.team_id = started_event.team_id
+          WHERE started_event.league_id = auctions.league_id
+            AND started_event.season_id = auctions.season_id
+            AND started_event.auction_id = auctions.id
+            AND started_event.event_type = 'auction_started'
+        ) AS fad_starter_bid_count,
+        (
+          SELECT started_event.bid_id
+          FROM auction_events AS started_event
+          WHERE started_event.league_id = auctions.league_id
+            AND started_event.season_id = auctions.season_id
+            AND started_event.auction_id = auctions.id
+            AND started_event.event_type = 'auction_started'
+            AND started_event.occurred_at_ms = auctions.opened_at_ms
+          ORDER BY started_event.id
+          LIMIT 1
+        ) AS fad_starter_bid_id,
+        (
+          SELECT started_event.team_id
+          FROM auction_events AS started_event
+          WHERE started_event.league_id = auctions.league_id
+            AND started_event.season_id = auctions.season_id
+            AND started_event.auction_id = auctions.id
+            AND started_event.event_type = 'auction_started'
+            AND started_event.occurred_at_ms = auctions.opened_at_ms
+          ORDER BY started_event.id
+          LIMIT 1
+        ) AS fad_starter_team_id,
+        (
+          SELECT COUNT(*)
+          FROM free_agent_draft_nomination_queue AS queue
+          WHERE queue.league_id = auctions.league_id
+            AND queue.opened_auction_id = auctions.id
+        ) AS queued_starter_count,
+        (
+          SELECT queue.opened_starter_bid_id
+          FROM free_agent_draft_nomination_queue AS queue
+          WHERE queue.league_id = auctions.league_id
+            AND queue.season_id = auctions.season_id
+            AND queue.fad_id = auction_contexts.fad_id
+            AND queue.player_id = auctions.player_id
+            AND queue.status = 'opened'
+            AND queue.opened_auction_id = auctions.id
+            AND queue.opened_at_ms = auctions.opened_at_ms
+          ORDER BY queue.id
+          LIMIT 1
+        ) AS queued_starter_bid_id,
+        (
+          SELECT queue.team_id
+          FROM free_agent_draft_nomination_queue AS queue
+          WHERE queue.league_id = auctions.league_id
+            AND queue.season_id = auctions.season_id
+            AND queue.fad_id = auction_contexts.fad_id
+            AND queue.player_id = auctions.player_id
+            AND queue.status = 'opened'
+            AND queue.opened_auction_id = auctions.id
+            AND queue.opened_at_ms = auctions.opened_at_ms
+          ORDER BY queue.id
+          LIMIT 1
+        ) AS queued_starter_team_id
+      FROM auctions
+      JOIN auction_contexts
+        ON auction_contexts.league_id = auctions.league_id
+       AND auction_contexts.season_id = auctions.season_id
+       AND auction_contexts.auction_id = auctions.id
+      LEFT JOIN free_agent_draft_player_allocations
+        ON free_agent_draft_player_allocations.league_id =
+            auction_contexts.league_id
+       AND free_agent_draft_player_allocations.season_id =
+            auction_contexts.season_id
+       AND free_agent_draft_player_allocations.fad_id =
+            auction_contexts.fad_id
+       AND free_agent_draft_player_allocations.id =
+            auction_contexts.fad_allocation_id
+      WHERE auctions.league_id = @leagueId
+        AND auctions.id = @auctionId
+      LIMIT 2
+    `);
+    findParticipant = database.prepare(`
+      SELECT *
+      FROM free_agent_draft_auction_participants
       WHERE league_id = @leagueId
-        AND id = @auctionId
+        AND auction_id = @auctionId
+        AND team_id = @teamId
       LIMIT 2
     `);
     findCurrentTeamBid = database.prepare(`
@@ -252,13 +488,6 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         AND auction_id = @auctionId
         AND team_id = @teamId
         AND status = 'active'
-      LIMIT 2
-    `);
-    findBidById = database.prepare(`
-      SELECT * FROM auction_bids
-      WHERE league_id = @leagueId
-        AND auction_id = @auctionId
-        AND id = @bidId
       LIMIT 2
     `);
     insertIdempotency = database.prepare(`
@@ -312,7 +541,7 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         @teamId, @actorUserId, @eventType, @metadataJson, @occurredAtMs
       )
     `);
-    completeIdempotency = database.prepare(`
+    completeBidIdempotency = database.prepare(`
       UPDATE idempotency_requests
       SET status = 'completed', result_type = 'auction_bid',
         result_id = @effectiveBidId, completed_at_ms = @occurredAtMs
@@ -345,168 +574,171 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         AND auction_bids.id = @effectiveBidId
       LIMIT 2
     `);
-    findReadAuthority = database.prepare(`
+    findReplayEvents = database.prepare(`
       SELECT
-        leagues.status AS league_status,
-        league_memberships.status AS membership_status,
-        league_memberships.permission_category AS membership_permission
-      FROM leagues
-      JOIN league_memberships
-        ON league_memberships.league_id = leagues.id
-       AND league_memberships.id = @viewerMembershipId
-       AND league_memberships.user_id = @viewerUserId
-      WHERE leagues.id = @leagueId
-      LIMIT 2
-    `);
-    listManagedTeams = database.prepare(`
-      SELECT team_manager_assignments.team_id AS team_id
-      FROM team_manager_assignments
-      JOIN teams
-        ON teams.league_id = team_manager_assignments.league_id
-       AND teams.id = team_manager_assignments.team_id
-      WHERE team_manager_assignments.league_id = @leagueId
-        AND team_manager_assignments.user_id = @viewerUserId
-        AND team_manager_assignments.membership_id = @viewerMembershipId
-        AND team_manager_assignments.status = 'accepted'
-        AND team_manager_assignments.accepted_at_ms IS NOT NULL
-        AND team_manager_assignments.ended_at_ms IS NULL
-        AND teams.status = 'active'
-      ORDER BY team_manager_assignments.team_id
-    `);
-    const auctionProjectionSql = `
-      SELECT
-        auctions.id AS auction_id,
-        auctions.league_id AS league_id,
-        auctions.season_id AS season_id,
-        auctions.player_id AS player_id,
-        auctions.status AS auction_status,
-        auctions.opened_at_ms AS opened_at_ms,
-        auctions.resolves_at_ms AS resolves_at_ms,
-        players.full_name AS player_full_name,
+        auction_events.*,
         COALESCE(
           (
-            SELECT league_player_positions.position_group
-            FROM league_player_positions
-            WHERE league_player_positions.league_id = auctions.league_id
-              AND league_player_positions.player_id = auctions.player_id
-              AND league_player_positions.ended_at_ms IS NULL
+            SELECT queue.binding_confirmed_at_ms
+            FROM free_agent_draft_nomination_queue AS queue
+            WHERE queue.league_id = auction_events.league_id
+              AND queue.opened_auction_id = auction_events.auction_id
+              AND queue.opened_starter_bid_id = auction_events.bid_id
+              AND queue.team_id = auction_events.team_id
+              AND queue.status = 'opened'
+            ORDER BY queue.id
             LIMIT 1
           ),
           (
-            SELECT CASE
-              WHEN COUNT(DISTINCT player_source_state.normalized_position) = 1
-              THEN MAX(player_source_state.normalized_position)
-              ELSE NULL
-            END
-            FROM player_source_state
-            WHERE player_source_state.player_id = auctions.player_id
-              AND player_source_state.ended_at_ms IS NULL
-              AND player_source_state.active = 1
-              AND player_source_state.normalized_position IN ('F', 'D')
+            SELECT MIN(submitted_event.occurred_at_ms)
+            FROM auction_events AS submitted_event
+            WHERE submitted_event.league_id = auction_events.league_id
+              AND submitted_event.season_id = auction_events.season_id
+              AND submitted_event.auction_id = auction_events.auction_id
+              AND submitted_event.bid_id = auction_events.bid_id
+              AND submitted_event.team_id = auction_events.team_id
+              AND submitted_event.event_type = 'bid_submitted'
+          ),
+          (
+            SELECT MIN(started_event.occurred_at_ms)
+            FROM auction_events AS started_event
+            WHERE started_event.league_id = auction_events.league_id
+              AND started_event.season_id = auction_events.season_id
+              AND started_event.auction_id = auction_events.auction_id
+              AND started_event.bid_id = auction_events.bid_id
+              AND started_event.team_id = auction_events.team_id
+              AND started_event.event_type = 'auction_started'
           )
-        ) AS position_group
-      FROM auctions
-      JOIN players ON players.id = auctions.player_id
-    `;
-    listOpenAuctions = database.prepare(`
-      ${auctionProjectionSql}
-      WHERE auctions.league_id = @leagueId
-        AND auctions.status = 'open'
-      ORDER BY auctions.resolves_at_ms, auctions.id
+        ) AS first_submitted_at_ms
+      FROM auction_events
+      WHERE auction_events.league_id = @leagueId
+        AND auction_events.bid_id = @effectiveBidId
+        AND auction_events.actor_user_id = @actorUserId
+        AND auction_events.occurred_at_ms = @occurredAtMs
+        AND auction_events.event_type IN (
+          'bid_submitted',
+          'bid_edited'
+        )
+      ORDER BY auction_events.id
     `);
-    findOpenAuction = database.prepare(`
-      ${auctionProjectionSql}
-      WHERE auctions.league_id = @leagueId
-        AND auctions.id = @auctionId
-        AND auctions.status = 'open'
+    updateParticipant = database.prepare(`
+      UPDATE free_agent_draft_auction_participants
+      SET active_improvement_bid_id = @effectiveBidId,
+        first_improvement_at_ms = COALESCE(
+          first_improvement_at_ms,
+          @firstSubmittedAtMs
+        ),
+        current_cooldown_anchor_at_ms = @lastEditedAtMs,
+        improvement_committed_at_ms = @lastEditedAtMs,
+        updated_at_ms = @lastEditedAtMs,
+        version = version + 1
+      WHERE id = @participantId
+        AND league_id = @leagueId
+        AND season_id = @seasonId
+        AND fad_id = @fadId
+        AND allocation_id = @allocationId
+        AND auction_id = @auctionId
+        AND team_id = @teamId
+        AND status = 'active'
+        AND version = @participantVersion
+        AND (
+          (
+            @action = 'submitted'
+            AND active_improvement_bid_id IS NULL
+            AND first_improvement_at_ms IS NULL
+            AND current_cooldown_anchor_at_ms IS NULL
+            AND improvement_committed_at_ms IS NULL
+          )
+          OR (
+            @action = 'edited'
+            AND active_improvement_bid_id = @effectiveBidId
+            AND first_improvement_at_ms = @firstSubmittedAtMs
+            AND current_cooldown_anchor_at_ms =
+              @previousCooldownAnchorAtMs
+            AND improvement_committed_at_ms =
+              @previousCooldownAnchorAtMs
+          )
+        )
+    `);
+    findParticipantById = database.prepare(`
+      SELECT *
+      FROM free_agent_draft_auction_participants
+      WHERE league_id = @leagueId
+        AND id = @participantId
       LIMIT 2
     `);
-    listParticipants = database.prepare(`
-      SELECT
-        auction_bids.id AS bid_id,
-        auction_bids.team_id AS team_id,
-        teams.name AS team_name,
-        auction_bids.total_value_cents AS total_value_cents,
-        auction_bids.term_years AS term_years,
-        auction_bids.first_submitted_at_ms AS first_submitted_at_ms,
-        auction_bids.last_edited_at_ms AS last_edited_at_ms,
-        auction_bids.edit_count AS edit_count,
-        auction_bids.version AS bid_version
-      FROM auction_bids
-      JOIN teams
-        ON teams.league_id = auction_bids.league_id
-       AND teams.id = auction_bids.team_id
-      WHERE auction_bids.league_id = @leagueId
-        AND auction_bids.auction_id = @auctionId
-        AND auction_bids.status = 'active'
-      ORDER BY auction_bids.first_submitted_at_ms, auction_bids.id
-    `);
-
     putTransaction = database.transaction((command) => {
-      const requestHash = createRequestHash(command);
+      const auction = unique(
+        findAuction,
+        command,
+        "An auction identifier is not unique within its league."
+      );
+      const requestHash = createRequestHash(command, auction);
       const idempotency = unique(
         findIdempotency,
         command,
         "Auction bid idempotency scope is not unique."
       );
       if (idempotency) {
+        if (idempotency.request_hash !== requestHash) {
+          policyFail(AUCTION_BID_CODES.idempotencyKeyReused);
+        }
         if (
-          idempotency.request_hash !== requestHash ||
           idempotency.status !== "completed" ||
-          idempotency.result_type !== "auction_bid" ||
           !idempotency.result_id
         ) {
           policyFail(AUCTION_BID_CODES.idempotencyConflict);
         }
-        return safeWriteResult(
-          unique(
-            findResultBid,
-            {
-              leagueId: command.leagueId,
-              effectiveBidId: idempotency.result_id,
-            },
-            "An idempotent auction bid aggregate is not unique."
-          ),
-          true
-        );
+        if (idempotency.result_type !== "auction_bid" || !auction) {
+          policyFail(AUCTION_BID_CODES.idempotencyConflict);
+        }
+        if (
+          isFadContext(auction) &&
+          !isReplayableFadBidContext(auction)
+        ) {
+          policyFail(AUCTION_BID_CODES.auctionUnavailable);
+        }
+        requireCurrentAuthority(command);
+        return replayResult(command, idempotency, auction);
       }
 
-      const auction = unique(
-        findAuction,
+      if (
+        auction?.source_kind === "ordinary_weekly" &&
+        Object.prototype.hasOwnProperty.call(
+          command,
+          "bindingIllegalityConfirmed"
+        )
+      ) {
+        policyFail(AUCTION_BID_CODES.inputInvalid);
+      }
+      if (isFadContext(auction) && !isSupportedFadBidContext(auction)) {
+        policyFail(AUCTION_BID_CODES.auctionUnavailable);
+      }
+      if (
+        isSupportedFadBidContext(auction) &&
+        command.bindingIllegalityConfirmed !== true
+      ) {
+        policyFail(AUCTION_BID_CODES.inputInvalid);
+      }
+
+      const participant = unique(
+        findParticipant,
         command,
-        "An auction identifier is not unique within its league."
+        "A restricted auction participant identity is not unique."
       );
-      const authority = unique(
-        findAuthority,
-        command,
-        "Auction bid authority is not unique."
-      );
+      const authority = requireCurrentAuthority(command);
       const currentTeamBid = unique(
         findCurrentTeamBid,
         command,
         "A team has multiple current bids in one auction."
       );
-      let existingBid = currentTeamBid;
-      if (command.actorAuthority === "commissioner") {
-        const targetBid = unique(
-          findBidById,
-          command,
-          "A commissioner bid target is not unique."
-        );
-        if (
-          (targetBid && targetBid.team_id !== command.teamId) ||
-          (targetBid && currentTeamBid && targetBid.id !== currentTeamBid.id) ||
-          (!targetBid && currentTeamBid)
-        ) {
-          policyFail(AUCTION_BID_CODES.bidConflict);
-        }
-        existingBid = targetBid;
-      }
+      const existingBid = currentTeamBid;
       const state = assertAuctionBidState({
         command,
         authority,
         auction,
         existingBid,
+        participant,
       });
       const effectiveBidId = existingBid?.id || command.bidId;
       const persisted = {
@@ -514,9 +746,15 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         ...state,
         effectiveBidId,
         seasonId: auction.season_id,
+        participantId: participant?.id || null,
+        participantVersion: participant?.version || null,
+        fadId: auction.fad_id,
+        allocationId: auction.fad_allocation_id,
+        previousCooldownAnchorAtMs:
+          existingBid?.last_edited_at_ms ?? null,
       };
       const eventType = state.action === "submitted" ? "bid_submitted" : "bid_edited";
-      const metadataJson = JSON.stringify({
+      const metadata = {
         actorAuthority: command.actorAuthority,
         actorMembershipId: command.actorMembershipId,
         before: existingBid
@@ -536,7 +774,8 @@ function createSqliteAuctionBidRepository({ database } = {}) {
           editCount: state.editCount,
           version: state.nextVersion,
         },
-      });
+      };
+      const metadataJson = JSON.stringify(metadata);
 
       insertIdempotency.run({ ...persisted, requestHash });
       if (existingBid) {
@@ -546,14 +785,35 @@ function createSqliteAuctionBidRepository({ database } = {}) {
       } else {
         insertBid.run(persisted);
       }
-      insertEvent.run({ ...persisted, eventType, metadataJson });
-      if (completeIdempotency.run(persisted).changes !== 1) {
-        throw repositoryError(
-          REPOSITORY_ERROR_CODES.versionConflict,
-          "Auction bid idempotency could not be completed."
+      if (auction.source_kind === "fad_restricted") {
+        if (updateParticipant.run(persisted).changes !== 1) {
+          policyFail(AUCTION_BID_CODES.versionConflict);
+        }
+        const linked = unique(
+          findParticipantById,
+          persisted,
+          "A restricted participant identity is not unique."
         );
+        if (
+          !linked ||
+          linked.status !== "active" ||
+          linked.active_improvement_bid_id !== effectiveBidId ||
+          linked.first_improvement_at_ms !==
+            state.firstSubmittedAtMs ||
+          linked.current_cooldown_anchor_at_ms !==
+            state.lastEditedAtMs ||
+          linked.improvement_committed_at_ms !==
+            state.lastEditedAtMs ||
+          linked.version !== participant.version + 1
+        ) {
+          throw repositoryError(
+            REPOSITORY_ERROR_CODES.versionConflict,
+            "The restricted participant bid link was not committed."
+          );
+        }
       }
-      return safeWriteResult(
+      insertEvent.run({ ...persisted, eventType, metadataJson });
+      const result = safeWriteResult(
         unique(
           findResultBid,
           persisted,
@@ -562,6 +822,13 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         false,
         state.action
       );
+      if (completeBidIdempotency.run(persisted).changes !== 1) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.versionConflict,
+          "Auction bid idempotency could not be completed."
+        );
+      }
+      return result;
     });
   } catch (error) {
     throw mapRepositoryError(error, {
@@ -580,71 +847,6 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         throw mapRepositoryError(error, {
           operation: "putAuctionBid",
           tableName: "auction_bids",
-        });
-      }
-    },
-
-    listActive(input) {
-      const canonical = canonicalReadInput(input);
-      try {
-        const authority = requireReadAuthority(canonical);
-        const managedTeamIds =
-          authority.membership_permission === "manager"
-            ? new Set(
-                listManagedTeams
-                  .all(canonical)
-                  .map(({ team_id: teamId }) => teamId)
-              )
-            : new Set();
-        return freeze(
-          listOpenAuctions.all(canonical).map((row) =>
-            projectAuction(
-              row,
-              listParticipants.all({
-                leagueId: canonical.leagueId,
-                auctionId: row.auction_id,
-              }),
-              managedTeamIds
-            )
-          )
-        );
-      } catch (error) {
-        if (error instanceof AuctionBidPolicyError) throw error;
-        throw mapRepositoryError(error, {
-          operation: "listActiveAuctions",
-          tableName: "auctions",
-        });
-      }
-    },
-
-    readActive(input) {
-      const canonical = canonicalReadInput(input, { detail: true });
-      try {
-        const authority = requireReadAuthority(canonical);
-        const row = unique(
-          findOpenAuction,
-          canonical,
-          "An active auction detail is not unique."
-        );
-        if (!row) return null;
-        const managedTeamIds =
-          authority.membership_permission === "manager"
-            ? new Set(
-                listManagedTeams
-                  .all(canonical)
-                  .map(({ team_id: teamId }) => teamId)
-              )
-            : new Set();
-        return projectAuction(
-          row,
-          listParticipants.all(canonical),
-          managedTeamIds
-        );
-      } catch (error) {
-        if (error instanceof AuctionBidPolicyError) throw error;
-        throw mapRepositoryError(error, {
-          operation: "readActiveAuction",
-          tableName: "auctions",
         });
       }
     },

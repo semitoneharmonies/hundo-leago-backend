@@ -45,6 +45,10 @@ const ACTION_TOKEN_DELIVERY_KEY = Buffer.alloc(
 ).toString("base64url");
 const RESEND_API_KEY =
   "re_m3_21_fake_provider_key_material_0123456789";
+const SPORTSDATAIO_LIVE_API_KEY =
+  "sportsdataio-live-provider-key-material-0123456789";
+const SPORTSDATAIO_LIVE_CAPABILITY_SECRET =
+  "sportsdataio-live-capability-secret-material-9876543210";
 const FIXED_UUID =
   "018f4ca6-7f73-4d95-8b65-91f9a2cc4d8e";
 
@@ -233,6 +237,127 @@ describe("M3-02 security configuration", () => {
           error instanceof SecurityConfigError &&
           error.field === "SESSION_COOKIE_SAME_SITE"
       );
+    }
+  });
+
+  test("owns and redacts independent SportsDataIO live secrets without serializing their values", () => {
+    const env = deployedEnv("staging", {
+      SPORTSDATAIO_NHL_LIVE_API_KEY:
+        SPORTSDATAIO_LIVE_API_KEY,
+      SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET:
+        SPORTSDATAIO_LIVE_CAPABILITY_SECRET,
+    });
+    const config = loadSecurityConfig({ env });
+
+    assert.equal(Object.isFrozen(config.sportsDataIoLive), true);
+    assert.equal(
+      config.sportsDataIoLive.apiKey.value,
+      SPORTSDATAIO_LIVE_API_KEY
+    );
+    assert.equal(
+      config.sportsDataIoLive.capabilitySecret.value,
+      SPORTSDATAIO_LIVE_CAPABILITY_SECRET
+    );
+    assert.equal(
+      Object.keys(config.sportsDataIoLive.apiKey).includes("value"),
+      false
+    );
+    assert.equal(
+      Object.keys(
+        config.sportsDataIoLive.capabilitySecret
+      ).includes("value"),
+      false
+    );
+    const serialized = JSON.stringify(config);
+    assert.equal(serialized.includes(SPORTSDATAIO_LIVE_API_KEY), false);
+    assert.equal(
+      serialized.includes(
+        SPORTSDATAIO_LIVE_CAPABILITY_SECRET
+      ),
+      false
+    );
+
+    const lines = [];
+    const foundations = createSecurityFoundations({
+      env,
+      now: () => FIXED_NOW_MS,
+      loggerSink(line) {
+        lines.push(line);
+      },
+    });
+    foundations.logger.info("security.live_provider_redaction", {
+      note:
+        `${SPORTSDATAIO_LIVE_API_KEY}:` +
+        SPORTSDATAIO_LIVE_CAPABILITY_SECRET,
+    });
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].includes(SPORTSDATAIO_LIVE_API_KEY), false);
+    assert.equal(
+      lines[0].includes(
+        SPORTSDATAIO_LIVE_CAPABILITY_SECRET
+      ),
+      false
+    );
+  });
+
+  test("rejects malformed or reused SportsDataIO live secrets without exposing them", () => {
+    const cases = [
+      {
+        env: deployedEnv("staging", {
+          SPORTSDATAIO_NHL_LIVE_API_KEY:
+            ` ${SPORTSDATAIO_LIVE_API_KEY}`,
+        }),
+        field: "SPORTSDATAIO_NHL_LIVE_API_KEY",
+      },
+      {
+        env: deployedEnv("staging", {
+          SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET:
+            "too-short",
+        }),
+        field:
+          "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
+      },
+      {
+        env: deployedEnv("staging", {
+          SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET:
+            RATE_LIMIT_SECRET,
+        }),
+        field:
+          "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
+      },
+      {
+        env: deployedEnv("staging", {
+          SPORTSDATAIO_NHL_LIVE_API_KEY:
+            SPORTSDATAIO_LIVE_CAPABILITY_SECRET,
+          SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET:
+            SPORTSDATAIO_LIVE_CAPABILITY_SECRET,
+        }),
+        field:
+          "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
+      },
+    ];
+
+    for (const { env, field } of cases) {
+      let caught;
+      try {
+        loadSecurityConfig({ env });
+      } catch (error) {
+        caught = error;
+      }
+      assert.ok(caught instanceof SecurityConfigError);
+      assert.equal(caught.field, field);
+      const serialized = JSON.stringify({
+        message: caught.message,
+        stack: caught.stack,
+      });
+      for (const secret of [
+        SPORTSDATAIO_LIVE_API_KEY,
+        SPORTSDATAIO_LIVE_CAPABILITY_SECRET,
+        RATE_LIMIT_SECRET,
+        "too-short",
+      ]) {
+        assert.equal(serialized.includes(secret), false);
+      }
     }
   });
 

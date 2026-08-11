@@ -174,6 +174,8 @@ function createCommissionerAssignmentService({
     "acceptInvitation",
     "activateMembership",
     "appendAssignmentActivity",
+    "appendCommissionerAssignmentChangedPublication",
+    "appendMembershipChangedPublication",
     "cancelInvitation",
     "completeIdempotency",
     "endNeverActiveMembership",
@@ -449,6 +451,8 @@ function createCommissionerAssignmentService({
     const nowMs = safeNow(clock);
     const activityId = secureRandom.id();
     const auditId = secureRandom.id();
+    const commissionerAssignmentPublicationId = secureRandom.id();
+    const membershipPublicationId = secureRandom.id();
     const audit = auditContext || {};
 
     try {
@@ -489,7 +493,7 @@ function createCommissionerAssignmentService({
         throw new CommissionerAssignmentConflictError();
       }
 
-      assignmentRepository.activateMembership({
+      const membership = assignmentRepository.activateMembership({
         leagueId: row.league_id,
         membershipId: row.membership_id,
         expectedVersion: row.membership_version,
@@ -501,10 +505,24 @@ function createCommissionerAssignmentService({
         expectedVersion: row.league_version,
         nowMs,
       });
-      assignmentRepository.acceptInvitation({
+      const assignment = assignmentRepository.acceptInvitation({
         leagueId: row.league_id,
         assignmentId: row.assignment_id,
         expectedVersion: row.assignment_version,
+        nowMs,
+      });
+      assignmentRepository.appendMembershipChangedPublication({
+        id: membershipPublicationId,
+        leagueId: row.league_id,
+        membershipId: membership.id,
+        version: membership.version,
+        nowMs,
+      });
+      assignmentRepository.appendCommissionerAssignmentChangedPublication({
+        id: commissionerAssignmentPublicationId,
+        leagueId: row.league_id,
+        assignmentId: assignment.id,
+        version: assignment.version,
         nowMs,
       });
       assignmentRepository.appendAssignmentActivity({

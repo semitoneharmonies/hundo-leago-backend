@@ -48,6 +48,15 @@ const DEFINITIONS = [
     { keyColumn: "metadata_key" }
   ),
   repositoryDefinition(
+    "auction_administration_command_results",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "auction_contexts",
+    REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
     "auction_bids",
     REPOSITORY_SCOPES.requiredLeague,
     { versioned: true }
@@ -82,6 +91,39 @@ const DEFINITIONS = [
   repositoryDefinition(
     "buyout_years",
     REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
+    "candidate_card_entries",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "candidate_card_help_command_results",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "candidate_card_help_requests",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "candidate_card_revisions",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "candidate_card_snapshot_entries",
+    REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
+    "candidate_card_snapshots",
+    REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
+    "candidate_cards",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
   ),
   repositoryDefinition(
     "commissioner_corrections",
@@ -139,7 +181,130 @@ const DEFINITIONS = [
     REPOSITORY_SCOPES.requiredLeague
   ),
   repositoryDefinition(
+    "entry_draft_on_clock_trades",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "entry_draft_pick_clocks",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "entry_draft_rollover_bindings",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "entry_draft_schedule_operations",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
     "entry_drafts",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_allocation_events",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_allocation_correction_command_results",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_auction_participants",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_draws",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_eligibility_revalidation_occurrences",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_player_allocations",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_readiness_attempts",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_readiness_corrective_requeues",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_readiness_operations",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_readiness_retry_receipts",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_recoveries",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_recovery_action_command_results",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_rollovers",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_schedule_recoveries",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_schedule_recovery_jobs",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_schedule_recovery_matchups",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_schedule_recovery_weeks",
+    REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
+    "free_agent_draft_nomination_queue",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_setup_exemptions",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "free_agent_draft_teams",
+    REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
+    "free_agent_drafts",
     REPOSITORY_SCOPES.requiredLeague,
     { versioned: true }
   ),
@@ -212,13 +377,33 @@ const DEFINITIONS = [
     { versioned: true }
   ),
   repositoryDefinition(
+    "matchup_roster_game_exclusion_sets",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
     "matchup_roster_locks",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "matchup_roster_game_exclusions",
     REPOSITORY_SCOPES.requiredLeague,
     { versioned: true }
   ),
   repositoryDefinition(
     "matchup_roster_players",
     REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
+    "matchup_schedule_command_results",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "matchup_schedule_job_bindings",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
   ),
   repositoryDefinition(
     "matchup_weeks",
@@ -235,6 +420,16 @@ const DEFINITIONS = [
     REPOSITORY_SCOPES.optionalLeague
   ),
   repositoryDefinition(
+    "nhl_game_state_observation_snapshots",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "nhl_game_state_observations",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
     "notifications",
     REPOSITORY_SCOPES.optionalLeague,
     { versioned: true }
@@ -242,6 +437,10 @@ const DEFINITIONS = [
   repositoryDefinition(
     "operational_events",
     REPOSITORY_SCOPES.optionalLeague
+  ),
+  repositoryDefinition(
+    "outbox_event_audiences",
+    REPOSITORY_SCOPES.requiredLeague
   ),
   repositoryDefinition(
     "outbox_events",
@@ -260,6 +459,11 @@ const DEFINITIONS = [
   repositoryDefinition(
     "player_external_ids",
     REPOSITORY_SCOPES.global
+  ),
+  repositoryDefinition(
+    "player_game_stat_observations",
+    REPOSITORY_SCOPES.global,
+    { versioned: true }
   ),
   repositoryDefinition(
     "player_names",
@@ -302,7 +506,35 @@ const DEFINITIONS = [
     { versioned: true }
   ),
   repositoryDefinition(
+    "season_matchup_schedule_generations",
+    REPOSITORY_SCOPES.requiredLeague,
+    {
+      keyColumn: "schedule_operation_id",
+      versioned: true,
+    }
+  ),
+  repositoryDefinition(
+    "season_rollover_items",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "season_rollover_attempts",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "season_rollover_occurrences",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
     "seasons",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "season_rollovers",
     REPOSITORY_SCOPES.requiredLeague,
     { versioned: true }
   ),
@@ -324,8 +556,31 @@ const DEFINITIONS = [
     REPOSITORY_SCOPES.requiredLeague
   ),
   repositoryDefinition(
+    "standings_snapshot_finalizations",
+    REPOSITORY_SCOPES.requiredLeague,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "standings_snapshot_result_versions",
+    REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
+    "standings_snapshot_team_identities",
+    REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
     "standings_snapshots",
     REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
+    "stat_refresh_player_game_coverage_entries",
+    REPOSITORY_SCOPES.global,
+    { versioned: true }
+  ),
+  repositoryDefinition(
+    "stat_refresh_player_game_sets",
+    REPOSITORY_SCOPES.global,
+    { versioned: true }
   ),
   repositoryDefinition(
     "stat_refreshes",

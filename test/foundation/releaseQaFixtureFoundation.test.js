@@ -63,6 +63,16 @@ const EXPECTED_IDENTITIES = Object.freeze({
   pendingVerification: Object.freeze({ displayName: "Pending", email: "pending@release-qa.example.test" }),
   deactivated: Object.freeze({ displayName: "Deactivated", email: "deactivated@release-qa.example.test" }),
 });
+const EMPTY_LOCKED_DECISION_EVIDENCE_TABLES = Object.freeze([
+  "auction_administration_command_results",
+  "free_agent_draft_readiness_corrective_requeues",
+  "free_agent_draft_schedule_recovery_matchups",
+  "matchup_roster_game_exclusion_sets",
+  "matchup_schedule_command_results",
+  "matchup_schedule_job_bindings",
+  "nhl_game_state_observation_snapshots",
+  "nhl_game_state_observations",
+]);
 
 test("release-QA fixture keeps the deployed v1 identity namespace stable", () => {
   assert.equal(FIXTURE_ID_NAMESPACE, "m7-release-qa-fixture-v1");
@@ -128,6 +138,7 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
 
   assert.deepEqual(first.manifest, second.manifest);
   assert.deepEqual(first.manifest, verifyReleaseQaFixture({ databasePath: firstPath }));
+  assert.equal(first.manifest.schemaVersion, 49);
   assert.equal(first.manifest.manifestChecksum, checksumManifest(first.manifest));
   assert.match(first.manifest.manifestChecksum, /^[0-9a-f]{64}$/);
   assert.equal(first.manifest.global.leagueCount, 2);
@@ -138,9 +149,19 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
   assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.populatedRosterTeams), [6, 6]);
   assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.syntheticPlayerTotals), [146, 146]);
   assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.matchupPlayers), [216, 216]);
+  assert.deepEqual(
+    first.manifest.leagues.map(
+      ({ counts }) => counts.scheduleGenerations
+    ),
+    [1, 1]
+  );
   assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.trades), [5, 5]);
   assert.equal(first.manifest.scenarios.twoLeagueIdentityIsolation, true);
   assert.equal(first.manifest.scenarios.distinctLeagueRosters, true);
+  assert.equal(
+    first.manifest.scenarios.scheduleGenerationEvidence,
+    true
+  );
 
   const serializedManifest = JSON.stringify(first.manifest);
   assert.equal(serializedManifest.includes("@release-qa.example.test"), false);
@@ -153,6 +174,56 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
     const leagueA = fixtureId("league:leagueA");
     const leagueB = fixtureId("league:leagueB");
     assert.notEqual(leagueA, leagueB);
+    for (const tableName of ["matchup_weeks", "matchups"]) {
+      assert.equal(
+        database
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM ${tableName}
+             WHERE status IN ('live', 'correction_required')`
+          )
+          .get().count,
+        0,
+        `${tableName} maintenance-blocking status count`
+      );
+    }
+    assert.equal(
+      database
+        .prepare(
+          "SELECT status FROM matchup_weeks WHERE id = ?"
+        )
+        .get(fixtureId("matchup-week:leagueA:current")).status,
+      "scheduled"
+    );
+    assert.equal(
+      database
+        .prepare("SELECT status FROM matchups WHERE id = ?")
+        .get(fixtureId("matchup:leagueA:current")).status,
+      "scheduled"
+    );
+    assert.equal(
+      database
+        .prepare(`
+          SELECT COUNT(*) AS count
+          FROM matchup_roster_players AS roster_player
+          LEFT JOIN player_external_ids AS identity
+            ON identity.player_id = roster_player.player_id
+           AND identity.provider = 'sportsdataio-discovery-lab'
+          WHERE identity.id IS NULL
+        `)
+        .get().count,
+      0,
+      "matchup roster SportsDataIO identity coverage"
+    );
+    for (const tableName of EMPTY_LOCKED_DECISION_EVIDENCE_TABLES) {
+      assert.equal(
+        database
+          .prepare(`SELECT COUNT(*) AS count FROM ${tableName}`)
+          .get().count,
+        0,
+        `${tableName} release-QA fixture count`
+      );
+    }
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM teams WHERE league_id=?").get(leagueA).count, 6);
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM teams WHERE league_id=?").get(leagueB).count, 6);
     assert.equal(database.prepare(`
@@ -199,18 +270,175 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
       FROM trade_events
       WHERE league_id=? AND trade_id=? AND event_type='proposal_accepted'
     `).get(leagueA, completedTradeId).count, 1);
+    const acceptedEvent = database.prepare(`
+      SELECT id, actor_user_id, metadata_json, occurred_at_ms
+      FROM trade_events
+      WHERE league_id=? AND trade_id=? AND event_type='proposal_accepted'
+    `).get(leagueA, completedTradeId);
+    assert.equal(
+      acceptedEvent.id,
+      completedTrade.commissioner_completion_reference
+    );
+    assert.equal(
+      acceptedEvent.actor_user_id,
+      fixtureId("account:leagueACommissioner")
+    );
+    assert.equal(acceptedEvent.occurred_at_ms, completedTrade.completed_at_ms);
+    const acceptedMetadata = JSON.parse(acceptedEvent.metadata_json);
+    assert.equal(acceptedMetadata.actorAuthority, "commissioner");
+    assert.equal(acceptedMetadata.generallyIllegal, false);
+    assert.equal(acceptedMetadata.ownershipTransfers.length, 2);
+    assert.deepEqual(acceptedMetadata.automaticallyCancelledTradeIds, []);
+    assert.equal(
+      acceptedMetadata.transfers.some((transfer) =>
+        Object.hasOwn(transfer, "sourceOwnershipId") ||
+        Object.hasOwn(transfer, "destinationOwnershipId")
+      ),
+      false
+    );
+    assert.deepEqual(
+      acceptedMetadata.ownershipTransfers.map(
+        ({ sourceOwnershipId }) => sourceOwnershipId
+      ),
+      acceptedMetadata.ownershipTransfers.map(
+        ({ sourceOwnershipId }) => sourceOwnershipId
+      ).sort()
+    );
     assert.equal(database.prepare(`
       SELECT COUNT(*) AS count
       FROM ownership_events
       WHERE league_id=? AND source_type='trade' AND source_id=?
-        AND event_type='trade_transfer'
+        AND event_type='trade_transfer_out'
     `).get(leagueA, completedTradeId).count, 2);
+    assert.equal(database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM ownership_events
+      WHERE league_id=? AND source_type='trade' AND source_id=?
+        AND event_type='trade_transfer_in'
+    `).get(leagueA, completedTradeId).count, 2);
+    const ownershipEvents = database.prepare(`
+      SELECT event_type, ownership_id, player_id, team_id,
+        actor_user_id, source_type, source_id, before_metadata_json,
+        after_metadata_json, reason, occurred_at_ms
+      FROM ownership_events
+      WHERE league_id=? AND source_type='trade' AND source_id=?
+        AND event_type IN ('trade_transfer_out', 'trade_transfer_in')
+    `).all(leagueA, completedTradeId);
+    for (const transfer of acceptedMetadata.ownershipTransfers) {
+      const sourceEvent = ownershipEvents.find(
+        (event) => event.event_type === "trade_transfer_out" &&
+          event.ownership_id === transfer.sourceOwnershipId
+      );
+      const destinationEvent = ownershipEvents.find(
+        (event) => event.event_type === "trade_transfer_in" &&
+          event.ownership_id === transfer.destinationOwnershipId
+      );
+      assert.equal(Boolean(sourceEvent), true);
+      assert.equal(Boolean(destinationEvent), true);
+      assert.equal(sourceEvent.player_id, destinationEvent.player_id);
+      assert.equal(sourceEvent.team_id, transfer.sourceTeamId);
+      assert.equal(destinationEvent.team_id, transfer.destinationTeamId);
+      assert.equal(
+        sourceEvent.actor_user_id,
+        fixtureId("account:leagueACommissioner")
+      );
+      assert.equal(destinationEvent.actor_user_id, sourceEvent.actor_user_id);
+      assert.equal(sourceEvent.source_type, "trade");
+      assert.equal(sourceEvent.source_id, completedTradeId);
+      assert.equal(destinationEvent.source_id, completedTradeId);
+      assert.equal(sourceEvent.reason, null);
+      assert.equal(destinationEvent.reason, null);
+      assert.equal(sourceEvent.occurred_at_ms, completedTrade.completed_at_ms);
+      assert.equal(destinationEvent.occurred_at_ms, sourceEvent.occurred_at_ms);
+
+      const sourceBefore = JSON.parse(sourceEvent.before_metadata_json);
+      const sourceAfter = JSON.parse(sourceEvent.after_metadata_json);
+      const destinationBefore = JSON.parse(
+        destinationEvent.before_metadata_json
+      );
+      const destinationAfter = JSON.parse(
+        destinationEvent.after_metadata_json
+      );
+      assert.equal(sourceBefore.schemaVersion, 2);
+      assert.equal(sourceBefore.exists, true);
+      assert.equal(sourceBefore.ownership.id, transfer.sourceOwnershipId);
+      assert.equal(sourceBefore.ownership.playerId, sourceEvent.player_id);
+      assert.equal(sourceBefore.ownership.teamId, transfer.sourceTeamId);
+      assert.equal(
+        sourceBefore.ownership.version,
+        transfer.sourceOwnershipVersion
+      );
+      assert.deepEqual(sourceAfter, {
+        schemaVersion: 2,
+        exists: false,
+        destinationOwnershipId: transfer.destinationOwnershipId,
+      });
+      assert.deepEqual(destinationBefore, {
+        schemaVersion: 2,
+        exists: false,
+        sourceOwnershipId: transfer.sourceOwnershipId,
+      });
+      assert.deepEqual(destinationAfter, {
+        schemaVersion: 2,
+        exists: true,
+        ownership: {
+          ...sourceBefore.ownership,
+          id: transfer.destinationOwnershipId,
+          teamId: transfer.destinationTeamId,
+          slotNumber: null,
+          version: 1,
+        },
+      });
+      assert.equal(
+        database.prepare(`
+          SELECT COUNT(*) AS count
+          FROM player_ownerships
+          WHERE league_id=? AND id=?
+        `).get(leagueA, transfer.sourceOwnershipId).count,
+        0
+      );
+      assert.deepEqual(database.prepare(`
+        SELECT player_id, team_id, acquired_transaction_type,
+          acquired_transaction_id, version, trade_blocked
+        FROM player_ownerships
+        WHERE league_id=? AND id=?
+      `).get(leagueA, transfer.destinationOwnershipId), {
+        player_id: destinationEvent.player_id,
+        team_id: transfer.destinationTeamId,
+        acquired_transaction_type: "trade_execution",
+        acquired_transaction_id: completedTradeId,
+        version: 1,
+        trade_blocked: 0,
+      });
+    }
     assert.equal(database.prepare(`
       SELECT COUNT(*) AS count
       FROM contract_events
       WHERE league_id=? AND source_type='trade' AND source_id=?
         AND event_type='trade_transfer'
     `).get(leagueA, completedTradeId).count, 2);
+    const completionActivity = database.prepare(`
+      SELECT actor_user_id, actor_authority, team_id, metadata_json,
+        occurred_at_ms
+      FROM league_activity
+      WHERE league_id=? AND related_type='trade' AND related_id=?
+        AND event_type='trade_completed'
+    `).get(leagueA, completedTradeId);
+    assert.equal(
+      completionActivity.actor_user_id,
+      fixtureId("account:leagueACommissioner")
+    );
+    assert.equal(completionActivity.actor_authority, "commissioner");
+    assert.equal(completionActivity.team_id, null);
+    assert.equal(
+      completionActivity.occurred_at_ms,
+      completedTrade.completed_at_ms
+    );
+    assert.equal(
+      JSON.parse(completionActivity.metadata_json)
+        .commissionerCompletionReference,
+      acceptedEvent.id
+    );
     assert.deepEqual(database.prepare(`
       SELECT status, completed_at_ms
       FROM trades
@@ -246,19 +474,21 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
     const scoring = createMatchupScoringService({
       repository: createSqliteMatchupScoringRepository({ database }),
     });
-    const liveScore = scoring.readLive({
-      leagueId: leagueA,
-      seasonId: fixtureId("season:leagueA:current"),
-      weekId: fixtureId("matchup-week:leagueA:current"),
-      matchupId: fixtureId("matchup:leagueA:current"),
-      providers: ["sportsdataio-discovery-lab", "release_qa_fixture"],
-      nowMs: FIXTURE_NOW_MS,
-    });
-    assert.equal(liveScore.source.provider, "release_qa_fixture");
-    assert.equal(liveScore.home.players.length > 0, true);
-    assert.equal(liveScore.away.players.length > 0, true);
-    assert.equal(liveScore.home.players.every(({ dataStatus }) => dataStatus === "available"), true);
-    assert.equal(liveScore.away.players.every(({ dataStatus }) => dataStatus === "available"), true);
+    assert.throws(
+      () =>
+        scoring.readLive({
+          leagueId: leagueA,
+          seasonId: fixtureId("season:leagueA:current"),
+          weekId: fixtureId("matchup-week:leagueA:current"),
+          matchupId: fixtureId("matchup:leagueA:current"),
+          providers: [
+            "sportsdataio-discovery-lab",
+            "release_qa_fixture",
+          ],
+          nowMs: FIXTURE_NOW_MS,
+        }),
+      (error) => error?.code === "MATCHUP_SCORING_STATE_INVALID"
+    );
     for (const alias of ACCOUNT_ALIASES) {
       const user = database.prepare(`
         SELECT display_name, email_normalized
@@ -294,7 +524,7 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
   }
 });
 
-test("release-QA fixture uses and verifies retained provider-backed NHL identities", (t) => {
+test("release-QA fixture uses and verifies retained provider-backed NHL identities", async (t) => {
   const root = temporaryRoot(t);
   const databasePath = path.join(root, "provider-release-qa.sqlite3");
   const connection = openDatabase({ databasePath, environment: "test" });
@@ -358,9 +588,16 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
       FIXTURE_NOW_MS
     );
   }
-  connection.database.transaction(() => {
-    seedFixture(connection.database, "provider-fixture-password-hash");
-  }).immediate();
+  const seedResult = connection.database.transaction(() =>
+    seedFixture(connection.database, "provider-fixture-password-hash")
+  ).immediate();
+  const acceptanceResults = await Promise.all(seedResult.acceptancePromises);
+  seedResult.assertLateLockCoverage();
+  assert.equal(acceptanceResults.length, 2);
+  assert.deepEqual(
+    acceptanceResults.map(({ lateLock }) => lateLock),
+    [{ status: "not_applicable" }, { status: "not_applicable" }]
+  );
   connection.database.close();
 
   const manifest = verifyReleaseQaFixture({ databasePath });
@@ -413,7 +650,7 @@ test("release-QA verifier fails closed when a required scenario is missing", asy
   const connection = openDatabase({ databasePath, environment: "test" });
   try {
     connection.database.prepare(
-      "DELETE FROM outbox_events WHERE league_id=?"
+      "DELETE FROM outbox_event_audiences WHERE league_id=?"
     ).run(fixtureId("league:leagueA"));
   } finally {
     connection.database.close();
@@ -422,6 +659,46 @@ test("release-QA verifier fails closed when a required scenario is missing", asy
     () => verifyReleaseQaFixture({ databasePath }),
     (error) => error instanceof ReleaseQaFixtureVerificationError &&
       error.code === "RELEASE_QA_FIXTURE_MISMATCH"
+  );
+});
+
+test("release-QA verifier fails closed when accepted tenure history loses its commissioner actor", async (t) => {
+  const root = temporaryRoot(t);
+  const databasePath = path.join(root, "history-tamper-release-qa.sqlite3");
+  await createReleaseQaFixture({
+    databasePath,
+    environment: "test",
+    migrationsDirectory: MIGRATIONS_DIRECTORY,
+    password: FIXTURE_PASSWORD,
+    temporaryRoot: root,
+  });
+  const connection = openDatabase({ databasePath, environment: "test" });
+  try {
+    const result = connection.database.prepare(`
+      UPDATE ownership_events
+      SET actor_user_id=?
+      WHERE id=(
+        SELECT id
+        FROM ownership_events
+        WHERE league_id=? AND source_type='trade' AND source_id=?
+          AND event_type='trade_transfer_out'
+        ORDER BY id ASC
+        LIMIT 1
+      )
+    `).run(
+      fixtureId("account:platformAdmin"),
+      fixtureId("league:leagueA"),
+      fixtureId("trade-scenario:leagueA:accepted:1")
+    );
+    assert.equal(result.changes, 1);
+  } finally {
+    connection.database.close();
+  }
+  assert.throws(
+    () => verifyReleaseQaFixture({ databasePath }),
+    (error) => error instanceof ReleaseQaFixtureVerificationError &&
+      error.code === "RELEASE_QA_FIXTURE_MISMATCH" &&
+      error.message.includes("source history actor_user_id")
   );
 });
 

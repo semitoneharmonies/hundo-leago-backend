@@ -20,6 +20,8 @@ const {
   inventorySourceBundle,
 } = require("../../src/infrastructure/migration/sourceInventory");
 const {
+  REQUIRED_APPLICATION_TABLE_COUNT,
+  REQUIRED_SCHEMA_VERSION,
   STAGING_VERIFICATION_ERROR_CODES,
   verificationHash,
   verifyStagingImport,
@@ -205,12 +207,19 @@ describe("M2-13 independent staging import verification", () => {
 
     assert.deepEqual(after, before);
     assert.equal(evidence.status, "verified");
+    assert.equal(
+      evidence.database.userVersion,
+      REQUIRED_SCHEMA_VERSION
+    );
     assert.equal(evidence.database.targetTables.length, 3);
     assert.equal(
       evidence.database.seededApplicationMetadataRowCount,
       2
     );
-    assert.equal(evidence.database.emptyApplicationTableCount, 75);
+    assert.equal(
+      evidence.database.emptyApplicationTableCount,
+      REQUIRED_APPLICATION_TABLE_COUNT - 4
+    );
     assert.equal(evidence.checks.integrity, "ok");
     assert.equal(evidence.checks.foreignKeyViolationCount, 0);
     assert.equal(evidence.checks.inputsUnchanged, true);
@@ -246,6 +255,20 @@ describe("M2-13 independent staging import verification", () => {
     database.close();
     assert.throws(
       () => verifyStagingImport(options(databaseAttempt)),
+      hasCode(STAGING_VERIFICATION_ERROR_CODES.databaseMismatch)
+    );
+
+    const schemaAttempt = createImportedAttempt(t);
+    const schemaDatabase =
+      new Database(schemaAttempt.databasePath);
+    schemaDatabase.exec(
+      "CREATE TABLE unexpected_application_table (" +
+        "id TEXT PRIMARY KEY" +
+      ") STRICT"
+    );
+    schemaDatabase.close();
+    assert.throws(
+      () => verifyStagingImport(options(schemaAttempt)),
       hasCode(STAGING_VERIFICATION_ERROR_CODES.databaseMismatch)
     );
   });

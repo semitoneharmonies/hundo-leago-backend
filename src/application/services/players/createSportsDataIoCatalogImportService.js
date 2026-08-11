@@ -1,3 +1,5 @@
+const { randomUUID } = require("node:crypto");
+
 const {
   PROVIDER_NAME,
 } = require("../../../infrastructure/sportsdataio/SportsDataIoNhlAdapter");
@@ -20,10 +22,16 @@ function createSportsDataIoCatalogImportService({
   provider,
   statisticsService,
   seasonStart,
+  createId = randomUUID,
 } = {}) {
   requireMethod(catalogRepository, "applyCatalog", "catalog persistence");
   requireMethod(provider, "fetchCatalog", "a configured provider adapter");
   requireMethod(statisticsService, "refresh", "statistics persistence");
+  if (typeof createId !== "function") {
+    throw new TypeError(
+      "SportsDataIO catalog import requires an ID factory."
+    );
+  }
   const canonicalSeasonStart =
     typeof seasonStart === "number" ? String(seasonStart) : seasonStart;
   if (!/^\d{4}$/.test(canonicalSeasonStart)) {
@@ -77,6 +85,7 @@ function createSportsDataIoCatalogImportService({
     let catalogResult;
     try {
       catalogResult = catalogRepository.applyCatalog({
+        sourceOperationId: createId(),
         provider: catalog.provider,
         capturedAtMs: catalog.capturedAtMs,
         rows: catalog.rows,

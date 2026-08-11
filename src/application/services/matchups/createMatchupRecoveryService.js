@@ -92,6 +92,12 @@ function createMatchupRecoveryService({ repository, standingsService, createId =
     ) {
       fail(MATCHUP_RECOVERY_SERVICE_CODES.commissionerRequired, "Current commissioner authority is required.");
     }
+    if (context.standingsFinalizationCount !== 0) {
+      fail(
+        MATCHUP_RECOVERY_SERVICE_CODES.stateInvalid,
+        "Canonical standings history blocks a derived standings rebuild."
+      );
+    }
     const projection = standingsService.read(input);
     return Object.freeze({
       currentSnapshotId: context.currentSnapshot?.id || null,
@@ -130,6 +136,7 @@ function createMatchupRecoveryService({ repository, standingsService, createId =
       authorizedAsPlatformAdministrator:
         input.authorizedAsPlatformAdministrator === true,
       operationId: input.operationId,
+      expectedVersion: validated.expectedVersion,
       expectedCurrentSnapshotId: input.expectedCurrentSnapshotId ?? null,
       snapshotId: createId(),
       sourceResultVersion: preview.projection.sourceResultVersion,

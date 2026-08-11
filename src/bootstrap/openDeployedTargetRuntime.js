@@ -34,6 +34,9 @@ const {
   createStagingSportsDataIoImportService,
 } = require("../application/services/operations/createStagingSportsDataIoImportService");
 const {
+  createStagingMaintenanceExclusionGuard,
+} = require("../application/services/operations/createStagingMaintenanceExclusionGuard");
+const {
   createSportsDataIoCatalogImportService,
 } = require("../application/services/players/createSportsDataIoCatalogImportService");
 const {
@@ -58,6 +61,30 @@ const {
   FIXTURE_DATABASE_ID,
   FIXTURE_ENVIRONMENT_ID,
 } = require("../operations/release/releaseQaFixtureContract");
+const {
+  hashSportsDataIoLiveCapabilityProbeManifest,
+  normalizeSportsDataIoLiveCapabilityProbeManifest,
+} = require(
+  "../operations/statistics/createSportsDataIoLiveCapabilityCheck"
+);
+const {
+  createSportsDataIoLiveCapabilityAuthenticator,
+} = require(
+  "../infrastructure/security/createSportsDataIoLiveCapabilityAuthenticator"
+);
+const {
+  createSportsDataIoLiveCapabilityArtifact,
+} = require(
+  "../infrastructure/statistics/SportsDataIoLiveCapabilityArtifact"
+);
+
+const SPORTS_DATA_IO_LIVE_CAPABILITY_STARTUP_ERROR_CODE =
+  "SPORTSDATAIO_LIVE_CAPABILITY_STARTUP_VERIFICATION_FAILED";
+const SPORTS_DATA_IO_LIVE_CAPABILITY_MANIFEST_MAX_BYTES =
+  512 * 1024;
+const UUID_V4_PATTERN =
+  /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 class DeployedTargetRuntimeError extends Error {
   constructor(code, message, options = {}) {
@@ -75,6 +102,197 @@ function fail(code, message, cause) {
   );
 }
 
+function failLiveCapabilityStartup() {
+  throw new DeployedTargetRuntimeError(
+    SPORTS_DATA_IO_LIVE_CAPABILITY_STARTUP_ERROR_CODE,
+    "Required SportsDataIO live capability verification failed safely."
+  );
+}
+
+function loadSportsDataIoLiveProbeManifest({
+  manifestPath,
+  fsModule = fs,
+  normalizeManifest =
+    normalizeSportsDataIoLiveCapabilityProbeManifest,
+  hashManifest =
+    hashSportsDataIoLiveCapabilityProbeManifest,
+} = {}) {
+  let raw;
+  try {
+    if (
+      typeof manifestPath !== "string" ||
+      !fsModule ||
+      typeof fsModule.readFileSync !== "function" ||
+      typeof normalizeManifest !== "function" ||
+      typeof hashManifest !== "function"
+    ) {
+      failLiveCapabilityStartup();
+    }
+    raw = fsModule.readFileSync(manifestPath);
+    if (
+      !Buffer.isBuffer(raw) ||
+      raw.length < 1 ||
+      raw.length >
+        SPORTS_DATA_IO_LIVE_CAPABILITY_MANIFEST_MAX_BYTES
+    ) {
+      failLiveCapabilityStartup();
+    }
+    const manifest = normalizeManifest(
+      JSON.parse(raw.toString("utf8"))
+    );
+    const probeManifestSha256 = hashManifest(manifest);
+    if (!SHA256_PATTERN.test(probeManifestSha256)) {
+      failLiveCapabilityStartup();
+    }
+    return Object.freeze({
+      manifest,
+      probeManifestSha256,
+    });
+  } catch {
+    failLiveCapabilityStartup();
+  } finally {
+    if (Buffer.isBuffer(raw)) raw.fill(0);
+  }
+}
+
+function sanitizeLiveCapabilityVerification(value) {
+  const verification = value?.verification;
+  if (
+    !verification ||
+    verification.status !== "verified" ||
+    !UUID_V4_PATTERN.test(verification.evidenceId) ||
+    !SHA256_PATTERN.test(verification.evidenceSha256) ||
+    !Number.isSafeInteger(verification.issuedAtMs) ||
+    verification.issuedAtMs < 0 ||
+    !Number.isSafeInteger(verification.expiresAtMs) ||
+    verification.expiresAtMs <= verification.issuedAtMs ||
+    !Number.isSafeInteger(verification.verifiedAtMs) ||
+    verification.verifiedAtMs < verification.issuedAtMs ||
+    verification.verifiedAtMs >= verification.expiresAtMs
+  ) {
+    failLiveCapabilityStartup();
+  }
+  return Object.freeze({
+    status: "verified",
+    evidenceId: verification.evidenceId,
+    evidenceSha256: verification.evidenceSha256,
+    issuedAtMs: verification.issuedAtMs,
+    expiresAtMs: verification.expiresAtMs,
+    verifiedAtMs: verification.verifiedAtMs,
+  });
+}
+
+function verifyRequiredSportsDataIoLiveCapability({
+  config,
+  securityFoundations,
+  fsModule = fs,
+  loadProbeManifest =
+    loadSportsDataIoLiveProbeManifest,
+  createAuthenticator =
+    createSportsDataIoLiveCapabilityAuthenticator,
+  createArtifactStore =
+    createSportsDataIoLiveCapabilityArtifact,
+} = {}) {
+  const live = config?.sportsDataIoLiveNhl;
+  if (live?.mode !== "required") return live;
+
+  try {
+    if (
+      live.enabled !== false ||
+      live.verified !== false ||
+      typeof live.origin !== "string" ||
+      typeof live.nhlSeasonKey !== "string" ||
+      typeof live.artifactPath !== "string" ||
+      typeof live.probeManifestPath !== "string" ||
+      !Number.isSafeInteger(live.capabilityKeyVersion) ||
+      live.capabilityKeyVersion < 1 ||
+      typeof loadProbeManifest !== "function" ||
+      typeof createAuthenticator !== "function" ||
+      typeof createArtifactStore !== "function"
+    ) {
+      failLiveCapabilityStartup();
+    }
+    const apiKey =
+      config.security?.sportsDataIoLive?.apiKey?.value;
+    const capabilitySecret =
+      config.security?.sportsDataIoLive
+        ?.capabilitySecret?.value;
+    if (
+      typeof apiKey !== "string" ||
+      apiKey === "" ||
+      typeof capabilitySecret !== "string" ||
+      capabilitySecret === ""
+    ) {
+      failLiveCapabilityStartup();
+    }
+
+    const loaded = loadProbeManifest({
+      manifestPath: live.probeManifestPath,
+      fsModule,
+    });
+    if (
+      !loaded?.manifest ||
+      !SHA256_PATTERN.test(loaded.probeManifestSha256) ||
+      loaded.manifest.configuredNhlSeasonKey !==
+        config.currentSeason?.nhlSeasonKey
+    ) {
+      failLiveCapabilityStartup();
+    }
+    const authenticator = createAuthenticator({
+      capabilitySecret,
+      dedicatedLiveApiKey: apiKey,
+      capabilityKeyVersion: live.capabilityKeyVersion,
+    });
+    const artifactStore = createArtifactStore({
+      persistentRoot: config.persistentRoot,
+      artifactPath: live.artifactPath,
+      authenticator,
+      fsModule,
+    });
+    if (!artifactStore || typeof artifactStore.readAndVerify !== "function") {
+      failLiveCapabilityStartup();
+    }
+    const expectedBindings = Object.freeze({
+      appEnv: config.appEnv,
+      environmentId: config.environmentId,
+      backendBuildId: config.buildId,
+      origin: live.origin,
+      configuredNhlSeasonKey:
+        config.currentSeason.nhlSeasonKey,
+      probeNhlSeasonKey: loaded.manifest.probeNhlSeasonKey,
+      probeKind: loaded.manifest.probeKind,
+      probeManifestSha256: loaded.probeManifestSha256,
+    });
+    const verification = sanitizeLiveCapabilityVerification(
+      artifactStore.readAndVerify({
+        expectedBindings,
+        nowMs: securityFoundations.clock.nowMs(),
+      })
+    );
+    const descriptor = {
+      mode: "required",
+      enabled: true,
+      verified: true,
+      origin: live.origin,
+      nhlSeasonKey: live.nhlSeasonKey,
+      capabilityKeyVersion: live.capabilityKeyVersion,
+      probeNhlSeasonKey: loaded.manifest.probeNhlSeasonKey,
+      probeKind: loaded.manifest.probeKind,
+      probeManifestSha256: loaded.probeManifestSha256,
+      verification,
+    };
+    Object.defineProperty(descriptor, "apiKey", {
+      configurable: false,
+      enumerable: false,
+      value: apiKey,
+      writable: false,
+    });
+    return Object.freeze(descriptor);
+  } catch {
+    failLiveCapabilityStartup();
+  }
+}
+
 function assertConfig(config, securityFoundations) {
   if (
     !config ||
@@ -84,6 +302,9 @@ function assertConfig(config, securityFoundations) {
     typeof config.migrationsDirectory !== "string" ||
     typeof config.environmentId !== "string" ||
     typeof config.databaseId !== "string" ||
+    typeof config.freeAgentDraftRoutesEnabled !== "boolean" ||
+    (config.freeAgentDraftRoutesEnabled &&
+      config.sportsDataIoLiveNhl?.mode !== "required") ||
     !config.currentSeason
   ) {
     throw new TypeError(
@@ -112,6 +333,12 @@ function openDeployedTargetRuntime({
   fsModule = fs,
   openDatabaseFunction = openDatabase,
   createRuntimeFunction = createTargetRuntime,
+  loadSportsDataIoLiveProbeManifestFunction =
+    loadSportsDataIoLiveProbeManifest,
+  createSportsDataIoLiveCapabilityAuthenticatorFunction =
+    createSportsDataIoLiveCapabilityAuthenticator,
+  createSportsDataIoLiveCapabilityArtifactFunction =
+    createSportsDataIoLiveCapabilityArtifact,
 } = {}) {
   assertConfig(config, securityFoundations);
   if (
@@ -124,6 +351,25 @@ function openDeployedTargetRuntime({
       "deployed target runtime requires filesystem, database, and runtime adapters"
     );
   }
+  const sportsDataIoLiveNhl =
+    verifyRequiredSportsDataIoLiveCapability({
+      config,
+      securityFoundations,
+      fsModule,
+      loadProbeManifest:
+        loadSportsDataIoLiveProbeManifestFunction,
+      createAuthenticator:
+        createSportsDataIoLiveCapabilityAuthenticatorFunction,
+      createArtifactStore:
+        createSportsDataIoLiveCapabilityArtifactFunction,
+    });
+  const runtimeConfig =
+    sportsDataIoLiveNhl === config.sportsDataIoLiveNhl
+      ? config
+      : Object.freeze({
+          ...config,
+          sportsDataIoLiveNhl,
+        });
   if (!fsModule.existsSync(config.databasePath)) {
     fail(
       "DATABASE_FILE_REQUIRED",
@@ -145,7 +391,10 @@ function openDeployedTargetRuntime({
       connection.database,
       migrations
     );
-    const databaseIdentity = assertDatabaseIdentity(connection.database, config);
+    const databaseIdentity = assertDatabaseIdentity(
+      connection.database,
+      runtimeConfig
+    );
     const runtime = createRuntimeFunction({
       database: connection.database,
       migrationsDirectory: config.migrationsDirectory,
@@ -156,15 +405,18 @@ function openDeployedTargetRuntime({
       emailFetchImplementation,
       emailJobOptions,
       sportsDataIoNhl: config.sportsDataIoNhl,
+      sportsDataIoLiveNhl,
       sportsDataIoFetchImplementation,
       leagueInvalidationPublisher,
       leagueWriteMode: config.leagueWriteMode,
+      freeAgentDraftRoutesEnabled:
+        config.freeAgentDraftRoutesEnabled,
     });
     const health = createRuntimeHealthService({
       database: connection.database,
       migrationState,
       databaseIdentity,
-      runtimeConfig: config,
+      runtimeConfig,
     });
     const scheduler = createTargetScheduler({
       enabled: config.scheduledJobsEnabled,
@@ -186,8 +438,19 @@ function openDeployedTargetRuntime({
     if (
       config.appEnv === "staging" &&
       config.environmentId === FIXTURE_ENVIRONMENT_ID &&
-      config.databaseId === FIXTURE_DATABASE_ID
+      config.databaseId === FIXTURE_DATABASE_ID &&
+      config.leagueWriteMode === "closed" &&
+      config.scheduledJobsEnabled === false
     ) {
+      const maintenanceExclusionGuard =
+        createStagingMaintenanceExclusionGuard({
+          database: connection.database,
+          appEnv: config.appEnv,
+          environmentId: config.environmentId,
+          databaseId: config.databaseId,
+          leagueWriteMode: config.leagueWriteMode,
+          scheduledJobsEnabled: config.scheduledJobsEnabled,
+        });
       const stagingFixtureResetService =
         createStagingFixtureResetService({
           database: connection.database,
@@ -196,6 +459,7 @@ function openDeployedTargetRuntime({
           appEnv: config.appEnv,
           environmentId: config.environmentId,
           databaseId: config.databaseId,
+          maintenanceExclusionGuard,
           platformAuthorization:
             runtime.services.authorizations.platform,
           clock: securityFoundations.clock,
@@ -243,11 +507,15 @@ function openDeployedTargetRuntime({
                 database: connection.database,
                 createId: () =>
                   securityFoundations.secureRandom.id(),
+                now: () =>
+                  securityFoundations.clock.nowMs(),
               }),
             provider: providerAdapter,
             statisticsService: providerStatistics,
             seasonStart:
               config.sportsDataIoNhl.seasonStartYear,
+            createId: () =>
+              securityFoundations.secureRandom.id(),
           });
         const stagingSportsDataIoImportService =
           createStagingSportsDataIoImportService({
@@ -260,6 +528,7 @@ function openDeployedTargetRuntime({
               config.scheduledJobsEnabled,
             providerEnabled:
               config.sportsDataIoNhl.enabled,
+            maintenanceExclusionGuard,
             platformAuthorization:
               runtime.services.authorizations.platform,
             importService: catalogImport,
@@ -295,7 +564,7 @@ function openDeployedTargetRuntime({
       databasePath: connection.databasePath,
       health,
       migrationState,
-      runtimeConfig: config,
+      runtimeConfig,
       scheduler,
     });
   } catch (error) {
@@ -307,7 +576,10 @@ function openDeployedTargetRuntime({
 module.exports = {
   DATABASE_IDENTITY_KEYS,
   DeployedTargetRuntimeError,
+  SPORTS_DATA_IO_LIVE_CAPABILITY_STARTUP_ERROR_CODE,
   assertDatabaseIdentity,
+  loadSportsDataIoLiveProbeManifest,
   openDeployedTargetRuntime,
   readDatabaseIdentity,
+  verifyRequiredSportsDataIoLiveCapability,
 };

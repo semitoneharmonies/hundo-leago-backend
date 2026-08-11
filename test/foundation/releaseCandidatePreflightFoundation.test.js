@@ -5,8 +5,21 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  EXPECTED_BASE_SCHEMA_VERSION,
+  EXPECTED_CONFIGURED_NHL_SEASON_KEY,
+  EXPECTED_MIGRATION_CHECKSUM_SET_SHA256,
+  EXPECTED_MIGRATION_COUNT,
   EXPECTED_NODE_VERSION,
+  EXPECTED_POST_BASE_MIGRATION_COUNT,
+  EXPECTED_POST_RESET_POLICY_SHA256,
+  EXPECTED_POST_RESET_REQUIRE_EMPTY_COUNT,
+  EXPECTED_PROBE_MANIFEST_RELATIVE_PATH,
+  EXPECTED_PROBE_NHL_SEASON_KEY,
+  EXPECTED_REPOSITORY_CATALOG_COUNT,
+  EXPECTED_REPOSITORY_CATALOG_SHA256,
+  EXPECTED_SCHEMA_VERSION,
   evaluateReleaseCandidatePreflight,
+  inspectBackendReleaseFacts,
   inspectRepository,
 } = require("../../src/operations/release/createReleaseCandidatePreflight");
 const {
@@ -18,6 +31,61 @@ const {
 const FRONTEND_COMMIT = "a".repeat(40);
 const BACKEND_COMMIT = "b".repeat(40);
 const FILE_HASH = "c".repeat(64);
+const MANIFEST_HASH = "d".repeat(64);
+
+function backendReleaseFacts(overrides = {}) {
+  return Object.freeze({
+    migrationSource: Object.freeze({
+      baseSchemaVersion: EXPECTED_BASE_SCHEMA_VERSION,
+      targetSchemaVersion: EXPECTED_SCHEMA_VERSION,
+      migrationCount: EXPECTED_MIGRATION_COUNT,
+      postBaseMigrationCount: EXPECTED_POST_BASE_MIGRATION_COUNT,
+      contiguous: true,
+      checksumSetSha256:
+        EXPECTED_MIGRATION_CHECKSUM_SET_SHA256,
+      ...overrides.migrationSource,
+    }),
+    repositorySource: Object.freeze({
+      repositoryCatalogCount:
+        EXPECTED_REPOSITORY_CATALOG_COUNT,
+      repositoryCatalogSha256:
+        EXPECTED_REPOSITORY_CATALOG_SHA256,
+      postResetRequireEmptyCount:
+        EXPECTED_POST_RESET_REQUIRE_EMPTY_COUNT,
+      postResetPolicySha256:
+        EXPECTED_POST_RESET_POLICY_SHA256,
+      resetPolicyCoverageValid: true,
+      ...overrides.repositorySource,
+    }),
+    probeManifest: Object.freeze({
+      relativePath:
+        EXPECTED_PROBE_MANIFEST_RELATIVE_PATH,
+      exists: true,
+      tracked: true,
+      valid: true,
+      manifestSha256: MANIFEST_HASH,
+      configuredNhlSeasonKey:
+        EXPECTED_CONFIGURED_NHL_SEASON_KEY,
+      probeNhlSeasonKey: EXPECTED_PROBE_NHL_SEASON_KEY,
+      ...overrides.probeManifest,
+    }),
+    renderProbe: Object.freeze({
+      nodeMode: "production",
+      maintenanceHold: "false",
+      liveMode: "probe",
+      leagueWriteMode: "closed",
+      scheduledJobsEnabled: "false",
+      freeAgentDraftRoutesEnabled: "false",
+      accountEmailDeliveryEnabled: "false",
+      debugRoutesEnabled: "false",
+      emailDeliveryMode: "capture",
+      backupScheduleEnabled: "false",
+      forbiddenEmailInputs: Object.freeze([]),
+      safe: true,
+      ...overrides.renderProbe,
+    }),
+  });
+}
 
 function repository(name, overrides = {}) {
   return Object.freeze({
@@ -26,6 +94,9 @@ function repository(name, overrides = {}) {
     commit: name === "frontend" ? FRONTEND_COMMIT : BACKEND_COMMIT,
     dirtyEntryCount: 0,
     configurationSha256: Object.freeze({ "package-lock.json": FILE_HASH }),
+    ...(name === "backend"
+      ? { releaseFacts: backendReleaseFacts() }
+      : {}),
     ...overrides,
   });
 }
@@ -71,6 +142,123 @@ test("release-candidate preflight blocks invalid identity and commit mismatch", 
   assert.equal(report.status, "blocked");
 });
 
+test("release-candidate preflight blocks missing provider evidence and every drifted schema source fact", () => {
+  const report = evaluateReleaseCandidatePreflight({
+    frontend: repository("frontend"),
+    backend: repository("backend", {
+      releaseFacts: backendReleaseFacts({
+        migrationSource: {
+          targetSchemaVersion: 48,
+          migrationCount: 48,
+          postBaseMigrationCount: 26,
+          contiguous: false,
+          checksumSetSha256: "e".repeat(64),
+        },
+        repositorySource: {
+          repositoryCatalogCount: 130,
+          repositoryCatalogSha256: "f".repeat(64),
+          postResetRequireEmptyCount: 48,
+          postResetPolicySha256: "0".repeat(64),
+          resetPolicyCoverageValid: false,
+        },
+        probeManifest: {
+          exists: false,
+          tracked: false,
+          valid: false,
+          manifestSha256: null,
+          configuredNhlSeasonKey: null,
+          probeNhlSeasonKey: null,
+        },
+        renderProbe: {
+          leagueWriteMode: "open",
+          forbiddenEmailInputs: Object.freeze(["RESEND_API_KEY"]),
+          safe: true,
+        },
+      }),
+    }),
+    candidate: {
+      releaseId: "HL-20260722-1",
+      frontendCommit: FRONTEND_COMMIT,
+      backendCommit: BACKEND_COMMIT,
+    },
+    nodeVersion: EXPECTED_NODE_VERSION,
+  });
+  assert.deepEqual(report.blockers, [
+    "BACKEND_SCHEMA_TARGET_MISMATCH",
+    "BACKEND_MIGRATION_SEQUENCE_INVALID",
+    "BACKEND_MIGRATION_CHECKSUM_SET_MISMATCH",
+    "BACKEND_REPOSITORY_CATALOG_MISMATCH",
+    "BACKEND_RESET_POLICY_MISMATCH",
+    "BACKEND_PROBE_MANIFEST_MISSING",
+    "BACKEND_RENDER_PROBE_NOT_QUIESCED",
+  ]);
+  assert.equal(report.status, "blocked");
+  assert.equal(report.authorityGranted, false);
+  assert.equal(report.mutationsPerformed, false);
+});
+
+test("release-candidate preflight distinguishes untracked, invalid, and season-mismatched probe evidence", () => {
+  const cases = [
+    {
+      manifest: { tracked: false },
+      blocker: "BACKEND_PROBE_MANIFEST_NOT_TRACKED",
+    },
+    {
+      manifest: { valid: false, manifestSha256: null },
+      blocker: "BACKEND_PROBE_MANIFEST_INVALID",
+    },
+    {
+      manifest: { configuredNhlSeasonKey: "20252026" },
+      blocker: "BACKEND_PROBE_MANIFEST_SEASON_MISMATCH",
+    },
+  ];
+  for (const { manifest, blocker } of cases) {
+    const report = evaluateReleaseCandidatePreflight({
+      frontend: repository("frontend"),
+      backend: repository("backend", {
+        releaseFacts: backendReleaseFacts({
+          probeManifest: manifest,
+        }),
+      }),
+      candidate: {
+        releaseId: "HL-20260722-1",
+        frontendCommit: FRONTEND_COMMIT,
+        backendCommit: BACKEND_COMMIT,
+      },
+      nodeVersion: EXPECTED_NODE_VERSION,
+    });
+    assert.deepEqual(report.blockers, [blocker]);
+    assert.equal(report.status, "blocked");
+  }
+});
+
+test("release-candidate preflight rejects every final Blueprint transition drift", () => {
+  for (const renderProbe of [
+    { nodeMode: "development", safe: false },
+    { maintenanceHold: "true", safe: false },
+    { debugRoutesEnabled: "true", safe: false },
+    { backupScheduleEnabled: "true", safe: false },
+  ]) {
+    const report = evaluateReleaseCandidatePreflight({
+      frontend: repository("frontend"),
+      backend: repository("backend", {
+        releaseFacts: backendReleaseFacts({ renderProbe }),
+      }),
+      candidate: {
+        releaseId: "HL-20260722-1",
+        frontendCommit: FRONTEND_COMMIT,
+        backendCommit: BACKEND_COMMIT,
+      },
+      nodeVersion: EXPECTED_NODE_VERSION,
+    });
+
+    assert.deepEqual(report.blockers, [
+      "BACKEND_RENDER_PROBE_NOT_QUIESCED",
+    ]);
+    assert.equal(report.status, "blocked");
+  }
+});
+
 test("release-candidate preflight marks only exact clean staging input ready for freeze review", () => {
   const report = evaluateReleaseCandidatePreflight({
     frontend: repository("frontend"),
@@ -110,6 +298,55 @@ test("repository inspection hashes exact inputs and reports status without expos
   assert.match(result.configurationSha256["package-lock.json"], /^[0-9a-f]{64}$/);
   assert.equal(JSON.stringify(result).includes("private-looking-content"), false);
   assert.equal(calls.length, 3);
+});
+
+test("backend release-source inspection proves schema 22 through 49 and the quiesced probe Blueprint", () => {
+  const facts = inspectBackendReleaseFacts({
+    directory: path.resolve(__dirname, "..", ".."),
+  });
+  assert.deepEqual(facts.migrationSource, {
+    baseSchemaVersion: EXPECTED_BASE_SCHEMA_VERSION,
+    targetSchemaVersion: EXPECTED_SCHEMA_VERSION,
+    migrationCount: EXPECTED_MIGRATION_COUNT,
+    postBaseMigrationCount: EXPECTED_POST_BASE_MIGRATION_COUNT,
+    contiguous: true,
+    checksumSetSha256:
+      EXPECTED_MIGRATION_CHECKSUM_SET_SHA256,
+  });
+  assert.deepEqual(facts.repositorySource, {
+    repositoryCatalogCount:
+      EXPECTED_REPOSITORY_CATALOG_COUNT,
+    repositoryCatalogSha256:
+      EXPECTED_REPOSITORY_CATALOG_SHA256,
+    postResetRequireEmptyCount:
+      EXPECTED_POST_RESET_REQUIRE_EMPTY_COUNT,
+    postResetPolicySha256:
+      EXPECTED_POST_RESET_POLICY_SHA256,
+    resetPolicyCoverageValid: true,
+  });
+  assert.equal(facts.renderProbe.safe, true);
+  assert.equal(facts.renderProbe.nodeMode, "production");
+  assert.equal(facts.renderProbe.maintenanceHold, "false");
+  assert.equal(facts.renderProbe.leagueWriteMode, "closed");
+  assert.equal(facts.renderProbe.accountEmailDeliveryEnabled, "false");
+  assert.equal(facts.renderProbe.debugRoutesEnabled, "false");
+  assert.equal(facts.renderProbe.backupScheduleEnabled, "false");
+  assert.deepEqual(facts.renderProbe.forbiddenEmailInputs, []);
+  if (facts.probeManifest.exists) {
+    assert.equal(facts.probeManifest.tracked, true);
+    assert.equal(facts.probeManifest.valid, true);
+    assert.equal(
+      facts.probeManifest.configuredNhlSeasonKey,
+      EXPECTED_CONFIGURED_NHL_SEASON_KEY
+    );
+    assert.equal(
+      facts.probeManifest.probeNhlSeasonKey,
+      EXPECTED_PROBE_NHL_SEASON_KEY
+    );
+  } else {
+    assert.equal(facts.probeManifest.valid, false);
+    assert.equal(facts.probeManifest.manifestSha256, null);
+  }
 });
 
 test("release-candidate CLI accepts inspection or one complete exact input and emits safely", () => {

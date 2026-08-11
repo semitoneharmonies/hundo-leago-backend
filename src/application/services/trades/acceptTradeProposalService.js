@@ -5,6 +5,15 @@ const {
 } = require("../../../domain/trades/tradeExecutionPolicy");
 
 const IDEMPOTENCY_LIFETIME_MS = 24 * 60 * 60 * 1000;
+const LATE_LOCK_STATUSES = new Set([
+  "awaiting_data",
+  "completed",
+  "not_applicable",
+  "still_illegal",
+]);
+const UUID_PATTERN =
+  /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
+const AWAITING_DATA_LATE_LOCK = Object.freeze({ status: "awaiting_data" });
 
 function assertMethod(value, method, description) {
   if (!value || typeof value[method] !== "function") {
@@ -35,7 +44,123 @@ function canonicalIdempotencyKey(value) {
   return value;
 }
 
-function projectResult(result) {
+function safeLateLockProjection(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("trade acceptance received an unsafe late-lock result");
+  }
+  const keys = Object.keys(value).sort().join(",");
+  if (keys !== "status" && keys !== "lockId,status") {
+    throw new TypeError("trade acceptance received an unsafe late-lock result");
+  }
+  if (!LATE_LOCK_STATUSES.has(value.status)) {
+    throw new TypeError("trade acceptance received an unsafe late-lock result");
+  }
+  if (
+    Object.hasOwn(value, "lockId") &&
+    (value.status !== "completed" || !UUID_PATTERN.test(value.lockId || ""))
+  ) {
+    throw new TypeError("trade acceptance received an unsafe late-lock result");
+  }
+  return Object.freeze({
+    status: value.status,
+    ...(Object.hasOwn(value, "lockId") ? { lockId: value.lockId } : {}),
+  });
+}
+
+function projectTransfer(transfer) {
+  return Object.freeze({
+    assetId: transfer.assetId,
+    assetType: transfer.assetType,
+    sourceTeamId: transfer.sourceTeamId,
+    destinationTeamId: transfer.destinationTeamId,
+    plannedRosterSlotNumber: transfer.plannedRosterSlotNumber,
+  });
+}
+
+function committedBatch(result) {
+  const teams = result?.committedTeams;
+  const trade = result?.trade;
+  if (
+    !Array.isArray(teams) ||
+    teams.length !== 2 ||
+    !trade ||
+    !UUID_PATTERN.test(trade.league_id || "") ||
+    !UUID_PATTERN.test(trade.season_id || "") ||
+    !UUID_PATTERN.test(trade.proposing_team_id || "") ||
+    !UUID_PATTERN.test(trade.receiving_team_id || "") ||
+    trade.proposing_team_id === trade.receiving_team_id
+  ) {
+    throw new TypeError("trade acceptance requires its committed team receipt");
+  }
+
+  const expectedTeamIds = new Set([
+    trade.proposing_team_id,
+    trade.receiving_team_id,
+  ]);
+  const seenOwnershipIds = new Set();
+  let previousTeamId = null;
+  const committedTeams = teams.map((team) => {
+    if (
+      !team ||
+      typeof team !== "object" ||
+      Array.isArray(team) ||
+      Object.keys(team).sort().join(",") !==
+        "leagueId,ownershipWitnesses,seasonId,teamId" ||
+      team.leagueId !== trade.league_id ||
+      team.seasonId !== trade.season_id ||
+      !expectedTeamIds.delete(team.teamId) ||
+      (previousTeamId !== null && team.teamId <= previousTeamId) ||
+      !Array.isArray(team.ownershipWitnesses)
+    ) {
+      throw new TypeError("trade acceptance requires exact committed team receipts");
+    }
+    previousTeamId = team.teamId;
+
+    let previousOwnershipId = null;
+    const ownershipWitnesses = team.ownershipWitnesses.map((witness) => {
+      if (
+        !witness ||
+        typeof witness !== "object" ||
+        Array.isArray(witness) ||
+        Object.keys(witness).sort().join(",") !==
+          "ownershipId,ownershipVersion,state" ||
+        !UUID_PATTERN.test(witness.ownershipId || "") ||
+        !Number.isSafeInteger(witness.ownershipVersion) ||
+        witness.ownershipVersion < 1 ||
+        !["present", "deleted"].includes(witness.state) ||
+        (previousOwnershipId !== null &&
+          witness.ownershipId <= previousOwnershipId) ||
+        seenOwnershipIds.has(witness.ownershipId)
+      ) {
+        throw new TypeError(
+          "trade acceptance requires exact committed ownership witnesses"
+        );
+      }
+      previousOwnershipId = witness.ownershipId;
+      seenOwnershipIds.add(witness.ownershipId);
+      return Object.freeze({
+        ownershipId: witness.ownershipId,
+        ownershipVersion: witness.ownershipVersion,
+        state: witness.state,
+      });
+    });
+    return Object.freeze({
+      leagueId: team.leagueId,
+      seasonId: team.seasonId,
+      teamId: team.teamId,
+      ownershipWitnesses: Object.freeze(ownershipWitnesses),
+    });
+  });
+  if (expectedTeamIds.size !== 0) {
+    throw new TypeError("trade acceptance committed team scope is incomplete");
+  }
+  return Object.freeze({
+    mutationKind: "trade_acceptance",
+    teams: Object.freeze(committedTeams),
+  });
+}
+
+function projectResult(result, lateLock) {
   return Object.freeze({
     code: result.replayed
       ? "TRADE_ACCEPTANCE_REPLAYED"
@@ -55,7 +180,7 @@ function projectResult(result) {
     }),
     generallyIllegal: result.event.metadata.generallyIllegal,
     teams: result.event.metadata.teams,
-    transfers: result.event.metadata.transfers,
+    transfers: Object.freeze(result.event.metadata.transfers.map(projectTransfer)),
     automaticallyCancelledTradeIds:
       result.event.metadata.automaticallyCancelledTradeIds,
     event: Object.freeze({
@@ -64,6 +189,7 @@ function projectResult(result) {
       actorUserId: result.event.actor_user_id,
       occurredAtMs: result.event.occurred_at_ms,
     }),
+    lateLock,
   });
 }
 
@@ -71,6 +197,7 @@ function createAcceptTradeProposalService({
   leagueAuthorization,
   teamAuthorization,
   repository,
+  lateLockCoordinator,
   clock,
   secureRandom,
 } = {}) {
@@ -85,6 +212,11 @@ function createAcceptTradeProposalService({
   for (const method of ["findLifecycleParticipants", "executeAcceptance"]) {
     assertMethod(repository, method, "an atomic trade-execution repository");
   }
+  assertMethod(
+    lateLockCoordinator,
+    "coordinateCommittedRoster",
+    "a late-lock coordinator"
+  );
   assertMethod(clock, "nowMs", "a clock");
   assertMethod(secureRandom, "id", "secure identifiers");
 
@@ -101,7 +233,7 @@ function createAcceptTradeProposalService({
     );
   }
 
-  function accept({ leagueId, input, idempotencyKey, authenticated } = {}) {
+  async function accept({ leagueId, input, idempotencyKey, authenticated } = {}) {
     const body = validateTradeExecutionInput(input);
     leagueAuthorization.requireActiveMembership(authenticated, leagueId);
     const proposal = repository.findLifecycleParticipants({
@@ -120,8 +252,7 @@ function createAcceptTradeProposalService({
       proposal.receiving_team_id
     );
     const occurredAtMs = safeNow(clock);
-    return projectResult(
-      repository.executeAcceptance({
+    const result = repository.executeAcceptance({
         tradeId: proposal.trade_id,
         eventId: secureRandom.id(),
         idempotencyRequestId: secureRandom.id(),
@@ -137,8 +268,17 @@ function createAcceptTradeProposalService({
         effectiveDeadlineAtMs: proposal.effective_deadline_at_ms,
         idempotencyKey: canonicalIdempotencyKey(idempotencyKey),
         idempotencyExpiresAtMs: occurredAtMs + IDEMPOTENCY_LIFETIME_MS,
-      })
-    );
+      });
+    let lateLock = AWAITING_DATA_LATE_LOCK;
+    try {
+      const batch = committedBatch(result);
+      lateLock = safeLateLockProjection(
+        await lateLockCoordinator.coordinateCommittedRoster(batch)
+      );
+    } catch {
+      lateLock = AWAITING_DATA_LATE_LOCK;
+    }
+    return projectResult(result, lateLock);
   }
 
   return Object.freeze({ accept });

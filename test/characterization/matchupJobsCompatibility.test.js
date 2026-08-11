@@ -180,6 +180,7 @@ describe(
   () => {
     test("shared job runner reports failure and permits a later retry", async () => {
       let attempts = 0;
+      const logged = [];
       const runner = createJobRunner({
         name: "test:retry",
         async execute() {
@@ -192,7 +193,11 @@ describe(
             attempts,
           };
         },
-        logger: silentLogger(),
+        logger: {
+          error(...input) {
+            logged.push(input);
+          },
+        },
       });
 
       const failed = await runner.run();
@@ -201,6 +206,15 @@ describe(
         failed.error.message,
         "first attempt failed"
       );
+      assert.deepEqual(logged, [
+        [
+          "job_runner.failed",
+          {
+            job: "test:retry",
+            error: failed.error,
+          },
+        ],
+      ]);
       assert.equal(runner.isRunning(), false);
       assert.deepEqual(await runner.run(), {
         job: "test:retry",

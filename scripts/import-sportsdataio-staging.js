@@ -5,6 +5,9 @@ const {
   createSportsDataIoCatalogImportService,
 } = require("../src/application/services/players/createSportsDataIoCatalogImportService");
 const {
+  createStagingMaintenanceExclusionGuard,
+} = require("../src/application/services/operations/createStagingMaintenanceExclusionGuard");
+const {
   createTargetStatisticsService,
 } = require("../src/application/services/statistics/createTargetStatisticsService");
 const {
@@ -26,6 +29,10 @@ const {
 const {
   createSqliteStatisticsRepository,
 } = require("../src/infrastructure/persistence/sqlite/SqliteStatisticsRepository");
+const {
+  FIXTURE_DATABASE_ID,
+  FIXTURE_ENVIRONMENT_ID,
+} = require("../src/operations/release/releaseQaFixtureContract");
 const {
   PROVIDER_NAME,
   MINIMUM_LAST_SEASON_STATISTICS_PLAYER_COUNT,
@@ -63,6 +70,15 @@ function assertSafeStagingImportConfig(config) {
       "SportsDataIO import is authorized only for staging."
     );
   }
+  if (
+    config.environmentId !== FIXTURE_ENVIRONMENT_ID ||
+    config.databaseId !== FIXTURE_DATABASE_ID
+  ) {
+    fail(
+      "SPORTSDATAIO_STAGING_FIXTURE_REQUIRED",
+      "SportsDataIO import is authorized only for the staging release-QA fixture."
+    );
+  }
   if (!config.sportsDataIoNhl?.enabled) {
     fail(
       "SPORTSDATAIO_NHL_API_KEY_REQUIRED",
@@ -86,6 +102,8 @@ async function importSportsDataIoStaging({
   createId = randomUUID,
   loadConfig = loadTargetRuntimeConfig,
   openDatabaseFunction = openDatabase,
+  createMaintenanceExclusionGuard =
+    createStagingMaintenanceExclusionGuard,
 } = {}) {
   parseArguments(argv);
   const config = assertSafeStagingImportConfig(loadConfig({ env }));
@@ -105,6 +123,20 @@ async function importSportsDataIoStaging({
       discoverMigrations({ migrationsDirectory: config.migrationsDirectory })
     );
     assertDatabaseIdentity(connection.database, config);
+    const maintenanceExclusionGuard =
+      createMaintenanceExclusionGuard({
+        database: connection.database,
+        appEnv: config.appEnv,
+        environmentId: config.environmentId,
+        databaseId: config.databaseId,
+        leagueWriteMode: config.leagueWriteMode,
+        scheduledJobsEnabled: config.scheduledJobsEnabled,
+      });
+    const authorizePersist = async () =>
+      maintenanceExclusionGuard.assertExclusion(
+        "staging_provider_catalog_import"
+      );
+    await authorizePersist();
     const providerAdapter = createSportsDataIoNhlAdapter({
       apiKey: config.sportsDataIoNhl.apiKey,
       fetchImpl: fetchImplementation,
@@ -130,12 +162,14 @@ async function importSportsDataIoStaging({
       catalogRepository: createSqlitePlayerCatalogRepository({
         database: connection.database,
         createId,
+        now: nowMs,
       }),
       provider: providerAdapter,
       statisticsService: statistics,
       seasonStart: config.sportsDataIoNhl.seasonStartYear,
+      createId,
     });
-    return await service.importLastSeason();
+    return await service.importLastSeason({ authorizePersist });
   } finally {
     if (connection.database?.open) connection.database.close();
   }

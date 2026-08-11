@@ -249,6 +249,36 @@ describe("M2-12 repeated persistent staging import", () => {
         ).get().count,
         2
       );
+      for (const tableName of [
+        "candidate_card_entries",
+        "candidate_card_help_requests",
+        "candidate_card_revisions",
+        "candidate_card_snapshot_entries",
+        "candidate_card_snapshots",
+        "candidate_cards",
+        "auction_contexts",
+        "free_agent_draft_auction_participants",
+        "free_agent_draft_draws",
+        "free_agent_draft_allocation_events",
+        "free_agent_draft_player_allocations",
+        "free_agent_draft_recoveries",
+        "free_agent_draft_rollovers",
+        "free_agent_draft_setup_exemptions",
+        "free_agent_draft_teams",
+        "free_agent_drafts",
+        "outbox_event_audiences",
+        "season_rollover_items",
+        "season_rollovers",
+      ]) {
+        assert.equal(
+          database
+            .prepare(
+              `SELECT COUNT(*) count FROM ${tableName}`
+            )
+            .get().count,
+          0
+        );
+      }
       assert.equal(database.pragma("integrity_check", {
         simple: true,
       }), "ok");

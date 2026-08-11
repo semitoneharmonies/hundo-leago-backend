@@ -39,6 +39,18 @@ const {
   createSqliteTradeProposalRepository,
 } = require("../../infrastructure/persistence/sqlite/SqliteTradeProposalRepository");
 const {
+  createSqliteCandidateCardRepository,
+} = require("../../infrastructure/persistence/sqlite/SqliteCandidateCardRepository");
+const {
+  createSqliteCandidateCardSummerSynchronizer,
+} = require("../../infrastructure/persistence/sqlite/SqliteCandidateCardSummerSynchronizer");
+const {
+  createSqliteLeagueOutboxWriter,
+} = require("../../infrastructure/persistence/sqlite/SqliteLeagueOutboxWriter");
+const {
+  createSqliteNotificationWriter,
+} = require("../../infrastructure/persistence/sqlite/SqliteNotificationWriter");
+const {
   createSqliteUserRepository,
 } = require("../../infrastructure/persistence/sqlite/SqliteUserRepository");
 const {
@@ -76,6 +88,107 @@ function fail(code, message, cause) {
     message,
     cause === undefined ? {} : { cause }
   );
+}
+
+const RELEASE_QA_NOOP_LATE_LOCK_RESULT = Object.freeze({
+  status: "not_applicable",
+});
+
+function createReleaseQaNoopLateLockCoordinator() {
+  const coordinatedLeagueIds = new Set();
+
+  async function coordinateCommittedRoster(batch) {
+    const teams = batch?.teams;
+    const leagueAlias = LEAGUE_ALIASES.find(
+      (alias) => fixtureId(`league:${alias}`) === teams?.[0]?.leagueId
+    );
+    const expectedTeamIds = leagueAlias
+      ? [
+          fixtureId(`team:${leagueAlias}:1`),
+          fixtureId(`team:${leagueAlias}:2`),
+        ].sort()
+      : [];
+    const seenOwnershipIds = new Set();
+    const witnessStateCounts = { deleted: 0, present: 0 };
+    if (
+      !Object.isFrozen(batch) ||
+      Object.keys(batch || {}).sort().join(",") !== "mutationKind,teams" ||
+      batch.mutationKind !== "trade_acceptance" ||
+      !leagueAlias ||
+      !Array.isArray(teams) ||
+      !Object.isFrozen(teams) ||
+      teams.length !== 2 ||
+      coordinatedLeagueIds.has(teams[0].leagueId)
+    ) {
+      throw new TypeError(
+        "release-QA late-lock coordination requires one exact trade receipt"
+      );
+    }
+    for (let index = 0; index < teams.length; index += 1) {
+      const team = teams[index];
+      if (
+        !Object.isFrozen(team) ||
+        Object.keys(team).sort().join(",") !==
+          "leagueId,ownershipWitnesses,seasonId,teamId" ||
+        team.leagueId !== teams[0].leagueId ||
+        team.seasonId !== fixtureId(`season:${leagueAlias}:current`) ||
+        team.teamId !== expectedTeamIds[index] ||
+        !Array.isArray(team.ownershipWitnesses) ||
+        !Object.isFrozen(team.ownershipWitnesses) ||
+        team.ownershipWitnesses.length !== 2
+      ) {
+        throw new TypeError(
+          "release-QA late-lock coordination received an invalid team receipt"
+        );
+      }
+      let previousOwnershipId = null;
+      for (const witness of team.ownershipWitnesses) {
+        if (
+          !Object.isFrozen(witness) ||
+          Object.keys(witness).sort().join(",") !==
+            "ownershipId,ownershipVersion,state" ||
+          typeof witness.ownershipId !== "string" ||
+          witness.ownershipVersion !== 1 ||
+          !["deleted", "present"].includes(witness.state) ||
+          (previousOwnershipId !== null &&
+            witness.ownershipId <= previousOwnershipId) ||
+          seenOwnershipIds.has(witness.ownershipId)
+        ) {
+          throw new TypeError(
+            "release-QA late-lock coordination received an invalid tenure witness"
+          );
+        }
+        previousOwnershipId = witness.ownershipId;
+        seenOwnershipIds.add(witness.ownershipId);
+        witnessStateCounts[witness.state] += 1;
+      }
+    }
+    if (
+      witnessStateCounts.deleted !== 2 ||
+      witnessStateCounts.present !== 2
+    ) {
+      throw new TypeError(
+        "release-QA late-lock coordination requires both closed and acquired tenures"
+      );
+    }
+    coordinatedLeagueIds.add(teams[0].leagueId);
+    return RELEASE_QA_NOOP_LATE_LOCK_RESULT;
+  }
+
+  function assertComplete() {
+    const expectedLeagueIds = LEAGUE_ALIASES
+      .map((alias) => fixtureId(`league:${alias}`))
+      .sort();
+    const actualLeagueIds = [...coordinatedLeagueIds].sort();
+    if (JSON.stringify(actualLeagueIds) !== JSON.stringify(expectedLeagueIds)) {
+      fail(
+        "RELEASE_QA_LATE_LOCK_COVERAGE_REQUIRED",
+        "The release-QA fixture did not coordinate both accepted trades."
+      );
+    }
+  }
+
+  return Object.freeze({ assertComplete, coordinateCommittedRoster });
 }
 
 function isInside(rootPath, targetPath) {
@@ -285,6 +398,11 @@ function insertGlobalPlayers(database) {
       id, player_id, provider, external_value, created_at_ms
     ) VALUES (?, ?, 'release_qa', ?, ?)
   `);
+  const insertSyntheticSportsDataIoExternalId = database.prepare(`
+    INSERT INTO player_external_ids (
+      id, player_id, provider, external_value, created_at_ms
+    ) VALUES (?, ?, 'sportsdataio-discovery-lab', ?, ?)
+  `);
   const players = {};
   PLAYER_BLUEPRINTS.forEach((blueprint, index) => {
     const providerPlayer = selectedByAlias.get(blueprint.alias);
@@ -314,6 +432,12 @@ function insertGlobalPlayers(database) {
       fixtureId(`player-external:${blueprint.alias}`),
       id,
       `release-qa-${String(index + 1).padStart(3, "0")}`,
+      FIXTURE_NOW_MS
+    );
+    insertSyntheticSportsDataIoExternalId.run(
+      fixtureId(`player-sportsdataio-external:${blueprint.alias}`),
+      id,
+      `release-qa-synthetic-${String(index + 1).padStart(3, "0")}`,
       FIXTURE_NOW_MS
     );
     players[blueprint.alias] = Object.freeze({ id, ...blueprint });
@@ -748,7 +872,19 @@ function insertLeaguePlayerState(database, league, players, accounts) {
   });
 }
 
-function insertAuctionAndTrades(database, league, leagueState, players, accounts) {
+function insertAuctionAndTrades(
+  database,
+  league,
+  leagueState,
+  players,
+  accounts,
+  {
+    lateLockCoordinator,
+    leagueOutboxWriter,
+    notificationWriter,
+    candidateCardSummerSynchronizer,
+  }
+) {
   const managerAlias = league.alias === "leagueA"
     ? "leagueAManagerOne"
     : "leagueBManagerOne";
@@ -767,6 +903,18 @@ function insertAuctionAndTrades(database, league, leagueState, players, accounts
     FIXTURE_NOW_MS + 86_400_000,
     accounts[managerAlias].id,
     FIXTURE_NOW_MS - 3_600_000,
+    FIXTURE_NOW_MS - 3_600_000
+  );
+  database.prepare(`
+    INSERT INTO auction_contexts (
+      id, league_id, season_id, auction_id, source_kind,
+      fad_id, fad_rollover_id, fad_allocation_id, created_at_ms
+    ) VALUES (?, ?, ?, ?, 'ordinary_weekly', NULL, NULL, NULL, ?)
+  `).run(
+    auctionId,
+    league.leagueId,
+    league.seasons[0].id,
+    auctionId,
     FIXTURE_NOW_MS - 3_600_000
   );
   database.prepare(`
@@ -795,7 +943,12 @@ function insertAuctionAndTrades(database, league, leagueState, players, accounts
     leagueAuthorization,
     teamAuthorityRepository: createSqliteTeamAuthorityRepository({ database }),
   });
-  const tradeRepository = createSqliteTradeProposalRepository({ database });
+  const tradeRepository = createSqliteTradeProposalRepository({
+    database,
+    leagueOutboxWriter,
+    notificationWriter,
+    candidateCardSummerSynchronizer,
+  });
   let scenarioAlias = "uninitialized";
   let scenarioIdSequence = 0;
   let nowMs = FIXTURE_NOW_MS;
@@ -832,6 +985,7 @@ function insertAuctionAndTrades(database, league, leagueState, players, accounts
     leagueAuthorization,
     teamAuthorization,
     repository: tradeRepository,
+    lateLockCoordinator,
     clock,
     secureRandom,
   });
@@ -874,18 +1028,25 @@ function insertAuctionAndTrades(database, league, leagueState, players, accounts
     }
   );
   nowMs = FIXTURE_NOW_MS + 11_000;
-  const accepted = acceptanceService.accept({
+  const acceptedResult = acceptanceService.accept({
     leagueId: league.leagueId,
     input: { tradeId: completed.proposal.id },
     idempotencyKey: `release-qa:${league.alias}:accepted:execute`,
     authenticated,
+  }).then((accepted) => {
+    if (
+      accepted.proposal.storageStatus !== "completed" ||
+      accepted.generallyIllegal ||
+      accepted.lateLock.status !== "not_applicable"
+    ) {
+      fail(
+        "RELEASE_QA_COMPLETED_TRADE_REQUIRED",
+        `The ${league.alias} accepted trade did not complete legally with ` +
+          "its deterministic late-lock receipt."
+      );
+    }
+    return accepted;
   });
-  if (accepted.proposal.storageStatus !== "completed" || accepted.generallyIllegal) {
-    fail(
-      "RELEASE_QA_COMPLETED_TRADE_REQUIRED",
-      `The ${league.alias} accepted trade did not complete legally.`
-    );
-  }
 
   const rejected = createScenario(
     "rejected",
@@ -986,9 +1147,18 @@ function insertAuctionAndTrades(database, league, leagueState, players, accounts
       }],
     }
   );
+  return acceptedResult;
 }
 
-function insertMatchupAndReleaseSignals(database, league, leagueState, players, accounts, statSourceId) {
+function insertMatchupAndReleaseSignals(
+  database,
+  league,
+  leagueState,
+  players,
+  accounts,
+  statSourceId,
+  { leagueOutboxWriter, notificationWriter }
+) {
   const day = 86_400_000;
   const matchupWeekCount = 22;
   const priorWeekId = fixtureId(`matchup-week:${league.alias}:prior`);
@@ -1011,7 +1181,7 @@ function insertMatchupAndReleaseSignals(database, league, leagueState, players, 
     currentWeekId, league.leagueId, league.seasons[0].id, "week-02", 2,
     FIXTURE_NOW_MS - day, FIXTURE_NOW_MS - day,
     FIXTURE_NOW_MS - 12 * 3_600_000, FIXTURE_NOW_MS + 6 * day,
-    FIXTURE_NOW_MS + 7 * day, "live", FIXTURE_NOW_MS - day,
+    FIXTURE_NOW_MS + 7 * day, "scheduled", FIXTURE_NOW_MS - day,
     FIXTURE_NOW_MS
   );
   for (let sequence = 3; sequence <= matchupWeekCount; sequence += 1) {
@@ -1032,6 +1202,48 @@ function insertMatchupAndReleaseSignals(database, league, leagueState, players, 
       FIXTURE_NOW_MS
     );
   }
+
+  const scheduleOperationId = fixtureId(
+    `matchup-schedule-operation:${league.alias}`
+  );
+  const scheduleGeneratedAtMs = FIXTURE_NOW_MS - 14 * day;
+  database.prepare(`
+    INSERT INTO matchup_operations (
+      id, league_id, season_id, matchup_week_id, matchup_id,
+      actor_user_id, operation_type, status, reason, metadata_json,
+      started_at_ms, completed_at_ms
+    ) VALUES (
+      ?, ?, ?, NULL, NULL, ?, 'schedule_generate', 'succeeded',
+      'release_qa_fixture', ?, ?, ?
+    )
+  `).run(
+    scheduleOperationId,
+    league.leagueId,
+    league.seasons[0].id,
+    accounts[league.commissionerAlias].id,
+    JSON.stringify({
+      fixture: true,
+      generatedWeekCount: matchupWeekCount,
+      schemaVersion: 1,
+    }),
+    scheduleGeneratedAtMs,
+    scheduleGeneratedAtMs
+  );
+  database.prepare(`
+    INSERT INTO season_matchup_schedule_generations (
+      league_id, season_id, schedule_version,
+      schedule_operation_id, week_one_matchup_week_id,
+      week_one_starts_at_ms, status, created_at_ms,
+      superseded_at_ms, version
+    ) VALUES (?, ?, 1, ?, ?, ?, 'current', ?, NULL, 1)
+  `).run(
+    league.leagueId,
+    league.seasons[0].id,
+    scheduleOperationId,
+    priorWeekId,
+    FIXTURE_NOW_MS - 14 * day,
+    scheduleGeneratedAtMs
+  );
 
   const priorMatchupId = fixtureId(`matchup:${league.alias}:prior`);
   const insertMatchup = database.prepare(`
@@ -1066,7 +1278,7 @@ function insertMatchupAndReleaseSignals(database, league, leagueState, players, 
       league.teams[awayIndex].id,
       league.teams[homeIndex].name,
       league.teams[awayIndex].name,
-      "live",
+      "scheduled",
       FIXTURE_NOW_MS - day,
       FIXTURE_NOW_MS
     );
@@ -1364,39 +1576,60 @@ function insertMatchupAndReleaseSignals(database, league, leagueState, players, 
     JSON.stringify({ fixture: true, leagueAlias: league.alias }),
     FIXTURE_NOW_MS
   );
-  database.prepare(`
-    INSERT INTO notifications (
-      id, user_id, league_id, event_type, message_data_json,
-      related_feature, related_record_id, delivery_status,
-      created_at_ms, read_at_ms, delivered_at_ms, version
-    ) VALUES (?, ?, ?, 'release_qa.fixture_ready', ?, 'release_qa', ?,
-      'delivered', ?, NULL, ?, 1)
-  `).run(
-    fixtureId(`notification:${league.alias}`),
-    accounts[league.commissionerAlias].id,
-    league.leagueId,
-    JSON.stringify({ message: "Release QA fixture ready" }),
-    league.leagueId,
-    FIXTURE_NOW_MS,
-    FIXTURE_NOW_MS
-  );
-  database.prepare(`
-    INSERT INTO outbox_events (
-      id, league_id, event_type, aggregate_type, aggregate_id,
-      payload_json, status, attempt_count, available_at_ms,
-      published_at_ms, last_error_code, created_at_ms, updated_at_ms, version
-    ) VALUES (?, ?, 'release_qa.email_captured', 'league', ?, ?,
-      'published', 1, ?, ?, NULL, ?, ?, 1)
-  `).run(
-    fixtureId(`captured-email:${league.alias}`),
-    league.leagueId,
-    league.leagueId,
-    JSON.stringify({ fixture: true, template: "release_qa_ready" }),
-    FIXTURE_NOW_MS,
-    FIXTURE_NOW_MS,
-    FIXTURE_NOW_MS,
-    FIXTURE_NOW_MS
-  );
+  notificationWriter.insert({
+    id: fixtureId(`notification:${league.alias}`),
+    userId: accounts[league.commissionerAlias].id,
+    leagueId: league.leagueId,
+    eventType: "release_qa.fixture_ready",
+    messageDataJson: JSON.stringify({
+      message: "Release QA fixture ready",
+    }),
+    relatedFeature: "release_qa",
+    relatedRecordId: league.leagueId,
+    deliveryStatus: "delivered",
+    createdAtMs: FIXTURE_NOW_MS,
+    deliveredAtMs: FIXTURE_NOW_MS,
+    deduplicationKey: null,
+  });
+  const capturedEmailEventId =
+    fixtureId(`captured-email:${league.alias}`);
+  leagueOutboxWriter.write({
+    id: capturedEmailEventId,
+    leagueId: league.leagueId,
+    eventType: "release_qa.email_captured",
+    aggregateType: "league",
+    aggregateId: league.leagueId,
+    payload: {
+      kind: "invalidation",
+      eventType: "release_qa.email_captured",
+      scope: "league",
+      scopeId: league.leagueId,
+      version: 1,
+      changedAtMs: FIXTURE_NOW_MS,
+    },
+    occurredAtMs: FIXTURE_NOW_MS,
+  });
+  const capturedEmailPublication = database.prepare(`
+    UPDATE outbox_events
+    SET status = 'published',
+        attempt_count = 1,
+        published_at_ms = @publishedAtMs,
+        updated_at_ms = @publishedAtMs,
+        version = version + 1
+    WHERE id = @eventId
+      AND league_id = @leagueId
+      AND status = 'pending'
+      AND version = 1
+  `).run({
+    eventId: capturedEmailEventId,
+    leagueId: league.leagueId,
+    publishedAtMs: FIXTURE_NOW_MS,
+  });
+  if (capturedEmailPublication.changes !== 1) {
+    throw new Error(
+      "The release-QA captured-email event could not be finalized."
+    );
+  }
 }
 
 function seedFixture(
@@ -1417,6 +1650,29 @@ function seedFixture(
 
   const accounts = insertAccounts(database, passwordHash);
   const players = insertGlobalPlayers(database);
+  const lateLockCoordinator = createReleaseQaNoopLateLockCoordinator();
+  const unexpectedCandidateCardWrite = () => {
+    throw new Error(
+      "The release QA fixture unexpectedly attempted a Candidate Card write."
+    );
+  };
+  const candidateCardRepository = createSqliteCandidateCardRepository({
+    database,
+    writeMutationSideEffects: unexpectedCandidateCardWrite,
+    writeHelpGrantSideEffects: unexpectedCandidateCardWrite,
+  });
+  const writers = Object.freeze({
+    lateLockCoordinator,
+    leagueOutboxWriter:
+      createSqliteLeagueOutboxWriter({ database }),
+    notificationWriter:
+      createSqliteNotificationWriter({ database }),
+    candidateCardSummerSynchronizer:
+      createSqliteCandidateCardSummerSynchronizer({
+        database,
+        candidateCardRepository,
+      }),
+  });
   const statSourceId = fixtureId("stat-source");
   database.prepare(`
     INSERT INTO stat_sources (
@@ -1424,12 +1680,34 @@ function seedFixture(
     ) VALUES (?, 'release_qa_fixture', 'active', ?, ?, 1)
   `).run(statSourceId, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
 
+  const acceptancePromises = [];
   for (const leagueAlias of LEAGUE_ALIASES) {
     const league = insertLeagueBase(database, leagueAlias, accounts);
     const leagueState = insertLeaguePlayerState(database, league, players, accounts);
-    insertAuctionAndTrades(database, league, leagueState, players, accounts);
-    insertMatchupAndReleaseSignals(database, league, leagueState, players, accounts, statSourceId);
+    acceptancePromises.push(
+      insertAuctionAndTrades(
+        database,
+        league,
+        leagueState,
+        players,
+        accounts,
+        writers
+      )
+    );
+    insertMatchupAndReleaseSignals(
+      database,
+      league,
+      leagueState,
+      players,
+      accounts,
+      statSourceId,
+      writers
+    );
   }
+  return Object.freeze({
+    acceptancePromises: Object.freeze(acceptancePromises),
+    assertLateLockCoverage: lateLockCoordinator.assertComplete,
+  });
 }
 
 async function createReleaseQaFixture({
@@ -1469,9 +1747,11 @@ async function createReleaseQaFixture({
       applicationBuildId: FIXTURE_BUILD_ID,
       now: () => FIXTURE_NOW_MS,
     });
-    connection.database.transaction(() => {
-      seedFixture(connection.database, passwordHash);
-    }).immediate();
+    const seedResult = connection.database.transaction(() =>
+      seedFixture(connection.database, passwordHash)
+    ).immediate();
+    await Promise.all(seedResult.acceptancePromises);
+    seedResult.assertLateLockCoverage();
   } catch (error) {
     if (error instanceof ReleaseQaFixtureError) throw error;
     fail(

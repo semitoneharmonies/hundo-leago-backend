@@ -149,15 +149,19 @@ function createTradeRecoveryRouter({ requestSecurity, tradeRecoveryService } = {
   );
 
   function write(method) {
-    return (request, response) => {
+    return async (request, response) => {
       try {
         const confirmed = exactConfirmationBody(request.body);
-        return success(request, response, tradeRecoveryService[method]({
-          leagueId: request.params.leagueId,
-          input: { tradeId: request.params.tradeId, confirmed },
-          idempotencyKey: request.get("idempotency-key"),
-          authenticated: requestSecurity.getAuthenticatedSession(request),
-        }));
+        return success(
+          request,
+          response,
+          await tradeRecoveryService[method]({
+            leagueId: request.params.leagueId,
+            input: { tradeId: request.params.tradeId, confirmed },
+            idempotencyKey: request.get("idempotency-key"),
+            authenticated: requestSecurity.getAuthenticatedSession(request),
+          })
+        );
       } catch (error) {
         return mapError(request, response, error);
       }

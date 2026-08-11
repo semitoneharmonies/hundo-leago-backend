@@ -417,6 +417,14 @@ function createRuntime(t) {
   });
   const repository = createSqliteTradeProposalRepository({
     database: connection.database,
+    candidateCardSummerSynchronizer: Object.freeze({
+      synchronize() {
+        return Object.freeze({
+          affectedCardCount: 0,
+          changedCardCount: 0,
+        });
+      },
+    }),
   });
   let nowMs = NOW_MS;
   let nextId = 100;

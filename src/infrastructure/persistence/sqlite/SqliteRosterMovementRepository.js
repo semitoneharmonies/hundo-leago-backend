@@ -19,7 +19,18 @@ function freezeRow(row) {
   return row ? Object.freeze({ ...row }) : null;
 }
 
-function createSqliteRosterMovementRepository({ database } = {}) {
+function createSqliteRosterMovementRepository({
+  database,
+  candidateCardSummerSynchronizer,
+} = {}) {
+  if (
+    !candidateCardSummerSynchronizer ||
+    typeof candidateCardSummerSynchronizer.synchronize !== "function"
+  ) {
+    throw new TypeError(
+      "createSqliteRosterMovementRepository requires a Candidate Card summer synchronizer"
+    );
+  }
   const ownerships = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("player_ownerships"),
@@ -43,7 +54,7 @@ function createSqliteRosterMovementRepository({ database } = {}) {
         "WHERE league_id = @leagueId AND player_id = @playerId LIMIT 2"
     );
     findUnplacedSourceOwnershipStatement = database.prepare(`
-      SELECT id, version
+      SELECT id, player_id, version
       FROM player_ownerships
       WHERE league_id = @leagueId
         AND season_id = @seasonId
@@ -66,6 +77,7 @@ function createSqliteRosterMovementRepository({ database } = {}) {
         AND league_id = @leagueId
         AND version = @expectedVersion
         AND slot_number IS NULL
+      RETURNING *
     `);
     moveTransaction = database.transaction((move) => {
       const rows = findOwnershipStatement.all({
@@ -99,6 +111,7 @@ function createSqliteRosterMovementRepository({ database } = {}) {
           },
         })
       );
+      let placedSourceOwnership = null;
       if (current.slot_number !== null) {
         const replacement = findUnplacedSourceOwnershipStatement.get({
           ...move,
@@ -106,13 +119,15 @@ function createSqliteRosterMovementRepository({ database } = {}) {
           sourcePositionGroup: current.position_group,
         });
         if (replacement) {
-          const placed = placeSourceOwnershipStatement.run({
+          placedSourceOwnership = freezeRow(
+            placeSourceOwnershipStatement.get({
             ...move,
             id: replacement.id,
             expectedVersion: replacement.version,
             sourceSlotNumber: current.slot_number,
-          });
-          if (placed.changes !== 1) {
+            })
+          );
+          if (!placedSourceOwnership) {
             throw repositoryError(
               REPOSITORY_ERROR_CODES.versionConflict,
               "The source roster changed before its open slot was restored."
@@ -173,8 +188,28 @@ function createSqliteRosterMovementRepository({ database } = {}) {
           occurred_at_ms: move.occurredAtMs,
         })
       );
+      candidateCardSummerSynchronizer.synchronize({
+        leagueId: move.leagueId,
+        affectedTeamIds: [move.teamId],
+        affectedPlayerIds: [
+          ...new Set(
+            [
+              move.playerId,
+              placedSourceOwnership?.player_id,
+            ].filter(Boolean)
+          ),
+        ].sort(),
+        sourceOperationId: move.ownershipEventId,
+        sourceKind: "roster_movement",
+        nowMs: move.occurredAtMs,
+      });
       return Object.freeze({
         ownership: updated,
+        affectedOwnerships: Object.freeze(
+          [updated, placedSourceOwnership]
+            .filter(Boolean)
+            .sort((left, right) => left.id.localeCompare(right.id))
+        ),
         ownershipEvent: event,
         activity: activityRow,
       });

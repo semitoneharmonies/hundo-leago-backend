@@ -4,14 +4,124 @@ const {
   COMMISSIONER_CORRECTION_CODES,
   CommissionerCorrectionPolicyError,
 } = require("../../../domain/leagues/commissionerCorrectionPolicy");
+const {
+  CANONICAL_UUID_PATTERN,
+} = require("../../../domain/players/playerIdentityPolicy");
 
 const IDEMPOTENCY_LIFETIME_MS = 24 * 60 * 60 * 1000;
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,200}$/;
+const LATE_LOCK_STATUSES = new Set([
+  "awaiting_data",
+  "completed",
+  "not_applicable",
+  "still_illegal",
+]);
+const AWAITING_DATA_LATE_LOCK = Object.freeze({ status: "awaiting_data" });
 
 function assertMethod(value, method, description) {
   if (!value || typeof value[method] !== "function") {
     throw new TypeError(`commissioner corrections require ${description}`);
   }
+}
+
+function safeLateLockProjection(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    throw new TypeError(
+      "commissioner corrections received an unsafe late-lock result"
+    );
+  }
+  const keys = Object.keys(value).sort().join(",");
+  if (keys !== "status" && keys !== "lockId,status") {
+    throw new TypeError(
+      "commissioner corrections received an unsafe late-lock result"
+    );
+  }
+  if (!LATE_LOCK_STATUSES.has(value.status)) {
+    throw new TypeError(
+      "commissioner corrections received an unsafe late-lock result"
+    );
+  }
+  if (
+    Object.hasOwn(value, "lockId") &&
+    (value.status !== "completed" ||
+      !CANONICAL_UUID_PATTERN.test(value.lockId || ""))
+  ) {
+    throw new TypeError(
+      "commissioner corrections received an unsafe late-lock result"
+    );
+  }
+  return Object.freeze({
+    status: value.status,
+    ...(Object.hasOwn(value, "lockId") ? { lockId: value.lockId } : {}),
+  });
+}
+
+function committedOwnershipWitness(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).sort().join(",") !==
+      "ownershipId,ownershipVersion,state" ||
+    !CANONICAL_UUID_PATTERN.test(value.ownershipId || "") ||
+    !Number.isSafeInteger(value.ownershipVersion) ||
+    value.ownershipVersion < 1 ||
+    !["present", "deleted"].includes(value.state)
+  ) {
+    throw new TypeError(
+      "commissioner corrections require an exact committed ownership witness"
+    );
+  }
+  return Object.freeze({
+    ownershipId: value.ownershipId,
+    ownershipVersion: value.ownershipVersion,
+    state: value.state,
+  });
+}
+
+function committedRosterTeams(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    !Array.isArray(value.teams) ||
+    value.teams.length < 1
+  ) {
+    throw new TypeError(
+      "commissioner corrections require a committed roster receipt"
+    );
+  }
+  return Object.freeze(
+    value.teams.map((team) => {
+      if (
+        !team ||
+        typeof team !== "object" ||
+        Array.isArray(team) ||
+        Object.keys(team).sort().join(",") !==
+          "leagueId,ownershipWitnesses,seasonId,teamId" ||
+        !CANONICAL_UUID_PATTERN.test(team.leagueId || "") ||
+        !CANONICAL_UUID_PATTERN.test(team.seasonId || "") ||
+        !CANONICAL_UUID_PATTERN.test(team.teamId || "") ||
+        !Array.isArray(team.ownershipWitnesses)
+      ) {
+        throw new TypeError(
+          "commissioner corrections require exact committed team receipts"
+        );
+      }
+      return Object.freeze({
+        leagueId: team.leagueId,
+        seasonId: team.seasonId,
+        teamId: team.teamId,
+        ownershipWitnesses: Object.freeze(
+          team.ownershipWitnesses.map(committedOwnershipWitness)
+        ),
+      });
+    })
+  );
 }
 
 function invalidInput() {
@@ -313,6 +423,7 @@ function authoritativeContractCorrection({
 function createCommissionerCorrectionService({
   leagueAuthorization,
   repository,
+  lateLockCoordinator,
   clock,
   secureRandom,
   providerEnabled = false,
@@ -335,12 +446,32 @@ function createCommissionerCorrectionService({
   ]) {
     assertMethod(repository, method, "an atomic commissioner-correction repository");
   }
+  assertMethod(
+    lateLockCoordinator,
+    "coordinateCommittedRoster",
+    "a late-lock coordinator"
+  );
   assertMethod(clock, "nowMs", "a clock");
   assertMethod(secureRandom, "id", "secure identifiers");
   if (typeof providerEnabled !== "boolean") {
     throw new TypeError(
       "commissioner corrections require a provider-enabled flag"
     );
+  }
+
+  async function coordinateRosterAfterCommit({ mutationKind, result }) {
+    try {
+      return safeLateLockProjection(
+        await lateLockCoordinator.coordinateCommittedRoster(
+          Object.freeze({
+            mutationKind,
+            teams: committedRosterTeams(result?.committedRoster),
+          })
+        )
+      );
+    } catch {
+      return AWAITING_DATA_LATE_LOCK;
+    }
   }
 
   function rosterCorrection({
@@ -381,12 +512,9 @@ function createCommissionerCorrectionService({
       occurredAtMs,
       secureRandom,
     });
-    return project(
-      apply
-        ? repository.applyRoster(correction, idempotency)
-        : repository.previewRoster(correction),
-      "roster"
-    );
+    return apply
+      ? repository.applyRoster(correction, idempotency)
+      : repository.previewRoster(correction);
   }
 
   function rosterAddition({
@@ -440,12 +568,9 @@ function createCommissionerCorrectionService({
       occurredAtMs,
       secureRandom,
     });
-    return project(
-      apply
-        ? repository.applyAdd(correction, idempotency)
-        : repository.previewAdd(correction),
-      "roster_add"
-    );
+    return apply
+      ? repository.applyAdd(correction, idempotency)
+      : repository.previewAdd(correction);
   }
 
   function rosterRemoval({
@@ -489,12 +614,9 @@ function createCommissionerCorrectionService({
       occurredAtMs,
       secureRandom,
     });
-    return project(
-      apply
-        ? repository.applyRemove(correction, idempotency)
-        : repository.previewRemove(correction),
-      "roster_remove"
-    );
+    return apply
+      ? repository.applyRemove(correction, idempotency)
+      : repository.previewRemove(correction);
   }
 
   function contractCorrection({
@@ -552,12 +674,9 @@ function createCommissionerCorrectionService({
       occurredAtMs,
       secureRandom,
     });
-    return project(
-      apply
-        ? repository.applyContract(correction, idempotency)
-        : repository.previewContract(correction),
-      "contract"
-    );
+    return apply
+      ? repository.applyContract(correction, idempotency)
+      : repository.previewContract(correction);
   }
 
   return Object.freeze({
@@ -585,28 +704,72 @@ function createCommissionerCorrectionService({
       });
     },
     previewAdd(options) {
-      return rosterAddition({ ...options, apply: false });
+      return project(
+        rosterAddition({ ...options, apply: false }),
+        "roster_add"
+      );
     },
-    applyAdd(options) {
-      return rosterAddition({ ...options, apply: true });
+    async applyAdd(options) {
+      const result = rosterAddition({ ...options, apply: true });
+      const lateLock = await coordinateRosterAfterCommit({
+        mutationKind: "commissioner_addition",
+        result,
+      });
+      return Object.freeze({
+        ...project(result, "roster_add"),
+        lateLock,
+      });
     },
     previewRemove(options) {
-      return rosterRemoval({ ...options, apply: false });
+      return project(
+        rosterRemoval({ ...options, apply: false }),
+        "roster_remove"
+      );
     },
-    applyRemove(options) {
-      return rosterRemoval({ ...options, apply: true });
+    async applyRemove(options) {
+      const result = rosterRemoval({ ...options, apply: true });
+      const lateLock = await coordinateRosterAfterCommit({
+        mutationKind: "commissioner_removal",
+        result,
+      });
+      return Object.freeze({
+        ...project(result, "roster_remove"),
+        lateLock,
+      });
     },
     previewRoster(options) {
-      return rosterCorrection({ ...options, apply: false });
+      return project(
+        rosterCorrection({ ...options, apply: false }),
+        "roster"
+      );
     },
-    applyRoster(options) {
-      return rosterCorrection({ ...options, apply: true });
+    async applyRoster(options) {
+      const result = rosterCorrection({ ...options, apply: true });
+      const lateLock = await coordinateRosterAfterCommit({
+        mutationKind: "commissioner_correction",
+        result,
+      });
+      return Object.freeze({
+        ...project(result, "roster"),
+        lateLock,
+      });
     },
     previewContract(options) {
-      return contractCorrection({ ...options, apply: false });
+      return project(
+        contractCorrection({ ...options, apply: false }),
+        "contract"
+      );
     },
-    applyContract(options) {
-      return contractCorrection({ ...options, apply: true });
+    async applyContract(options) {
+      const result = contractCorrection({ ...options, apply: true });
+      const lateLock = await coordinateRosterAfterCommit({
+        mutationKind: "contract_correction",
+        result,
+      });
+      return Object.freeze({
+        ...project(result, "contract"),
+        lateLock,
+      });
     },
   });
 }

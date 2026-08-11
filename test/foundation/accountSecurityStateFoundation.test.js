@@ -26,7 +26,9 @@ const {
   AUTHENTICATION_RATE_LIMITS,
   HOUR_MS,
   MINUTE_MS,
+  RATE_LIMIT_BUCKETS,
   createRateLimitWindow,
+  getAuthenticationRateLimitRule,
 } = require(
   "../../src/domain/accounts/authenticationRateLimitPolicy"
 );
@@ -402,7 +404,55 @@ describe("M3-06 account security policies", () => {
         network: null,
         subject: [5, HOUR_MS, "attempts"],
       },
+      fad_candidate_write: {
+        session: [
+          120,
+          15 * MINUTE_MS,
+          "attempts",
+        ],
+        league: [
+          600,
+          15 * MINUTE_MS,
+          "attempts",
+        ],
+      },
+      fad_help_write: {
+        session: [5, HOUR_MS, "attempts"],
+        league: [25, HOUR_MS, "attempts"],
+      },
+      fad_operational_write: {
+        session: [
+          30,
+          15 * MINUTE_MS,
+          "attempts",
+        ],
+        league: [
+          120,
+          15 * MINUTE_MS,
+          "attempts",
+        ],
+      },
     });
+    assert.deepEqual(RATE_LIMIT_BUCKETS, {
+      league: "league",
+      network: "network",
+      session: "session",
+      subject: "subject",
+    });
+    assert.equal(
+      getAuthenticationRateLimitRule(
+        "sign_in",
+        "session"
+      ),
+      null
+    );
+    assert.equal(
+      getAuthenticationRateLimitRule(
+        "fad_candidate_write",
+        "network"
+      ),
+      null
+    );
     assert.deepEqual(
       createRateLimitWindow(
         CREATED_AT_MS + 1234,
@@ -995,6 +1045,109 @@ describe("M3-06 durable authentication rate limits", () => {
     assert.equal(
       limiter.cleanupExpired({ limit: 1 }),
       0
+    );
+  });
+
+  test("enforces the shared FAD session and league buckets without changing authentication bucket behavior", (t) => {
+    const runtime = createDatabaseRuntime(
+      t,
+      "hundo-fad-rate-threshold-"
+    );
+    const time = { nowMs: CREATED_AT_MS };
+    const limiter = createLimiter(
+      runtime.repositories().rateLimits,
+      time,
+      deterministicRandom({ firstId: 900 })
+    );
+    const sessionId = uuid(901);
+    const leagueId = uuid(902);
+
+    for (let index = 0; index < 5; index += 1) {
+      assert.equal(
+        limiter.recordAttempt({
+          action: "fad_help_write",
+          bucket: "session",
+          canonicalIdentifier: sessionId,
+        }).allowed,
+        true
+      );
+    }
+    for (let index = 0; index < 25; index += 1) {
+      assert.equal(
+        limiter.recordAttempt({
+          action: "fad_help_write",
+          bucket: "league",
+          canonicalIdentifier: leagueId,
+        }).allowed,
+        true
+      );
+    }
+    assert.deepEqual(
+      limiter.check({
+        action: "fad_help_write",
+        bucket: "session",
+        canonicalIdentifier: sessionId,
+      }),
+      {
+        allowed: false,
+        code: "RATE_LIMITED",
+        retryAfterSeconds: 60 * 60,
+      }
+    );
+    assert.deepEqual(
+      limiter.check({
+        action: "fad_help_write",
+        bucket: "league",
+        canonicalIdentifier: leagueId,
+      }),
+      {
+        allowed: false,
+        code: "RATE_LIMITED",
+        retryAfterSeconds: 60 * 60,
+      }
+    );
+
+    for (const action of [
+      "fad_candidate_write",
+      "fad_operational_write",
+    ]) {
+      for (const bucket of ["session", "league"]) {
+        assert.equal(
+          limiter.recordAttempt({
+            action,
+            bucket,
+            canonicalIdentifier:
+              bucket === "session"
+                ? sessionId
+                : leagueId,
+          }).allowed,
+          true
+        );
+      }
+    }
+    assert.deepEqual(
+      limiter.check({
+        action: "sign_in",
+        bucket: "session",
+        canonicalIdentifier: sessionId,
+      }),
+      {
+        allowed: true,
+        code: "RATE_LIMIT_DELEGATED",
+        retryAfterSeconds: 0,
+      }
+    );
+    assert.deepEqual(
+      limiter.check({
+        action: "fad_candidate_write",
+        bucket: "network",
+        canonicalIdentifier: "192.0.2.0/24",
+      }),
+      {
+        allowed: true,
+        code: "RATE_LIMIT_DELEGATED",
+        retryAfterSeconds: 0,
+      }
     );
   });
 });

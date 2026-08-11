@@ -6,11 +6,50 @@ const { execFileSync } = require("node:child_process");
 const {
   canonicalize,
 } = require("./releaseQaFixtureContract");
+const {
+  discoverMigrations,
+} = require("../../infrastructure/database/migrate");
+const {
+  RESET_V1_POST_RESET_TABLE_POLICY,
+  assertPolicyCatalogCoverage,
+} = require("../../infrastructure/migration/resetManifest");
+const {
+  REPOSITORY_CATALOG,
+} = require(
+  "../../infrastructure/persistence/sqlite/repositoryCatalog"
+);
+const {
+  SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST_RELATIVE_PATH,
+} = require("../../config/loadTargetRuntimeConfig");
+const {
+  loadSportsDataIoLiveProbeManifest,
+} = require("../../bootstrap/openDeployedTargetRuntime");
 
 const EXPECTED_NODE_VERSION = "v24.14.1";
 const EXPECTED_STAGING_BRANCH = "staging";
+const EXPECTED_BASE_SCHEMA_VERSION = 22;
+const EXPECTED_SCHEMA_VERSION = 49;
+const EXPECTED_MIGRATION_COUNT = 49;
+const EXPECTED_POST_BASE_MIGRATION_COUNT = 27;
+const EXPECTED_MIGRATION_CHECKSUM_SET_SHA256 =
+  "6df4e827296ef3e63a143fb932f557b410511813ea421177afb7908fda15d636";
+const EXPECTED_REPOSITORY_CATALOG_COUNT = 131;
+const EXPECTED_REPOSITORY_CATALOG_SHA256 =
+  "89b4eb536aef7c4c6d1519c5311f94c449109a55d8b71d130e5b952a157b49ff";
+const EXPECTED_POST_RESET_REQUIRE_EMPTY_COUNT = 49;
+const EXPECTED_POST_RESET_POLICY_SHA256 =
+  "52d2d5ba6faaad9cc877132ad0153d8e52665b8aa0ae05394b685c9e48267808";
+const EXPECTED_CONFIGURED_NHL_SEASON_KEY = "20262027";
+const EXPECTED_PROBE_NHL_SEASON_KEY = "20252026";
+const EXPECTED_PROBE_MANIFEST_RELATIVE_PATH =
+  SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST_RELATIVE_PATH.replaceAll(
+    "\\",
+    "/"
+  );
 const RELEASE_ID_PATTERN = /^HL-\d{8}-[1-9]\d*$/;
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const SEASON_KEY_PATTERN = /^\d{8}$/;
 
 class ReleaseCandidatePreflightError extends Error {
   constructor(code, message, options = {}) {
@@ -30,6 +69,179 @@ function fail(code, message, cause) {
 
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function exactRenderEnvironment(directory) {
+  try {
+    const blueprint = JSON.parse(
+      fs.readFileSync(path.join(directory, "render.yaml"), "utf8")
+    );
+    if (
+      !blueprint || !Array.isArray(blueprint.services) ||
+      blueprint.services.length !== 1 ||
+      !Array.isArray(blueprint.services[0]?.envVars)
+    ) {
+      return null;
+    }
+    return new Map(
+      blueprint.services[0].envVars.map((entry) => [entry?.key, entry])
+    );
+  } catch {
+    return null;
+  }
+}
+
+function inspectRenderProbeSafety(directory) {
+  const environment = exactRenderEnvironment(directory);
+  const value = (key) => environment?.get(key)?.value ?? null;
+  const forbiddenEmailInputs = [
+    "EMAIL_FROM",
+    "EMAIL_REPLY_TO",
+    "RESEND_API_KEY",
+    "STAGING_EMAIL_RECIPIENT_ALLOWLIST",
+  ].filter((key) => environment?.has(key));
+  const facts = {
+    nodeMode: value("NODE_ENV"),
+    maintenanceHold: value("STAGING_MAINTENANCE_HOLD"),
+    liveMode: value("SPORTSDATAIO_NHL_LIVE_MODE"),
+    leagueWriteMode: value("LEAGUE_WRITE_MODE"),
+    scheduledJobsEnabled: value("SCHEDULED_JOBS_ENABLED"),
+    freeAgentDraftRoutesEnabled:
+      value("FREE_AGENT_DRAFT_ROUTES_ENABLED"),
+    accountEmailDeliveryEnabled:
+      value("ACCOUNT_EMAIL_DELIVERY_ENABLED"),
+    debugRoutesEnabled: value("DEBUG_ROUTES_ENABLED"),
+    emailDeliveryMode: value("EMAIL_DELIVERY_MODE"),
+    backupScheduleEnabled: value("BACKUP_SCHEDULE_ENABLED"),
+    forbiddenEmailInputs,
+  };
+  return Object.freeze({
+    ...facts,
+    safe:
+      facts.nodeMode === "production" &&
+      facts.maintenanceHold === "false" &&
+      facts.liveMode === "probe" &&
+      facts.leagueWriteMode === "closed" &&
+      facts.scheduledJobsEnabled === "false" &&
+      facts.freeAgentDraftRoutesEnabled === "false" &&
+      facts.accountEmailDeliveryEnabled === "false" &&
+      facts.debugRoutesEnabled === "false" &&
+      facts.emailDeliveryMode === "capture" &&
+      facts.backupScheduleEnabled === "false" &&
+      forbiddenEmailInputs.length === 0,
+  });
+}
+
+function inspectProbeManifest({ directory, runGit }) {
+  const relativePath =
+    SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST_RELATIVE_PATH;
+  const manifestPath = path.join(directory, relativePath);
+  const exists =
+    fs.existsSync(manifestPath) && fs.lstatSync(manifestPath).isFile();
+  const tracked = runGit(
+    directory,
+    ["ls-files", "--stage", "--", relativePath.replaceAll("\\", "/")]
+  ) !== "";
+  let valid = false;
+  let manifestSha256 = null;
+  let configuredNhlSeasonKey = null;
+  let probeNhlSeasonKey = null;
+  if (exists) {
+    try {
+      const loaded = loadSportsDataIoLiveProbeManifest({
+        manifestPath,
+      });
+      valid = true;
+      manifestSha256 = loaded.probeManifestSha256;
+      configuredNhlSeasonKey =
+        loaded.manifest.configuredNhlSeasonKey;
+      probeNhlSeasonKey = loaded.manifest.probeNhlSeasonKey;
+    } catch {
+      // The release report records only safe validity facts.
+    }
+  }
+  return Object.freeze({
+    relativePath: relativePath.replaceAll("\\", "/"),
+    exists,
+    tracked,
+    valid,
+    manifestSha256,
+    configuredNhlSeasonKey,
+    probeNhlSeasonKey,
+  });
+}
+
+function inspectMigrationSource(directory) {
+  try {
+    const migrations = discoverMigrations({
+      migrationsDirectory: path.join(directory, "database", "migrations"),
+    });
+    const identities = migrations.map(({ id, fileName, checksum }) => ({
+      id,
+      fileName,
+      checksum,
+    }));
+    const contiguous = identities.every(
+      ({ id }, index) => id === index + 1
+    );
+    return Object.freeze({
+      baseSchemaVersion: EXPECTED_BASE_SCHEMA_VERSION,
+      targetSchemaVersion: identities.at(-1)?.id ?? null,
+      migrationCount: identities.length,
+      postBaseMigrationCount: identities.filter(
+        ({ id }) => id > EXPECTED_BASE_SCHEMA_VERSION
+      ).length,
+      contiguous,
+      checksumSetSha256: sha256(canonicalize(identities)),
+    });
+  } catch {
+    return Object.freeze({
+      baseSchemaVersion: EXPECTED_BASE_SCHEMA_VERSION,
+      targetSchemaVersion: null,
+      migrationCount: 0,
+      postBaseMigrationCount: 0,
+      contiguous: false,
+      checksumSetSha256: null,
+    });
+  }
+}
+
+function inspectResetAndRepositorySource() {
+  let resetPolicyCoverageValid = false;
+  try {
+    resetPolicyCoverageValid = assertPolicyCatalogCoverage() === true;
+  } catch {
+    // The release report records only safe validity facts.
+  }
+  return Object.freeze({
+    repositoryCatalogCount: REPOSITORY_CATALOG.length,
+    repositoryCatalogSha256:
+      sha256(canonicalize(REPOSITORY_CATALOG)),
+    postResetRequireEmptyCount:
+      RESET_V1_POST_RESET_TABLE_POLICY.length,
+    postResetPolicySha256:
+      sha256(canonicalize(RESET_V1_POST_RESET_TABLE_POLICY)),
+    resetPolicyCoverageValid,
+  });
+}
+
+function inspectBackendReleaseFacts({ directory, runGit = readGit } = {}) {
+  if (!path.isAbsolute(directory || "") || typeof runGit !== "function") {
+    fail(
+      "RELEASE_CANDIDATE_INPUT_INVALID",
+      "Exact backend release-source inspection input is required."
+    );
+  }
+  const physicalDirectory = fs.realpathSync(directory);
+  return Object.freeze({
+    migrationSource: inspectMigrationSource(physicalDirectory),
+    repositorySource: inspectResetAndRepositorySource(),
+    probeManifest: inspectProbeManifest({
+      directory: physicalDirectory,
+      runGit,
+    }),
+    renderProbe: inspectRenderProbeSafety(physicalDirectory),
+  });
 }
 
 function readGit(directory, arguments_) {
@@ -126,6 +338,161 @@ function assertRepositoryFacts(repository, name) {
   }
 }
 
+function assertBackendReleaseFacts(facts) {
+  const migration = facts?.migrationSource;
+  const repository = facts?.repositorySource;
+  const manifest = facts?.probeManifest;
+  const render = facts?.renderProbe;
+  if (
+    !facts || typeof facts !== "object" || Array.isArray(facts) ||
+    !migration || !repository || !manifest || !render ||
+    !Number.isSafeInteger(migration.baseSchemaVersion) ||
+    !Number.isSafeInteger(migration.migrationCount) ||
+    !Number.isSafeInteger(migration.postBaseMigrationCount) ||
+    !(
+      migration.targetSchemaVersion === null ||
+      (
+        Number.isSafeInteger(migration.targetSchemaVersion) &&
+        migration.targetSchemaVersion > 0
+      )
+    ) ||
+    typeof migration.contiguous !== "boolean" ||
+    !(
+      migration.checksumSetSha256 === null ||
+      SHA256_PATTERN.test(migration.checksumSetSha256)
+    ) ||
+    !Number.isSafeInteger(repository.repositoryCatalogCount) ||
+    !SHA256_PATTERN.test(repository.repositoryCatalogSha256 || "") ||
+    !Number.isSafeInteger(repository.postResetRequireEmptyCount) ||
+    !SHA256_PATTERN.test(repository.postResetPolicySha256 || "") ||
+    typeof repository.resetPolicyCoverageValid !== "boolean" ||
+    typeof manifest.relativePath !== "string" ||
+    typeof manifest.exists !== "boolean" ||
+    typeof manifest.tracked !== "boolean" ||
+    typeof manifest.valid !== "boolean" ||
+    !(
+      manifest.manifestSha256 === null ||
+      SHA256_PATTERN.test(manifest.manifestSha256)
+    ) ||
+    !(
+      manifest.configuredNhlSeasonKey === null ||
+      SEASON_KEY_PATTERN.test(manifest.configuredNhlSeasonKey)
+    ) ||
+    !(
+      manifest.probeNhlSeasonKey === null ||
+      SEASON_KEY_PATTERN.test(manifest.probeNhlSeasonKey)
+    ) ||
+    typeof render.safe !== "boolean" ||
+    !Array.isArray(render.forbiddenEmailInputs) ||
+    render.forbiddenEmailInputs.some(
+      (value) => typeof value !== "string" || value === ""
+    ) ||
+    [
+      render.nodeMode,
+      render.maintenanceHold,
+      render.liveMode,
+      render.leagueWriteMode,
+      render.scheduledJobsEnabled,
+      render.freeAgentDraftRoutesEnabled,
+      render.accountEmailDeliveryEnabled,
+      render.debugRoutesEnabled,
+      render.emailDeliveryMode,
+      render.backupScheduleEnabled,
+    ].some((value) => value !== null && typeof value !== "string")
+  ) {
+    fail(
+      "RELEASE_CANDIDATE_FACTS_INVALID",
+      "Exact backend release-source facts are required."
+    );
+  }
+}
+
+function renderProbeIsSafe(render) {
+  return (
+    render.safe === true &&
+    render.nodeMode === "production" &&
+    render.maintenanceHold === "false" &&
+    render.liveMode === "probe" &&
+    render.leagueWriteMode === "closed" &&
+    render.scheduledJobsEnabled === "false" &&
+    render.freeAgentDraftRoutesEnabled === "false" &&
+    render.accountEmailDeliveryEnabled === "false" &&
+    render.debugRoutesEnabled === "false" &&
+    render.emailDeliveryMode === "capture" &&
+    render.backupScheduleEnabled === "false" &&
+    render.forbiddenEmailInputs.length === 0
+  );
+}
+
+function backendReleaseBlockers(facts) {
+  const blockers = [];
+  const migration = facts.migrationSource;
+  const repository = facts.repositorySource;
+  const manifest = facts.probeManifest;
+  if (
+    migration.baseSchemaVersion !== EXPECTED_BASE_SCHEMA_VERSION ||
+    migration.targetSchemaVersion !== EXPECTED_SCHEMA_VERSION
+  ) {
+    blockers.push("BACKEND_SCHEMA_TARGET_MISMATCH");
+  }
+  if (
+    migration.migrationCount !== EXPECTED_MIGRATION_COUNT ||
+    migration.postBaseMigrationCount !==
+      EXPECTED_POST_BASE_MIGRATION_COUNT ||
+    migration.contiguous !== true
+  ) {
+    blockers.push("BACKEND_MIGRATION_SEQUENCE_INVALID");
+  }
+  if (
+    migration.checksumSetSha256 !==
+      EXPECTED_MIGRATION_CHECKSUM_SET_SHA256
+  ) {
+    blockers.push("BACKEND_MIGRATION_CHECKSUM_SET_MISMATCH");
+  }
+  if (
+    repository.repositoryCatalogCount !==
+      EXPECTED_REPOSITORY_CATALOG_COUNT ||
+    repository.repositoryCatalogSha256 !==
+      EXPECTED_REPOSITORY_CATALOG_SHA256
+  ) {
+    blockers.push("BACKEND_REPOSITORY_CATALOG_MISMATCH");
+  }
+  if (
+    repository.postResetRequireEmptyCount !==
+      EXPECTED_POST_RESET_REQUIRE_EMPTY_COUNT ||
+    repository.postResetPolicySha256 !==
+      EXPECTED_POST_RESET_POLICY_SHA256 ||
+    repository.resetPolicyCoverageValid !== true
+  ) {
+    blockers.push("BACKEND_RESET_POLICY_MISMATCH");
+  }
+  if (!manifest.exists) {
+    blockers.push("BACKEND_PROBE_MANIFEST_MISSING");
+  } else {
+    if (!manifest.tracked) {
+      blockers.push("BACKEND_PROBE_MANIFEST_NOT_TRACKED");
+    }
+    if (
+      !manifest.valid ||
+      manifest.relativePath !==
+        EXPECTED_PROBE_MANIFEST_RELATIVE_PATH ||
+      !SHA256_PATTERN.test(manifest.manifestSha256 || "")
+    ) {
+      blockers.push("BACKEND_PROBE_MANIFEST_INVALID");
+    } else if (
+      manifest.configuredNhlSeasonKey !==
+        EXPECTED_CONFIGURED_NHL_SEASON_KEY ||
+      manifest.probeNhlSeasonKey !== EXPECTED_PROBE_NHL_SEASON_KEY
+    ) {
+      blockers.push("BACKEND_PROBE_MANIFEST_SEASON_MISMATCH");
+    }
+  }
+  if (!renderProbeIsSafe(facts.renderProbe)) {
+    blockers.push("BACKEND_RENDER_PROBE_NOT_QUIESCED");
+  }
+  return blockers;
+}
+
 function evaluateReleaseCandidatePreflight({
   backend,
   candidate = null,
@@ -134,6 +501,7 @@ function evaluateReleaseCandidatePreflight({
 } = {}) {
   assertRepositoryFacts(backend, "backend");
   assertRepositoryFacts(frontend, "frontend");
+  assertBackendReleaseFacts(backend.releaseFacts);
   if (typeof nodeVersion !== "string") {
     fail(
       "RELEASE_CANDIDATE_FACTS_INVALID",
@@ -158,6 +526,7 @@ function evaluateReleaseCandidatePreflight({
   }
 
   const blockers = [];
+  blockers.push(...backendReleaseBlockers(backend.releaseFacts));
   if (nodeVersion !== EXPECTED_NODE_VERSION) {
     blockers.push("NODE_VERSION_MISMATCH");
   }
@@ -207,6 +576,7 @@ function evaluateReleaseCandidatePreflight({
       commit: backend.commit,
       dirtyEntryCount: backend.dirtyEntryCount,
       configurationSha256: backend.configurationSha256,
+      releaseFacts: backend.releaseFacts,
     }),
     blockers: Object.freeze(blockers),
   });
@@ -229,6 +599,13 @@ function createReleaseCandidatePreflight({
     configurationFiles: ["package-lock.json", "package.json", "render.yaml"],
     runGit,
   });
+  const backendWithReleaseFacts = Object.freeze({
+    ...backend,
+    releaseFacts: inspectBackendReleaseFacts({
+      directory: backendDirectory,
+      runGit,
+    }),
+  });
   const frontend = inspectRepository({
     name: "frontend",
     directory: frontendDirectory,
@@ -236,7 +613,7 @@ function createReleaseCandidatePreflight({
     runGit,
   });
   return evaluateReleaseCandidatePreflight({
-    backend,
+    backend: backendWithReleaseFacts,
     candidate,
     frontend,
     nodeVersion,
@@ -245,11 +622,24 @@ function createReleaseCandidatePreflight({
 
 module.exports = {
   COMMIT_PATTERN,
+  EXPECTED_BASE_SCHEMA_VERSION,
+  EXPECTED_CONFIGURED_NHL_SEASON_KEY,
+  EXPECTED_MIGRATION_CHECKSUM_SET_SHA256,
+  EXPECTED_MIGRATION_COUNT,
   EXPECTED_NODE_VERSION,
+  EXPECTED_POST_BASE_MIGRATION_COUNT,
+  EXPECTED_POST_RESET_POLICY_SHA256,
+  EXPECTED_POST_RESET_REQUIRE_EMPTY_COUNT,
+  EXPECTED_PROBE_MANIFEST_RELATIVE_PATH,
+  EXPECTED_PROBE_NHL_SEASON_KEY,
+  EXPECTED_REPOSITORY_CATALOG_COUNT,
+  EXPECTED_REPOSITORY_CATALOG_SHA256,
+  EXPECTED_SCHEMA_VERSION,
   EXPECTED_STAGING_BRANCH,
   RELEASE_ID_PATTERN,
   ReleaseCandidatePreflightError,
   createReleaseCandidatePreflight,
   evaluateReleaseCandidatePreflight,
+  inspectBackendReleaseFacts,
   inspectRepository,
 };

@@ -41,6 +41,7 @@ const IDS = Object.freeze({
   membership: "66666666-6666-4666-8666-666666666666",
   ownership: "77777777-7777-4777-8777-777777777777",
   player: "88888888-8888-4888-8888-888888888888",
+  replacementOwnership: "12121212-1212-4212-8212-121212121212",
   season: "99999999-9999-4999-8999-999999999999",
   team: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 });
@@ -87,6 +88,24 @@ function workspaceRecord(players = [workspacePlayer()]) {
   };
 }
 
+function movementResult(overrides = {}, additionalOwnerships = []) {
+  const ownership = Object.freeze({
+    id: IDS.ownership,
+    version: 4,
+    roster_category: "Bench",
+    slot_number: 1,
+    ...overrides,
+  });
+  return Object.freeze({
+    ownership,
+    affectedOwnerships: Object.freeze(
+      [...additionalOwnerships, ownership]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((row) => Object.freeze({ ...row }))
+    ),
+  });
+}
+
 function authorization() {
   return {
     leagueAuthorization: {
@@ -130,8 +149,10 @@ describe("M7-14 roster review actions", () => {
     );
   });
 
-  test("moves only provider-eligible players into the first open IR slot", () => {
+  test("moves only provider-eligible players into the first open IR slot", async () => {
     let command = null;
+    let coordinatedBatch = null;
+    const events = [];
     const { leagueAuthorization, teamAuthorization } = authorization();
     const service = createRosterActionService({
       leagueAuthorization,
@@ -151,23 +172,30 @@ describe("M7-14 roster review actions", () => {
       },
       rosterMovementRepository: {
         move(input) {
+          events.push("move");
           command = input;
-          return {
-            ownership: {
-              id: IDS.ownership,
-              version: 4,
+          return movementResult(
+            {
               roster_category: "Injured Reserve",
               slot_number: 2,
             },
-          };
+            [{ id: IDS.replacementOwnership, version: 2 }]
+          );
         },
       },
       buyoutRepository: { buyOut() {} },
+      lateLockCoordinator: {
+        coordinateCommittedRoster(batch) {
+          events.push("coordinate");
+          coordinatedBatch = batch;
+          return { status: "completed", lockId: IDS.activity };
+        },
+      },
       clock: { nowMs: () => 1_000 },
       secureRandom: identifierSource(),
     });
 
-    const result = service.moveToInjuredReserve({
+    const result = await service.moveToInjuredReserve({
       authenticated: {},
       leagueId: IDS.league,
       teamId: IDS.team,
@@ -180,10 +208,50 @@ describe("M7-14 roster review actions", () => {
     assert.equal(command.destinationCategory, "Injured Reserve");
     assert.equal(command.destinationSlotNumber, 2);
     assert.equal(command.actorAuthority, "manager");
+    assert.deepEqual(events, ["move", "coordinate"]);
+    assert.deepEqual(result.lateLock, {
+      status: "completed",
+      lockId: IDS.activity,
+    });
+    assert.deepEqual(coordinatedBatch, {
+      mutationKind: "injured_reserve_move",
+      teams: [
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.season,
+          teamId: IDS.team,
+          ownershipWitnesses: [
+            {
+              ownershipId: IDS.replacementOwnership,
+              ownershipVersion: 2,
+              state: "present",
+            },
+            {
+              ownershipId: IDS.ownership,
+              ownershipVersion: 4,
+              state: "present",
+            },
+          ],
+        },
+      ],
+    });
+    assert.equal(Object.isFrozen(coordinatedBatch), true);
+    assert.equal(Object.isFrozen(coordinatedBatch.teams), true);
+    assert.equal(Object.isFrozen(coordinatedBatch.teams[0]), true);
+    assert.equal(
+      Object.isFrozen(coordinatedBatch.teams[0].ownershipWitnesses),
+      true
+    );
+    assert.equal(
+      Object.isFrozen(coordinatedBatch.teams[0].ownershipWitnesses[0]),
+      true
+    );
   });
 
-  test("requires confirmation, then persists an over-limit Bench-to-Active move", () => {
+  test("requires confirmation, then persists an over-limit Bench-to-Active move", async () => {
     let command = null;
+    let moveCalls = 0;
+    let coordinatorCalls = 0;
     const { leagueAuthorization, teamAuthorization } = authorization();
     const activeForwards = Array.from({ length: 12 }, (_, index) =>
       workspacePlayer({
@@ -210,18 +278,22 @@ describe("M7-14 roster review actions", () => {
       },
       rosterMovementRepository: {
         move(input) {
+          moveCalls += 1;
           command = input;
-          return {
-            ownership: {
-              id: IDS.ownership,
-              version: 4,
-              roster_category: "Active",
-              slot_number: null,
-            },
-          };
+          return movementResult({
+            roster_category: "Active",
+            slot_number: null,
+          });
         },
       },
       buyoutRepository: { buyOut() {} },
+      lateLockCoordinator: {
+        coordinateCommittedRoster(batch) {
+          coordinatorCalls += 1;
+          assert.equal(batch.mutationKind, "roster_move");
+          return { status: "still_illegal" };
+        },
+      },
       clock: { nowMs: () => 1_000 },
       secureRandom: identifierSource(),
     });
@@ -237,22 +309,125 @@ describe("M7-14 roster review actions", () => {
       },
     };
 
-    assert.throws(
+    await assert.rejects(
       () => service.moveRosterPlayer(request),
       { code: "ROSTER_ILLEGAL_CONFIRMATION_REQUIRED" }
     );
-    const result = service.moveRosterPlayer({
+    assert.equal(moveCalls, 0);
+    assert.equal(coordinatorCalls, 0);
+    const result = await service.moveRosterPlayer({
       ...request,
       input: { ...request.input, confirmedIllegal: true },
     });
 
     assert.equal(result.code, "ROSTER_PLAYER_MOVED");
     assert.equal(result.legality.legal, false);
+    assert.deepEqual(result.lateLock, { status: "still_illegal" });
     assert.equal(command.destinationSlotNumber, null);
+    assert.equal(moveCalls, 1);
+    assert.equal(coordinatorCalls, 1);
   });
 
-  test("buys out the selected contract with its exact remaining term", () => {
+  test("contains coordinator failures and unsafe projections after one committed move", async () => {
+    const cases = [
+      () => {
+        throw new Error("private synchronous coordinator failure");
+      },
+      async () => {
+        throw new Error("private asynchronous coordinator failure");
+      },
+      () => ({ status: "completed", details: { private: true } }),
+      () => ({ status: "completed", lockId: "not-a-uuid" }),
+      () => ({ status: "unknown" }),
+    ];
+
+    for (const coordinateCommittedRoster of cases) {
+      let moveCalls = 0;
+      const { leagueAuthorization, teamAuthorization } = authorization();
+      const service = createRosterActionService({
+        leagueAuthorization,
+        teamAuthorization,
+        workspaceRepository: { read: () => workspaceRecord() },
+        rosterMovementRepository: {
+          move() {
+            moveCalls += 1;
+            return movementResult();
+          },
+        },
+        buyoutRepository: { buyOut() {} },
+        lateLockCoordinator: { coordinateCommittedRoster },
+        clock: { nowMs: () => 1_000 },
+        secureRandom: identifierSource(),
+      });
+
+      const result = await service.moveRosterPlayer({
+        authenticated: {},
+        leagueId: IDS.league,
+        teamId: IDS.team,
+        ownershipId: IDS.ownership,
+        input: {
+          confirmedIllegal: false,
+          destinationCategory: "Bench",
+          expectedVersion: 3,
+        },
+      });
+
+      assert.equal(result.code, "ROSTER_PLAYER_MOVED");
+      assert.deepEqual(result.lateLock, { status: "awaiting_data" });
+      assert.equal(Object.isFrozen(result.lateLock), true);
+      assert.equal(moveCalls, 1);
+    }
+  });
+
+  test("does not coordinate a roster move that fails before commit", async () => {
+    let moveCalls = 0;
+    let coordinatorCalls = 0;
+    const conflict = new Error("stale persisted ownership");
+    conflict.code = "REPOSITORY_VERSION_CONFLICT";
+    const { leagueAuthorization, teamAuthorization } = authorization();
+    const service = createRosterActionService({
+      leagueAuthorization,
+      teamAuthorization,
+      workspaceRepository: { read: () => workspaceRecord() },
+      rosterMovementRepository: {
+        move() {
+          moveCalls += 1;
+          throw conflict;
+        },
+      },
+      buyoutRepository: { buyOut() {} },
+      lateLockCoordinator: {
+        coordinateCommittedRoster() {
+          coordinatorCalls += 1;
+          return { status: "completed", lockId: IDS.activity };
+        },
+      },
+      clock: { nowMs: () => 1_000 },
+      secureRandom: identifierSource(),
+    });
+
+    await assert.rejects(
+      () =>
+        service.moveRosterPlayer({
+          authenticated: {},
+          leagueId: IDS.league,
+          teamId: IDS.team,
+          ownershipId: IDS.ownership,
+          input: {
+            confirmedIllegal: false,
+            destinationCategory: "Bench",
+            expectedVersion: 3,
+          },
+        }),
+      { code: "REPOSITORY_VERSION_CONFLICT" }
+    );
+    assert.equal(moveCalls, 1);
+    assert.equal(coordinatorCalls, 0);
+  });
+
+  test("buys out the selected contract and coordinates its exact deletion witness", async () => {
     let command = null;
+    let coordinatedBatch = null;
     const { leagueAuthorization, teamAuthorization } = authorization();
     const service = createRosterActionService({
       leagueAuthorization,
@@ -266,14 +441,24 @@ describe("M7-14 roster review actions", () => {
             obligation: { id: IDS.buyout },
             annualPenaltyCents: 125,
             years: [{}, {}],
+            releasedOwnership: {
+              id: IDS.ownership,
+              version: 3,
+            },
           };
+        },
+      },
+      lateLockCoordinator: {
+        coordinateCommittedRoster(batch) {
+          coordinatedBatch = batch;
+          return { status: "not_applicable" };
         },
       },
       clock: { nowMs: () => 2_000 },
       secureRandom: identifierSource(),
     });
 
-    const result = service.buyOutContract({
+    const result = await service.buyOutContract({
       authenticated: {},
       leagueId: IDS.league,
       teamId: IDS.team,
@@ -290,6 +475,99 @@ describe("M7-14 roster review actions", () => {
     assert.equal(command.contractId, IDS.contract);
     assert.equal(command.buyoutYearIds.length, 2);
     assert.equal(command.playerId, IDS.player);
+    assert.deepEqual(result.lateLock, { status: "not_applicable" });
+    assert.deepEqual(coordinatedBatch, {
+      mutationKind: "buyout",
+      teams: [
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.season,
+          teamId: IDS.team,
+          ownershipWitnesses: [
+            {
+              ownershipId: IDS.ownership,
+              ownershipVersion: 3,
+              state: "deleted",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  test("contains missing buyout evidence and coordinator failure after commit", async () => {
+    const cases = [
+      {
+        releasedOwnership: {
+          id: IDS.ownership,
+          version: 3,
+        },
+        coordinateCommittedRoster() {
+          throw new Error("private post-buyout coordinator failure");
+        },
+        expectedCoordinatorCalls: 1,
+      },
+      {
+        releasedOwnership: null,
+        coordinateCommittedRoster() {
+          return { status: "completed", lockId: IDS.activity };
+        },
+        expectedCoordinatorCalls: 0,
+      },
+    ];
+
+    for (const scenario of cases) {
+      let buyoutCalls = 0;
+      let coordinatorCalls = 0;
+      const { leagueAuthorization, teamAuthorization } = authorization();
+      const service = createRosterActionService({
+        leagueAuthorization,
+        teamAuthorization,
+        workspaceRepository: { read: () => workspaceRecord() },
+        rosterMovementRepository: { move() {} },
+        buyoutRepository: {
+          buyOut() {
+            buyoutCalls += 1;
+            return {
+              obligation: { id: IDS.buyout },
+              annualPenaltyCents: 125,
+              years: [{}, {}],
+              releasedOwnership: scenario.releasedOwnership,
+            };
+          },
+        },
+        lateLockCoordinator: {
+          coordinateCommittedRoster(batch) {
+            coordinatorCalls += 1;
+            return scenario.coordinateCommittedRoster(batch);
+          },
+        },
+        clock: { nowMs: () => 2_000 },
+        secureRandom: identifierSource(),
+      });
+
+      const result = await service.buyOutContract({
+        authenticated: {},
+        leagueId: IDS.league,
+        teamId: IDS.team,
+        contractId: IDS.contract,
+        input: {
+          confirmed: true,
+          expectedContractVersion: 4,
+          expectedOwnershipVersion: 3,
+        },
+      });
+
+      assert.equal(result.code, "CONTRACT_BOUGHT_OUT");
+      assert.equal(buyoutCalls, 1);
+      assert.equal(
+        coordinatorCalls,
+        scenario.expectedCoordinatorCalls
+      );
+      assert.deepEqual(result.lateLock, {
+        status: "awaiting_data",
+      });
+    }
   });
 
   test("persists an explicit trade-block flag with optimistic ownership versioning", () => {

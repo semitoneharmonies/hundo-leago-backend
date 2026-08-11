@@ -10,16 +10,39 @@ const {
   validateTradeReversalPreviewCommand,
 } = require("../../../domain/trades/tradeReversalPolicy");
 const {
-  createSocketInvalidation,
+  createEmptySocketRelated,
+  createSocketEventMetadata,
 } = require("../../../domain/leagues/socketInvalidation");
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
   repositoryError,
 } = require("./SqliteRepositoryError");
+const {
+  resolveSqliteLeagueOutboxWriter,
+} = require("./SqliteLeagueOutboxWriter");
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const OWNERSHIP_TRANSFER_KEYS = Object.freeze([
+  "sourceTeamId",
+  "destinationTeamId",
+  "sourceOwnershipId",
+  "sourceOwnershipVersion",
+  "destinationOwnershipId",
+  "destinationOwnershipVersion",
+]);
+const REVERSAL_OWNERSHIP_MAPPING_KEYS = Object.freeze([
+  "assetId",
+  ...OWNERSHIP_TRANSFER_KEYS,
+]);
+const PUBLIC_TRANSFER_KEYS = Object.freeze([
+  "assetId",
+  "assetType",
+  "sourceTeamId",
+  "destinationTeamId",
+  "plannedRosterSlotNumber",
+]);
 
 function stableId(value) {
   if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
@@ -83,6 +106,78 @@ function parseObject(value) {
   } catch {
     return null;
   }
+}
+
+function persistedAggregateFail(message) {
+  throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible, message);
+}
+
+function parsePersistedObject(value, description) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    persistedAggregateFail(`The reversed trade has invalid ${description}.`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    persistedAggregateFail(`The reversed trade has invalid ${description}.`);
+  }
+  return parsed;
+}
+
+function exactPersistedObject(value, keys, description) {
+  if (!hasExactKeys(value, keys)) {
+    persistedAggregateFail(`The reversed trade has invalid ${description}.`);
+  }
+  return value;
+}
+
+function hasExactKeys(value, keys) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const actualKeys = Object.keys(value).sort();
+  const expectedKeys = [...keys].sort();
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index])
+  );
+}
+
+function persistedStableId(value, description) {
+  if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
+    persistedAggregateFail(
+      `The reversed trade has an invalid ${description}.`
+    );
+  }
+  return value;
+}
+
+function persistedPositiveVersion(value, description) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    persistedAggregateFail(
+      `The reversed trade has an invalid ${description}.`
+    );
+  }
+  return value;
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function publicAssetType(asset) {
+  return asset.asset_type === "future_consideration" &&
+    asset.future_consideration_description !== null
+    ? "future_consideration_instruction"
+    : asset.asset_type;
 }
 
 function validVersion(value) {
@@ -153,7 +248,36 @@ function validSnapshotShape(snapshot, asset) {
   }
 }
 
-function createSqliteTradeReversalRepository({ database } = {}) {
+function validAcceptanceTenureMapping(transfer, snapshot, asset, tradeId) {
+  if (!["contract", "prospect_right"].includes(asset.asset_type)) return true;
+  return (
+    transfer !== null &&
+    transfer.sourceTeamId === asset.source_team_id &&
+    transfer.destinationTeamId === asset.destination_team_id &&
+    transfer.sourceOwnershipId === snapshot.ownership?.id &&
+    transfer.sourceOwnershipVersion === snapshot.ownership?.version &&
+    UUID_PATTERN.test(transfer.destinationOwnershipId || "") &&
+    transfer.destinationOwnershipId !== transfer.sourceOwnershipId &&
+    transfer.destinationOwnershipId === deterministicUuid(
+      `${tradeId}:ownership-tenure:${transfer.sourceOwnershipId}:destination`
+    ) &&
+    transfer.destinationOwnershipVersion === 1
+  );
+}
+
+function createSqliteTradeReversalRepository({
+  database,
+  candidateCardSummerSynchronizer,
+  leagueOutboxWriter,
+} = {}) {
+  if (
+    !candidateCardSummerSynchronizer ||
+    typeof candidateCardSummerSynchronizer.synchronize !== "function"
+  ) {
+    throw new TypeError(
+      "createSqliteTradeReversalRepository requires a Candidate Card summer synchronizer"
+    );
+  }
   let findTargetStatement;
   let loadContextStatement;
   let listAssetsStatement;
@@ -172,8 +296,10 @@ function createSqliteTradeReversalRepository({ database } = {}) {
   let insertIdempotencyStatement;
   let completeIdempotencyStatement;
   let findRecoveryEventStatement;
-  let clearTransferredSlotStatement;
-  let reverseOwnershipStatement;
+  let listReversalOwnershipEventsStatement;
+  let deleteReversalRosterDisplayOrderStatement;
+  let deleteReversalOwnershipStatement;
+  let insertReversalOwnershipStatement;
   let reverseContractStatement;
   let reverseDraftPickStatement;
   let reverseRetentionStatement;
@@ -189,7 +315,7 @@ function createSqliteTradeReversalRepository({ database } = {}) {
   let insertTradeEventStatement;
   let insertCorrectionStatement;
   let insertActivityStatement;
-  let insertOutboxStatement;
+  let outboxWriter;
 
   try {
     findTargetStatement = database.prepare(`
@@ -317,27 +443,38 @@ function createSqliteTradeReversalRepository({ database } = {}) {
         AND event_type = @eventType
       LIMIT 2
     `);
-    clearTransferredSlotStatement = database.prepare(`
-      UPDATE player_ownerships SET slot_number = NULL
-      WHERE league_id = @leagueId AND id = @ownershipId
-        AND team_id = @destinationTeamId
-        AND acquired_transaction_type = 'trade_execution'
-        AND acquired_transaction_id = @tradeId
-        AND version = @postVersion
+    listReversalOwnershipEventsStatement = database.prepare(`
+      SELECT * FROM ownership_events
+      WHERE league_id = @leagueId
+        AND source_type = 'trade_reversal'
+        AND source_id = @tradeId
+        AND event_type IN ('trade_reversal_out', 'trade_reversal_in')
+      ORDER BY event_type, ownership_id, id
     `);
-    reverseOwnershipStatement = database.prepare(`
-      UPDATE player_ownerships
-      SET team_id = @sourceTeamId, ownership_kind = @ownershipKind,
-        roster_category = @rosterCategory, position_group = @positionGroup,
-        slot_number = @slotNumber,
-        acquired_transaction_type = 'trade_reversal',
-        acquired_transaction_id = @tradeId, updated_at_ms = @occurredAtMs,
-        version = version + 1
-      WHERE league_id = @leagueId AND id = @ownershipId
+    deleteReversalRosterDisplayOrderStatement = database.prepare(`
+      DELETE FROM roster_display_order_entries
+      WHERE league_id = @leagueId AND ownership_id = @sourceOwnershipId
+    `);
+    deleteReversalOwnershipStatement = database.prepare(`
+      DELETE FROM player_ownerships
+      WHERE league_id = @leagueId AND id = @sourceOwnershipId
         AND team_id = @destinationTeamId
         AND acquired_transaction_type = 'trade_execution'
         AND acquired_transaction_id = @tradeId
-        AND version = @postVersion
+        AND version = @sourceOwnershipVersion
+    `);
+    insertReversalOwnershipStatement = database.prepare(`
+      INSERT INTO player_ownerships (
+        id, league_id, season_id, player_id, team_id, ownership_kind,
+        roster_category, position_group, slot_number,
+        acquired_transaction_type, acquired_transaction_id,
+        created_at_ms, updated_at_ms, version, trade_blocked
+      ) VALUES (
+        @destinationOwnershipId, @leagueId, @seasonId, @playerId,
+        @sourceTeamId, @ownershipKind, @rosterCategory, @positionGroup,
+        @slotNumber, 'trade_reversal', @tradeId, @occurredAtMs,
+        @occurredAtMs, 1, 0
+      )
     `);
     reverseContractStatement = database.prepare(`
       UPDATE contracts
@@ -409,8 +546,8 @@ function createSqliteTradeReversalRepository({ database } = {}) {
         event_type, actor_user_id, source_type, source_id,
         before_metadata_json, after_metadata_json, reason, occurred_at_ms
       ) VALUES (
-        @historyId, @leagueId, @seasonId, @playerId, @sourceTeamId,
-        @ownershipId, 'trade_reversal', @actorUserId, 'trade_reversal',
+        @historyId, @leagueId, @seasonId, @playerId, @eventTeamId,
+        @eventOwnershipId, @ownershipEventType, @actorUserId, 'trade_reversal',
         @tradeId, @beforeMetadataJson, @afterMetadataJson,
         'safe_trade_reversal', @occurredAtMs
       )
@@ -467,18 +604,10 @@ function createSqliteTradeReversalRepository({ database } = {}) {
         @displaySummary, @reason, @metadataJson, @occurredAtMs
       )
     `);
-    insertOutboxStatement = database.prepare(`
-      INSERT INTO outbox_events (
-        id, league_id, event_type, aggregate_type, aggregate_id,
-        payload_json, status, attempt_count, available_at_ms,
-        published_at_ms, last_error_code, created_at_ms, updated_at_ms,
-        version
-      ) VALUES (
-        @outboxEventId, @leagueId, 'trade.changed', 'trade', @tradeId,
-        @payloadJson, 'pending', 0, @occurredAtMs, NULL, NULL,
-        @occurredAtMs, @occurredAtMs, 1
-      )
-    `);
+    outboxWriter = resolveSqliteLeagueOutboxWriter({
+      database,
+      leagueOutboxWriter,
+    });
   } catch (error) {
     throw mapRepositoryError(error, {
       operation: "prepareTradeReversalRepository",
@@ -544,24 +673,92 @@ function createSqliteTradeReversalRepository({ database } = {}) {
     const completionMetadata = completionEvent
       ? parseObject(completionEvent.metadata_json)
       : null;
-    const transfers =
-      completionEvent?.occurred_at_ms === context.completed_at_ms &&
-      Array.isArray(completionMetadata?.transfers)
-      ? new Map(completionMetadata.transfers.map((item) => [item.assetId, item]))
-      : new Map();
     const assets = listAssetsStatement.all(command);
-    const parsed = assets.map((asset) => ({
-      row: asset,
-      snapshot:
+    let acceptanceMetadataValid =
+      completionEvent?.occurred_at_ms === context.completed_at_ms &&
+      completionMetadata?.schemaVersion === 1 &&
+      completionMetadata?.action === "accept" &&
+      completionMetadata?.fromStatus === "proposed" &&
+      completionMetadata?.toStatus === "completed" &&
+      Array.isArray(completionMetadata?.transfers) &&
+      Array.isArray(completionMetadata?.ownershipTransfers) &&
+      completionMetadata.transfers.length === assets.length &&
+      completionMetadata.ownershipTransfers.length === assets.filter(
+        (asset) => ["contract", "prospect_right"].includes(asset.asset_type)
+      ).length;
+    const transfers = new Map();
+    const ownershipTransfers = new Map();
+    const seenOwnershipIds = new Set();
+    if (acceptanceMetadataValid) {
+      for (const transfer of completionMetadata.transfers) {
+        if (
+          !hasExactKeys(transfer, PUBLIC_TRANSFER_KEYS) ||
+          !UUID_PATTERN.test(transfer.assetId || "") ||
+          !UUID_PATTERN.test(transfer.sourceTeamId || "") ||
+          !UUID_PATTERN.test(transfer.destinationTeamId || "") ||
+          transfer.sourceTeamId === transfer.destinationTeamId ||
+          transfers.has(transfer.assetId)
+        ) {
+          acceptanceMetadataValid = false;
+          break;
+        }
+        transfers.set(transfer.assetId, transfer);
+      }
+    }
+    if (acceptanceMetadataValid) {
+      let priorSortKey = null;
+      for (const transfer of completionMetadata.ownershipTransfers) {
+        const sortKey = `${transfer?.sourceOwnershipId || ""}:` +
+          `${transfer?.destinationOwnershipId || ""}`;
+        if (
+          !hasExactKeys(transfer, OWNERSHIP_TRANSFER_KEYS) ||
+          !UUID_PATTERN.test(transfer.sourceTeamId || "") ||
+          !UUID_PATTERN.test(transfer.destinationTeamId || "") ||
+          transfer.sourceTeamId === transfer.destinationTeamId ||
+          !UUID_PATTERN.test(transfer.sourceOwnershipId || "") ||
+          !validVersion(transfer.sourceOwnershipVersion) ||
+          !UUID_PATTERN.test(transfer.destinationOwnershipId || "") ||
+          transfer.destinationOwnershipVersion !== 1 ||
+          transfer.sourceOwnershipId === transfer.destinationOwnershipId ||
+          seenOwnershipIds.has(transfer.sourceOwnershipId) ||
+          seenOwnershipIds.has(transfer.destinationOwnershipId) ||
+          (priorSortKey !== null && priorSortKey.localeCompare(sortKey) >= 0)
+        ) {
+          acceptanceMetadataValid = false;
+          break;
+        }
+        priorSortKey = sortKey;
+        seenOwnershipIds.add(transfer.sourceOwnershipId);
+        seenOwnershipIds.add(transfer.destinationOwnershipId);
+        ownershipTransfers.set(transfer.sourceOwnershipId, transfer);
+      }
+    }
+    const parsed = assets.map((asset) => {
+      const snapshot =
         asset.asset_model_version === 2
           ? parseObject(asset.proposal_snapshot_json)
-          : null,
-      transfer: transfers.get(asset.id) || null,
-      mismatches: [],
-    }));
+          : null;
+      const publicTransfer = transfers.get(asset.id) || null;
+      const ownershipTransfer = snapshot?.ownership?.id
+        ? ownershipTransfers.get(snapshot.ownership.id) || null
+        : null;
+      return {
+        row: asset,
+        snapshot,
+        transfer:
+          acceptanceMetadataValid &&
+          publicTransfer &&
+          (!["contract", "prospect_right"].includes(asset.asset_type) ||
+            ownershipTransfer)
+            ? { ...publicTransfer, ...(ownershipTransfer || {}) }
+            : null,
+        acceptanceMetadataValid,
+        mismatches: [],
+      };
+    });
     const transferredOwnershipIds = new Set(
       parsed
-        .map(({ snapshot }) => snapshot?.ownership?.id)
+        .map(({ transfer }) => transfer?.destinationOwnershipId)
         .filter((id) => typeof id === "string")
     );
     const contractSnapshots = new Map(
@@ -574,15 +771,27 @@ function createSqliteTradeReversalRepository({ database } = {}) {
       const asset = item.row;
       const snapshot = item.snapshot;
       const mismatch = (code) => pushMismatch(item.mismatches, asset, code);
-      if (!validSnapshotShape(snapshot, asset) || !item.transfer) {
+      if (
+        !item.acceptanceMetadataValid ||
+        !validSnapshotShape(snapshot, asset) ||
+        !item.transfer
+      ) {
         mismatch(TRADE_REVERSAL_REASON_CODES.snapshotInvalid);
         continue;
       }
       if (
         item.transfer.sourceTeamId !== asset.source_team_id ||
-        item.transfer.destinationTeamId !== asset.destination_team_id
+        item.transfer.destinationTeamId !== asset.destination_team_id ||
+        item.transfer.assetType !== publicAssetType(asset) ||
+        !validAcceptanceTenureMapping(
+          item.transfer,
+          snapshot,
+          asset,
+          command.tradeId
+        )
       ) {
         mismatch(TRADE_REVERSAL_REASON_CODES.snapshotInvalid);
+        continue;
       }
 
       switch (snapshot.type) {
@@ -594,7 +803,7 @@ function createSqliteTradeReversalRepository({ database } = {}) {
           const ownership = row(
             findOwnershipStatement,
             command,
-            snapshot.ownership?.id,
+            item.transfer.destinationOwnershipId,
             "A traded ownership row was not unique."
           );
           const contract = row(
@@ -623,13 +832,14 @@ function createSqliteTradeReversalRepository({ database } = {}) {
               slot_number: item.transfer.plannedRosterSlotNumber,
               acquired_transaction_type: "trade_execution",
               acquired_transaction_id: command.tradeId,
+              created_at_ms: context.completed_at_ms,
               updated_at_ms: context.completed_at_ms,
-              version: snapshot.ownership?.version + 1,
+              version: item.transfer.destinationOwnershipVersion,
             }, [
               ["season_id"], ["player_id"], ["ownership_kind"],
               ["roster_category"], ["position_group"], ["slot_number"],
               ["acquired_transaction_type"], ["acquired_transaction_id"],
-              ["updated_at_ms"], ["version"],
+              ["created_at_ms"], ["updated_at_ms"], ["version"],
             ]) ||
             !equalFields(contract, {
               player_id: snapshot.player?.id,
@@ -686,7 +896,7 @@ function createSqliteTradeReversalRepository({ database } = {}) {
           const ownership = row(
             findOwnershipStatement,
             command,
-            snapshot.ownership?.id,
+            item.transfer.destinationOwnershipId,
             "A traded prospect ownership row was not unique."
           );
           if (!ownership) {
@@ -705,13 +915,14 @@ function createSqliteTradeReversalRepository({ database } = {}) {
             slot_number: null,
             acquired_transaction_type: "trade_execution",
             acquired_transaction_id: command.tradeId,
+            created_at_ms: context.completed_at_ms,
             updated_at_ms: context.completed_at_ms,
-            version: snapshot.ownership?.version + 1,
+            version: item.transfer.destinationOwnershipVersion,
           }, [
             ["season_id"], ["player_id"], ["ownership_kind"],
             ["roster_category"], ["position_group"], ["slot_number"],
             ["acquired_transaction_type"], ["acquired_transaction_id"],
-            ["updated_at_ms"], ["version"],
+            ["created_at_ms"], ["updated_at_ms"], ["version"],
           ])) {
             mismatch(TRADE_REVERSAL_REASON_CODES.assetChanged);
           }
@@ -1005,6 +1216,492 @@ function createSqliteTradeReversalRepository({ database } = {}) {
     return action === "reverse" ? "trade.reverse" : "trade.correction_required";
   }
 
+  function reconstructReversalReceipt({ command, trade, event, metadata }) {
+    const participantTeamIds = [
+      trade.proposing_team_id,
+      trade.receiving_team_id,
+    ].sort((left, right) => left.localeCompare(right));
+    if (
+      trade.league_id !== command.leagueId ||
+      trade.season_id !== command.seasonId ||
+      trade.status !== "reversed" ||
+      trade.proposing_team_id === trade.receiving_team_id ||
+      participantTeamIds.some((teamId) => !UUID_PATTERN.test(teamId)) ||
+      event.league_id !== trade.league_id ||
+      event.season_id !== trade.season_id ||
+      event.trade_id !== trade.id ||
+      event.event_type !== "trade_reversed" ||
+      event.actor_user_id !== command.actorUserId ||
+      event.reason !== "safe_trade_reversal" ||
+      event.occurred_at_ms !== trade.updated_at_ms ||
+      !UUID_PATTERN.test(event.id || "")
+    ) {
+      persistedAggregateFail("The reversed trade scope is inconsistent.");
+    }
+    exactPersistedObject(
+      metadata,
+      [
+        "schemaVersion",
+        "action",
+        "actorAuthority",
+        "actorMembershipId",
+        "fromStatus",
+        "toStatus",
+        "recoverable",
+        "mismatches",
+        "assets",
+        "ownershipTenureMappings",
+        "correctionId",
+      ],
+      "reversal event metadata"
+    );
+    if (
+      metadata.schemaVersion !== 1 ||
+      metadata.action !== "reverse" ||
+      metadata.actorAuthority !== command.actorAuthority ||
+      metadata.actorMembershipId !== command.actorMembershipId ||
+      metadata.fromStatus !== "completed" ||
+      metadata.toStatus !== "reversed" ||
+      metadata.recoverable !== true ||
+      !Array.isArray(metadata.mismatches) ||
+      metadata.mismatches.length !== 0 ||
+      !Array.isArray(metadata.assets) ||
+      !Array.isArray(metadata.ownershipTenureMappings) ||
+      !UUID_PATTERN.test(metadata.correctionId || "")
+    ) {
+      persistedAggregateFail("The reversed trade event metadata is incomplete.");
+    }
+
+    const completionEvent = unique(
+      findCompletionEventStatement,
+      command,
+      "A reversed trade had duplicate acceptance events."
+    );
+    if (
+      !completionEvent ||
+      completionEvent.occurred_at_ms !== trade.completed_at_ms ||
+      completionEvent.league_id !== trade.league_id ||
+      completionEvent.season_id !== trade.season_id ||
+      completionEvent.trade_id !== trade.id
+    ) {
+      persistedAggregateFail("The reversed trade acceptance event is incomplete.");
+    }
+    const completionMetadata = parsePersistedObject(
+      completionEvent.metadata_json,
+      "acceptance event metadata"
+    );
+    if (
+      completionMetadata.schemaVersion !== 1 ||
+      completionMetadata.action !== "accept" ||
+      completionMetadata.fromStatus !== "proposed" ||
+      completionMetadata.toStatus !== "completed" ||
+      !Array.isArray(completionMetadata.transfers) ||
+      !Array.isArray(completionMetadata.ownershipTransfers)
+    ) {
+      persistedAggregateFail("The reversed trade acceptance receipt is incomplete.");
+    }
+
+    const assets = listAssetsStatement.all(command);
+    if (completionMetadata.transfers.length !== assets.length) {
+      persistedAggregateFail("The reversed trade public transfer receipt is incomplete.");
+    }
+    const publicTransfersByAssetId = new Map();
+    for (const transfer of completionMetadata.transfers) {
+      exactPersistedObject(
+        transfer,
+        PUBLIC_TRANSFER_KEYS,
+        "public transfer receipt"
+      );
+      persistedStableId(transfer.assetId, "public transfer asset identifier");
+      persistedStableId(transfer.sourceTeamId, "public transfer source team");
+      persistedStableId(
+        transfer.destinationTeamId,
+        "public transfer destination team"
+      );
+      if (
+        transfer.sourceTeamId === transfer.destinationTeamId ||
+        publicTransfersByAssetId.has(transfer.assetId)
+      ) {
+        persistedAggregateFail(
+          "The reversed trade public transfer receipt is inconsistent."
+        );
+      }
+      publicTransfersByAssetId.set(transfer.assetId, transfer);
+    }
+
+    const acceptedOwnershipBySourceId = new Map();
+    const acceptedOwnershipIds = new Set();
+    let priorAcceptedSortKey = null;
+    for (const transfer of completionMetadata.ownershipTransfers) {
+      exactPersistedObject(
+        transfer,
+        OWNERSHIP_TRANSFER_KEYS,
+        "acceptance ownership-transfer mapping"
+      );
+      persistedStableId(transfer.sourceTeamId, "acceptance source team");
+      persistedStableId(
+        transfer.destinationTeamId,
+        "acceptance destination team"
+      );
+      persistedStableId(
+        transfer.sourceOwnershipId,
+        "acceptance source ownership"
+      );
+      persistedPositiveVersion(
+        transfer.sourceOwnershipVersion,
+        "acceptance source ownership version"
+      );
+      persistedStableId(
+        transfer.destinationOwnershipId,
+        "acceptance destination ownership"
+      );
+      persistedPositiveVersion(
+        transfer.destinationOwnershipVersion,
+        "acceptance destination ownership version"
+      );
+      const sortKey = `${transfer.sourceOwnershipId}:` +
+        `${transfer.destinationOwnershipId}`;
+      if (
+        transfer.sourceTeamId === transfer.destinationTeamId ||
+        transfer.destinationOwnershipVersion !== 1 ||
+        transfer.sourceOwnershipId === transfer.destinationOwnershipId ||
+        acceptedOwnershipIds.has(transfer.sourceOwnershipId) ||
+        acceptedOwnershipIds.has(transfer.destinationOwnershipId) ||
+        (priorAcceptedSortKey !== null &&
+          priorAcceptedSortKey.localeCompare(sortKey) >= 0)
+      ) {
+        persistedAggregateFail(
+          "The reversed trade acceptance ownership mapping is inconsistent."
+        );
+      }
+      priorAcceptedSortKey = sortKey;
+      acceptedOwnershipIds.add(transfer.sourceOwnershipId);
+      acceptedOwnershipIds.add(transfer.destinationOwnershipId);
+      acceptedOwnershipBySourceId.set(transfer.sourceOwnershipId, transfer);
+    }
+
+    const expectedPublicAssets = assets.map((asset) => ({
+      id: asset.id,
+      assetType: publicAssetType(asset),
+      sourceTeamId: asset.source_team_id,
+      destinationTeamId: asset.destination_team_id,
+      recoverable: true,
+      mismatches: [],
+    }));
+    if (canonicalJson(metadata.assets) !== canonicalJson(expectedPublicAssets)) {
+      persistedAggregateFail("The reversed trade asset receipt is inconsistent.");
+    }
+
+    const expectedRecords = [];
+    for (const asset of assets) {
+      const publicTransfer = publicTransfersByAssetId.get(asset.id);
+      if (
+        !publicTransfer ||
+        publicTransfer.assetType !== publicAssetType(asset) ||
+        publicTransfer.sourceTeamId !== asset.source_team_id ||
+        publicTransfer.destinationTeamId !== asset.destination_team_id ||
+        !participantTeamIds.includes(asset.source_team_id) ||
+        !participantTeamIds.includes(asset.destination_team_id)
+      ) {
+        persistedAggregateFail(
+          "The reversed trade public transfer asset scope is inconsistent."
+        );
+      }
+      if (!["contract", "prospect_right"].includes(asset.asset_type)) continue;
+      const snapshot = parsePersistedObject(
+        asset.proposal_snapshot_json,
+        "ownership-transfer proposal snapshot"
+      );
+      if (!validSnapshotShape(snapshot, asset)) {
+        persistedAggregateFail(
+          "The reversed trade ownership-transfer snapshot is incomplete."
+        );
+      }
+      const acceptedTransfer = acceptedOwnershipBySourceId.get(
+        snapshot.ownership.id
+      );
+      if (
+        !validAcceptanceTenureMapping(
+          acceptedTransfer,
+          snapshot,
+          asset,
+          command.tradeId
+        )
+      ) {
+        persistedAggregateFail(
+          "The reversed trade acceptance ownership mapping is inconsistent."
+        );
+      }
+      const destinationOwnershipId = deterministicUuid(
+        `${command.tradeId}:reversal-ownership-tenure:` +
+          `${acceptedTransfer.destinationOwnershipId}`
+      );
+      expectedRecords.push({
+        asset,
+        snapshot,
+        publicTransfer,
+        mapping: {
+          assetId: asset.id,
+          sourceTeamId: asset.destination_team_id,
+          destinationTeamId: asset.source_team_id,
+          sourceOwnershipId: acceptedTransfer.destinationOwnershipId,
+          sourceOwnershipVersion: acceptedTransfer.destinationOwnershipVersion,
+          destinationOwnershipId,
+          destinationOwnershipVersion: 1,
+        },
+      });
+    }
+    expectedRecords.sort((left, right) =>
+      left.mapping.assetId.localeCompare(right.mapping.assetId)
+    );
+    if (
+      completionMetadata.ownershipTransfers.length !== expectedRecords.length ||
+      metadata.ownershipTenureMappings.length !== expectedRecords.length
+    ) {
+      persistedAggregateFail(
+        "The reversed trade ownership-transfer mapping is incomplete."
+      );
+    }
+
+    const mappings = [];
+    const seenReversalOwnershipIds = new Set();
+    for (let index = 0; index < expectedRecords.length; index += 1) {
+      const expected = expectedRecords[index].mapping;
+      const mapping = exactPersistedObject(
+        metadata.ownershipTenureMappings[index],
+        REVERSAL_OWNERSHIP_MAPPING_KEYS,
+        "reversal ownership-transfer mapping"
+      );
+      for (const key of ["assetId", "sourceTeamId", "destinationTeamId"]){
+        persistedStableId(mapping[key], `reversal ${key}`);
+      }
+      persistedStableId(
+        mapping.sourceOwnershipId,
+        "reversal source ownership"
+      );
+      persistedPositiveVersion(
+        mapping.sourceOwnershipVersion,
+        "reversal source ownership version"
+      );
+      persistedStableId(
+        mapping.destinationOwnershipId,
+        "reversal destination ownership"
+      );
+      persistedPositiveVersion(
+        mapping.destinationOwnershipVersion,
+        "reversal destination ownership version"
+      );
+      if (
+        REVERSAL_OWNERSHIP_MAPPING_KEYS.some(
+          (key) => mapping[key] !== expected[key]
+        ) ||
+        mapping.destinationOwnershipVersion !== 1 ||
+        mapping.sourceOwnershipId === mapping.destinationOwnershipId ||
+        acceptedOwnershipIds.has(mapping.destinationOwnershipId) ||
+        seenReversalOwnershipIds.has(mapping.sourceOwnershipId) ||
+        seenReversalOwnershipIds.has(mapping.destinationOwnershipId)
+      ) {
+        persistedAggregateFail(
+          "The reversed trade ownership-transfer mapping is inconsistent."
+        );
+      }
+      seenReversalOwnershipIds.add(mapping.sourceOwnershipId);
+      seenReversalOwnershipIds.add(mapping.destinationOwnershipId);
+      mappings.push(Object.freeze({ ...mapping }));
+    }
+
+    const ownershipEvents = listReversalOwnershipEventsStatement.all(command);
+    if (ownershipEvents.length !== expectedRecords.length * 2) {
+      persistedAggregateFail(
+        "The reversed trade ownership-transfer history is incomplete."
+      );
+    }
+    const eventsByTenure = new Map();
+    for (const ownershipEvent of ownershipEvents) {
+      const key = `${ownershipEvent.event_type}:${ownershipEvent.ownership_id}`;
+      if (eventsByTenure.has(key)) {
+        persistedAggregateFail(
+          "The reversed trade ownership-transfer history is duplicated."
+        );
+      }
+      eventsByTenure.set(key, ownershipEvent);
+    }
+    for (const record of expectedRecords) {
+      const { mapping } = record;
+      const sourceEvent = eventsByTenure.get(
+        `trade_reversal_out:${mapping.sourceOwnershipId}`
+      );
+      const destinationEvent = eventsByTenure.get(
+        `trade_reversal_in:${mapping.destinationOwnershipId}`
+      );
+      if (!sourceEvent || !destinationEvent) {
+        persistedAggregateFail(
+          "The reversed trade ownership-transfer history is incomplete."
+        );
+      }
+      const ownershipKind = record.asset.asset_type === "contract"
+        ? "Rostered"
+        : "Prospect Right";
+      const rosterCategory = record.asset.asset_type === "contract"
+        ? record.snapshot.ownership.rosterCategory
+        : "Prospect";
+      const sourceSlotNumber = record.asset.asset_type === "contract"
+        ? record.publicTransfer.plannedRosterSlotNumber
+        : null;
+      const destinationSlotNumber = record.snapshot.ownership.slotNumber ?? null;
+      const sourceOwnership = row(
+        findOwnershipStatement,
+        command,
+        mapping.sourceOwnershipId,
+        "A closed reversal source ownership was not unique."
+      );
+      const destinationOwnership = row(
+        findOwnershipStatement,
+        command,
+        mapping.destinationOwnershipId,
+        "A committed reversal destination ownership was not unique."
+      );
+      if (
+        sourceOwnership !== null ||
+        destinationOwnership === null ||
+        destinationOwnership.season_id !== trade.season_id ||
+        destinationOwnership.player_id !== record.snapshot.player.id ||
+        destinationOwnership.team_id !== mapping.destinationTeamId ||
+        destinationOwnership.ownership_kind !== ownershipKind ||
+        destinationOwnership.roster_category !== rosterCategory ||
+        destinationOwnership.position_group !==
+          record.snapshot.ownership.positionGroup ||
+        destinationOwnership.slot_number !== destinationSlotNumber ||
+        destinationOwnership.acquired_transaction_type !== "trade_reversal" ||
+        destinationOwnership.acquired_transaction_id !== command.tradeId ||
+        destinationOwnership.created_at_ms !== event.occurred_at_ms ||
+        destinationOwnership.updated_at_ms !== event.occurred_at_ms ||
+        destinationOwnership.version !== 1 ||
+        destinationOwnership.trade_blocked !== 0
+      ) {
+        persistedAggregateFail(
+          "The reversed trade committed ownership tenure is inconsistent."
+        );
+      }
+      const expectedSourceBefore = {
+        schemaVersion: 2,
+        exists: true,
+        ownership: {
+          id: mapping.sourceOwnershipId,
+          leagueId: trade.league_id,
+          seasonId: trade.season_id,
+          playerId: record.snapshot.player.id,
+          teamId: mapping.sourceTeamId,
+          ownershipKind,
+          rosterCategory,
+          positionGroup: record.snapshot.ownership.positionGroup,
+          slotNumber: sourceSlotNumber,
+          version: mapping.sourceOwnershipVersion,
+        },
+      };
+      const expectedSourceAfter = {
+        schemaVersion: 2,
+        exists: false,
+        destinationOwnershipId: mapping.destinationOwnershipId,
+      };
+      const expectedDestinationBefore = {
+        schemaVersion: 2,
+        exists: false,
+        sourceOwnershipId: mapping.sourceOwnershipId,
+      };
+      const expectedDestinationAfter = {
+        schemaVersion: 2,
+        exists: true,
+        ownership: {
+          id: mapping.destinationOwnershipId,
+          leagueId: trade.league_id,
+          seasonId: trade.season_id,
+          playerId: record.snapshot.player.id,
+          teamId: mapping.destinationTeamId,
+          ownershipKind,
+          rosterCategory,
+          positionGroup: record.snapshot.ownership.positionGroup,
+          slotNumber: destinationSlotNumber,
+          version: mapping.destinationOwnershipVersion,
+        },
+      };
+      if (
+        sourceEvent.id !== deterministicUuid(
+          `${event.id}:ownership:${mapping.sourceOwnershipId}:out`
+        ) ||
+        sourceEvent.season_id !== trade.season_id ||
+        sourceEvent.player_id !== record.snapshot.player.id ||
+        sourceEvent.team_id !== mapping.sourceTeamId ||
+        sourceEvent.actor_user_id !== event.actor_user_id ||
+        sourceEvent.source_id !== command.tradeId ||
+        sourceEvent.reason !== "safe_trade_reversal" ||
+        sourceEvent.occurred_at_ms !== event.occurred_at_ms ||
+        destinationEvent.id !== deterministicUuid(
+          `${event.id}:ownership:${mapping.destinationOwnershipId}:in`
+        ) ||
+        destinationEvent.season_id !== trade.season_id ||
+        destinationEvent.player_id !== record.snapshot.player.id ||
+        destinationEvent.team_id !== mapping.destinationTeamId ||
+        destinationEvent.actor_user_id !== event.actor_user_id ||
+        destinationEvent.source_id !== command.tradeId ||
+        destinationEvent.reason !== "safe_trade_reversal" ||
+        destinationEvent.occurred_at_ms !== event.occurred_at_ms ||
+        canonicalJson(parsePersistedObject(
+          sourceEvent.before_metadata_json,
+          "reversal source closure history"
+        )) !== canonicalJson(expectedSourceBefore) ||
+        canonicalJson(parsePersistedObject(
+          sourceEvent.after_metadata_json,
+          "reversal source closure history"
+        )) !== canonicalJson(expectedSourceAfter) ||
+        canonicalJson(parsePersistedObject(
+          destinationEvent.before_metadata_json,
+          "reversal destination acquisition history"
+        )) !== canonicalJson(expectedDestinationBefore) ||
+        canonicalJson(parsePersistedObject(
+          destinationEvent.after_metadata_json,
+          "reversal destination acquisition history"
+        )) !== canonicalJson(expectedDestinationAfter)
+      ) {
+        persistedAggregateFail(
+          "The reversed trade ownership-transfer history is inconsistent."
+        );
+      }
+    }
+
+    const witnessesByTeam = new Map(
+      participantTeamIds.map((teamId) => [teamId, []])
+    );
+    for (const mapping of mappings) {
+      witnessesByTeam.get(mapping.sourceTeamId).push({
+        ownershipId: mapping.sourceOwnershipId,
+        ownershipVersion: mapping.sourceOwnershipVersion,
+        state: "deleted",
+      });
+      witnessesByTeam.get(mapping.destinationTeamId).push({
+        ownershipId: mapping.destinationOwnershipId,
+        ownershipVersion: mapping.destinationOwnershipVersion,
+        state: "present",
+      });
+    }
+    const committedTeams = participantTeamIds.map((teamId) => {
+      const ownershipWitnesses = witnessesByTeam
+        .get(teamId)
+        .sort((left, right) => left.ownershipId.localeCompare(right.ownershipId))
+        .map((witness) => Object.freeze(witness));
+      return Object.freeze({
+        leagueId: trade.league_id,
+        seasonId: trade.season_id,
+        teamId,
+        ownershipWitnesses: Object.freeze(ownershipWitnesses),
+      });
+    });
+    return Object.freeze({
+      mappings: Object.freeze(mappings),
+      committedTeams: Object.freeze(committedTeams),
+    });
+  }
+
   function aggregate(command, replayed) {
     const trade = unique(
       findTargetStatement,
@@ -1022,23 +1719,71 @@ function createSqliteTradeReversalRepository({ database } = {}) {
         "The recovered trade aggregate is incomplete."
       );
     }
-    return freeze({
-      replayed,
+    if (command.action !== "reverse") {
+      return freeze({
+        replayed,
+        trade,
+        event: { ...event, metadata: parseObject(event.metadata_json) },
+      });
+    }
+    const metadata = parsePersistedObject(
+      event.metadata_json,
+      "reversal event metadata"
+    );
+    const receipt = reconstructReversalReceipt({
+      command,
       trade,
-      event: { ...event, metadata: parseObject(event.metadata_json) },
+      event,
+      metadata,
     });
+    const result = {
+      replayed,
+      trade: Object.freeze({ ...trade }),
+      event: Object.freeze({
+        ...event,
+        metadata: Object.freeze({
+          ...metadata,
+          ownershipTenureMappings: receipt.mappings,
+        }),
+      }),
+    };
+    Object.defineProperty(result, "committedTeams", {
+      configurable: false,
+      enumerable: false,
+      value: receipt.committedTeams,
+      writable: false,
+    });
+    return Object.freeze(result);
   }
 
   function reverseAssets(command, evaluation) {
-    for (const { row: asset, snapshot } of evaluation.assets) {
-      if (snapshot.type === "contract") {
-        requireChange(clearTransferredSlotStatement.run({
-          ...command,
-          ownershipId: snapshot.ownership.id,
-          destinationTeamId: asset.destination_team_id,
-          postVersion: snapshot.ownership.version + 1,
-        }));
-      }
+    const ownershipTenures = new Map();
+    for (const { row: asset, snapshot, transfer } of evaluation.assets) {
+      if (!["contract", "prospect_right"].includes(snapshot.type)) continue;
+      const sourceOwnershipId = transfer.destinationOwnershipId;
+      const sourceOwnershipVersion = transfer.destinationOwnershipVersion;
+      const destinationOwnershipId = deterministicUuid(
+        `${command.tradeId}:reversal-ownership-tenure:${sourceOwnershipId}`
+      );
+      deleteReversalRosterDisplayOrderStatement.run({
+        leagueId: command.leagueId,
+        sourceOwnershipId,
+      });
+      requireChange(deleteReversalOwnershipStatement.run({
+        ...command,
+        sourceOwnershipId,
+        sourceOwnershipVersion,
+        destinationTeamId: asset.destination_team_id,
+      }));
+      ownershipTenures.set(asset.id, Object.freeze({
+        assetId: asset.id,
+        sourceTeamId: asset.destination_team_id,
+        destinationTeamId: asset.source_team_id,
+        sourceOwnershipId,
+        sourceOwnershipVersion,
+        destinationOwnershipId,
+        destinationOwnershipVersion: 1,
+      }));
     }
     for (const { row: asset, snapshot, transfer } of evaluation.assets) {
       const base = {
@@ -1047,34 +1792,79 @@ function createSqliteTradeReversalRepository({ database } = {}) {
         destinationTeamId: asset.destination_team_id,
       };
       if (snapshot.type === "contract" || snapshot.type === "prospect_right") {
-        requireChange(reverseOwnershipStatement.run({
+        const tenure = ownershipTenures.get(asset.id);
+        insertReversalOwnershipStatement.run({
           ...base,
-          ownershipId: snapshot.ownership.id,
+          destinationOwnershipId: tenure.destinationOwnershipId,
+          playerId: snapshot.player.id,
           ownershipKind:
             snapshot.type === "contract" ? "Rostered" : "Prospect Right",
           rosterCategory: snapshot.ownership.rosterCategory,
           positionGroup: snapshot.ownership.positionGroup,
           slotNumber: snapshot.ownership.slotNumber ?? null,
-          postVersion: snapshot.ownership.version + 1,
-        }));
+        });
         insertOwnershipEventStatement.run({
           ...base,
           historyId: deterministicUuid(
-            `${command.eventId}:ownership:${snapshot.ownership.id}`
+            `${command.eventId}:ownership:${tenure.sourceOwnershipId}:out`
           ),
-          ownershipId: snapshot.ownership.id,
           playerId: snapshot.player.id,
+          eventTeamId: asset.destination_team_id,
+          eventOwnershipId: tenure.sourceOwnershipId,
+          ownershipEventType: "trade_reversal_out",
           beforeMetadataJson: JSON.stringify({
-            schemaVersion: 1,
-            teamId: asset.destination_team_id,
-            rosterCategory: snapshot.ownership.rosterCategory,
-            slotNumber: transfer?.plannedRosterSlotNumber ?? null,
+            schemaVersion: 2,
+            exists: true,
+            ownership: {
+              id: tenure.sourceOwnershipId,
+              leagueId: command.leagueId,
+              seasonId: command.seasonId,
+              playerId: snapshot.player.id,
+              teamId: asset.destination_team_id,
+              ownershipKind:
+                snapshot.type === "contract" ? "Rostered" : "Prospect Right",
+              rosterCategory: snapshot.ownership.rosterCategory,
+              positionGroup: snapshot.ownership.positionGroup,
+              slotNumber: transfer?.plannedRosterSlotNumber ?? null,
+              version: tenure.sourceOwnershipVersion,
+            },
           }),
           afterMetadataJson: JSON.stringify({
-            schemaVersion: 1,
-            teamId: asset.source_team_id,
-            rosterCategory: snapshot.ownership.rosterCategory,
-            slotNumber: snapshot.ownership.slotNumber ?? null,
+            schemaVersion: 2,
+            exists: false,
+            destinationOwnershipId: tenure.destinationOwnershipId,
+          }),
+        });
+        insertOwnershipEventStatement.run({
+          ...base,
+          historyId: deterministicUuid(
+            `${command.eventId}:ownership:${tenure.destinationOwnershipId}:in`
+          ),
+          playerId: snapshot.player.id,
+          eventTeamId: asset.source_team_id,
+          eventOwnershipId: tenure.destinationOwnershipId,
+          ownershipEventType: "trade_reversal_in",
+          beforeMetadataJson: JSON.stringify({
+            schemaVersion: 2,
+            exists: false,
+            sourceOwnershipId: tenure.sourceOwnershipId,
+          }),
+          afterMetadataJson: JSON.stringify({
+            schemaVersion: 2,
+            exists: true,
+            ownership: {
+              id: tenure.destinationOwnershipId,
+              leagueId: command.leagueId,
+              seasonId: command.seasonId,
+              playerId: snapshot.player.id,
+              teamId: asset.source_team_id,
+              ownershipKind:
+                snapshot.type === "contract" ? "Rostered" : "Prospect Right",
+              rosterCategory: snapshot.ownership.rosterCategory,
+              positionGroup: snapshot.ownership.positionGroup,
+              slotNumber: snapshot.ownership.slotNumber ?? null,
+              version: tenure.destinationOwnershipVersion,
+            },
           }),
         });
         const contractId =
@@ -1148,6 +1938,9 @@ function createSqliteTradeReversalRepository({ database } = {}) {
         }));
       }
     }
+    return freeze([...ownershipTenures.values()].sort((left, right) =>
+      left.assetId.localeCompare(right.assetId)
+    ));
   }
 
   const recoveryTransaction = database.transaction((rawCommand) => {
@@ -1182,9 +1975,9 @@ function createSqliteTradeReversalRepository({ database } = {}) {
     const evaluation = previewFor(command, context);
     assertRecoveryActionAllowed(command.action, evaluation.preview.recoverable);
 
-    if (command.action === "reverse") {
-      reverseAssets(command, evaluation);
-    }
+    const ownershipTenureMappings = command.action === "reverse"
+      ? reverseAssets(command, evaluation)
+      : Object.freeze([]);
     const nextStatus =
       command.action === "reverse" ? "reversed" : "correction_required";
     requireChange(updateTradeStatement.run({ ...command, nextStatus }));
@@ -1204,6 +1997,7 @@ function createSqliteTradeReversalRepository({ database } = {}) {
       recoverable: evaluation.preview.recoverable,
       mismatches: evaluation.preview.mismatches,
       assets: evaluation.preview.assets,
+      ...(command.action === "reverse" ? { ownershipTenureMappings } : {}),
       correctionId: command.correctionId,
     };
     insertTradeEventStatement.run({
@@ -1240,18 +2034,44 @@ function createSqliteTradeReversalRepository({ database } = {}) {
       reason,
       metadataJson: JSON.stringify(evidence),
     });
-    insertOutboxStatement.run({
-      ...command,
-      payloadJson: JSON.stringify(
-        createSocketInvalidation({
-          eventType: "trade.changed",
-          scope: "league",
-          scopeId: command.leagueId,
-          version: command.expectedVersion + 1,
-          changedAtMs: command.occurredAtMs,
-        })
-      ),
+    outboxWriter.write({
+      id: command.outboxEventId,
+      leagueId: command.leagueId,
+      eventType: "trade.changed",
+      aggregateType: "trade",
+      aggregateId: command.tradeId,
+      payload: createSocketEventMetadata({
+        eventType: "trade.changed",
+        version: command.expectedVersion + 1,
+        reasonCode: "trade_changed",
+        occurredAtMs: command.occurredAtMs,
+        related: createEmptySocketRelated(),
+      }),
+      occurredAtMs: command.occurredAtMs,
     });
+    if (command.action === "reverse") {
+      candidateCardSummerSynchronizer.synchronize({
+        leagueId: command.leagueId,
+        affectedTeamIds: [
+          ...new Set([
+            context.proposing_team_id,
+            context.receiving_team_id,
+          ]),
+        ].sort(),
+        affectedPlayerIds: [
+          ...new Set(
+            evaluation.assets
+              .filter(({ snapshot }) =>
+                ["contract", "prospect_right"].includes(snapshot.type)
+              )
+              .map(({ snapshot }) => snapshot.player.id)
+          ),
+        ].sort(),
+        sourceOperationId: command.eventId,
+        sourceKind: "trade_reversal",
+        nowMs: command.occurredAtMs,
+      });
+    }
     requireChange(completeIdempotencyStatement.run(command));
     return aggregate(command, false);
   });

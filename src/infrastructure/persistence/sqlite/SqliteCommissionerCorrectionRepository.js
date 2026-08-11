@@ -1,3 +1,5 @@
+const crypto = require("node:crypto");
+
 const {
   COMMISSIONER_CORRECTION_CODES,
   CommissionerCorrectionPolicyError,
@@ -14,6 +16,9 @@ const {
 const {
   evaluateStructuralRosterLegality,
 } = require("../../../domain/rosters/rosterMovementPolicy");
+const {
+  CANONICAL_UUID_PATTERN,
+} = require("../../../domain/players/playerIdentityPolicy");
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
@@ -48,6 +53,371 @@ function freezeWarnings(warnings) {
   return Object.freeze(
     warnings.map((warning) => Object.freeze({ ...warning }))
   );
+}
+
+function deterministicUuid(value) {
+  const hex = crypto.createHash("sha256").update(value, "utf8").digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-` +
+    `8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+function ownershipWitness(row, state) {
+  return Object.freeze({
+    ownershipId: row.id,
+    ownershipVersion: row.version,
+    state,
+  });
+}
+
+function rosterMutationReceipt(teams, ownershipTransfer = null) {
+  return Object.freeze({
+    teams: Object.freeze(
+      teams
+        .map((team) =>
+          Object.freeze({
+            leagueId: team.leagueId,
+            seasonId: team.seasonId,
+            teamId: team.teamId,
+            ownershipWitnesses: Object.freeze(
+              [...team.ownershipWitnesses].sort((left, right) =>
+                left.ownershipId.localeCompare(right.ownershipId)
+              )
+            ),
+          })
+        )
+        .sort((left, right) =>
+          left.leagueId.localeCompare(right.leagueId) ||
+          left.seasonId.localeCompare(right.seasonId) ||
+          left.teamId.localeCompare(right.teamId)
+        )
+    ),
+    ...(ownershipTransfer === null ? {} : { ownershipTransfer }),
+  });
+}
+
+function singleTeamRosterReceipt(row, state) {
+  return rosterMutationReceipt([
+    {
+      leagueId: row.league_id,
+      seasonId: row.season_id,
+      teamId: row.team_id,
+      ownershipWitnesses: [ownershipWitness(row, state)],
+    },
+  ]);
+}
+
+function invalidStoredRosterReceipt() {
+  throw repositoryError(
+    REPOSITORY_ERROR_CODES.schemaIncompatible,
+    "The persisted commissioner roster-mutation receipt is invalid."
+  );
+}
+
+function exactStoredObject(value, expectedKeys) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    invalidStoredRosterReceipt();
+  }
+  const actualKeys = Object.keys(value).sort();
+  const sortedExpectedKeys = [...expectedKeys].sort();
+  if (
+    actualKeys.length !== sortedExpectedKeys.length ||
+    actualKeys.some((key, index) => key !== sortedExpectedKeys[index])
+  ) {
+    invalidStoredRosterReceipt();
+  }
+  return value;
+}
+
+function storedStableId(value) {
+  if (
+    typeof value !== "string" ||
+    !CANONICAL_UUID_PATTERN.test(value)
+  ) {
+    invalidStoredRosterReceipt();
+  }
+  return value;
+}
+
+function storedPositiveVersion(value) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    invalidStoredRosterReceipt();
+  }
+  return value;
+}
+
+function freezeStoredRosterReceipt(value) {
+  const hasOwnershipTransfer =
+    value && Object.hasOwn(value, "ownershipTransfer");
+  const receipt = exactStoredObject(
+    value,
+    hasOwnershipTransfer
+      ? ["teams", "ownershipTransfer"]
+      : ["teams"]
+  );
+  if (
+    !Array.isArray(receipt.teams) ||
+    receipt.teams.length < 1 ||
+    receipt.teams.length > 2 ||
+    receipt.teams.length !== (hasOwnershipTransfer ? 2 : 1)
+  ) {
+    invalidStoredRosterReceipt();
+  }
+
+  const globalOwnershipIds = new Set();
+  let previousTeamScope = null;
+  const teams = receipt.teams.map((rawTeam) => {
+    const team = exactStoredObject(rawTeam, [
+      "leagueId",
+      "seasonId",
+      "teamId",
+      "ownershipWitnesses",
+    ]);
+    if (!Array.isArray(team.ownershipWitnesses)) {
+      invalidStoredRosterReceipt();
+    }
+    const normalizedTeam = {
+      leagueId: storedStableId(team.leagueId),
+      seasonId: storedStableId(team.seasonId),
+      teamId: storedStableId(team.teamId),
+    };
+    const teamScope = `${normalizedTeam.leagueId}\u0000` +
+      `${normalizedTeam.seasonId}\u0000${normalizedTeam.teamId}`;
+    if (previousTeamScope !== null && teamScope <= previousTeamScope) {
+      invalidStoredRosterReceipt();
+    }
+    previousTeamScope = teamScope;
+
+    let previousOwnershipId = null;
+    const ownershipWitnesses = team.ownershipWitnesses.map((rawWitness) => {
+      const witness = exactStoredObject(rawWitness, [
+        "ownershipId",
+        "ownershipVersion",
+        "state",
+      ]);
+      const ownershipId = storedStableId(witness.ownershipId);
+      if (
+        (previousOwnershipId !== null &&
+          ownershipId <= previousOwnershipId) ||
+        globalOwnershipIds.has(ownershipId) ||
+        !["present", "deleted"].includes(witness.state)
+      ) {
+        invalidStoredRosterReceipt();
+      }
+      previousOwnershipId = ownershipId;
+      globalOwnershipIds.add(ownershipId);
+      return Object.freeze({
+        ownershipId,
+        ownershipVersion: storedPositiveVersion(
+          witness.ownershipVersion
+        ),
+        state: witness.state,
+      });
+    });
+    return Object.freeze({
+      ...normalizedTeam,
+      ownershipWitnesses: Object.freeze(ownershipWitnesses),
+    });
+  });
+
+  let ownershipTransfer = null;
+  if (hasOwnershipTransfer) {
+    const transfer = exactStoredObject(receipt.ownershipTransfer, [
+      "sourceOwnershipId",
+      "sourceOwnershipVersion",
+      "destinationOwnershipId",
+      "destinationOwnershipVersion",
+    ]);
+    ownershipTransfer = Object.freeze({
+      sourceOwnershipId: storedStableId(transfer.sourceOwnershipId),
+      sourceOwnershipVersion: storedPositiveVersion(
+        transfer.sourceOwnershipVersion
+      ),
+      destinationOwnershipId: storedStableId(
+        transfer.destinationOwnershipId
+      ),
+      destinationOwnershipVersion: storedPositiveVersion(
+        transfer.destinationOwnershipVersion
+      ),
+    });
+    if (
+      ownershipTransfer.sourceOwnershipId ===
+        ownershipTransfer.destinationOwnershipId ||
+      !teams.some((team) =>
+        team.ownershipWitnesses.some((witness) =>
+          witness.ownershipId === ownershipTransfer.sourceOwnershipId &&
+          witness.ownershipVersion ===
+            ownershipTransfer.sourceOwnershipVersion &&
+          witness.state === "deleted"
+        )
+      ) ||
+      !teams.some((team) =>
+        team.ownershipWitnesses.some((witness) =>
+          witness.ownershipId ===
+            ownershipTransfer.destinationOwnershipId &&
+          witness.ownershipVersion ===
+            ownershipTransfer.destinationOwnershipVersion &&
+          witness.state === "present"
+        )
+      )
+    ) {
+      invalidStoredRosterReceipt();
+    }
+  }
+
+  return Object.freeze({
+    teams: Object.freeze(teams),
+    ...(ownershipTransfer === null ? {} : { ownershipTransfer }),
+  });
+}
+
+function snapshotRosterReceipt(row, state) {
+  return rosterMutationReceipt([
+    {
+      leagueId: row.leagueId,
+      seasonId: row.seasonId,
+      teamId: row.teamId,
+      ownershipWitnesses: [ownershipWitness(row, state)],
+    },
+  ]);
+}
+
+function expectedStoredRosterReceipt({
+  correctionRow,
+  before,
+  authoritative,
+  stored,
+}) {
+  let expected;
+  if (correctionRow.feature === "roster_add") {
+    const ownership = authoritative?.ownership;
+    if (
+      before !== null ||
+      !ownership ||
+      ownership.version !== 1 ||
+      correctionRow.feature_record_id !== ownership.id
+    ) {
+      invalidStoredRosterReceipt();
+    }
+    expected = snapshotRosterReceipt(ownership, "present");
+  } else if (correctionRow.feature === "roster_remove") {
+    const ownership = before?.ownership;
+    if (
+      !ownership ||
+      authoritative?.ownership !== null ||
+      correctionRow.feature_record_id !== ownership.id
+    ) {
+      invalidStoredRosterReceipt();
+    }
+    expected = snapshotRosterReceipt(ownership, "deleted");
+  } else if (correctionRow.feature === "roster") {
+    if (
+      !before ||
+      !authoritative ||
+      before.leagueId !== authoritative.leagueId ||
+      before.seasonId !== authoritative.seasonId ||
+      before.playerId !== authoritative.playerId ||
+      authoritative.version !==
+        (before.teamId === authoritative.teamId
+          ? before.version + 1
+          : 1) ||
+      correctionRow.feature_record_id !== authoritative.id
+    ) {
+      invalidStoredRosterReceipt();
+    }
+    if (before.teamId === authoritative.teamId) {
+      if (before.id !== authoritative.id) {
+        invalidStoredRosterReceipt();
+      }
+      expected = snapshotRosterReceipt(authoritative, "present");
+    } else {
+      if (before.id === authoritative.id) {
+        invalidStoredRosterReceipt();
+      }
+      const ownershipTransfer = Object.freeze({
+        sourceOwnershipId: before.id,
+        sourceOwnershipVersion: before.version,
+        destinationOwnershipId: authoritative.id,
+        destinationOwnershipVersion: authoritative.version,
+      });
+      expected = rosterMutationReceipt(
+        [
+          {
+            leagueId: before.leagueId,
+            seasonId: before.seasonId,
+            teamId: before.teamId,
+            ownershipWitnesses: [ownershipWitness(before, "deleted")],
+          },
+          {
+            leagueId: authoritative.leagueId,
+            seasonId: authoritative.seasonId,
+            teamId: authoritative.teamId,
+            ownershipWitnesses: [
+              ownershipWitness(authoritative, "present"),
+            ],
+          },
+        ],
+        ownershipTransfer
+      );
+    }
+  } else if (correctionRow.feature === "contract") {
+    if (
+      !before ||
+      !authoritative ||
+      before.id !== authoritative.id ||
+      before.leagueId !== authoritative.leagueId ||
+      before.playerId !== authoritative.playerId ||
+      before.teamId !== authoritative.teamId ||
+      authoritative.version !== before.version + 1 ||
+      correctionRow.feature_record_id !== authoritative.id
+    ) {
+      invalidStoredRosterReceipt();
+    }
+    const team = stored.teams[0];
+    if (
+      stored.teams.length !== 1 ||
+      Object.hasOwn(stored, "ownershipTransfer") ||
+      team.leagueId !== authoritative.leagueId ||
+      team.seasonId !== correctionRow.season_id ||
+      team.teamId !== authoritative.teamId ||
+      team.ownershipWitnesses.length !== 1 ||
+      team.ownershipWitnesses[0].state !== "present"
+    ) {
+      invalidStoredRosterReceipt();
+    }
+    expected = stored;
+  } else {
+    invalidStoredRosterReceipt();
+  }
+
+  if (
+    expected.teams.some(
+      (team) =>
+        team.leagueId !== correctionRow.league_id ||
+        team.seasonId !== correctionRow.season_id
+    )
+  ) {
+    invalidStoredRosterReceipt();
+  }
+  return expected;
+}
+
+function validatedStoredRosterReceipt({
+  correctionRow,
+  before,
+  authoritative,
+  value,
+}) {
+  const stored = freezeStoredRosterReceipt(value);
+  const expected = expectedStoredRosterReceipt({
+    correctionRow,
+    before,
+    authoritative,
+    stored,
+  });
+  if (JSON.stringify(stored) !== JSON.stringify(expected)) {
+    invalidStoredRosterReceipt();
+  }
+  return stored;
 }
 
 function rosterValues(row) {
@@ -152,6 +522,7 @@ function correctionSnapshot({
   warnings,
   teamEvaluations,
   confirmed,
+  committedRoster,
 }) {
   return JSON.stringify({
     actionType: "correction",
@@ -164,11 +535,23 @@ function correctionSnapshot({
     warnings,
     teamEvaluations,
     confirmations: { warningsAccepted: confirmed },
+    committedRoster,
     outcome: "applied",
   });
 }
 
-function createSqliteCommissionerCorrectionRepository({ database } = {}) {
+function createSqliteCommissionerCorrectionRepository({
+  database,
+  candidateCardSummerSynchronizer,
+} = {}) {
+  if (
+    !candidateCardSummerSynchronizer ||
+    typeof candidateCardSummerSynchronizer.synchronize !== "function"
+  ) {
+    throw new TypeError(
+      "createSqliteCommissionerCorrectionRepository requires a Candidate Card summer synchronizer"
+    );
+  }
   const ownerships = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("player_ownerships"),
@@ -222,6 +605,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
   let teamForAdjustmentStatement;
   let seasonScheduleStatement;
   let removeDependencyStatement;
+  let deleteRosterDisplayOrderStatement;
   let deleteOwnershipStatement;
   let eliminateContractYearsStatement;
   let findIdempotencyStatement;
@@ -705,6 +1089,11 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
             AND buyout.status = 'active'
         ) AS count
     `);
+    deleteRosterDisplayOrderStatement = database.prepare(`
+      DELETE FROM roster_display_order_entries
+      WHERE league_id = @leagueId
+        AND ownership_id = @ownershipId
+    `);
     deleteOwnershipStatement = database.prepare(`
       DELETE FROM player_ownerships
       WHERE league_id = @leagueId
@@ -1072,6 +1461,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
     authoritative,
     warnings,
     teamEvaluations,
+    committedRoster,
   }) {
     return freezeRow(
       corrections.insert({
@@ -1091,6 +1481,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
           warnings,
           teamEvaluations,
           confirmed: correction.confirmWarnings,
+          committedRoster,
         }),
         corrected_at_ms: correction.occurredAtMs,
       })
@@ -1215,6 +1606,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
         ? null
         : contractSnapshot(contract, years),
     });
+    const committedRoster = singleTeamRosterReceipt(ownership, "present");
     const evaluation = evaluateTeams(correction, [correction.teamId]);
     const extraWarnings = [
       ...(
@@ -1259,6 +1651,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
         authoritative,
         warnings,
         teamEvaluations: evaluation.evaluations,
+        committedRoster,
       });
       ownershipEvent = freezeRow(
         ownershipEvents.insert({
@@ -1327,6 +1720,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
       authoritative,
       warnings,
       teamEvaluations: evaluation.evaluations,
+      committedRoster,
       correction: correctionRow,
       ownershipEvent,
       contractEvent,
@@ -1396,6 +1790,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
         contractYearsStatement.all(correction)
       );
     }
+    deleteRosterDisplayOrderStatement.run(correction);
     const deleted = deleteOwnershipStatement.run(correction);
     if (deleted.changes !== 1) {
       throw repositoryError(
@@ -1414,6 +1809,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
         ? null
         : contractSnapshot(correctedContract, correctedYears),
     });
+    const committedRoster = singleTeamRosterReceipt(current, "deleted");
     const evaluation = evaluateTeams(correction, [current.team_id]);
     if (persist) {
       assertWarningsConfirmed(
@@ -1436,6 +1832,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
         authoritative,
         warnings: evaluation.warnings,
         teamEvaluations: evaluation.evaluations,
+        committedRoster,
       });
       ownershipEvent = freezeRow(
         ownershipEvents.insert({
@@ -1508,6 +1905,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
       authoritative,
       warnings: evaluation.warnings,
       teamEvaluations: evaluation.evaluations,
+      committedRoster,
       correction: correctionRow,
       ownershipEvent,
       contractEvent,
@@ -1525,9 +1923,6 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
       "The corrected roster ownership does not exist."
     );
     assertCurrentRecord(current, correction, "roster");
-    if (correction.correctedTeamId !== current.team_id) {
-      policyFailure(COMMISSIONER_CORRECTION_CODES.scopeMismatch);
-    }
     const activeContract = optionalUnique(
       activeContractByPlayerStatement.all(correction),
       "A player has multiple active league contracts."
@@ -1549,25 +1944,116 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
     ) {
       policyFailure(COMMISSIONER_CORRECTION_CODES.rosterInvalid);
     }
+    const transfersTeam = correction.correctedTeamId !== current.team_id;
+    if (transfersTeam) {
+      requireUnique(
+        teamForAdjustmentStatement.all({
+          ...correction,
+          teamId: correction.correctedTeamId,
+        }),
+        "The roster-correction destination team does not exist."
+      );
+      if (activeContract !== null) {
+        assertNoDependentTransactions(
+          contractDependencyStatement.get({
+            ...correction,
+            contractId: activeContract.id,
+          }).count
+        );
+      }
+    }
     const before = rosterSnapshot(current);
     const requested = requestedRosterValues(correction);
     assertCorrectionChanged(rosterValues(current), requested);
-    const updated = freezeRow(
-      ownerships.updateVersioned({
-        key: current.id,
-        leagueId: correction.leagueId,
-        expectedVersion: correction.expectedVersion,
-        changes: {
+    let transferredContract = null;
+    let ownershipTransfer = null;
+    let updated;
+    if (transfersTeam) {
+      const destinationOwnershipId = deterministicUuid(
+        `${correction.correctionId}:commissioner-ownership-tenure:` +
+          `${current.id}:destination`
+      );
+      deleteRosterDisplayOrderStatement.run(correction);
+      if (deleteOwnershipStatement.run(correction).changes !== 1) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.versionConflict,
+          "The roster ownership changed before commissioner transfer."
+        );
+      }
+      if (activeContract !== null) {
+        transferredContract = freezeRow(
+          contracts.updateVersioned({
+            key: activeContract.id,
+            leagueId: correction.leagueId,
+            expectedVersion: activeContract.version,
+            changes: {
+              current_team_id: correction.correctedTeamId,
+              updated_at_ms: correction.occurredAtMs,
+            },
+          })
+        );
+      }
+      updated = freezeRow(
+        ownerships.insert({
+          id: destinationOwnershipId,
+          league_id: correction.leagueId,
+          season_id: correction.seasonId,
+          player_id: correction.playerId,
           team_id: correction.correctedTeamId,
           ownership_kind: correction.correctedOwnershipKind,
           roster_category: correction.correctedRosterCategory,
           position_group: correction.correctedPositionGroup,
           slot_number: correction.correctedSlotNumber,
+          acquired_transaction_type: "commissioner_correction",
+          acquired_transaction_id: correction.correctionId,
+          created_at_ms: correction.occurredAtMs,
           updated_at_ms: correction.occurredAtMs,
-        },
-      })
-    );
+          version: 1,
+          trade_blocked: 0,
+        })
+      );
+      ownershipTransfer = Object.freeze({
+        sourceOwnershipId: current.id,
+        sourceOwnershipVersion: current.version,
+        destinationOwnershipId: updated.id,
+        destinationOwnershipVersion: updated.version,
+      });
+    } else {
+      updated = freezeRow(
+        ownerships.updateVersioned({
+          key: current.id,
+          leagueId: correction.leagueId,
+          expectedVersion: correction.expectedVersion,
+          changes: {
+            ownership_kind: correction.correctedOwnershipKind,
+            roster_category: correction.correctedRosterCategory,
+            position_group: correction.correctedPositionGroup,
+            slot_number: correction.correctedSlotNumber,
+            updated_at_ms: correction.occurredAtMs,
+          },
+        })
+      );
+    }
     const after = rosterSnapshot(updated);
+    const committedRoster = transfersTeam
+      ? rosterMutationReceipt(
+          [
+            {
+              leagueId: current.league_id,
+              seasonId: current.season_id,
+              teamId: current.team_id,
+              ownershipWitnesses: [ownershipWitness(current, "deleted")],
+            },
+            {
+              leagueId: updated.league_id,
+              seasonId: updated.season_id,
+              teamId: updated.team_id,
+              ownershipWitnesses: [ownershipWitness(updated, "present")],
+            },
+          ],
+          ownershipTransfer
+        )
+      : singleTeamRosterReceipt(updated, "present");
     const evaluation = evaluateTeams(correction, [
       current.team_id,
       updated.team_id,
@@ -1619,36 +2105,128 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
 
     let correctionRow = null;
     let ownershipEvent = null;
+    let ownershipEventRows = Object.freeze([]);
+    let contractEvent = null;
     let activityRow = null;
     if (persist) {
       correctionRow = insertCorrectionEvidence({
         correction,
         feature: "roster",
-        featureRecordId: current.id,
+        featureRecordId: updated.id,
         before,
         requested,
         authoritative: after,
         warnings,
         teamEvaluations: evaluation.evaluations,
+        committedRoster,
       });
-      ownershipEvent = freezeRow(
-        ownershipEvents.insert({
-          id: correction.ownershipEventId,
-          league_id: correction.leagueId,
-          season_id: correction.seasonId,
-          player_id: correction.playerId,
-          team_id: updated.team_id,
-          ownership_id: current.id,
-          event_type: "commissioner_roster_corrected",
-          actor_user_id: correction.actorUserId,
-          source_type: "commissioner_correction",
-          source_id: correction.correctionId,
-          before_metadata_json: JSON.stringify(before),
-          after_metadata_json: JSON.stringify(after),
-          reason: correction.reason,
-          occurred_at_ms: correction.occurredAtMs,
-        })
-      );
+      if (transfersTeam) {
+        const transferOut = freezeRow(
+          ownershipEvents.insert({
+            id: deterministicUuid(
+              `${correction.correctionId}:commissioner-roster-transfer-out`
+            ),
+            league_id: correction.leagueId,
+            season_id: correction.seasonId,
+            player_id: correction.playerId,
+            team_id: current.team_id,
+            ownership_id: current.id,
+            event_type: "commissioner_roster_transfer_out",
+            actor_user_id: correction.actorUserId,
+            source_type: "commissioner_correction",
+            source_id: correction.correctionId,
+            before_metadata_json: JSON.stringify({
+              schemaVersion: 2,
+              exists: true,
+              ownership: before,
+            }),
+            after_metadata_json: JSON.stringify({
+              schemaVersion: 2,
+              exists: false,
+              destinationOwnershipId: updated.id,
+            }),
+            reason: correction.reason,
+            occurred_at_ms: correction.occurredAtMs,
+          })
+        );
+        ownershipEvent = freezeRow(
+          ownershipEvents.insert({
+            id: correction.ownershipEventId,
+            league_id: correction.leagueId,
+            season_id: correction.seasonId,
+            player_id: correction.playerId,
+            team_id: updated.team_id,
+            ownership_id: updated.id,
+            event_type: "commissioner_roster_transfer_in",
+            actor_user_id: correction.actorUserId,
+            source_type: "commissioner_correction",
+            source_id: correction.correctionId,
+            before_metadata_json: JSON.stringify({
+              schemaVersion: 2,
+              exists: false,
+              sourceOwnershipId: current.id,
+            }),
+            after_metadata_json: JSON.stringify({
+              schemaVersion: 2,
+              exists: true,
+              ownership: after,
+            }),
+            reason: correction.reason,
+            occurred_at_ms: correction.occurredAtMs,
+          })
+        );
+        ownershipEventRows = Object.freeze([transferOut, ownershipEvent]);
+        if (transferredContract !== null) {
+          contractEvent = freezeRow(
+            contractEvents.insert({
+              id: deterministicUuid(
+                `${correction.correctionId}:commissioner-contract-transfer`
+              ),
+              league_id: correction.leagueId,
+              contract_id: transferredContract.id,
+              player_id: correction.playerId,
+              team_id: updated.team_id,
+              actor_user_id: correction.actorUserId,
+              event_type: "commissioner_contract_transferred",
+              source_type: "commissioner_correction",
+              source_id: correction.correctionId,
+              metadata_json: JSON.stringify({
+                ownershipTransfer,
+                before: {
+                  teamId: activeContract.current_team_id,
+                  version: activeContract.version,
+                },
+                after: {
+                  teamId: transferredContract.current_team_id,
+                  version: transferredContract.version,
+                },
+              }),
+              reason: correction.reason,
+              occurred_at_ms: correction.occurredAtMs,
+            })
+          );
+        }
+      } else {
+        ownershipEvent = freezeRow(
+          ownershipEvents.insert({
+            id: correction.ownershipEventId,
+            league_id: correction.leagueId,
+            season_id: correction.seasonId,
+            player_id: correction.playerId,
+            team_id: updated.team_id,
+            ownership_id: current.id,
+            event_type: "commissioner_roster_corrected",
+            actor_user_id: correction.actorUserId,
+            source_type: "commissioner_correction",
+            source_id: correction.correctionId,
+            before_metadata_json: JSON.stringify(before),
+            after_metadata_json: JSON.stringify(after),
+            reason: correction.reason,
+            occurred_at_ms: correction.occurredAtMs,
+          })
+        );
+        ownershipEventRows = Object.freeze([ownershipEvent]);
+      }
       activityRow = freezeRow(
         activity.insert({
           id: correction.activityId,
@@ -1660,7 +2238,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
           team_id: updated.team_id,
           player_id: correction.playerId,
           related_type: "player_ownership",
-          related_id: current.id,
+          related_id: updated.id,
           display_summary: "Commissioner corrected a roster assignment.",
           reason: correction.reason,
           metadata_json: JSON.stringify({
@@ -1668,6 +2246,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
             actorMembershipId: correction.actorMembershipId,
             before,
             after,
+            ...(ownershipTransfer === null ? {} : { ownershipTransfer }),
             warnings,
           }),
           occurred_at_ms: correction.occurredAtMs,
@@ -1681,8 +2260,12 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
       authoritative: after,
       warnings,
       teamEvaluations: evaluation.evaluations,
+      committedRoster,
+      ownershipTransfer,
       correction: correctionRow,
       ownershipEvent,
+      ownershipEvents: ownershipEventRows,
+      contractEvent,
       activity: activityRow,
     });
   }
@@ -1743,6 +2326,10 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
       "The corrected contract does not exist."
     );
     assertCurrentRecord(current, correction, "contract");
+    const currentOwnership = requireUnique(
+      ownershipByPlayerStatement.all(correction),
+      "The corrected contract ownership does not exist."
+    );
     if (
       correction.correctedTeamId !== current.current_team_id ||
       correction.correctedContractType !== current.contract_type ||
@@ -1750,6 +2337,13 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
       correction.correctedStatus !== current.status ||
       correction.correctedAuctionBuyoutLockExpiresAtMs !==
         current.auction_buyout_lock_expires_at_ms
+    ) {
+      policyFailure(COMMISSIONER_CORRECTION_CODES.scopeMismatch);
+    }
+    if (
+      currentOwnership.season_id !== correction.seasonId ||
+      currentOwnership.team_id !== current.current_team_id ||
+      currentOwnership.player_id !== correction.playerId
     ) {
       policyFailure(COMMISSIONER_CORRECTION_CODES.scopeMismatch);
     }
@@ -1781,6 +2375,10 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
     );
     const updatedYears = replaceContractYears(correction, currentYears);
     const after = contractSnapshot(updated, updatedYears);
+    const committedRoster = singleTeamRosterReceipt(
+      currentOwnership,
+      "present"
+    );
     const evaluation = evaluateTeams(correction, [
       current.current_team_id,
       updated.current_team_id,
@@ -1805,6 +2403,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
         authoritative: after,
         warnings: evaluation.warnings,
         teamEvaluations: evaluation.evaluations,
+        committedRoster,
       });
       contractEvent = freezeRow(
         contractEvents.insert({
@@ -1854,6 +2453,7 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
       authoritative: after,
       warnings: evaluation.warnings,
       teamEvaluations: evaluation.evaluations,
+      committedRoster,
       correction: correctionRow,
       contractEvent,
       activity: activityRow,
@@ -1912,6 +2512,12 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
         "The idempotent correction snapshot is invalid."
       );
     }
+    const committedRoster = validatedStoredRosterReceipt({
+      correctionRow,
+      before,
+      authoritative: snapshot.authoritative,
+      value: snapshot.committedRoster,
+    });
     return Object.freeze({
       preview: false,
       replayed: true,
@@ -1924,6 +2530,8 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
           Object.freeze(evaluation)
         )
       ),
+      committedRoster,
+      ownershipTransfer: committedRoster.ownershipTransfer || null,
       correction: correctionRow,
       activity: activityRow,
     });
@@ -1963,6 +2571,16 @@ function createSqliteCommissionerCorrectionRepository({ database } = {}) {
     }
     insertIdempotencyStatement.run(idempotency);
     const result = executor(request.correction, true);
+    candidateCardSummerSynchronizer.synchronize({
+      leagueId: request.correction.leagueId,
+      affectedTeamIds: result.teamEvaluations.map(
+        (evaluation) => evaluation.teamId
+      ),
+      affectedPlayerIds: [request.correction.playerId],
+      sourceOperationId: request.correction.correctionId,
+      sourceKind: "commissioner_correction",
+      nowMs: request.correction.occurredAtMs,
+    });
     if (completeIdempotencyStatement.run(idempotency).changes !== 1) {
       throw repositoryError(
         REPOSITORY_ERROR_CODES.versionConflict,

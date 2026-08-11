@@ -1,7 +1,13 @@
 const {
   M6_JOB_TYPES,
-  parseMatchupOccurrenceKey,
 } = require("../../domain/matchups/matchupJobPolicy");
+const {
+  MATCHUP_OCCURRENCE_EXECUTION_GUARD_REASONS,
+  classifyMatchupOccurrenceExecutionGuardError,
+} = require("../../infrastructure/persistence/sqlite/SqliteMatchupOccurrenceExecutionGuard");
+const {
+  REPOSITORY_ERROR_CODES,
+} = require("../../infrastructure/persistence/sqlite/SqliteRepositoryError");
 const { createJobRunner } = require("../runJob");
 
 const JOB_NAME = "matchups:occurrences:target";
@@ -15,8 +21,26 @@ function safeErrorCode(error) {
     : "MATCHUP_OCCURRENCE_FAILED";
 }
 
+function isRepositoryVersionConflict(error) {
+  const visited = new Set();
+  let current = error;
+  while (
+    current &&
+    (typeof current === "object" || typeof current === "function") &&
+    !visited.has(current)
+  ) {
+    visited.add(current);
+    if (current.code === REPOSITORY_ERROR_CODES.versionConflict) {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
 function createRunMatchupOccurrencesJob({
   repository,
+  executionGuard,
   handlers,
   clock,
   secureRandom,
@@ -26,10 +50,13 @@ function createRunMatchupOccurrencesJob({
   batchSize = 25,
   logger = console,
 } = {}) {
-  for (const method of ["claim", "fail", "listDue", "succeed"]) {
+  for (const method of ["claim", "fail", "listDue", "skipSuperseded", "succeed"]) {
     if (!repository || typeof repository[method] !== "function") {
       throw new TypeError("matchup occurrence runner requires a durable repository");
     }
+  }
+  if (!executionGuard || typeof executionGuard.assertCurrent !== "function") {
+    throw new TypeError("matchup occurrence runner requires an execution guard");
   }
   if (!clock || typeof clock.nowMs !== "function" || !secureRandom || typeof secureRandom.id !== "function") {
     throw new TypeError("matchup occurrence runner requires a clock and secure IDs");
@@ -75,35 +102,63 @@ function createRunMatchupOccurrencesJob({
         }
         summary.acquired += 1;
         const leased = claim.occurrence;
+        const occurrenceExecution = claim.occurrenceExecution;
         try {
-          const scope = parseMatchupOccurrenceKey({
-            jobType: leased.job_type,
-            leagueId: leased.league_id,
-            seasonId: leased.season_id,
-            occurrenceKey: leased.occurrence_key,
-            scheduledForMs: leased.scheduled_for_ms,
-          });
-          const result = await handlers[leased.job_type](Object.freeze({
-            ...scope,
-            runId: leased.id,
-            leagueId: leased.league_id,
-            seasonId: leased.season_id,
-            occurrenceKey: leased.occurrence_key,
-            scheduledForMs: leased.scheduled_for_ms,
-            observedAtMs: nowMs,
-          }));
-          repository.succeed({
-            leagueId: leased.league_id,
-            runId: leased.id,
-            leaseOwner,
-            leaseToken,
-            expectedVersion: leased.version,
-            completedAtMs: clock.nowMs(),
-            result,
-          });
+          if (
+            occurrenceExecution === null ||
+            typeof occurrenceExecution !== "object" ||
+            Array.isArray(occurrenceExecution) ||
+            !Object.isFrozen(occurrenceExecution)
+          ) {
+            throw new TypeError(
+              "The claimed matchup occurrence execution context is missing or mutable."
+            );
+          }
+          executionGuard.assertCurrent(occurrenceExecution);
+          const result = await handlers[occurrenceExecution.jobType](
+            occurrenceExecution,
+            nowMs
+          );
+          try {
+            repository.succeed({
+              leagueId: occurrenceExecution.leagueId,
+              runId: occurrenceExecution.runId,
+              leaseOwner: occurrenceExecution.leaseOwner,
+              leaseToken: occurrenceExecution.leaseToken,
+              expectedVersion: occurrenceExecution.claimedJobVersion,
+              completedAtMs: clock.nowMs(),
+              result,
+            });
+          } catch (error) {
+            if (isRepositoryVersionConflict(error)) {
+              summary.skipped += 1;
+              continue;
+            }
+            throw error;
+          }
           summary.succeeded += 1;
         } catch (error) {
           const completedAtMs = clock.nowMs();
+          const guardReason =
+            classifyMatchupOccurrenceExecutionGuardError(error);
+          if (
+            guardReason ===
+            MATCHUP_OCCURRENCE_EXECUTION_GUARD_REASONS.generationSuperseded
+          ) {
+            repository.skipSuperseded({
+              occurrenceExecution,
+              completedAtMs,
+            });
+            summary.skipped += 1;
+            continue;
+          }
+          if (
+            guardReason ===
+            MATCHUP_OCCURRENCE_EXECUTION_GUARD_REASONS.leaseLost
+          ) {
+            summary.skipped += 1;
+            continue;
+          }
           repository.fail({
             leagueId: leased.league_id,
             runId: leased.id,

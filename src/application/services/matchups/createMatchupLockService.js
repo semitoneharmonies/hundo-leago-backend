@@ -105,6 +105,9 @@ function createMatchupLockService({ repository, createId = randomUUID } = {}) {
       locksAtMs: context.week.locks_at_ms,
       nowMs: input.nowMs,
       players: Object.freeze(players),
+      ...(input.occurrenceExecution === undefined
+        ? {}
+        : { occurrenceExecution: input.occurrenceExecution }),
     });
   }
 

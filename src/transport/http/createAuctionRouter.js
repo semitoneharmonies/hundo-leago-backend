@@ -6,6 +6,9 @@ const SAFE_MESSAGES = Object.freeze({
   AUCTION_BID_EDIT_LIMIT_REACHED: "This bid has no manager edits remaining.",
   AUCTION_BID_INPUT_INVALID: "The auction-bid request is invalid.",
   AUCTION_BID_WINDOW_CLOSED: "Auction bidding is closed.",
+  AUCTION_ADMIN_ACTION_INVALID: "The auction administration action is not allowed.",
+  AUCTION_ADMINISTRATION_AUTHORIZATION_DENIED:
+    "Current auction-administration authority is required.",
   AUCTION_CREATION_AUTHORIZATION_DENIED: "Current auction authority is required.",
   AUCTION_CREATION_INPUT_INVALID: "The auction-start request is invalid.",
   AUCTION_CREATION_WINDOW_CLOSED: "New auctions cannot be started now.",
@@ -15,6 +18,11 @@ const SAFE_MESSAGES = Object.freeze({
   AUCTION_REQUEST_CONFLICT: "The auction request conflicts with current state.",
   AUCTION_REQUEST_FAILED: "The auction request could not be completed.",
   AUCTION_REQUEST_TOO_LARGE: "The auction request is too large.",
+  FAD_BINDING_ILLEGALITY_CONFIRMATION_REQUIRED:
+    "The binding FAD auction confirmation is required.",
+  FAD_ALLOCATION_QUARANTINED: "This player is temporarily unavailable.",
+  IDEMPOTENCY_KEY_REUSED:
+    "This idempotency key was already used for a different request.",
   LEAGUE_NOT_FOUND: "The league was not found.",
   TEAM_MANAGER_REQUIRED: "Current team-manager authority is required.",
 });
@@ -34,7 +42,11 @@ function optionalIfMatch(request) {
   return Object.freeze({ valid: Number.isSafeInteger(version), version });
 }
 
-function createAuctionRouter({ requestSecurity, auctionService } = {}) {
+function createAuctionRouter({
+  requestSecurity,
+  auctionService,
+  auctionAdministrationService,
+} = {}) {
   for (const method of [
     "assignRequestId",
     "authenticateBootstrap",
@@ -50,8 +62,25 @@ function createAuctionRouter({ requestSecurity, auctionService } = {}) {
   ]) {
     assertMethod(requestSecurity, method, "the target request-security boundary");
   }
-  for (const method of ["list", "putAsCommissioner", "putMine", "read", "start"]) {
+  for (const method of [
+    "list",
+    "putMine",
+    "read",
+    "start",
+  ]) {
     assertMethod(auctionService, method, "an auction service");
+  }
+  for (const method of [
+    "editBid",
+    "removeBid",
+    "cancelAuction",
+    "requestResolution",
+  ]) {
+    assertMethod(
+      auctionAdministrationService,
+      method,
+      "an auction-administration service"
+    );
   }
 
   function requestId(request) {
@@ -61,6 +90,19 @@ function createAuctionRouter({ requestSecurity, auctionService } = {}) {
   function success(request, response, status, data) {
     return response.status(status).json({
       data,
+      meta: { requestId: requestId(request) },
+    });
+  }
+
+  function collectionSuccess(
+    request,
+    response,
+    result
+  ) {
+    return response.status(200).json({
+      data: result.data,
+      actions: result.actions,
+      page: result.page,
       meta: { requestId: requestId(request) },
     });
   }
@@ -76,7 +118,113 @@ function createAuctionRouter({ requestSecurity, auctionService } = {}) {
   }
 
   function mapError(request, response, error) {
-    const code = error?.reasonCode || error?.code;
+    const policyCode = error?.code;
+    const code =
+      typeof policyCode === "string" &&
+      (
+        policyCode.startsWith(
+          "AUCTION_ADMINISTRATION_"
+        ) ||
+        policyCode ===
+          "AUCTION_ADMIN_ACTION_INVALID" ||
+        policyCode ===
+          "AUCTION_READ_INPUT_INVALID"
+      )
+        ? policyCode
+        : error?.reasonCode || policyCode;
+    if (
+      code ===
+        "AUCTION_ADMINISTRATION_REQUEST_INVALID" ||
+      code === "REPOSITORY_ARGUMENT_INVALID" ||
+      code === "AUCTION_READ_INPUT_INVALID"
+    ) {
+      return failure(
+        request,
+        response,
+        400,
+        "AUCTION_INPUT_INVALID"
+      );
+    }
+    if (code === "AUCTION_ADMIN_ACTION_INVALID") {
+      return failure(
+        request,
+        response,
+        422,
+        "AUCTION_ADMIN_ACTION_INVALID"
+      );
+    }
+    if (
+      code ===
+        "FAD_BINDING_ILLEGALITY_CONFIRMATION_REQUIRED"
+    ) {
+      return failure(request, response, 422, code);
+    }
+    if (
+      code ===
+        "AUCTION_ADMINISTRATION_AUTHORIZATION_DENIED"
+    ) {
+      return failure(
+        request,
+        response,
+        403,
+        code
+      );
+    }
+    if (code === "AUCTION_READ_AUTHORIZATION_DENIED") {
+      return failure(
+        request,
+        response,
+        404,
+        "LEAGUE_NOT_FOUND"
+      );
+    }
+    if (
+      code === "IDEMPOTENCY_KEY_REUSED"
+    ) {
+      return failure(
+        request,
+        response,
+        409,
+        code
+      );
+    }
+    if (
+      code ===
+        "AUCTION_PRECONDITION_FAILED"
+    ) {
+      return failure(
+        request,
+        response,
+        412,
+        code
+      );
+    }
+    if (
+      [
+        "AUCTION_ADMINISTRATION_NOT_DUE",
+        "AUCTION_ADMINISTRATION_STATE_CONFLICT",
+        "AUCTION_ADMIN_FAD_INTEGRATION_REQUIRED",
+        "REPOSITORY_CONSTRAINT",
+        "REPOSITORY_VERSION_CONFLICT",
+      ].includes(code)
+    ) {
+      return failure(
+        request,
+        response,
+        409,
+        "AUCTION_REQUEST_CONFLICT"
+      );
+    }
+    if (
+      code === "REPOSITORY_RECORD_NOT_FOUND"
+    ) {
+      return failure(
+        request,
+        response,
+        404,
+        "AUCTION_NOT_FOUND"
+      );
+    }
     if (
       code === "AUCTION_INPUT_INVALID" ||
       code?.endsWith("_INPUT_INVALID") ||
@@ -135,6 +283,9 @@ function createAuctionRouter({ requestSecurity, auctionService } = {}) {
     if (code === "AUCTION_BID_VERSION_CONFLICT") {
       return failure(request, response, 412, "AUCTION_PRECONDITION_FAILED");
     }
+    if (code === "FAD_ALLOCATION_QUARANTINED") {
+      return failure(request, response, 409, code);
+    }
     if (
       code?.startsWith("AUCTION_BID_") ||
       code?.startsWith("AUCTION_CREATION_")
@@ -166,8 +317,9 @@ function createAuctionRouter({ requestSecurity, auctionService } = {}) {
     requestSecurity.authenticateBootstrap,
     (request, response) => {
       try {
-        return success(request, response, 200, auctionService.list({
+        return collectionSuccess(request, response, auctionService.list({
           leagueId: request.params.leagueId,
+          query: request.query,
           authenticated: requestSecurity.getSessionBootstrap(request),
         }));
       } catch (error) {
@@ -233,21 +385,191 @@ function createAuctionRouter({ requestSecurity, auctionService } = {}) {
     requestSecurity.authenticateUnsafe,
     (request, response) => {
       const precondition = optionalIfMatch(request);
-      if (!precondition.valid) {
+      if (
+        !precondition.valid ||
+        precondition.version === null
+      ) {
         return failure(request, response, 400, "AUCTION_BID_INPUT_INVALID");
       }
       try {
-        return success(request, response, 200, auctionService.putAsCommissioner({
-          leagueId: request.params.leagueId,
-          auctionId: request.params.auctionId,
-          bidId: request.params.bidId,
-          input: request.body,
-          expectedBidVersion: precondition.version,
-          idempotencyKey: request.get("idempotency-key"),
-          authenticated: requestSecurity.getAuthenticatedSession(request),
-        }));
+        const result =
+          auctionAdministrationService.editBid({
+            leagueId:
+              request.params.leagueId,
+            auctionId:
+              request.params.auctionId,
+            bidId: request.params.bidId,
+            input: request.body,
+            expectedBidVersion:
+              precondition.version,
+            idempotencyKey:
+              request.get(
+                "idempotency-key"
+              ),
+            authenticated:
+              requestSecurity.getAuthenticatedSession(
+                request
+              ),
+          });
+        return success(
+          request,
+          response,
+          result.httpStatus,
+          result.data
+        );
       } catch (error) {
         return mapError(request, response, error);
+      }
+    }
+  );
+  router.delete(
+    "/api/v1/leagues/:leagueId/auctions/:auctionId/bids/:bidId",
+    requestSecurity.authenticateUnsafe,
+    (request, response) => {
+      const precondition = optionalIfMatch(request);
+      if (
+        !precondition.valid ||
+        precondition.version === null
+      ) {
+        return failure(
+          request,
+          response,
+          400,
+          "AUCTION_BID_INPUT_INVALID"
+        );
+      }
+      try {
+        const result =
+          auctionAdministrationService.removeBid({
+            leagueId: request.params.leagueId,
+            auctionId: request.params.auctionId,
+            bidId: request.params.bidId,
+            input: request.body,
+            expectedBidVersion:
+              precondition.version,
+            idempotencyKey:
+              request.get("idempotency-key"),
+            authenticated:
+              requestSecurity.getAuthenticatedSession(
+                request
+              ),
+          });
+        return success(
+          request,
+          response,
+          result.httpStatus,
+          result.data
+        );
+      } catch (error) {
+        return mapError(
+          request,
+          response,
+          error
+        );
+      }
+    }
+  );
+  router.post(
+    "/api/v1/leagues/:leagueId/auctions/:auctionId/cancel",
+    requestSecurity.authenticateUnsafe,
+    (request, response) => {
+      const precondition = optionalIfMatch(request);
+      if (
+        !precondition.valid ||
+        precondition.version === null
+      ) {
+        return failure(
+          request,
+          response,
+          400,
+          "AUCTION_INPUT_INVALID"
+        );
+      }
+      try {
+        const result =
+          auctionAdministrationService.cancelAuction(
+            {
+              leagueId:
+                request.params.leagueId,
+              auctionId:
+                request.params.auctionId,
+              input: request.body,
+              expectedAuctionVersion:
+                precondition.version,
+              idempotencyKey:
+                request.get(
+                  "idempotency-key"
+                ),
+              authenticated:
+                requestSecurity.getAuthenticatedSession(
+                  request
+                ),
+            }
+          );
+        return success(
+          request,
+          response,
+          result.httpStatus,
+          result.data
+        );
+      } catch (error) {
+        return mapError(
+          request,
+          response,
+          error
+        );
+      }
+    }
+  );
+  router.post(
+    "/api/v1/leagues/:leagueId/auctions/:auctionId/resolve",
+    requestSecurity.authenticateUnsafe,
+    (request, response) => {
+      const precondition = optionalIfMatch(request);
+      if (
+        !precondition.valid ||
+        precondition.version === null
+      ) {
+        return failure(
+          request,
+          response,
+          400,
+          "AUCTION_INPUT_INVALID"
+        );
+      }
+      try {
+        const result =
+          auctionAdministrationService.requestResolution(
+            {
+              leagueId:
+                request.params.leagueId,
+              auctionId:
+                request.params.auctionId,
+              input: request.body,
+              expectedAuctionVersion:
+                precondition.version,
+              idempotencyKey:
+                request.get(
+                  "idempotency-key"
+                ),
+              authenticated:
+                requestSecurity.getAuthenticatedSession(
+                  request
+                ),
+            }
+          );
+        return success(
+          request,
+          response,
+          result.httpStatus,
+          result.data
+        );
+      } catch (error) {
+        return mapError(
+          request,
+          response,
+          error
+        );
       }
     }
   );

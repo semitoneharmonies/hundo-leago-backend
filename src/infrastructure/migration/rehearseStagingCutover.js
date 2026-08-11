@@ -23,6 +23,7 @@ const {
   canonicalize,
 } = require("./sourceInventory");
 const {
+  REQUIRED_SCHEMA_VERSION,
   verifyStagingImport,
 } = require("./verifyStagingImport");
 
@@ -297,9 +298,9 @@ function inspectCandidate({
     },
     {
       metadata_key: "data_model_version",
-      metadata_value: "22",
+      metadata_value: String(REQUIRED_SCHEMA_VERSION),
       created_at_ms: 0,
-      updated_at_ms: 1,
+      updated_at_ms: REQUIRED_SCHEMA_VERSION,
     },
   ];
   if (

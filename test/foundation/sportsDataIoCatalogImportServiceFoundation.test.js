@@ -12,6 +12,7 @@ const {
 test("SportsDataIO import persists the full catalog before last-season statistics", async () => {
   const calls = [];
   const service = createSportsDataIoCatalogImportService({
+    createId: () => "10000000-0000-4000-8000-000000000001",
     seasonStart: "2025",
     provider: {
       async fetchCatalog(seasonStart) {
@@ -28,6 +29,7 @@ test("SportsDataIO import persists the full catalog before last-season statistic
       applyCatalog(command) {
         calls.push("persist-catalog");
         assert.deepEqual(command, {
+          sourceOperationId: "10000000-0000-4000-8000-000000000001",
           provider: PROVIDER_NAME,
           capturedAtMs: 1_700_000_000_000,
           rows: [{ player: "normalized-row" }],

@@ -44,7 +44,10 @@ function createJobRunner({
         ...normalized,
       };
     } catch (error) {
-      logger.error(`[${name}] Failed:`, error);
+      logger.error("job_runner.failed", {
+        job: name,
+        error,
+      });
       return {
         job: name,
         status: "failed",

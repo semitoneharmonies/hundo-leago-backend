@@ -1,6 +1,9 @@
 const {
   describeLiveSource,
 } = require("../../../domain/matchups/matchupScoringPolicy");
+const {
+  validateMatchupResultCorrectionPreviewInput,
+} = require("../../../domain/matchups/matchupResultCorrectionPolicy");
 
 const UUID_PATTERN =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -13,6 +16,15 @@ const MATCHUP_INTEGRATION_CODES = Object.freeze({
   resultMissing: "MATCHUP_INTEGRATION_RESULT_MISSING",
   versionConflict: "MATCHUP_INTEGRATION_VERSION_CONFLICT",
 });
+
+const MATCHUP_SCHEDULE_INPUT_FIELDS = Object.freeze([
+  "nhlRegularSeasonStartsAtMs",
+  "nhlRegularSeasonEndsAtMs",
+  "fantasyPlayoffsStartAtMs",
+  "fantasyPlayoffsEndAtMs",
+  "firstWeekStartsAtMs",
+  "confirmed",
+]);
 
 class MatchupIntegrationError extends Error {
   constructor(code, message) {
@@ -41,6 +53,21 @@ function confirmation(value) {
     fail(MATCHUP_INTEGRATION_CODES.inputInvalid, "An explicit confirmation choice is required.");
   }
   return value;
+}
+
+function exactScheduleBody(value) {
+  const body = exactObject(value, MATCHUP_SCHEDULE_INPUT_FIELDS);
+  if (
+    MATCHUP_SCHEDULE_INPUT_FIELDS.some(
+      (field) => !Object.hasOwn(body, field)
+    )
+  ) {
+    fail(
+      MATCHUP_INTEGRATION_CODES.inputInvalid,
+      "The complete matchup schedule request is required."
+    );
+  }
+  return body;
 }
 
 function expectedVersion(value) {
@@ -162,7 +189,7 @@ function createMatchupIntegrationService({
   scheduleService,
   weekService,
   scoringService,
-  resultService,
+  resultCorrectionService,
   standingsService,
   recoveryService,
   statisticsProviders: configuredStatisticsProviders,
@@ -185,9 +212,17 @@ function createMatchupIntegrationService({
     }
   }
   const dependencies = [
-    [scheduleService, ["preview", "generate"], "schedule service"],
+    [
+      scheduleService,
+      ["preview", "generate", "shiftWeekOne"],
+      "schedule service",
+    ],
     [weekService, ["advance"], "week service"],
-    [resultService, ["correct"], "result service"],
+    [
+      resultCorrectionService,
+      ["correct"],
+      "matchup-result correction service",
+    ],
     [standingsService, ["read"], "standings service"],
     [recoveryService, ["previewStandings", "rebuildStandings"], "recovery service"],
   ];
@@ -399,40 +434,89 @@ function createMatchupIntegrationService({
   }
 
   function generateSchedule(input) {
-    const authority = commissioner(input);
-    const body = exactObject(input.input, ["confirmed"]);
+    const body = exactScheduleBody(input.input);
     const confirmed = confirmation(body.confirmed);
+    if (confirmed) {
+      return Object.freeze({
+        code: "MATCHUP_SCHEDULE_GENERATED",
+        result: scheduleService.generate({
+          leagueId: input.leagueId,
+          seasonId: input.seasonId,
+          input: body,
+          expectedSeasonVersion:
+            expectedVersion(
+              input.expectedVersion
+            ),
+          idempotencyKey:
+            input.idempotencyKey,
+          authenticated: input.authenticated,
+        }),
+      });
+    }
+    const authority = commissioner(input);
     const command = {
       leagueId: input.leagueId,
       seasonId: input.seasonId,
       actorUserId: authority.actorUserId,
       authorizedAsPlatformAdministrator:
         authority.authority === "platform_administrator",
+      nhlRegularSeasonStartsAtMs:
+        body.nhlRegularSeasonStartsAtMs,
+      nhlRegularSeasonEndsAtMs:
+        body.nhlRegularSeasonEndsAtMs,
+      fantasyPlayoffsStartAtMs:
+        body.fantasyPlayoffsStartAtMs,
+      fantasyPlayoffsEndAtMs:
+        body.fantasyPlayoffsEndAtMs,
+      firstWeekStartsAtMs: body.firstWeekStartsAtMs,
       nowMs: clock.nowMs(),
     };
     const preview = scheduleService.preview(command);
     const summary = Object.freeze({
-      expectedVersion: preview.context.season_version,
+      seasonId: preview.context.season_id,
+      expectedSeasonVersion:
+        preview.context.season_version,
+      nhlRegularSeasonStartsAtMs:
+        preview.plan.nhlRegularSeasonStartsAtMs,
+      nhlRegularSeasonEndsAtMs:
+        preview.plan.nhlRegularSeasonEndsAtMs,
+      fantasyPlayoffsStartAtMs:
+        preview.plan.fantasyPlayoffsStartAtMs,
+      fantasyPlayoffsEndAtMs:
+        preview.plan.fantasyPlayoffsEndAtMs,
+      calendarWillBePersisted:
+        preview.calendarWillBePersisted,
+      firstWeekStartsAtMs:
+        preview.plan.firstWeekStartsAtMs,
       participantCount: preview.plan.teamIds.length,
       weekCount: preview.plan.weeks.length,
       matchupCount: preview.plan.weeks.reduce((sum, week) => sum + week.pairs.length, 0),
       byeCount: preview.plan.weeks.filter((week) => week.byeTeamId !== null).length,
-      firstWeekStartsAtMs: preview.plan.firstWeekStartsAtMs,
       lastWeekEndsAtMs: preview.plan.weeks.at(-1)?.endsAtMs ?? null,
     });
-    if (!confirmed) {
-      return Object.freeze({ code: "MATCHUP_SCHEDULE_PREVIEWED", preview: summary });
-    }
-    if (expectedVersion(input.expectedVersion) !== summary.expectedVersion) {
-      fail(MATCHUP_INTEGRATION_CODES.versionConflict, "The schedule preview is stale.");
-    }
     return Object.freeze({
-      code: "MATCHUP_SCHEDULE_GENERATED",
-      result: scheduleService.generate(command),
+      code: "MATCHUP_SCHEDULE_PREVIEWED",
+      preview: summary,
     });
   }
 
   function transitionWeek(input) {
+    if (
+      input.input?.action ===
+      "shift_week_one"
+    ) {
+      return scheduleService.shiftWeekOne({
+        leagueId: input.leagueId,
+        seasonId: input.seasonId,
+        weekId: input.weekId,
+        input: input.input,
+        expectedWeekVersion:
+          input.expectedVersion,
+        idempotencyKey:
+          input.idempotencyKey,
+        authenticated: input.authenticated,
+      });
+    }
     const authority = commissioner(input);
     const body = exactObject(input.input, ["confirmed"]);
     const confirmed = confirmation(body.confirmed);
@@ -464,48 +548,48 @@ function createMatchupIntegrationService({
   }
 
   function correctResult(input) {
-    const authority = commissioner(input);
-    const body = exactObject(input.input, [
-      "confirmed",
-      "homeScoreHundredths",
-      "awayScoreHundredths",
-      "reason",
-    ]);
-    const confirmed = confirmation(body.confirmed);
-    const scope = readRepository.readResultScope(input);
-    if (!scope) fail(MATCHUP_INTEGRATION_CODES.resultMissing, "The result was not found.");
-    const preview = Object.freeze({
-      resultId: scope.result_id,
-      expectedVersion: scope.result_version,
-      weekId: scope.week_id,
-      matchupId: scope.matchup_id,
-    });
-    if (!confirmed) {
-      if (Object.keys(body).length !== 1) {
-        fail(MATCHUP_INTEGRATION_CODES.inputInvalid, "A correction preview accepts confirmation only.");
+    if (input.input?.confirmed === false) {
+      commissioner(input);
+      validateMatchupResultCorrectionPreviewInput(
+        input.input
+      );
+      const scope =
+        readRepository.readResultScope(input);
+      if (!scope) {
+        fail(
+          MATCHUP_INTEGRATION_CODES.resultMissing,
+          "The result was not found."
+        );
       }
-      return Object.freeze({ code: "MATCHUP_RESULT_CORRECTION_PREVIEWED", preview });
+      return Object.freeze({
+        code:
+          "MATCHUP_RESULT_CORRECTION_PREVIEWED",
+        preview: Object.freeze({
+          resultId: scope.result_id,
+          expectedVersion: scope.result_version,
+          weekId: scope.week_id,
+          matchupId: scope.matchup_id,
+          currentVersion: Object.freeze({
+            id: scope.result_version_id,
+            versionNumber: scope.version_number,
+            homeScoreHundredths:
+              scope.home_score_hundredths,
+            awayScoreHundredths:
+              scope.away_score_hundredths,
+            outcome: scope.outcome,
+          }),
+        }),
+      });
     }
-    if (expectedVersion(input.expectedVersion) !== preview.expectedVersion) {
-      fail(MATCHUP_INTEGRATION_CODES.versionConflict, "The result preview is stale.");
-    }
-    return Object.freeze({
-      code: "MATCHUP_RESULT_CORRECTED",
-      result: resultService.correct({
-        leagueId: input.leagueId,
-        seasonId: input.seasonId,
-        weekId: scope.week_id,
-        matchupId: scope.matchup_id,
-        actorUserId: authority.actorUserId,
-        authorizedAsPlatformAdministrator:
-          authority.authority === "platform_administrator",
-        operationId: operationId(input.idempotencyKey, createId),
-        expectedResultVersion: input.expectedVersion,
-        homeScoreHundredths: body.homeScoreHundredths,
-        awayScoreHundredths: body.awayScoreHundredths,
-        reason: body.reason,
-        nowMs: clock.nowMs(),
-      }),
+    return resultCorrectionService.correct({
+      leagueId: input.leagueId,
+      seasonId: input.seasonId,
+      resultId: input.resultId,
+      input: input.input,
+      expectedResultVersion: input.expectedVersion,
+      idempotencyKey: input.idempotencyKey,
+      authenticated: input.authenticated,
+      auditContext: input.auditContext,
     });
   }
 

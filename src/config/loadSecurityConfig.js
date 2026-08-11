@@ -45,6 +45,7 @@ const DEPLOYED_ENVIRONMENTS = new Set([
 const SECRET_MINIMUM_BYTES = 32;
 const ACTION_TOKEN_DELIVERY_KEY_BYTES = 32;
 const INITIAL_KEY_VERSION = 1;
+const SPORTSDATAIO_LIVE_API_KEY_MAXIMUM_BYTES = 1024;
 const MAXIMUM_FRONTEND_ORIGINS = 32;
 const PLACEHOLDER_SECRETS = new Set([
   "changeme",
@@ -300,6 +301,39 @@ function readSecret(env, field, appEnv) {
   );
 }
 
+function readOptionalSportsDataIoLiveApiKey(env) {
+  const field = "SPORTSDATAIO_NHL_LIVE_API_KEY";
+  const raw = env[field];
+  if (raw === undefined || raw === null || raw === "") {
+    return createSecretSlot(null);
+  }
+  if (
+    typeof raw !== "string" ||
+    raw !== raw.trim() ||
+    Buffer.byteLength(raw, "utf8") >
+      SPORTSDATAIO_LIVE_API_KEY_MAXIMUM_BYTES ||
+    /[\u0000-\u001f\u007f-\u009f]/u.test(raw)
+  ) {
+    fail(field, "a valid dedicated provider credential is required");
+  }
+  return createSecretSlot(raw);
+}
+
+function readOptionalSportsDataIoLiveCapabilitySecret(env) {
+  const field =
+    "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET";
+  const raw = env[field];
+  if (raw === undefined || raw === null || raw === "") {
+    return createSecretSlot(null);
+  }
+  if (typeof raw !== "string") {
+    fail(field, "the value must be a string");
+  }
+  return createSecretSlot(
+    validateSecretValue(field, raw)
+  );
+}
+
 function readActionTokenDeliveryKey(env, appEnv) {
   const field = "ACTION_TOKEN_DELIVERY_KEY";
   const required = DEPLOYED_ENVIRONMENTS.has(appEnv);
@@ -518,6 +552,11 @@ function loadSecurityConfig({ env } = {}) {
   const actionTokenDeliveryKey =
     readActionTokenDeliveryKey(env, appEnv);
   const email = readEmailConfig(env, appEnv);
+  const sportsDataIoLive = Object.freeze({
+    apiKey: readOptionalSportsDataIoLiveApiKey(env),
+    capabilitySecret:
+      readOptionalSportsDataIoLiveCapabilitySecret(env),
+  });
 
   const configuredSecrets = [
     ["RATE_LIMIT_KEY_SECRET", rateLimitKey.value],
@@ -527,6 +566,14 @@ function loadSecurityConfig({ env } = {}) {
       actionTokenDeliveryKey.value,
     ],
     ["RESEND_API_KEY", email.apiKey.value],
+    [
+      "SPORTSDATAIO_NHL_LIVE_API_KEY",
+      sportsDataIoLive.apiKey.value,
+    ],
+    [
+      "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
+      sportsDataIoLive.capabilitySecret.value,
+    ],
   ].filter(([, value]) => value !== null);
   for (let index = 0; index < configuredSecrets.length; index += 1) {
     for (
@@ -560,6 +607,7 @@ function loadSecurityConfig({ env } = {}) {
     auditMetadataKey,
     actionTokenDeliveryKey,
     email,
+    sportsDataIoLive,
   });
 }
 
@@ -575,6 +623,7 @@ module.exports = {
   RESEND_API_ORIGIN,
   SECRET_MINIMUM_BYTES,
   SESSION_COOKIE_SAME_SITE_VALUES,
+  SPORTSDATAIO_LIVE_API_KEY_MAXIMUM_BYTES,
   SecurityConfigError,
   createExactOriginMatcher,
   loadSecurityConfig,

@@ -160,7 +160,10 @@ function seed(context) {
   }
 }
 
-function createRuntime(t) {
+function createRuntime(
+  t,
+  { candidateCardSummerSynchronizer } = {}
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m4-05-"));
   const connection = openDatabase({
     databasePath: path.join(root, "league.sqlite3"),
@@ -184,6 +187,10 @@ function createRuntime(t) {
     database: connection.database,
     repository: createSqliteContractRepository({
       database: connection.database,
+      candidateCardSummerSynchronizer:
+        candidateCardSummerSynchronizer ?? {
+          synchronize() {},
+        },
     }),
   };
 }
@@ -292,7 +299,17 @@ describe("M4-05 rounded-AAV normal contract policy", () => {
 
 describe("M4-05 SQLite normal contract persistence", () => {
   test("creates the contract, all years, and creation event atomically", (t) => {
-    const { database, repository } = createRuntime(t);
+    const synchronizationCalls = [];
+    let runtime;
+    runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize(command) {
+          assert.equal(runtime.database.inTransaction, true);
+          synchronizationCalls.push(command);
+        },
+      },
+    });
+    const { database, repository } = runtime;
     const created = repository.createNormal(normalInput());
     assert.equal(created.contract.aav_cents, 333);
     assert.equal(created.contract.original_total_value_cents, 1_000);
@@ -304,6 +321,35 @@ describe("M4-05 SQLite normal contract persistence", () => {
     assert.equal(count(database, "contracts"), 1);
     assert.equal(count(database, "contract_years"), 3);
     assert.equal(count(database, "contract_events"), 1);
+    assert.deepEqual(synchronizationCalls, [
+      {
+        leagueId: IDS.league,
+        affectedTeamIds: [IDS.team],
+        affectedPlayerIds: [IDS.player1],
+        sourceOperationId: IDS.event1,
+        sourceKind: "contract_change",
+        nowMs: NOW_MS,
+      },
+    ]);
+  });
+
+  test("rolls back contract creation when Candidate Card synchronization fails", (t) => {
+    const { database, repository } = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize() {
+          throw new Error("forced Candidate Card synchronization failure");
+        },
+      },
+    });
+    const before = database.serialize();
+
+    assert.throws(
+      () => repository.createNormal(normalInput()),
+      (error) =>
+        error.code === REPOSITORY_ERROR_CODES.operationFailed &&
+        error.details?.operation === "createNormalContract"
+    );
+    assert.deepEqual(database.serialize(), before);
   });
 
   test("enforces one active contract per league player", (t) => {

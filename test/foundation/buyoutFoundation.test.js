@@ -106,7 +106,10 @@ function seed(context) {
   });
 }
 
-function createRuntime(t) {
+function createRuntime(
+  t,
+  { candidateCardSummerSynchronizer } = {}
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m4-08-"));
   const connection = openDatabase({
     databasePath: path.join(root, "league.sqlite3"), environment: "test",
@@ -123,7 +126,18 @@ function createRuntime(t) {
   seed(context);
   return {
     context, database: connection.database,
-    repository: createSqliteBuyoutRepository({ database: connection.database }),
+    repository: createSqliteBuyoutRepository({
+      database: connection.database,
+      candidateCardSummerSynchronizer:
+        candidateCardSummerSynchronizer ?? {
+          synchronize() {
+            return Object.freeze({
+              affectedCardCount: 0,
+              changedCardCount: 0,
+            });
+          },
+        },
+    }),
   };
 }
 
@@ -268,6 +282,36 @@ describe("M4-08 buyout policy", () => {
 });
 
 describe("M4-08 atomic SQLite buyout", () => {
+  test("synchronizes the released player and penalty team inside the buyout transaction", (t) => {
+    const calls = [];
+    let runtime;
+    runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize(command) {
+          assert.equal(runtime.database.inTransaction, true);
+          calls.push(command);
+          return Object.freeze({
+            affectedCardCount: 0,
+            changedCardCount: 0,
+          });
+        },
+      },
+    });
+
+    runtime.repository.buyOut(command());
+
+    assert.deepEqual(calls, [
+      {
+        leagueId: IDS.league,
+        affectedTeamIds: [IDS.team1],
+        affectedPlayerIds: [IDS.player],
+        sourceOperationId: IDS.buyout,
+        sourceKind: "buyout",
+        nowMs: NOW_MS + 1,
+      },
+    ]);
+  });
+
   test("eliminates the contract, releases ownership, preserves retention, and schedules penalties", (t) => {
     const { context, database, repository } = createRuntime(t);
     seedRetention(context);
@@ -350,5 +394,41 @@ describe("M4-08 atomic SQLite buyout", () => {
     assert.equal(count(database, "contract_events"), 0);
     assert.equal(count(database, "ownership_events"), 0);
     assert.equal(count(database, "league_activity"), 1);
+  });
+
+  test("rolls every buyout effect back when Candidate synchronization fails", (t) => {
+    const { database, repository } = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize() {
+          throw new Error("injected Candidate synchronization failure");
+        },
+      },
+    });
+
+    assert.throws(
+      () => repository.buyOut(command()),
+      (error) => error.code === REPOSITORY_ERROR_CODES.operationFailed
+    );
+    assert.equal(
+      database.prepare("SELECT status, version FROM contracts").get()
+        .status,
+      "active"
+    );
+    assert.deepEqual(
+      database
+        .prepare("SELECT status FROM contract_years ORDER BY year_number")
+        .all(),
+      [
+        { status: "current" },
+        { status: "future" },
+        { status: "future" },
+      ]
+    );
+    assert.equal(count(database, "player_ownerships"), 1);
+    assert.equal(count(database, "buyout_obligations"), 0);
+    assert.equal(count(database, "buyout_years"), 0);
+    assert.equal(count(database, "contract_events"), 0);
+    assert.equal(count(database, "ownership_events"), 0);
+    assert.equal(count(database, "league_activity"), 0);
   });
 });

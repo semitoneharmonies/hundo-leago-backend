@@ -23,7 +23,18 @@ function freezeRows(rows) {
   return Object.freeze(rows.map(freezeRow));
 }
 
-function createSqliteBuyoutRepository({ database } = {}) {
+function createSqliteBuyoutRepository({
+  database,
+  candidateCardSummerSynchronizer,
+} = {}) {
+  if (
+    !candidateCardSummerSynchronizer ||
+    typeof candidateCardSummerSynchronizer.synchronize !== "function"
+  ) {
+    throw new TypeError(
+      "createSqliteBuyoutRepository requires a Candidate Card summer synchronizer"
+    );
+  }
   const contracts = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("contracts"),
@@ -228,6 +239,14 @@ function createSqliteBuyoutRepository({ database } = {}) {
           "The owned player changed before release."
         );
       }
+      candidateCardSummerSynchronizer.synchronize({
+        leagueId: command.leagueId,
+        affectedTeamIds: [command.teamId],
+        affectedPlayerIds: [command.playerId],
+        sourceOperationId: command.buyoutId,
+        sourceKind: "buyout",
+        nowMs: command.occurredAtMs,
+      });
       return Object.freeze({
         contract,
         obligation,

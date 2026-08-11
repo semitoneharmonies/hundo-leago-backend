@@ -68,6 +68,9 @@ const {
   createSignOutService,
 } = require("../application/services/accounts/createSignOutService");
 const {
+  createAuctionAdministrationService,
+} = require("../application/services/auctions/createAuctionAdministrationService");
+const {
   createAuctionService,
 } = require("../application/services/auctions/createAuctionService");
 const {
@@ -76,6 +79,72 @@ const {
 const {
   createAuctionResolutionService,
 } = require("../application/services/auctions/createAuctionResolutionService");
+const {
+  createEntryDraftScheduleService,
+} = require("../application/services/drafts/createEntryDraftScheduleService");
+const {
+  createCandidateCardService,
+} = require("../application/services/freeAgentDraft/createCandidateCardService");
+const {
+  createCandidateAllocationService,
+} = require("../application/services/freeAgentDraft/createCandidateAllocationService");
+const {
+  createFreeAgentDraftAllocationLifecycleService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftAllocationLifecycleService");
+const {
+  createFreeAgentDraftAllocationCorrectionService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftAllocationCorrectionService");
+const {
+  createFreeAgentDraftCompletionService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftCompletionService");
+const {
+  createCandidateEligibilityRevalidationService,
+} = require("../application/services/freeAgentDraft/createCandidateEligibilityRevalidationService");
+const {
+  createFreeAgentDraftReadinessService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftReadinessService");
+const {
+  createFreeAgentDraftReadService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftReadService");
+const {
+  createFreeAgentDraftReadinessRetryService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftReadinessRetryService");
+const {
+  createFreeAgentDraftRecoveryReadService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftRecoveryReadService");
+const {
+  createFreeAgentDraftRecoveryActionService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftRecoveryActionService");
+const {
+  createFreeAgentDraftCorrectionPreviewService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftCorrectionPreviewService");
+const {
+  createFreeAgentDraftDeadlineReminderService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftDeadlineReminderService");
+const {
+  createFreeAgentDraftDeadlineService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftDeadlineService");
+const {
+  createFreeAgentDraftScheduleRecoveryService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftScheduleRecoveryService");
+const {
+  createFreeAgentDraftAuctionResolutionService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftAuctionResolutionService");
+const {
+  createFreeAgentDraftRestrictedActivationService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftRestrictedActivationService");
+const {
+  createFreeAgentDraftFallbackActivationService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftFallbackActivationService");
+const {
+  createFreeAgentDraftQueuedNominationActivationService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftQueuedNominationActivationService");
+const {
+  createFreeAgentDraftRolloverService,
+} = require("../application/services/freeAgentDraft/createFreeAgentDraftRolloverService");
+const {
+  createLateLockCoordinator,
+} = require("../application/services/matchups/createLateLockCoordinator");
 const {
   createMatchupIntegrationService,
 } = require("../application/services/matchups/createMatchupIntegrationService");
@@ -95,6 +164,9 @@ const {
   createMatchupResultService,
 } = require("../application/services/matchups/createMatchupResultService");
 const {
+  createMatchupResultCorrectionService,
+} = require("../application/services/matchups/createMatchupResultCorrectionService");
+const {
   createMatchupScheduleService,
 } = require("../application/services/matchups/createMatchupScheduleService");
 const {
@@ -103,6 +175,9 @@ const {
 const {
   createMatchupStandingsService,
 } = require("../application/services/matchups/createMatchupStandingsService");
+const {
+  createStandingsFinalizationService,
+} = require("../application/services/matchups/createStandingsFinalizationService");
 const {
   createMatchupWeekService,
 } = require("../application/services/matchups/createMatchupWeekService");
@@ -113,8 +188,8 @@ const {
   createLeaguePlayerReadService,
 } = require("../application/services/players/createLeaguePlayerReadService");
 const {
-  createTargetStatisticsService,
-} = require("../application/services/statistics/createTargetStatisticsService");
+  createLiveStatisticsService,
+} = require("../application/services/statistics/createLiveStatisticsService");
 const {
   createTradeProposalFoundationService,
 } = require("../application/services/trades/createTradeProposalFoundationService");
@@ -149,6 +224,48 @@ const {
   createRunMatchupOccurrencesJob,
 } = require("../jobs/definitions/runMatchupOccurrences");
 const {
+  createExecuteScheduledEntryDraftRolloversJob,
+} = require("../jobs/definitions/executeScheduledEntryDraftRollovers");
+const {
+  createOpenReadyFreeAgentDraftCandidateCardsJob,
+} = require("../jobs/definitions/openReadyFreeAgentDraftCandidateCards");
+const {
+  createRevalidateFreeAgentDraftCandidateEligibilityJob,
+} = require("../jobs/definitions/revalidateFreeAgentDraftCandidateEligibility");
+const {
+  createSendFreeAgentDraftDeadlineRemindersJob,
+} = require("../jobs/definitions/sendFreeAgentDraftDeadlineReminders");
+const {
+  createProcessFreeAgentDraftDeadlinesJob,
+} = require("../jobs/definitions/processFreeAgentDraftDeadlines");
+const {
+  createProcessFreeAgentDraftAllocationsJob,
+} = require("../jobs/definitions/processFreeAgentDraftAllocations");
+const {
+  createProcessFreeAgentDraftAllocationCycleJob,
+} = require("../jobs/definitions/processFreeAgentDraftAllocationCycle");
+const {
+  createCoordinateFreeAgentDraftAllocationsJob,
+} = require("../jobs/definitions/coordinateFreeAgentDraftAllocations");
+const {
+  createCompleteFreeAgentDraftsJob,
+} = require("../jobs/definitions/completeFreeAgentDrafts");
+const {
+  createResolveFreeAgentDraftAuctionsJob,
+} = require("../jobs/definitions/resolveFreeAgentDraftAuctions");
+const {
+  createActivateFreeAgentDraftRestrictedAuctionsJob,
+} = require("../jobs/definitions/activateFreeAgentDraftRestrictedAuctions");
+const {
+  createActivateFreeAgentDraftFallbackAuctionsJob,
+} = require("../jobs/definitions/activateFreeAgentDraftFallbackAuctions");
+const {
+  createActivateFreeAgentDraftQueuedNominationsJob,
+} = require("../jobs/definitions/activateFreeAgentDraftQueuedNominations");
+const {
+  createFinalizeFreeAgentDraftRolloversJob,
+} = require("../jobs/definitions/finalizeFreeAgentDraftRollovers");
+const {
   createSocketAuthorizationService,
 } = require("../application/services/authorization/createSocketAuthorizationService");
 const {
@@ -172,6 +289,15 @@ const {
 const {
   createLeagueInvitationService,
 } = require("../application/services/leagues/createLeagueInvitationService");
+const {
+  createLeagueLifecycleTransitionService,
+} = require("../application/services/leagues/createLeagueLifecycleTransitionService");
+const {
+  createLeagueStartService,
+} = require("../application/services/leagues/createLeagueStartService");
+const {
+  createLeagueTradeDeadlineService,
+} = require("../application/services/leagues/createLeagueTradeDeadlineService");
 const {
   createLeagueReadService,
 } = require("../application/services/leagues/createLeagueReadService");
@@ -210,17 +336,25 @@ const {
   createConfiguredAccountEmailAdapter,
 } = require("../infrastructure/email/createConfiguredAccountEmailAdapter");
 const {
-  PROVIDER_NAME: SPORTSDATAIO_PROVIDER_NAME,
-  MINIMUM_LAST_SEASON_STATISTICS_PLAYER_COUNT,
-  createSportsDataIoLastSeasonStatisticsProvider,
-  createSportsDataIoNhlAdapter,
+  MINIMUM_CURRENT_SEASON_PLAYER_COUNT,
+  PROVIDER_NAME: SPORTSDATAIO_LIVE_PROVIDER_NAME,
+  createSportsDataIoLiveNhlAdapter,
+} = require("../infrastructure/sportsdataio/SportsDataIoLiveNhlAdapter");
+const {
+  PROVIDER_NAME: SPORTSDATAIO_PLAYER_IDENTITY_PROVIDER_NAME,
 } = require("../infrastructure/sportsdataio/SportsDataIoNhlAdapter");
 const {
   createSqliteAccountActionTokenRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteAccountActionTokenRepository");
 const {
+  createSqliteAuctionAdministrationRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteAuctionAdministrationRepository");
+const {
   createSqliteAuctionBidRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteAuctionBidRepository");
+const {
+  createSqliteAuctionReadRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteAuctionReadRepository");
 const {
   createSqliteAuctionRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteAuctionRepository");
@@ -228,8 +362,14 @@ const {
   createSqliteAuctionResolutionRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteAuctionResolutionRepository");
 const {
+  createSqliteFreeAgentDraftAuctionStartWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftAuctionStartWriter");
+const {
   createSqliteBuyoutRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteBuyoutRepository");
+const {
+  createSqliteContractRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteContractRepository");
 const {
   createSqliteAuthenticationRateLimitRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteAuthenticationRateLimitRepository");
@@ -252,11 +392,110 @@ const {
   createSqliteLeagueInvitationRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteLeagueInvitationRepository");
 const {
+  createSqliteEntryDraftScheduleRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteEntryDraftScheduleRepository");
+const {
+  createSqliteCandidateCardRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteCandidateCardRepository");
+const {
+  createSqliteCandidateAllocationRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteCandidateAllocationRepository");
+const {
+  createSqliteCandidateCardOpeningWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteCandidateCardOpeningWriter");
+const {
+  createSqliteCandidateCardMutationSideEffectWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteCandidateCardMutationSideEffectWriter");
+const {
+  createSqliteCandidateCardHelpSideEffectWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteCandidateCardHelpSideEffectWriter");
+const {
+  createSqliteCandidateCardSummerSynchronizer,
+} = require("../infrastructure/persistence/sqlite/SqliteCandidateCardSummerSynchronizer");
+const {
+  createSqliteCandidateEligibilityRevalidationWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteCandidateEligibilityRevalidationWriter");
+const {
+  createSqliteFreeAgentDraftEligibilityDeadlineReconciler,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftEligibilityDeadlineReconciler");
+const {
+  createSqliteFreeAgentDraftDeadlineReminderWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftDeadlineReminderWriter");
+const {
+  createSqliteFreeAgentDraftDeadlineWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftDeadlineWriter");
+const {
+  createSqliteFreeAgentDraftAllocationLifecycleWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftAllocationLifecycleWriter");
+const {
+  createSqliteFreeAgentDraftAllocationCorrectionRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftAllocationCorrectionRepository");
+const {
+  createSqliteFreeAgentDraftCompletionWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftCompletionWriter");
+const {
+  createSqliteFreeAgentDraftAuctionResolutionWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftAuctionResolutionWriter");
+const {
+  createSqliteFreeAgentDraftRestrictedActivationWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftRestrictedActivationWriter");
+const {
+  createSqliteFreeAgentDraftFallbackActivationWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftFallbackActivationWriter");
+const {
+  createSqliteFreeAgentDraftQueuedNominationActivationWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftQueuedNominationActivationWriter");
+const {
+  createSqliteFreeAgentDraftRolloverWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftRolloverWriter");
+const {
+  createSqliteRestrictedNoImprovementFallbackWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteRestrictedNoImprovementFallbackWriter");
+const {
+  createFreeAgentDraftTransitionWriterDispatcher,
+} = require("../infrastructure/persistence/sqlite/createFreeAgentDraftTransitionWriterDispatcher");
+const {
+  createSqliteFreeAgentDraftJobRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftJobRepository");
+const {
+  createSqliteFreeAgentDraftReadRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftReadRepository");
+const {
+  createSqliteFreeAgentDraftRecoveryReadRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftRecoveryReadRepository");
+const {
+  createSqliteFreeAgentDraftRecoveryActionRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftRecoveryActionRepository");
+const {
+  createSqliteFreeAgentDraftCorrectionPreviewRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftCorrectionPreviewRepository");
+const {
+  createSqliteFreeAgentDraftReadinessHandoffWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftReadinessHandoffWriter");
+const {
+  createSqliteFreeAgentDraftRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftRepository");
+const {
+  createSqliteFreeAgentDraftScheduleRecoveryWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteFreeAgentDraftScheduleRecoveryWriter");
+const {
+  createSqliteLeagueLifecycleTransitionRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteLeagueLifecycleTransitionRepository");
+const {
+  createSqliteLeagueStartRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteLeagueStartRepository");
+const {
+  createSqliteLeagueTradeDeadlineRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteLeagueTradeDeadlineRepository");
+const {
   createSqliteLeagueActivityRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteLeagueActivityRepository");
 const {
   createSqliteLeagueOutboxRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteLeagueOutboxRepository");
+const {
+  createSqliteLeagueOutboxWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteLeagueOutboxWriter");
 const {
   createSqliteMatchupReadRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteMatchupReadRepository");
@@ -264,14 +503,23 @@ const {
   createSqliteMatchupJobRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteMatchupJobRepository");
 const {
+  createSqliteLateLockCoordinatorRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteLateLockCoordinatorRepository");
+const {
   createSqliteMatchupLockRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteMatchupLockRepository");
+const {
+  createSqliteMatchupOccurrenceExecutionGuard,
+} = require("../infrastructure/persistence/sqlite/SqliteMatchupOccurrenceExecutionGuard");
 const {
   createSqliteMatchupRecoveryRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteMatchupRecoveryRepository");
 const {
   createSqliteMatchupResultRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteMatchupResultRepository");
+const {
+  createSqliteMatchupResultCorrectionRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteMatchupResultCorrectionRepository");
 const {
   createSqliteMatchupScheduleRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteMatchupScheduleRepository");
@@ -282,11 +530,17 @@ const {
   createSqliteMatchupStandingsRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteMatchupStandingsRepository");
 const {
+  createSqliteMatchupStandingsFinalizationRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteMatchupStandingsFinalizationRepository");
+const {
   createSqliteMatchupWeekRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteMatchupWeekRepository");
 const {
   createSqliteNotificationRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteNotificationRepository");
+const {
+  createSqliteNotificationWriter,
+} = require("../infrastructure/persistence/sqlite/SqliteNotificationWriter");
 const {
   createSqliteOutboxEventRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteOutboxEventRepository");
@@ -300,6 +554,12 @@ const {
   createSqliteLeaguePlayerReadRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteLeaguePlayerReadRepository");
 const {
+  createSqliteLeaguePlayerOwnershipRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteLeaguePlayerOwnershipRepository");
+const {
+  createSqliteProspectDecisionRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteProspectDecisionRepository");
+const {
   createSqlitePublicRosterRepository,
 } = require("../infrastructure/persistence/sqlite/SqlitePublicRosterRepository");
 const {
@@ -311,6 +571,9 @@ const {
 const {
   createSqliteSessionRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteSessionRepository");
+const {
+  createSqliteSeasonRolloverJobRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteSeasonRolloverJobRepository");
 const {
   createSqliteStatisticsRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteStatisticsRepository");
@@ -335,6 +598,9 @@ const {
 const {
   createSqliteRosterMovementRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteRosterMovementRepository");
+const {
+  createSqliteRetentionRepository,
+} = require("../infrastructure/persistence/sqlite/SqliteRetentionRepository");
 const {
   createSqliteTradeProposalRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteTradeProposalRepository");
@@ -378,6 +644,9 @@ const {
   createAuctionRouter,
 } = require("../transport/http/createAuctionRouter");
 const {
+  createCandidateCardRouter,
+} = require("../transport/http/createCandidateCardRouter");
+const {
   createActivityNotificationRouter,
 } = require("../transport/http/createActivityNotificationRouter");
 const {
@@ -387,8 +656,17 @@ const {
   createCommissionerCorrectionRouter,
 } = require("../transport/http/createCommissionerCorrectionRouter");
 const {
+  createEntryDraftRouter,
+} = require("../transport/http/createEntryDraftRouter");
+const {
+  createFreeAgentDraftRouter,
+} = require("../transport/http/createFreeAgentDraftRouter");
+const {
   createLeagueInvitationRouter,
 } = require("../transport/http/createLeagueInvitationRouter");
+const {
+  createLeagueLifecycleRouter,
+} = require("../transport/http/createLeagueLifecycleRouter");
 const {
   createLeagueReadRouter,
 } = require("../transport/http/createLeagueReadRouter");
@@ -398,6 +676,9 @@ const {
 const {
   createMatchupRouter,
 } = require("../transport/http/createMatchupRouter");
+const {
+  createStandingsFinalizationRouter,
+} = require("../transport/http/createStandingsFinalizationRouter");
 const {
   createPlatformAdministrationRouter,
 } = require("../transport/http/createPlatformAdministrationRouter");
@@ -434,6 +715,18 @@ const {
 const {
   createAuthenticatedSocketRooms,
 } = require("../transport/socket/createAuthenticatedSocketRooms");
+
+const SPORTSDATAIO_LIVE_VERIFICATION_KEYS = Object.freeze([
+  "status",
+  "evidenceId",
+  "evidenceSha256",
+  "issuedAtMs",
+  "expiresAtMs",
+  "verifiedAtMs",
+]);
+const SPORTSDATAIO_LIVE_UUID_V4_PATTERN =
+  /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
+const SPORTSDATAIO_LIVE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const TARGET_ENDPOINTS = Object.freeze([
   ["POST", "/api/v1/accounts", "accountRegistration"],
@@ -488,6 +781,121 @@ const TARGET_ENDPOINTS = Object.freeze([
     "leagueMembership",
   ],
   ["GET", "/api/v1/leagues/:leagueId/seasons", "leagueRead"],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/entry-drafts/:draftId/schedule",
+    "entryDraft",
+  ],
+  [
+    "GET",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/navigation",
+    "freeAgentDraft",
+  ],
+  [
+    "GET",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/readiness",
+    "freeAgentDraft",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/readiness/retries",
+    "freeAgentDraft",
+  ],
+  [
+    "GET",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId",
+    "freeAgentDraft",
+  ],
+  [
+    "GET",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards",
+    "freeAgentDraft",
+  ],
+  [
+    "GET",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/history",
+    "freeAgentDraft",
+  ],
+  [
+    "GET",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/results",
+    "freeAgentDraft",
+  ],
+  [
+    "GET",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/recovery",
+    "freeAgentDraft",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/recovery/actions",
+    "freeAgentDraft",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/allocations/:allocationId/correction-previews",
+    "freeAgentDraft",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/allocations/:allocationId/corrections",
+    "freeAgentDraft",
+  ],
+  [
+    "GET",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/private",
+    "candidateCard",
+  ],
+  [
+    "GET",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/eligible-players",
+    "candidateCard",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/revision-previews",
+    "candidateCard",
+  ],
+  [
+    "PUT",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/slots/:slotKey/candidate",
+    "candidateCard",
+  ],
+  [
+    "PATCH",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/entries/:entryId",
+    "candidateCard",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/entries/:entryId/move",
+    "candidateCard",
+  ],
+  [
+    "DELETE",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/entries/:entryId",
+    "candidateCard",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/help-requests",
+    "candidateCard",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/lifecycle-transitions",
+    "leagueLifecycle",
+  ],
+  [
+    "PUT",
+    "/api/v1/leagues/:leagueId/setup/trade-deadline",
+    "leagueLifecycle",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/start",
+    "leagueLifecycle",
+  ],
   [
     "GET",
     "/api/v1/leagues/:leagueId/activity",
@@ -556,6 +964,21 @@ const TARGET_ENDPOINTS = Object.freeze([
   [
     "PATCH",
     "/api/v1/leagues/:leagueId/auctions/:auctionId/bids/:bidId",
+    "auction",
+  ],
+  [
+    "DELETE",
+    "/api/v1/leagues/:leagueId/auctions/:auctionId/bids/:bidId",
+    "auction",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/auctions/:auctionId/cancel",
+    "auction",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/auctions/:auctionId/resolve",
     "auction",
   ],
   ["GET", "/api/v1/leagues/:leagueId/trades", "trade"],
@@ -640,6 +1063,11 @@ const TARGET_ENDPOINTS = Object.freeze([
     "POST",
     "/api/v1/leagues/:leagueId/seasons/:seasonId/standings/rebuilds",
     "matchup",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/seasons/:seasonId/standings/finalizations",
+    "standingsFinalization",
   ],
   ["POST", "/api/v1/leagues/:leagueId/invitations", "leagueInvitation"],
   [
@@ -729,6 +1157,10 @@ const TARGET_ENDPOINTS = Object.freeze([
 const TARGET_ROUTER_KEYS = Object.freeze(
   [...new Set(TARGET_ENDPOINTS.map(({ routerKey }) => routerKey))].sort()
 );
+const FREE_AGENT_DRAFT_ROUTER_KEYS = Object.freeze([
+  "candidateCard",
+  "freeAgentDraft",
+]);
 
 function compilePath(path) {
   const expression = path
@@ -776,6 +1208,7 @@ function selectTargetRouterKey(method, requestPath, requestedMethod) {
 function createTargetApplication({
   routers,
   leagueWriteGate,
+  freeAgentDraftRoutesEnabled = true,
   expressModule = express,
 } = {}) {
   if (
@@ -795,29 +1228,41 @@ function createTargetApplication({
   if (!expressModule || typeof expressModule !== "function") {
     throw new TypeError("target runtime requires Express");
   }
+  if (typeof freeAgentDraftRoutesEnabled !== "boolean") {
+    throw new TypeError(
+      "target runtime requires an exact Free Agent Draft route exposure boolean"
+    );
+  }
+
+  function selectRequestTargetRouterKey(request) {
+    return selectTargetRouterKey(
+      request.method,
+      request.path,
+      request.get("access-control-request-method")
+    );
+  }
 
   const app = expressModule();
   app.disable("x-powered-by");
+  if (!freeAgentDraftRoutesEnabled) {
+    app.use((request, response, next) => {
+      const routerKey = selectRequestTargetRouterKey(request);
+      if (!FREE_AGENT_DRAFT_ROUTER_KEYS.includes(routerKey)) return next();
+      return response.status(404).end();
+    });
+  }
   if (leagueWriteGate !== undefined) {
     if (typeof leagueWriteGate !== "function") {
       throw new TypeError("target runtime requires a league write gate");
     }
     app.use((request, response, next) => {
-      const routerKey = selectTargetRouterKey(
-        request.method,
-        request.path,
-        request.get("access-control-request-method")
-      );
+      const routerKey = selectRequestTargetRouterKey(request);
       if (!routerKey) return next();
       return leagueWriteGate(request, response, next);
     });
   }
   app.use((request, response, next) => {
-    const routerKey = selectTargetRouterKey(
-      request.method,
-      request.path,
-      request.get("access-control-request-method")
-    );
+    const routerKey = selectRequestTargetRouterKey(request);
     if (!routerKey) return next();
     return routers[routerKey](request, response, next);
   });
@@ -837,58 +1282,512 @@ function requireConfiguredSecret(secretSlot, description) {
   return secretSlot;
 }
 
-function createTargetRepositories({ database } = {}) {
+function isPlainObject(value) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isExactFrozenLiveVerification(value) {
+  if (
+    !isPlainObject(value) ||
+    !Object.isFrozen(value) ||
+    Object.getOwnPropertySymbols(value).length !== 0
+  ) {
+    return false;
+  }
+  const actualKeys = Object.getOwnPropertyNames(value).sort();
+  const expectedKeys = [...SPORTSDATAIO_LIVE_VERIFICATION_KEYS].sort();
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key, index) => key !== expectedKeys[index])
+  ) {
+    return false;
+  }
+  for (const key of actualKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      !descriptor ||
+      descriptor.enumerable !== true ||
+      !Object.prototype.hasOwnProperty.call(descriptor, "value")
+    ) {
+      return false;
+    }
+  }
+  return (
+    value.status === "verified" &&
+    SPORTSDATAIO_LIVE_UUID_V4_PATTERN.test(value.evidenceId) &&
+    SPORTSDATAIO_LIVE_SHA256_PATTERN.test(value.evidenceSha256) &&
+    Number.isSafeInteger(value.issuedAtMs) &&
+    value.issuedAtMs >= 0 &&
+    Number.isSafeInteger(value.expiresAtMs) &&
+    value.expiresAtMs > value.issuedAtMs &&
+    Number.isSafeInteger(value.verifiedAtMs) &&
+    value.verifiedAtMs >= value.issuedAtMs &&
+    value.verifiedAtMs < value.expiresAtMs
+  );
+}
+
+function requireVerifiedSportsDataIoLiveDescriptor(value) {
+  if (!isPlainObject(value) || typeof value.enabled !== "boolean") {
+    throw new TypeError(
+      "target runtime requires a verified SportsDataIO live capability descriptor"
+    );
+  }
+  if (value.enabled === false) return null;
+
+  const apiKeyDescriptor = Object.getOwnPropertyDescriptor(value, "apiKey");
+  if (
+    value.mode !== "required" ||
+    value.verified !== true ||
+    !Object.isFrozen(value) ||
+    Object.getOwnPropertySymbols(value).length !== 0 ||
+    !isExactFrozenLiveVerification(value.verification) ||
+    !apiKeyDescriptor ||
+    apiKeyDescriptor.enumerable !== false ||
+    apiKeyDescriptor.configurable !== false ||
+    apiKeyDescriptor.writable !== false ||
+    typeof apiKeyDescriptor.value !== "string" ||
+    apiKeyDescriptor.value.length < 1 ||
+    typeof value.origin !== "string" ||
+    value.origin.length < 1
+  ) {
+    throw new TypeError(
+      "target runtime requires a verified SportsDataIO live capability descriptor"
+    );
+  }
+  return value;
+}
+
+function createTargetRepositories({
+  database,
+  secureRandom,
+} = {}) {
   const context = createSqliteRepositoryContext({ database });
+  const matchupOccurrenceExecutionGuard =
+    createSqliteMatchupOccurrenceExecutionGuard({
+      database,
+    });
+  const matchupOccurrenceRunnerGuardTransaction =
+    database.transaction((occurrenceExecution) =>
+      matchupOccurrenceExecutionGuard.assertCurrent(
+        occurrenceExecution
+      )
+    );
+  const matchupOccurrenceRunnerExecutionGuard =
+    Object.freeze({
+      assertCurrent(occurrenceExecution) {
+        return matchupOccurrenceRunnerGuardTransaction.immediate(
+          occurrenceExecution
+        );
+      },
+    });
+  const leagueOutboxWriter = createSqliteLeagueOutboxWriter({
+    database,
+  });
+  const notificationWriter = createSqliteNotificationWriter({
+    database,
+  });
+  const freeAgentDraftDeadlineReminderWriter =
+    createSqliteFreeAgentDraftDeadlineReminderWriter({
+      database,
+      notificationWriter,
+      leagueOutboxWriter,
+    });
+  const auditRepository =
+    createSqliteSecurityAuditRepository({ database });
+  const freeAgentDraftReadinessHandoffWriter =
+    createSqliteFreeAgentDraftReadinessHandoffWriter({
+      database,
+    });
+  const freeAgentDraftRead =
+    createSqliteFreeAgentDraftReadRepository({
+      database,
+    });
+  const freeAgentDraftRecoveryRead =
+    createSqliteFreeAgentDraftRecoveryReadRepository({
+      database,
+    });
+  const freeAgentDraftRecoveryActions =
+    createSqliteFreeAgentDraftRecoveryActionRepository({
+      database,
+    });
+  const freeAgentDraftCorrectionPreview =
+    createSqliteFreeAgentDraftCorrectionPreviewRepository({
+      database,
+    });
+  const freeAgentDraftAllocationCorrections =
+    createSqliteFreeAgentDraftAllocationCorrectionRepository({
+      database,
+    });
+  const candidateCardOpeningWriter =
+    createSqliteCandidateCardOpeningWriter({
+      database,
+      openingContextReader: freeAgentDraftRead,
+    });
+  const candidateCardMutationSideEffectWriter =
+    createSqliteCandidateCardMutationSideEffectWriter({
+      database,
+      leagueOutboxWriter,
+    });
+  const candidateCardHelpSideEffectWriter =
+    createSqliteCandidateCardHelpSideEffectWriter({
+      database,
+      auditRepository,
+      notificationWriter,
+      leagueOutboxWriter,
+    });
+  const candidateCards =
+    createSqliteCandidateCardRepository({
+      database,
+      writeMutationSideEffects:
+        candidateCardMutationSideEffectWriter,
+      writeHelpGrantSideEffects:
+        candidateCardHelpSideEffectWriter,
+    });
+  const candidateCardSummerSynchronizer =
+    createSqliteCandidateCardSummerSynchronizer({
+      database,
+      candidateCardRepository: candidateCards,
+    });
+  const candidateEligibilityRevalidationWriter =
+    createSqliteCandidateEligibilityRevalidationWriter({
+      database,
+      candidateCardSummerSynchronizer,
+    });
+  const freeAgentDraftEligibilityDeadlineReconciler =
+    createSqliteFreeAgentDraftEligibilityDeadlineReconciler({
+      database,
+      candidateCardSummerSynchronizer,
+    });
+  const freeAgentDraftDeadlineWriter =
+    createSqliteFreeAgentDraftDeadlineWriter({
+      database,
+      eligibilityDeadlineReconciler:
+        freeAgentDraftEligibilityDeadlineReconciler,
+      notificationWriter,
+      leagueOutboxWriter,
+    });
+  const freeAgentDraftAllocationLifecycleWriter =
+    createSqliteFreeAgentDraftAllocationLifecycleWriter({
+      database,
+      notificationWriter,
+      leagueOutboxWriter,
+    });
+  const freeAgentDraftScheduleRecoveryService =
+    createFreeAgentDraftScheduleRecoveryService({
+      secureRandom,
+    });
+  const freeAgentDraftCompletionWriter =
+    createSqliteFreeAgentDraftCompletionWriter({
+      database,
+      scheduleRecoveryService:
+        freeAgentDraftScheduleRecoveryService,
+      notificationWriter,
+      leagueOutboxWriter,
+    });
+  const freeAgentDraftTransitionWriter =
+    createFreeAgentDraftTransitionWriterDispatcher([
+      {
+        fromStatus: "cards_open",
+        toStatus: "deadline_locked",
+        writer: freeAgentDraftDeadlineWriter,
+      },
+      {
+        fromStatus: "deadline_locked",
+        toStatus: "allocating",
+        writer: freeAgentDraftAllocationLifecycleWriter,
+      },
+      {
+        fromStatus: "deadline_locked",
+        toStatus: "rapid",
+        writer: freeAgentDraftAllocationLifecycleWriter,
+      },
+      {
+        fromStatus: "allocating",
+        toStatus: "rapid",
+        writer: freeAgentDraftAllocationLifecycleWriter,
+      },
+      {
+        fromStatus: "rapid",
+        toStatus: "completed",
+        writer: freeAgentDraftCompletionWriter,
+      },
+    ]);
+  const freeAgentDraftScheduleRecoveryWriter =
+    createSqliteFreeAgentDraftScheduleRecoveryWriter({
+      database,
+    });
+  const freeAgentDraftLifecycle =
+    createSqliteFreeAgentDraftRepository({
+      database,
+      candidateCardWriter:
+        candidateCardOpeningWriter,
+      scheduleRecoveryWriter:
+        freeAgentDraftScheduleRecoveryWriter,
+      transitionWriter:
+        freeAgentDraftTransitionWriter,
+      notificationWriter,
+    });
+  const restrictedNoImprovementFallbackWriter =
+    createSqliteRestrictedNoImprovementFallbackWriter({
+      database,
+      createDrawNonce: () => secureRandom.bytes(32),
+      leagueOutboxWriter,
+      notificationWriter,
+    });
+  const freeAgentDraftAuctionResolutionWriter =
+    createSqliteFreeAgentDraftAuctionResolutionWriter({
+      database,
+      createId: () => secureRandom.id(),
+      candidateCardSummerSynchronizer,
+      leagueOutboxWriter,
+      restrictedFallbackWriter:
+        restrictedNoImprovementFallbackWriter,
+    });
+  const freeAgentDraftAuctionStartWriter =
+    createSqliteFreeAgentDraftAuctionStartWriter({
+      database,
+      createId: () => secureRandom.id(),
+      createDrawNonce: () => secureRandom.bytes(32),
+      leagueOutboxWriter,
+    });
+  const freeAgentDraftRestrictedActivationWriter =
+    createSqliteFreeAgentDraftRestrictedActivationWriter({
+      database,
+      createId: () => secureRandom.id(),
+      leagueOutboxWriter,
+      notificationWriter,
+    });
+  const freeAgentDraftFallbackActivationWriter =
+    createSqliteFreeAgentDraftFallbackActivationWriter({
+      database,
+      createId: () => secureRandom.id(),
+      leagueOutboxWriter,
+      notificationWriter,
+    });
+  const freeAgentDraftQueuedNominationActivationWriter =
+    createSqliteFreeAgentDraftQueuedNominationActivationWriter({
+      database,
+      createId: () => secureRandom.id(),
+      createDrawNonce: () => secureRandom.bytes(32),
+      leagueOutboxWriter,
+    });
+  const freeAgentDraftRolloverWriter =
+    createSqliteFreeAgentDraftRolloverWriter({
+      database,
+      createId: () => secureRandom.id(),
+    });
+  const candidateAllocations =
+    createSqliteCandidateAllocationRepository({
+      database,
+      leagueOutboxWriter,
+      notificationWriter,
+      createId: () => secureRandom.id(),
+      createDrawNonce: () => secureRandom.bytes(32),
+      allowImmediateRestrictedActivation: true,
+    });
   return Object.freeze({
     context,
     actionTokens: createSqliteAccountActionTokenRepository({ database }),
+    auctionAdministration:
+      createSqliteAuctionAdministrationRepository({
+        database,
+        leagueOutboxWriter,
+        notificationWriter,
+      }),
     auctionBids: createSqliteAuctionBidRepository({ database }),
-    auctionResolutions: createSqliteAuctionResolutionRepository({ database }),
+    auctionReads: createSqliteAuctionReadRepository({ database }),
+    auctionResolutions: createSqliteAuctionResolutionRepository({
+      database,
+      leagueOutboxWriter,
+      candidateCardSummerSynchronizer,
+    }),
     auctions: createSqliteAuctionRepository({ database }),
-    audit: createSqliteSecurityAuditRepository({ database }),
-    buyouts: createSqliteBuyoutRepository({ database }),
+    audit: auditRepository,
+    buyouts: createSqliteBuyoutRepository({
+      database,
+      candidateCardSummerSynchronizer,
+    }),
+    candidateAllocations,
+    candidateCards,
+    candidateCardSummerSynchronizer,
+    candidateEligibilityRevalidationWriter,
     commissionerAssignments: createSqliteCommissionerAssignmentRepository({
       database,
+      leagueOutboxWriter,
+      notificationWriter,
     }),
     commissionerCorrections: createSqliteCommissionerCorrectionRepository({
       database,
+      candidateCardSummerSynchronizer,
+    }),
+    contracts: createSqliteContractRepository({
+      database,
+      candidateCardSummerSynchronizer,
     }),
     credentials: createSqliteCredentialRepository({ database }),
+    entryDraftSchedule:
+      createSqliteEntryDraftScheduleRepository({
+        database,
+        auditRepository,
+        notificationWriter,
+        leagueOutboxWriter,
+      }),
+    freeAgentDraftJobs:
+      createSqliteFreeAgentDraftJobRepository({
+        database,
+      }),
+    freeAgentDraftDeadlineReminderWriter,
+    freeAgentDraftDeadlineWriter,
+    freeAgentDraftAllocationLifecycleWriter,
+    freeAgentDraftAuctionStartWriter,
+    freeAgentDraftAuctionResolutionWriter,
+    freeAgentDraftRestrictedActivationWriter,
+    freeAgentDraftFallbackActivationWriter,
+    freeAgentDraftQueuedNominationActivationWriter,
+    freeAgentDraftRolloverWriter,
+    freeAgentDraftCompletionWriter,
+    freeAgentDraftEligibilityDeadlineReconciler,
+    freeAgentDraftLifecycle,
+    freeAgentDraftRead,
+    freeAgentDraftRecoveryRead,
+    freeAgentDraftRecoveryActions,
+    freeAgentDraftCorrectionPreview,
+    freeAgentDraftAllocationCorrections,
+    freeAgentDraftReadinessHandoffWriter,
+    freeAgentDraftTransitionWriter,
+    restrictedNoImprovementFallbackWriter,
     leagueActivity: createSqliteLeagueActivityRepository({ database }),
-    leagueAccess: createSqliteLeagueAccessRepository({ database }),
+    leagueAccess: createSqliteLeagueAccessRepository({
+      database,
+      leagueOutboxWriter,
+    }),
     leagueCreation: createSqliteLeagueCreationRepository({ database }),
-    leagueInvitations: createSqliteLeagueInvitationRepository({ database }),
+    leagueInvitations: createSqliteLeagueInvitationRepository({
+      database,
+      leagueOutboxWriter,
+      notificationWriter,
+    }),
+    leagueLifecycleTransition:
+      createSqliteLeagueLifecycleTransitionRepository({
+        database,
+        leagueOutboxWriter,
+        notificationWriter,
+      }),
+    leagueStart: createSqliteLeagueStartRepository({
+      database,
+      leagueOutboxWriter,
+    }),
+    leagueTradeDeadline:
+      createSqliteLeagueTradeDeadlineRepository({
+        database,
+        leagueOutboxWriter,
+      }),
     leagueOutbox: createSqliteLeagueOutboxRepository({ database }),
+    leagueOutboxWriter,
+    lateLockCoordinator:
+      createSqliteLateLockCoordinatorRepository({ database }),
     matchupJobs: createSqliteMatchupJobRepository({ database }),
-    matchupLocks: createSqliteMatchupLockRepository({ database }),
+    matchupLocks: createSqliteMatchupLockRepository({
+      database,
+      occurrenceExecutionGuard:
+        matchupOccurrenceExecutionGuard,
+    }),
+    matchupOccurrenceRunnerExecutionGuard,
     matchupRead: createSqliteMatchupReadRepository({ database }),
     matchupRecovery: createSqliteMatchupRecoveryRepository({ database }),
-    matchupResults: createSqliteMatchupResultRepository({ database }),
+    matchupResultCorrections:
+      createSqliteMatchupResultCorrectionRepository({
+        database,
+        leagueOutboxWriter,
+        notificationWriter,
+        auditRepository,
+      }),
+    matchupResults: createSqliteMatchupResultRepository({
+      database,
+      occurrenceExecutionGuard:
+        matchupOccurrenceExecutionGuard,
+    }),
     matchupSchedule: createSqliteMatchupScheduleRepository({ database }),
     matchupScoring: createSqliteMatchupScoringRepository({ database }),
     matchupStandings: createSqliteMatchupStandingsRepository({ database }),
-    matchupWeeks: createSqliteMatchupWeekRepository({ database }),
+    standingsFinalization:
+      createSqliteMatchupStandingsFinalizationRepository({
+        database,
+        leagueOutboxWriter,
+        notificationWriter,
+      }),
+    matchupWeeks: createSqliteMatchupWeekRepository({
+      database,
+      occurrenceExecutionGuard:
+        matchupOccurrenceExecutionGuard,
+    }),
     notifications: createSqliteNotificationRepository({ database }),
+    notificationWriter,
     outbox: createSqliteOutboxEventRepository({ database }),
     leaguePlayers: createSqliteLeaguePlayerReadRepository({ database }),
+    leaguePlayerOwnership: createSqliteLeaguePlayerOwnershipRepository({
+      database,
+      candidateCardSummerSynchronizer,
+    }),
     players: createSqlitePlayerRepository({ database }),
     platformRoles: createSqlitePlatformRoleRepository({ database }),
     publicRoster: createSqlitePublicRosterRepository({ database }),
+    prospectDecisions: createSqliteProspectDecisionRepository({
+      database,
+      candidateCardSummerSynchronizer,
+    }),
     rateLimits: createSqliteAuthenticationRateLimitRepository({ database }),
-    rosterMovements: createSqliteRosterMovementRepository({ database }),
+    rosterMovements: createSqliteRosterMovementRepository({
+      database,
+      candidateCardSummerSynchronizer,
+    }),
+    retentions: createSqliteRetentionRepository({
+      database,
+      candidateCardSummerSynchronizer,
+    }),
+    seasonRolloverJobs:
+      createSqliteSeasonRolloverJobRepository({
+        database,
+      }),
     sessions: createSqliteSessionRepository({ database }),
-    statistics: createSqliteStatisticsRepository({ database }),
+    statistics: createSqliteStatisticsRepository({
+      database,
+      occurrenceExecutionGuard:
+        matchupOccurrenceExecutionGuard,
+    }),
     teamAuthority: createSqliteTeamAuthorityRepository({ database }),
     teamCreation: createSqliteTeamCreationRepository({ database }),
     teamManagerAssignments: createSqliteTeamManagerAssignmentRepository({
       database,
+      leagueOutboxWriter,
+      notificationWriter,
     }),
     teamProfiles: createSqliteTeamProfileRepository({ database }),
     teamRead: createSqliteTeamReadRepository({ database }),
     teamWorkspace: createSqliteTeamWorkspaceRepository({ database }),
-    tradeProposals: createSqliteTradeProposalRepository({ database }),
-    tradeExpiries: createSqliteTradeExpiryRepository({ database }),
-    tradeRecovery: createSqliteTradeReversalRepository({ database }),
+    tradeProposals: createSqliteTradeProposalRepository({
+      database,
+      leagueOutboxWriter,
+      notificationWriter,
+      candidateCardSummerSynchronizer,
+    }),
+    tradeExpiries: createSqliteTradeExpiryRepository({
+      database,
+      leagueOutboxWriter,
+    }),
+    tradeRecovery: createSqliteTradeReversalRepository({
+      database,
+      leagueOutboxWriter,
+      candidateCardSummerSynchronizer,
+    }),
     users: createSqliteUserRepository({ database }),
   });
 }
@@ -904,11 +1803,24 @@ function createTargetServices({
   emailFetchImplementation,
   emailJobOptions,
   sportsDataIoNhl = Object.freeze({ enabled: false }),
+  sportsDataIoLiveNhl = Object.freeze({ enabled: false }),
   sportsDataIoFetchImplementation,
+  createSportsDataIoLiveNhlAdapterFunction =
+    createSportsDataIoLiveNhlAdapter,
 } = {}) {
   const { config, clock, secureRandom, logger } = securityFoundations || {};
   if (!config || !clock || !secureRandom || !logger) {
     throw new TypeError("target runtime requires security foundations");
+  }
+  const verifiedSportsDataIoLiveNhl =
+    requireVerifiedSportsDataIoLiveDescriptor(sportsDataIoLiveNhl);
+  if (
+    verifiedSportsDataIoLiveNhl &&
+    typeof createSportsDataIoLiveNhlAdapterFunction !== "function"
+  ) {
+    throw new TypeError(
+      "target runtime requires a SportsDataIO live adapter factory"
+    );
   }
   const rateLimitKey = requireConfiguredSecret(
     config.rateLimitKey,
@@ -1015,6 +1927,15 @@ function createTargetServices({
     leagueAuthorization,
     teamAuthorityRepository: repositories.teamAuthority,
   });
+  const entryDraftSchedule =
+    createEntryDraftScheduleService({
+      repositoryContext: repositories.context,
+      leagueAuthorization,
+      entryDraftScheduleRepository:
+        repositories.entryDraftSchedule,
+      clock,
+      secureRandom,
+    });
   const leagueOutboxPublication = createLeagueOutboxPublicationService({
     repository: repositories.leagueOutbox,
     publisher: leagueInvalidationPublisher,
@@ -1022,18 +1943,6 @@ function createTargetServices({
   });
   const auctionResolutionDecision = createAuctionResolutionDecisionService({
     repository: repositories.auctionResolutions,
-  });
-  const auctionResolution = createAuctionResolutionService({
-    repository: repositories.auctionResolutions,
-    secureRandom,
-  });
-  const auctionResolutionJob = createResolveTargetAuctionsJob({
-    repository: repositories.auctionResolutions,
-    resolutionService: auctionResolution,
-    clock,
-    secureRandom,
-    leaseOwner: secureRandom.id(),
-    logger,
   });
   const tradeProposalExpiry = createExpireTradeProposalsJob({
     repository: repositories.tradeExpiries,
@@ -1046,32 +1955,36 @@ function createTargetServices({
     service: leagueOutboxPublication,
     logger,
   });
-  const statisticsProvider = sportsDataIoNhl.enabled
-    ? createSportsDataIoLastSeasonStatisticsProvider({
-      adapter: createSportsDataIoNhlAdapter({
-        apiKey: sportsDataIoNhl.apiKey,
+  const liveSportsDataIoAdapter =
+    verifiedSportsDataIoLiveNhl
+      ? createSportsDataIoLiveNhlAdapterFunction({
+        apiKey: verifiedSportsDataIoLiveNhl.apiKey,
         fetchImpl: sportsDataIoFetchImplementation,
-        origin: sportsDataIoNhl.origin,
-      }),
-      seasonStart: sportsDataIoNhl.seasonStartYear,
-    })
-    : Object.freeze({
-      async fetchRows() {
+        origin: verifiedSportsDataIoLiveNhl.origin,
+        nowMs: () => clock.nowMs(),
+      })
+      : null;
+  const statisticsProvider =
+    liveSportsDataIoAdapter ||
+    Object.freeze({
+      async fetchLiveSnapshot() {
         const error = new Error(
-          "SportsDataIO NHL import is disabled until staging configuration is complete."
+          "SportsDataIO current-season NHL data is disabled until live provider configuration is complete."
         );
-        error.code = "SPORTSDATAIO_NHL_IMPORT_DISABLED";
+        error.code =
+          "SPORTSDATAIO_LIVE_NHL_DISABLED";
         throw error;
       },
     });
-  const statistics = createTargetStatisticsService({
+  const statistics = createLiveStatisticsService({
     repository: repositories.statistics,
     provider: statisticsProvider,
-    nhlSeasonKey: sportsDataIoNhl.enabled
-      ? sportsDataIoNhl.nhlSeasonKey
-      : currentSeason.nhlSeasonKey,
-    providerName: SPORTSDATAIO_PROVIDER_NAME,
-    minimumPlayerCount: MINIMUM_LAST_SEASON_STATISTICS_PLAYER_COUNT,
+    nhlSeasonKey: currentSeason.nhlSeasonKey,
+    providerName: SPORTSDATAIO_LIVE_PROVIDER_NAME,
+    playerIdentityProvider:
+      SPORTSDATAIO_PLAYER_IDENTITY_PROVIDER_NAME,
+    minimumPlayerCount:
+      MINIMUM_CURRENT_SEASON_PLAYER_COUNT,
     nowMs: () => clock.nowMs(),
     createId: () => secureRandom.id(),
   });
@@ -1085,8 +1998,11 @@ function createTargetServices({
     leaguePlayerRepository: repositories.leaguePlayers,
   });
   const matchupSchedule = createMatchupScheduleService({
+    repositoryContext: repositories.context,
+    leagueAuthorization,
     repository: repositories.matchupSchedule,
-    createId: () => secureRandom.id(),
+    clock,
+    secureRandom,
   });
   const matchupWeeks = createMatchupWeekService({
     repository: repositories.matchupWeeks,
@@ -1099,7 +2015,307 @@ function createTargetServices({
   const matchupLegality = createMatchupLegalityService({
     repository: repositories.matchupLocks,
     normalLockService: matchupLock,
+    gameStateProvider: liveSportsDataIoAdapter,
     createId: () => secureRandom.id(),
+    nowMs: () => clock.nowMs(),
+  });
+  const lateLockCoordinator = createLateLockCoordinator({
+    targetRepository: repositories.lateLockCoordinator,
+    legalityService: matchupLegality,
+    statisticsService: statistics,
+    provider: SPORTSDATAIO_LIVE_PROVIDER_NAME,
+    clock,
+    logger,
+  });
+  const lifecycleTransition =
+    createLeagueLifecycleTransitionService({
+      repositoryContext: repositories.context,
+      leagueAuthorization,
+      platformAuthorization,
+      leagueLifecycleTransitionRepository:
+        repositories.leagueLifecycleTransition,
+      freeAgentDraftReadinessHandoffWriter:
+        repositories.freeAgentDraftReadinessHandoffWriter,
+      lateLockCoordinator,
+      clock,
+      secureRandom,
+    });
+  const seasonRolloverJob =
+    createExecuteScheduledEntryDraftRolloversJob({
+      repository: repositories.seasonRolloverJobs,
+      leagueLifecycleTransitionService:
+        lifecycleTransition,
+      clock,
+      secureRandom,
+      leaseOwner: secureRandom.id(),
+      logger,
+    });
+  const freeAgentDraftReadiness =
+    createFreeAgentDraftReadinessService({
+      clock,
+      readRepository:
+        repositories.freeAgentDraftRead,
+      repository:
+        repositories.freeAgentDraftLifecycle,
+      scheduleRepository:
+        repositories.matchupSchedule,
+      secureRandom,
+    });
+  const freeAgentDraftRead =
+    createFreeAgentDraftReadService({
+      leagueAuthorization,
+      repository: repositories.freeAgentDraftRead,
+      clock,
+    });
+  const freeAgentDraftRecoveryRead =
+    createFreeAgentDraftRecoveryReadService({
+      leagueAuthorization,
+      repository:
+        repositories.freeAgentDraftRecoveryRead,
+      clock,
+    });
+  const freeAgentDraftRecoveryAction =
+    createFreeAgentDraftRecoveryActionService({
+      leagueAuthorization,
+      repository:
+        repositories.freeAgentDraftRecoveryActions,
+      clock,
+      secureRandom,
+    });
+  const freeAgentDraftCorrectionPreview =
+    createFreeAgentDraftCorrectionPreviewService({
+      leagueAuthorization,
+      repository:
+        repositories.freeAgentDraftCorrectionPreview,
+    });
+  const freeAgentDraftAllocationCorrection =
+    createFreeAgentDraftAllocationCorrectionService({
+      leagueAuthorization,
+      repository:
+        repositories.freeAgentDraftAllocationCorrections,
+      clock,
+      secureRandom,
+      lateLockCoordinator,
+    });
+  const candidateCards =
+    createCandidateCardService({
+      leagueAuthorization,
+      repository: repositories.candidateCards,
+      clock,
+      secureRandom,
+    });
+  const candidateAllocation =
+    createCandidateAllocationService({
+      repository: repositories.candidateAllocations,
+      clock,
+    });
+  const candidateEligibilityRevalidation =
+    createCandidateEligibilityRevalidationService({
+      writer:
+        repositories.candidateEligibilityRevalidationWriter,
+      clock,
+    });
+  const freeAgentDraftDeadlineReminder =
+    createFreeAgentDraftDeadlineReminderService({
+      writer:
+        repositories.freeAgentDraftDeadlineReminderWriter,
+      clock,
+    });
+  const freeAgentDraftDeadline =
+    createFreeAgentDraftDeadlineService({
+      writer: repositories.freeAgentDraftDeadlineWriter,
+      lifecycleRepository:
+        repositories.freeAgentDraftLifecycle,
+      clock,
+    });
+  const freeAgentDraftAllocationLifecycle =
+    createFreeAgentDraftAllocationLifecycleService({
+      lifecycleRepository:
+        repositories.freeAgentDraftLifecycle,
+      clock,
+    });
+  const freeAgentDraftCompletion =
+    createFreeAgentDraftCompletionService({
+      writer:
+        repositories.freeAgentDraftCompletionWriter,
+      lifecycleRepository:
+        repositories.freeAgentDraftLifecycle,
+      clock,
+    });
+  const freeAgentDraftAuctionResolution =
+    createFreeAgentDraftAuctionResolutionService({
+      repository:
+        repositories.freeAgentDraftAuctionResolutionWriter,
+      clock,
+      lateLockCoordinator,
+    });
+  const freeAgentDraftRestrictedActivation =
+    createFreeAgentDraftRestrictedActivationService({
+      repository:
+        repositories.freeAgentDraftRestrictedActivationWriter,
+      clock,
+    });
+  const freeAgentDraftFallbackActivation =
+    createFreeAgentDraftFallbackActivationService({
+      repository:
+        repositories.freeAgentDraftFallbackActivationWriter,
+      clock,
+    });
+  const freeAgentDraftQueuedNominationActivation =
+    createFreeAgentDraftQueuedNominationActivationService({
+      repository:
+        repositories.freeAgentDraftQueuedNominationActivationWriter,
+      clock,
+    });
+  const freeAgentDraftRollover =
+    createFreeAgentDraftRolloverService({
+      writer: repositories.freeAgentDraftRolloverWriter,
+      clock,
+    });
+  const freeAgentDraftReadinessRetry =
+    createFreeAgentDraftReadinessRetryService({
+      leagueAuthorization,
+      repository: repositories.freeAgentDraftJobs,
+      clock,
+      secureRandom,
+    });
+  const freeAgentDraftReadinessJob =
+    createOpenReadyFreeAgentDraftCandidateCardsJob({
+      repository: repositories.freeAgentDraftJobs,
+      readinessService: freeAgentDraftReadiness,
+      clock,
+      secureRandom,
+      leaseOwner: secureRandom.id(),
+      logger,
+    });
+  const candidateEligibilityRevalidationJob =
+    createRevalidateFreeAgentDraftCandidateEligibilityJob({
+      repository: repositories.freeAgentDraftJobs,
+      eligibilityService:
+        candidateEligibilityRevalidation,
+      clock,
+      secureRandom,
+      leaseOwner: secureRandom.id(),
+      logger,
+    });
+  const freeAgentDraftDeadlineReminderJob =
+    createSendFreeAgentDraftDeadlineRemindersJob({
+      repository: repositories.freeAgentDraftJobs,
+      reminderService:
+        freeAgentDraftDeadlineReminder,
+      clock,
+      secureRandom,
+      leaseOwner: secureRandom.id(),
+      logger,
+    });
+  const freeAgentDraftDeadlineJob =
+    createProcessFreeAgentDraftDeadlinesJob({
+      repository: repositories.freeAgentDraftJobs,
+      deadlineService: freeAgentDraftDeadline,
+      clock,
+      secureRandom,
+      leaseOwner: secureRandom.id(),
+      logger,
+    });
+  const candidateAllocationJob =
+    createProcessFreeAgentDraftAllocationsJob({
+      repository: repositories.freeAgentDraftJobs,
+      allocationService: candidateAllocation,
+      clock,
+      secureRandom,
+      leaseOwner: secureRandom.id(),
+      logger,
+    });
+  const freeAgentDraftAllocationLifecycleJob =
+    createCoordinateFreeAgentDraftAllocationsJob({
+      writer:
+        repositories.freeAgentDraftAllocationLifecycleWriter,
+      allocationLifecycleService:
+        freeAgentDraftAllocationLifecycle,
+      clock,
+      logger,
+    });
+  const freeAgentDraftAllocationCycleJob =
+    createProcessFreeAgentDraftAllocationCycleJob({
+      allocationLifecycleJob:
+        freeAgentDraftAllocationLifecycleJob,
+      candidateAllocationJob,
+      logger,
+    });
+  const freeAgentDraftAuctionResolutionJob =
+    createResolveFreeAgentDraftAuctionsJob({
+      repository:
+        repositories.freeAgentDraftAuctionResolutionWriter,
+      resolutionService:
+        freeAgentDraftAuctionResolution,
+      clock,
+      secureRandom,
+      leaseOwner: secureRandom.id(),
+      logger,
+    });
+  const freeAgentDraftRestrictedActivationJob =
+    createActivateFreeAgentDraftRestrictedAuctionsJob({
+      repository: repositories.freeAgentDraftJobs,
+      activationService:
+        freeAgentDraftRestrictedActivation,
+      clock,
+      secureRandom,
+      leaseOwner: secureRandom.id(),
+      logger,
+    });
+  const freeAgentDraftFallbackActivationJob =
+    createActivateFreeAgentDraftFallbackAuctionsJob({
+      repository: repositories.freeAgentDraftJobs,
+      activationService:
+        freeAgentDraftFallbackActivation,
+      clock,
+      secureRandom,
+      leaseOwner: secureRandom.id(),
+      logger,
+    });
+  const freeAgentDraftQueuedNominationActivationJob =
+    createActivateFreeAgentDraftQueuedNominationsJob({
+      repository: repositories.freeAgentDraftJobs,
+      activationService:
+        freeAgentDraftQueuedNominationActivation,
+      clock,
+      secureRandom,
+      leaseOwner: secureRandom.id(),
+      logger,
+    });
+  const freeAgentDraftRolloverJob =
+    createFinalizeFreeAgentDraftRolloversJob({
+      writer: repositories.freeAgentDraftRolloverWriter,
+      repository: repositories.freeAgentDraftJobs,
+      rolloverService: freeAgentDraftRollover,
+      clock,
+      secureRandom,
+      leaseOwner: secureRandom.id(),
+      logger,
+    });
+  const freeAgentDraftCompletionJob =
+    createCompleteFreeAgentDraftsJob({
+      writer:
+        repositories.freeAgentDraftCompletionWriter,
+      repository: repositories.freeAgentDraftJobs,
+      completionService: freeAgentDraftCompletion,
+      clock,
+      secureRandom,
+      leaseOwner: secureRandom.id(),
+      logger,
+    });
+  const auctionResolution = createAuctionResolutionService({
+    repository: repositories.auctionResolutions,
+    lateLockCoordinator,
+    secureRandom,
+  });
+  const auctionResolutionJob = createResolveTargetAuctionsJob({
+    repository: repositories.auctionResolutions,
+    resolutionService: auctionResolution,
+    clock,
+    secureRandom,
+    leaseOwner: secureRandom.id(),
+    logger,
   });
   const matchupScoring = createMatchupScoringService({
     repository: repositories.matchupScoring,
@@ -1109,9 +2325,28 @@ function createTargetServices({
     scoringService: matchupScoring,
     createId: () => secureRandom.id(),
   });
+  const matchupResultCorrection =
+    createMatchupResultCorrectionService({
+      repositoryContext: repositories.context,
+      leagueAuthorization,
+      repository:
+        repositories.matchupResultCorrections,
+      clock,
+      secureRandom,
+    });
   const matchupStandings = createMatchupStandingsService({
     repository: repositories.matchupStandings,
   });
+  const standingsFinalization =
+    createStandingsFinalizationService({
+      repositoryContext: repositories.context,
+      leagueAuthorization,
+      standingsFinalizationRepository:
+        repositories.standingsFinalization,
+      auditRepository: repositories.audit,
+      clock,
+      secureRandom,
+    });
   const matchupRecovery = createMatchupRecoveryService({
     repository: repositories.matchupRecovery,
     standingsService: matchupStandings,
@@ -1123,11 +2358,12 @@ function createTargetServices({
     scheduleService: matchupSchedule,
     weekService: matchupWeeks,
     scoringService: matchupScoring,
-    resultService: matchupResults,
+    resultCorrectionService:
+      matchupResultCorrection,
     standingsService: matchupStandings,
     recoveryService: matchupRecovery,
     statisticsProviders: Object.freeze([
-      SPORTSDATAIO_PROVIDER_NAME,
+      SPORTSDATAIO_LIVE_PROVIDER_NAME,
       "release_qa_fixture",
     ]),
     clock,
@@ -1135,13 +2371,17 @@ function createTargetServices({
   });
   const matchupOccurrenceHandlers = createMatchupOccurrenceHandlers({
     statisticsService: statistics,
+    lateLockCoordinator,
     readRepository: repositories.matchupRead,
     weekService: matchupWeeks,
     legalityService: matchupLegality,
     resultService: matchupResults,
+    provider: SPORTSDATAIO_LIVE_PROVIDER_NAME,
   });
   const matchupOccurrenceJob = createRunMatchupOccurrencesJob({
     repository: repositories.matchupJobs,
+    executionGuard:
+      repositories.matchupOccurrenceRunnerExecutionGuard,
     handlers: matchupOccurrenceHandlers,
     clock,
     secureRandom,
@@ -1283,17 +2523,55 @@ function createTargetServices({
   });
 
   const league = Object.freeze({
+    candidateAllocation,
+    candidateAllocationJob,
+    candidateCards,
+    candidateEligibilityRevalidation,
+    candidateEligibilityRevalidationJob,
+    freeAgentDraftAllocationLifecycle,
+    freeAgentDraftAllocationCycleJob,
+    freeAgentDraftAllocationLifecycleJob,
+    freeAgentDraftAuctionResolution,
+    freeAgentDraftAuctionResolutionJob,
+    freeAgentDraftRestrictedActivation,
+    freeAgentDraftRestrictedActivationJob,
+    freeAgentDraftFallbackActivation,
+    freeAgentDraftFallbackActivationJob,
+    freeAgentDraftQueuedNominationActivation,
+    freeAgentDraftQueuedNominationActivationJob,
+    freeAgentDraftRollover,
+    freeAgentDraftRolloverJob,
+    freeAgentDraftCompletion,
+    freeAgentDraftCompletionJob,
+    freeAgentDraftDeadline,
+    freeAgentDraftDeadlineJob,
+    freeAgentDraftDeadlineReminder,
+    freeAgentDraftDeadlineReminderJob,
+    entryDraftSchedule,
+    lifecycleTransition,
     matchup,
+    lateLockCoordinator,
     matchupLegality,
     matchupLock,
     matchupOccurrenceHandlers,
     matchupOccurrenceJob,
     matchupRecovery,
+    matchupResultCorrection,
     matchupResults,
     matchupSchedule,
     matchupScoring,
     matchupStandings,
+    standingsFinalization,
     matchupWeeks,
+    seasonRolloverJob,
+    freeAgentDraftReadiness,
+    freeAgentDraftReadinessJob,
+    freeAgentDraftRead,
+    freeAgentDraftRecoveryRead,
+    freeAgentDraftRecoveryAction,
+    freeAgentDraftCorrectionPreview,
+    freeAgentDraftAllocationCorrection,
+    freeAgentDraftReadinessRetry,
     activity: createLeagueActivityService({
       leagueAuthorization,
       repository: repositories.leagueActivity,
@@ -1302,11 +2580,21 @@ function createTargetServices({
       leagueAuthorization,
       teamAuthorization,
       leagueAccessRepository: repositories.leagueAccess,
+      freeAgentDraftAuctionStartWriter:
+        repositories.freeAgentDraftAuctionStartWriter,
       auctionRepository: repositories.auctions,
       auctionBidRepository: repositories.auctionBids,
+      auctionReadRepository: repositories.auctionReads,
       clock,
       secureRandom,
     }),
+    auctionAdministration:
+      createAuctionAdministrationService({
+        leagueAuthorization,
+        repository:
+          repositories.auctionAdministration,
+        clock,
+      }),
     auctionResolutionDecision,
     auctionResolution,
     auctionResolutionJob,
@@ -1345,12 +2633,14 @@ function createTargetServices({
       leagueAuthorization,
       teamAuthorization,
       repository: repositories.tradeProposals,
+      lateLockCoordinator,
       clock,
       secureRandom,
     }),
     tradeRecovery: createTradeReversalService({
       leagueAuthorization,
       repository: repositories.tradeRecovery,
+      lateLockCoordinator,
       clock,
       secureRandom,
     }),
@@ -1364,8 +2654,56 @@ function createTargetServices({
     outboxPublicationJob,
     scheduledJobs: Object.freeze([
       Object.freeze({
+        name: "entry_draft_rollover",
+        runner: seasonRolloverJob,
+      }),
+      Object.freeze({
+        name: "free_agent_draft_readiness",
+        runner: freeAgentDraftReadinessJob,
+      }),
+      Object.freeze({
+        name: "free_agent_draft_eligibility_revalidation",
+        runner: candidateEligibilityRevalidationJob,
+      }),
+      Object.freeze({
+        name: "free_agent_draft_deadline_reminder",
+        runner: freeAgentDraftDeadlineReminderJob,
+      }),
+      Object.freeze({
+        name: "free_agent_draft_deadline",
+        runner: freeAgentDraftDeadlineJob,
+      }),
+      Object.freeze({
+        name: "free_agent_draft_allocation_cycle",
+        runner: freeAgentDraftAllocationCycleJob,
+      }),
+      Object.freeze({
+        name: "free_agent_draft_auction_resolution",
+        runner: freeAgentDraftAuctionResolutionJob,
+      }),
+      Object.freeze({
+        name: "free_agent_draft_restricted_activation",
+        runner: freeAgentDraftRestrictedActivationJob,
+      }),
+      Object.freeze({
+        name: "free_agent_draft_fallback_activation",
+        runner: freeAgentDraftFallbackActivationJob,
+      }),
+      Object.freeze({
+        name: "free_agent_draft_queued_nomination_activation",
+        runner: freeAgentDraftQueuedNominationActivationJob,
+      }),
+      Object.freeze({
+        name: "free_agent_draft_rollover_finalization",
+        runner: freeAgentDraftRolloverJob,
+      }),
+      Object.freeze({
         name: "auction_resolution",
         runner: auctionResolutionJob,
+      }),
+      Object.freeze({
+        name: "free_agent_draft_completion",
+        runner: freeAgentDraftCompletionJob,
       }),
       Object.freeze({ name: "trade_expiry", runner: tradeProposalExpiry }),
       Object.freeze({
@@ -1396,9 +2734,10 @@ function createTargetServices({
     commissionerCorrection: createCommissionerCorrectionService({
       leagueAuthorization,
       repository: repositories.commissionerCorrections,
+      lateLockCoordinator,
       clock,
       secureRandom,
-      providerEnabled: sportsDataIoNhl.enabled === true,
+      providerEnabled: liveSportsDataIoAdapter !== null,
     }),
     read: createLeagueReadService({
       leagueAuthorization,
@@ -1420,6 +2759,27 @@ function createTargetServices({
       clock,
       secureRandom,
     }),
+    start: createLeagueStartService({
+      repositoryContext: repositories.context,
+      leagueAuthorization,
+      leagueStartRepository:
+        repositories.leagueStart,
+      freeAgentDraftReadinessHandoffWriter:
+        repositories.freeAgentDraftReadinessHandoffWriter,
+      auditRepository: repositories.audit,
+      clock,
+      secureRandom,
+    }),
+    tradeDeadline:
+      createLeagueTradeDeadlineService({
+        repositoryContext: repositories.context,
+        leagueAuthorization,
+        leagueTradeDeadlineRepository:
+          repositories.leagueTradeDeadline,
+        auditRepository: repositories.audit,
+        clock,
+        secureRandom,
+      }),
     teamRead: createTeamReadService({
       leagueAuthorization,
       teamReadRepository: repositories.teamRead,
@@ -1437,6 +2797,7 @@ function createTargetServices({
       workspaceRepository: repositories.teamWorkspace,
       rosterMovementRepository: repositories.rosterMovements,
       buyoutRepository: repositories.buyouts,
+      lateLockCoordinator,
       clock,
       secureRandom,
     }),
@@ -1554,6 +2915,15 @@ function createTargetRouters({
     auction: createAuctionRouter({
       requestSecurity,
       auctionService: services.league.auction,
+      auctionAdministrationService:
+        services.league
+          .auctionAdministration,
+    }),
+    candidateCard: createCandidateCardRouter({
+      requestSecurity,
+      candidateCardService:
+        services.league.candidateCards,
+      rateLimiter: services.rateLimiter,
     }),
     commissionerAssignment: createCommissionerAssignmentRouter({
       ...sharedAudit,
@@ -1563,9 +2933,39 @@ function createTargetRouters({
       requestSecurity,
       commissionerCorrectionService: services.league.commissionerCorrection,
     }),
+    entryDraft: createEntryDraftRouter({
+      ...sharedAudit,
+      entryDraftScheduleService:
+        services.league.entryDraftSchedule,
+    }),
+    freeAgentDraft: createFreeAgentDraftRouter({
+      requestSecurity,
+      freeAgentDraftReadService:
+        services.league.freeAgentDraftRead,
+      freeAgentDraftReadinessRetryService:
+        services.league.freeAgentDraftReadinessRetry,
+      freeAgentDraftRecoveryReadService:
+        services.league.freeAgentDraftRecoveryRead,
+      freeAgentDraftRecoveryActionService:
+        services.league.freeAgentDraftRecoveryAction,
+      freeAgentDraftCorrectionPreviewService:
+        services.league.freeAgentDraftCorrectionPreview,
+      freeAgentDraftAllocationCorrectionService:
+        services.league
+          .freeAgentDraftAllocationCorrection,
+      rateLimiter: services.rateLimiter,
+    }),
     leagueInvitation: createLeagueInvitationRouter({
       ...sharedAudit,
       leagueInvitationService: services.league.invitation,
+    }),
+    leagueLifecycle: createLeagueLifecycleRouter({
+      ...sharedAudit,
+      leagueLifecycleTransitionService:
+        services.league.lifecycleTransition,
+      leagueTradeDeadlineService:
+        services.league.tradeDeadline,
+      leagueStartService: services.league.start,
     }),
     leagueRead: createLeagueReadRouter({
       requestSecurity,
@@ -1576,9 +2976,15 @@ function createTargetRouters({
       leagueMembershipService: services.league.membership,
     }),
     matchup: createMatchupRouter({
-      requestSecurity,
+      ...sharedAudit,
       matchupService: services.league.matchup,
     }),
+    standingsFinalization:
+      createStandingsFinalizationRouter({
+        ...sharedAudit,
+        standingsFinalizationService:
+          services.league.standingsFinalization,
+      }),
     player: createPlayerRouter({
       requestSecurity,
       playerReadService: services.players,
@@ -1641,17 +3047,25 @@ function createTargetRuntime({
   emailJobOptions,
   leagueInvalidationPublisher,
   leagueWriteMode = "open",
+  freeAgentDraftRoutesEnabled = true,
   sportsDataIoNhl,
+  sportsDataIoLiveNhl,
   sportsDataIoFetchImplementation,
+  createSportsDataIoLiveNhlAdapterFunction,
 } = {}) {
   const migrations = discoverMigrations({ migrationsDirectory });
   const migrationState = assertMigrationCompatibility(database, migrations);
-  const repositories = createTargetRepositories({ database });
+  const repositories = createTargetRepositories({
+    database,
+    secureRandom: securityFoundations?.secureRandom,
+  });
   let targetApplication = null;
+  let socketRooms = null;
   const resolvedLeagueInvalidationPublisher =
     leagueInvalidationPublisher ||
     createSocketIoInvalidationPublisher({
       getIo: () => targetApplication?.get("io"),
+      getSocketReauthorizer: () => socketRooms?.reauthorize,
     });
   const services = createTargetServices({
     repositories,
@@ -1664,7 +3078,9 @@ function createTargetRuntime({
     emailFetchImplementation,
     emailJobOptions,
     sportsDataIoNhl,
+    sportsDataIoLiveNhl,
     sportsDataIoFetchImplementation,
+    createSportsDataIoLiveNhlAdapterFunction,
   });
   const transport = createTargetRouters({
     services,
@@ -1673,6 +3089,7 @@ function createTargetRuntime({
   });
   const app = createTargetApplication({
     routers: transport.routers,
+    freeAgentDraftRoutesEnabled,
     leagueWriteGate: createLeagueWriteGate({
       mode: leagueWriteMode,
       isAllowedOrigin:
@@ -1690,7 +3107,7 @@ function createTargetRuntime({
     leagueAccessRepository: repositories.leagueAccess,
     teamAuthorityRepository: repositories.teamAuthority,
   });
-  const socketRooms = createAuthenticatedSocketRooms({
+  socketRooms = createAuthenticatedSocketRooms({
     authorizationService: socketAuthorization,
   });
   return Object.freeze({
@@ -1720,7 +3137,9 @@ function openTargetRuntime({
   emailJobOptions,
   leagueInvalidationPublisher,
   sportsDataIoNhl,
+  sportsDataIoLiveNhl,
   sportsDataIoFetchImplementation,
+  createSportsDataIoLiveNhlAdapterFunction,
   openDatabaseFunction = openDatabase,
 } = {}) {
   if (environment !== "local" && environment !== "test") {
@@ -1750,7 +3169,9 @@ function openTargetRuntime({
       emailFetchImplementation,
       emailJobOptions,
       sportsDataIoNhl,
+      sportsDataIoLiveNhl,
       sportsDataIoFetchImplementation,
+      createSportsDataIoLiveNhlAdapterFunction,
       leagueInvalidationPublisher,
     });
     let closed = false;

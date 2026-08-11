@@ -27,13 +27,20 @@ const {
   validateTradeExecutionCommand,
 } = require("../../../domain/trades/tradeExecutionPolicy");
 const {
-  createSocketInvalidation,
+  createEmptySocketRelated,
+  createSocketEventMetadata,
 } = require("../../../domain/leagues/socketInvalidation");
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
   repositoryError,
 } = require("./SqliteRepositoryError");
+const {
+  resolveSqliteLeagueOutboxWriter,
+} = require("./SqliteLeagueOutboxWriter");
+const {
+  resolveSqliteNotificationWriter,
+} = require("./SqliteNotificationWriter");
 const {
   createSqliteRecordRepository,
 } = require("./createSqliteRecordRepository");
@@ -44,6 +51,14 @@ const {
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const OPERATION = "trade.propose";
+const OWNERSHIP_TRANSFER_KEYS = Object.freeze([
+  "sourceTeamId",
+  "destinationTeamId",
+  "sourceOwnershipId",
+  "sourceOwnershipVersion",
+  "destinationOwnershipId",
+  "destinationOwnershipVersion",
+]);
 
 function stableId(value) {
   if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
@@ -53,6 +68,76 @@ function stableId(value) {
     );
   }
   return value;
+}
+
+function persistedAggregateFail(message) {
+  throw repositoryError(
+    REPOSITORY_ERROR_CODES.schemaIncompatible,
+    message
+  );
+}
+
+function exactPersistedObject(value, keys, description) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).sort().join("\u0000") !==
+      [...keys].sort().join("\u0000")
+  ) {
+    persistedAggregateFail(
+      `The accepted trade has an invalid ${description}.`
+    );
+  }
+  return value;
+}
+
+function persistedStableId(value, description) {
+  if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
+    persistedAggregateFail(
+      `The accepted trade has an invalid ${description}.`
+    );
+  }
+  return value;
+}
+
+function persistedPositiveVersion(value, description) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    persistedAggregateFail(
+      `The accepted trade has an invalid ${description}.`
+    );
+  }
+  return value;
+}
+
+function parsePersistedObject(value, description) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    persistedAggregateFail(
+      `The accepted trade has invalid ${description}.`
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    persistedAggregateFail(
+      `The accepted trade has invalid ${description}.`
+    );
+  }
+  return parsed;
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function freezeRow(row) {
@@ -129,10 +214,23 @@ function lifecycleEventType(action) {
   return action === "reject" ? "proposal_rejected" : "proposal_cancelled";
 }
 
-function createSqliteTradeProposalRepository({ database } = {}) {
+function createSqliteTradeProposalRepository({
+  database,
+  candidateCardSummerSynchronizer,
+  leagueOutboxWriter,
+  notificationWriter,
+} = {}) {
+  if (
+    !candidateCardSummerSynchronizer ||
+    typeof candidateCardSummerSynchronizer.synchronize !== "function"
+  ) {
+    throw new TypeError(
+      "createSqliteTradeProposalRepository requires a Candidate Card summer synchronizer"
+    );
+  }
   let activityRepository;
   let notificationsRepository;
-  let outboxRepository;
+  let outboxWriter;
   let listReceivingManagersStatement;
   let loadFoundationStateStatement;
   let listVisibleStatement;
@@ -171,7 +269,9 @@ function createSqliteTradeProposalRepository({ database } = {}) {
   let listAcceptanceRetentionsStatement;
   let listAcceptanceBuyoutsStatement;
   let updateExecutionTradeStatement;
-  let updateExecutionOwnershipStatement;
+  let deleteExecutionRosterDisplayOrderStatement;
+  let deleteExecutionOwnershipStatement;
+  let insertExecutionOwnershipStatement;
   let updateExecutionContractStatement;
   let insertExecutionOwnershipEventStatement;
   let insertExecutionContractEventStatement;
@@ -188,18 +288,20 @@ function createSqliteTradeProposalRepository({ database } = {}) {
   let updateConflictingTradeStatement;
   let insertAutomaticCancellationEventStatement;
   let findExecutionEventStatement;
+  let listExecutionOwnershipEventsStatement;
+  let findExecutionOwnershipStatement;
   try {
     activityRepository = createSqliteRecordRepository({
       database,
       definition: getRepositoryDefinition("league_activity"),
     });
-    notificationsRepository = createSqliteRecordRepository({
+    notificationsRepository = resolveSqliteNotificationWriter({
       database,
-      definition: getRepositoryDefinition("notifications"),
+      notificationWriter,
     });
-    outboxRepository = createSqliteRecordRepository({
+    outboxWriter = resolveSqliteLeagueOutboxWriter({
       database,
-      definition: getRepositoryDefinition("outbox_events"),
+      leagueOutboxWriter,
     });
     listReceivingManagersStatement = database.prepare(`
       SELECT DISTINCT
@@ -807,18 +909,29 @@ function createSqliteTradeProposalRepository({ database } = {}) {
         AND status = 'proposed'
         AND version = @expectedVersion
     `);
-    updateExecutionOwnershipStatement = database.prepare(`
-      UPDATE player_ownerships
-      SET team_id = @destinationTeamId,
-        slot_number = @plannedRosterSlotNumber,
-        acquired_transaction_type = 'trade_execution',
-        acquired_transaction_id = @tradeId,
-        updated_at_ms = @occurredAtMs,
-        version = version + 1
+    deleteExecutionRosterDisplayOrderStatement = database.prepare(`
+      DELETE FROM roster_display_order_entries
+      WHERE league_id = @leagueId AND ownership_id = @sourceOwnershipId
+    `);
+    deleteExecutionOwnershipStatement = database.prepare(`
+      DELETE FROM player_ownerships
       WHERE league_id = @leagueId
-        AND id = @ownershipId
+        AND id = @sourceOwnershipId
         AND team_id = @sourceTeamId
-        AND version = @ownershipVersion
+        AND version = @sourceOwnershipVersion
+    `);
+    insertExecutionOwnershipStatement = database.prepare(`
+      INSERT INTO player_ownerships (
+        id, league_id, season_id, player_id, team_id, ownership_kind,
+        roster_category, position_group, slot_number,
+        acquired_transaction_type, acquired_transaction_id,
+        created_at_ms, updated_at_ms, version, trade_blocked
+      ) VALUES (
+        @destinationOwnershipId, @leagueId, @seasonId, @playerId,
+        @destinationTeamId, @ownershipKind, @rosterCategory,
+        @positionGroup, @plannedRosterSlotNumber, 'trade_execution',
+        @tradeId, @occurredAtMs, @occurredAtMs, 1, 0
+      )
     `);
     updateExecutionContractStatement = database.prepare(`
       UPDATE contracts
@@ -838,7 +951,7 @@ function createSqliteTradeProposalRepository({ database } = {}) {
         before_metadata_json, after_metadata_json, reason, occurred_at_ms
       ) VALUES (
         @historyId, @leagueId, @seasonId, @playerId,
-        @destinationTeamId, @ownershipId, 'trade_transfer', @actorUserId,
+        @eventTeamId, @eventOwnershipId, @ownershipEventType, @actorUserId,
         'trade', @tradeId, @beforeMetadataJson, @afterMetadataJson,
         NULL, @occurredAtMs
       )
@@ -1035,6 +1148,20 @@ function createSqliteTradeProposalRepository({ database } = {}) {
         AND event_type = 'proposal_accepted'
       LIMIT 2
     `);
+    listExecutionOwnershipEventsStatement = database.prepare(`
+      SELECT * FROM ownership_events
+      WHERE league_id = @leagueId
+        AND season_id = @seasonId
+        AND source_type = 'trade'
+        AND source_id = @tradeId
+        AND event_type IN ('trade_transfer_out', 'trade_transfer_in')
+      ORDER BY ownership_id ASC, event_type ASC, id ASC
+    `);
+    findExecutionOwnershipStatement = database.prepare(`
+      SELECT * FROM player_ownerships
+      WHERE league_id = @leagueId AND id = @ownershipId
+      LIMIT 2
+    `);
   } catch (error) {
     throw mapRepositoryError(error, {
       operation: "prepareTradeProposalRepository",
@@ -1083,28 +1210,21 @@ function createSqliteTradeProposalRepository({ database } = {}) {
       metadata_json: JSON.stringify(metadata),
       occurred_at_ms: occurredAtMs,
     });
-    const payload = createSocketInvalidation({
+    const payload = createSocketEventMetadata({
       eventType: "trade.changed",
-      scope: "league",
-      scopeId: leagueId,
       version: tradeVersion,
-      changedAtMs: occurredAtMs,
+      reasonCode: "trade_changed",
+      occurredAtMs,
+      related: createEmptySocketRelated(),
     });
-    outboxRepository.insert({
+    outboxWriter.write({
       id: deterministicUuid(`outbox:${eventId}:trade.changed`),
-      league_id: leagueId,
-      event_type: "trade.changed",
-      aggregate_type: "trade",
-      aggregate_id: tradeId,
-      payload_json: JSON.stringify(payload),
-      status: "pending",
-      attempt_count: 0,
-      available_at_ms: occurredAtMs,
-      published_at_ms: null,
-      last_error_code: null,
-      created_at_ms: occurredAtMs,
-      updated_at_ms: occurredAtMs,
-      version: 1,
+      leagueId,
+      eventType: "trade.changed",
+      aggregateType: "trade",
+      aggregateId: tradeId,
+      payload,
+      occurredAtMs,
     });
   }
 
@@ -2002,10 +2122,10 @@ function createSqliteTradeProposalRepository({ database } = {}) {
         id: deterministicUuid(
           `trade-proposal-notification:${command.eventId}:${recipient.user_id}`
         ),
-        user_id: recipient.user_id,
-        league_id: command.leagueId,
-        event_type: "trade_proposal_received",
-        message_data_json: JSON.stringify({
+        userId: recipient.user_id,
+        leagueId: command.leagueId,
+        eventType: "trade_proposal_received",
+        messageDataJson: JSON.stringify({
           message:
             `Trade proposal received from ${recipient.proposing_team_name}.`,
           tradeId: command.tradeId,
@@ -2015,13 +2135,12 @@ function createSqliteTradeProposalRepository({ database } = {}) {
           receivingTeamId: command.receivingTeamId,
           receivingTeamName: recipient.receiving_team_name,
         }),
-        related_feature: "trade",
-        related_record_id: command.tradeId,
-        delivery_status: "delivered",
-        created_at_ms: command.createdAtMs,
-        read_at_ms: null,
-        delivered_at_ms: command.createdAtMs,
-        version: 1,
+        relatedFeature: "trade",
+        relatedRecordId: command.tradeId,
+        deliveryStatus: "delivered",
+        createdAtMs: command.createdAtMs,
+        deliveredAtMs: command.createdAtMs,
+        deduplicationKey: null,
       });
     }
     if (completeIdempotencyStatement.run(command).changes !== 1) {
@@ -2178,6 +2297,404 @@ function createSqliteTradeProposalRepository({ database } = {}) {
     return lifecycleAggregate({ command, replayed: false });
   });
 
+  function reconstructCommittedTeams({
+    command,
+    trade,
+    event,
+    metadata,
+    replayed,
+  }) {
+    const participantTeamIds = [
+      trade.proposing_team_id,
+      trade.receiving_team_id,
+    ].sort((left, right) => left.localeCompare(right));
+    if (
+      trade.league_id !== command.leagueId ||
+      trade.season_id !== command.seasonId ||
+      trade.proposing_team_id !== command.proposingTeamId ||
+      trade.receiving_team_id !== command.receivingTeamId ||
+      trade.proposing_team_id === trade.receiving_team_id ||
+      participantTeamIds.some((teamId) => !UUID_PATTERN.test(teamId))
+    ) {
+      persistedAggregateFail(
+        "The accepted trade participant scope is inconsistent."
+      );
+    }
+    if (
+      metadata.schemaVersion !== 1 ||
+      metadata.action !== "accept" ||
+      metadata.fromStatus !== "proposed" ||
+      metadata.toStatus !== "completed" ||
+      !Array.isArray(metadata.transfers) ||
+      !Array.isArray(metadata.ownershipTransfers)
+    ) {
+      persistedAggregateFail(
+        "The accepted trade event metadata is incomplete."
+      );
+    }
+
+    const publicTransfersByAssetId = new Map();
+    for (const transfer of metadata.transfers) {
+      exactPersistedObject(
+        transfer,
+        [
+          "assetId",
+          "assetType",
+          "sourceTeamId",
+          "destinationTeamId",
+          "plannedRosterSlotNumber",
+        ],
+        "public transfer receipt"
+      );
+      const assetId = persistedStableId(
+        transfer.assetId,
+        "public transfer asset identifier"
+      );
+      if (publicTransfersByAssetId.has(assetId)) {
+        persistedAggregateFail(
+          "The accepted trade has duplicate public transfer receipts."
+        );
+      }
+      publicTransfersByAssetId.set(assetId, transfer);
+    }
+
+    const expectedRecords = [];
+    for (const asset of listTradeAssetsStatement.all(command)) {
+      if (!['contract', 'prospect_right'].includes(asset.asset_type)) {
+        continue;
+      }
+      const snapshot = parsePersistedObject(
+        asset.proposal_snapshot_json,
+        "ownership-transfer proposal snapshot"
+      );
+      if (
+        snapshot.type !== asset.asset_type ||
+        snapshot.player === null ||
+        typeof snapshot.player !== "object" ||
+        Array.isArray(snapshot.player) ||
+        snapshot.ownership === null ||
+        typeof snapshot.ownership !== "object" ||
+        Array.isArray(snapshot.ownership)
+      ) {
+        persistedAggregateFail(
+          "The accepted trade ownership-transfer snapshot is incomplete."
+        );
+      }
+      const playerId = persistedStableId(
+        snapshot.player.id,
+        "ownership-transfer player identifier"
+      );
+      const sourceOwnershipId = persistedStableId(
+        snapshot.ownership.id,
+        "source ownership identifier"
+      );
+      const sourceOwnershipVersion = persistedPositiveVersion(
+        snapshot.ownership.version,
+        "source ownership version"
+      );
+      if (
+        snapshot.ownership.teamId !== asset.source_team_id ||
+        !participantTeamIds.includes(asset.source_team_id) ||
+        !participantTeamIds.includes(asset.destination_team_id) ||
+        asset.source_team_id === asset.destination_team_id ||
+        (asset.asset_type === "contract" &&
+          snapshot.contract?.id !== asset.contract_id) ||
+        (asset.asset_type === "prospect_right" &&
+          playerId !== asset.player_id)
+      ) {
+        persistedAggregateFail(
+          "The accepted trade ownership-transfer asset scope is inconsistent."
+        );
+      }
+      const publicTransfer = publicTransfersByAssetId.get(asset.id);
+      if (
+        !publicTransfer ||
+        publicTransfer.assetType !== asset.asset_type ||
+        publicTransfer.sourceTeamId !== asset.source_team_id ||
+        publicTransfer.destinationTeamId !== asset.destination_team_id
+      ) {
+        persistedAggregateFail(
+          "The accepted trade public transfer receipt is inconsistent."
+        );
+      }
+      const destinationOwnershipId = deterministicUuid(
+        `${command.tradeId}:ownership-tenure:${sourceOwnershipId}:destination`
+      );
+      expectedRecords.push({
+        asset,
+        snapshot,
+        playerId,
+        publicTransfer,
+        mapping: {
+          sourceTeamId: asset.source_team_id,
+          destinationTeamId: asset.destination_team_id,
+          sourceOwnershipId,
+          sourceOwnershipVersion,
+          destinationOwnershipId,
+          destinationOwnershipVersion: 1,
+        },
+      });
+    }
+    expectedRecords.sort((left, right) =>
+      left.mapping.sourceOwnershipId.localeCompare(
+        right.mapping.sourceOwnershipId
+      ) ||
+      left.mapping.destinationOwnershipId.localeCompare(
+        right.mapping.destinationOwnershipId
+      )
+    );
+
+    if (metadata.ownershipTransfers.length !== expectedRecords.length) {
+      persistedAggregateFail(
+        "The accepted trade ownership-transfer mapping is incomplete."
+      );
+    }
+    const seenOwnershipIds = new Set();
+    const ownershipTransfers = [];
+    for (let index = 0; index < expectedRecords.length; index += 1) {
+      const expected = expectedRecords[index].mapping;
+      const transfer = exactPersistedObject(
+        metadata.ownershipTransfers[index],
+        OWNERSHIP_TRANSFER_KEYS,
+        "ownership-transfer mapping"
+      );
+      persistedStableId(transfer.sourceTeamId, "source team identifier");
+      persistedStableId(
+        transfer.destinationTeamId,
+        "destination team identifier"
+      );
+      persistedStableId(
+        transfer.sourceOwnershipId,
+        "source ownership identifier"
+      );
+      persistedPositiveVersion(
+        transfer.sourceOwnershipVersion,
+        "source ownership version"
+      );
+      persistedStableId(
+        transfer.destinationOwnershipId,
+        "destination ownership identifier"
+      );
+      persistedPositiveVersion(
+        transfer.destinationOwnershipVersion,
+        "destination ownership version"
+      );
+      if (
+        OWNERSHIP_TRANSFER_KEYS.some(
+          (key) => transfer[key] !== expected[key]
+        ) ||
+        transfer.destinationOwnershipVersion !== 1 ||
+        transfer.sourceOwnershipId === transfer.destinationOwnershipId ||
+        seenOwnershipIds.has(transfer.sourceOwnershipId) ||
+        seenOwnershipIds.has(transfer.destinationOwnershipId)
+      ) {
+        persistedAggregateFail(
+          "The accepted trade ownership-transfer mapping is inconsistent."
+        );
+      }
+      seenOwnershipIds.add(transfer.sourceOwnershipId);
+      seenOwnershipIds.add(transfer.destinationOwnershipId);
+      ownershipTransfers.push(Object.freeze({ ...transfer }));
+    }
+
+    const ownershipEvents = listExecutionOwnershipEventsStatement.all(command);
+    if (ownershipEvents.length !== expectedRecords.length * 2) {
+      persistedAggregateFail(
+        "The accepted trade ownership-transfer history is incomplete."
+      );
+    }
+    const eventsByTenure = new Map();
+    for (const ownershipEvent of ownershipEvents) {
+      const key = `${ownershipEvent.event_type}:${ownershipEvent.ownership_id}`;
+      if (eventsByTenure.has(key)) {
+        persistedAggregateFail(
+          "The accepted trade ownership-transfer history is duplicated."
+        );
+      }
+      eventsByTenure.set(key, ownershipEvent);
+    }
+    for (const record of expectedRecords) {
+      const { mapping } = record;
+      const sourceEvent = eventsByTenure.get(
+        `trade_transfer_out:${mapping.sourceOwnershipId}`
+      );
+      const destinationEvent = eventsByTenure.get(
+        `trade_transfer_in:${mapping.destinationOwnershipId}`
+      );
+      if (!sourceEvent || !destinationEvent) {
+        persistedAggregateFail(
+          "The accepted trade ownership-transfer history is incomplete."
+        );
+      }
+      const ownershipKind =
+        record.asset.asset_type === "contract" ? "Rostered" : "Prospect Right";
+      const rosterCategory =
+        record.asset.asset_type === "contract"
+          ? record.snapshot.ownership.rosterCategory
+          : "Prospect";
+      const sourceSlotNumber = record.snapshot.ownership.slotNumber ?? null;
+      const destinationSlotNumber =
+        record.asset.asset_type === "contract"
+          ? record.publicTransfer.plannedRosterSlotNumber
+          : null;
+      if (!replayed) {
+        const sourceOwnership = unique(
+          findExecutionOwnershipStatement,
+          {
+            leagueId: command.leagueId,
+            ownershipId: mapping.sourceOwnershipId,
+          },
+          "A closed source ownership tenure was not unique."
+        );
+        const destinationOwnership = unique(
+          findExecutionOwnershipStatement,
+          {
+            leagueId: command.leagueId,
+            ownershipId: mapping.destinationOwnershipId,
+          },
+          "A committed destination ownership tenure was not unique."
+        );
+        if (
+          sourceOwnership !== null ||
+          destinationOwnership === null ||
+          destinationOwnership.season_id !== command.seasonId ||
+          destinationOwnership.player_id !== record.playerId ||
+          destinationOwnership.team_id !== mapping.destinationTeamId ||
+          destinationOwnership.ownership_kind !== ownershipKind ||
+          destinationOwnership.roster_category !== rosterCategory ||
+          destinationOwnership.position_group !==
+            record.snapshot.ownership.positionGroup ||
+          destinationOwnership.slot_number !== destinationSlotNumber ||
+          destinationOwnership.acquired_transaction_type !==
+            "trade_execution" ||
+          destinationOwnership.acquired_transaction_id !== command.tradeId ||
+          destinationOwnership.created_at_ms !== event.occurred_at_ms ||
+          destinationOwnership.updated_at_ms !== event.occurred_at_ms ||
+          destinationOwnership.version !== 1 ||
+          destinationOwnership.trade_blocked !== 0
+        ) {
+          persistedAggregateFail(
+            "The accepted trade committed ownership tenure is inconsistent."
+          );
+        }
+      }
+      const expectedSourceBefore = {
+        schemaVersion: 2,
+        exists: true,
+        ownership: {
+          id: mapping.sourceOwnershipId,
+          leagueId: command.leagueId,
+          seasonId: command.seasonId,
+          playerId: record.playerId,
+          teamId: mapping.sourceTeamId,
+          ownershipKind,
+          rosterCategory,
+          positionGroup: record.snapshot.ownership.positionGroup,
+          slotNumber: sourceSlotNumber,
+          version: mapping.sourceOwnershipVersion,
+        },
+      };
+      const expectedSourceAfter = {
+        schemaVersion: 2,
+        exists: false,
+        destinationOwnershipId: mapping.destinationOwnershipId,
+      };
+      const expectedDestinationBefore = {
+        schemaVersion: 2,
+        exists: false,
+        sourceOwnershipId: mapping.sourceOwnershipId,
+      };
+      const expectedDestinationAfter = {
+        schemaVersion: 2,
+        exists: true,
+        ownership: {
+          id: mapping.destinationOwnershipId,
+          leagueId: command.leagueId,
+          seasonId: command.seasonId,
+          playerId: record.playerId,
+          teamId: mapping.destinationTeamId,
+          ownershipKind,
+          rosterCategory,
+          positionGroup: record.snapshot.ownership.positionGroup,
+          slotNumber: destinationSlotNumber,
+          version: 1,
+        },
+      };
+      if (
+        sourceEvent.id !== deterministicUuid(
+          `${command.tradeId}:ownership:${mapping.sourceOwnershipId}:out`
+        ) ||
+        sourceEvent.player_id !== record.playerId ||
+        sourceEvent.team_id !== mapping.sourceTeamId ||
+        sourceEvent.actor_user_id !== event.actor_user_id ||
+        sourceEvent.source_id !== command.tradeId ||
+        sourceEvent.reason !== null ||
+        sourceEvent.occurred_at_ms !== event.occurred_at_ms ||
+        destinationEvent.id !== deterministicUuid(
+          `${command.tradeId}:ownership:${mapping.destinationOwnershipId}:in`
+        ) ||
+        destinationEvent.player_id !== record.playerId ||
+        destinationEvent.team_id !== mapping.destinationTeamId ||
+        destinationEvent.actor_user_id !== event.actor_user_id ||
+        destinationEvent.source_id !== command.tradeId ||
+        destinationEvent.reason !== null ||
+        destinationEvent.occurred_at_ms !== event.occurred_at_ms ||
+        canonicalJson(parsePersistedObject(
+          sourceEvent.before_metadata_json,
+          "source ownership closure history"
+        )) !== canonicalJson(expectedSourceBefore) ||
+        canonicalJson(parsePersistedObject(
+          sourceEvent.after_metadata_json,
+          "source ownership closure history"
+        )) !== canonicalJson(expectedSourceAfter) ||
+        canonicalJson(parsePersistedObject(
+          destinationEvent.before_metadata_json,
+          "destination ownership acquisition history"
+        )) !== canonicalJson(expectedDestinationBefore) ||
+        canonicalJson(parsePersistedObject(
+          destinationEvent.after_metadata_json,
+          "destination ownership acquisition history"
+        )) !== canonicalJson(expectedDestinationAfter)
+      ) {
+        persistedAggregateFail(
+          "The accepted trade ownership-transfer history is inconsistent."
+        );
+      }
+    }
+
+    const witnessesByTeam = new Map(
+      participantTeamIds.map((teamId) => [teamId, []])
+    );
+    for (const transfer of ownershipTransfers) {
+      witnessesByTeam.get(transfer.sourceTeamId).push({
+        ownershipId: transfer.sourceOwnershipId,
+        ownershipVersion: transfer.sourceOwnershipVersion,
+        state: "deleted",
+      });
+      witnessesByTeam.get(transfer.destinationTeamId).push({
+        ownershipId: transfer.destinationOwnershipId,
+        ownershipVersion: transfer.destinationOwnershipVersion,
+        state: "present",
+      });
+    }
+    const committedTeams = participantTeamIds.map((teamId) => {
+      const ownershipWitnesses = witnessesByTeam
+        .get(teamId)
+        .sort((left, right) => left.ownershipId.localeCompare(right.ownershipId))
+        .map((witness) => Object.freeze(witness));
+      return Object.freeze({
+        leagueId: trade.league_id,
+        seasonId: trade.season_id,
+        teamId,
+        ownershipWitnesses: Object.freeze(ownershipWitnesses),
+      });
+    });
+    return Object.freeze({
+      ownershipTransfers: Object.freeze(ownershipTransfers),
+      committedTeams: Object.freeze(committedTeams),
+    });
+  }
+
   function executionAggregate({ command, replayed }) {
     const trade = unique(
       findTradeStatement,
@@ -2195,14 +2712,35 @@ function createSqliteTradeProposalRepository({ database } = {}) {
         "The accepted trade aggregate is incomplete."
       );
     }
-    return Object.freeze({
+    const metadata = parsePersistedObject(
+      event.metadata_json,
+      "trade-acceptance event metadata"
+    );
+    const receipt = reconstructCommittedTeams({
+      command,
+      trade,
+      event,
+      metadata,
+      replayed,
+    });
+    const result = {
       replayed,
       trade: Object.freeze({ ...trade }),
       event: Object.freeze({
         ...event,
-        metadata: Object.freeze(JSON.parse(event.metadata_json)),
+        metadata: Object.freeze({
+          ...metadata,
+          ownershipTransfers: receipt.ownershipTransfers,
+        }),
       }),
+    };
+    Object.defineProperty(result, "committedTeams", {
+      configurable: false,
+      enumerable: false,
+      value: receipt.committedTeams,
+      writable: false,
     });
+    return Object.freeze(result);
   }
 
   function requireExecutionChange(result) {
@@ -2262,6 +2800,123 @@ function createSqliteTradeProposalRepository({ database } = {}) {
     });
     requireExecutionChange(updateExecutionTradeStatement.run(command));
 
+    const ownershipTenures = new Map();
+    for (const asset of preview.assets) {
+      if (!["contract", "prospect_right"].includes(asset.asset_type)) {
+        continue;
+      }
+      const current = asset.currentSnapshot;
+      const sourceOwnershipId = current.ownership.id;
+      const sourceOwnershipVersion = current.ownership.version;
+      const destinationOwnershipId = deterministicUuid(
+        `${command.tradeId}:ownership-tenure:${sourceOwnershipId}:destination`
+      );
+      deleteExecutionRosterDisplayOrderStatement.run({
+        leagueId: command.leagueId,
+        sourceOwnershipId,
+      });
+      requireExecutionChange(
+        deleteExecutionOwnershipStatement.run({
+          leagueId: command.leagueId,
+          sourceTeamId: asset.source_team_id,
+          sourceOwnershipId,
+          sourceOwnershipVersion,
+        })
+      );
+      ownershipTenures.set(asset.id, Object.freeze({
+        sourceOwnershipId,
+        sourceOwnershipVersion,
+        destinationOwnershipId,
+        destinationOwnershipVersion: 1,
+        ownershipKind:
+          asset.asset_type === "contract" ? "Rostered" : "Prospect Right",
+        rosterCategory:
+          asset.asset_type === "contract"
+            ? current.ownership.rosterCategory
+            : "Prospect",
+        positionGroup: current.ownership.positionGroup,
+        plannedRosterSlotNumber:
+          asset.asset_type === "contract"
+            ? asset.plannedRosterSlotNumber
+            : null,
+      }));
+    }
+    for (const asset of preview.assets) {
+      const tenure = ownershipTenures.get(asset.id);
+      if (!tenure) continue;
+      insertExecutionOwnershipStatement.run({
+        ...command,
+        ...tenure,
+        playerId: asset.currentSnapshot.player.id,
+        destinationTeamId: asset.destination_team_id,
+      });
+    }
+
+    function insertOwnershipTenureEvents({ asset, current, base, tenure }) {
+      insertExecutionOwnershipEventStatement.run({
+        ...base,
+        historyId: deterministicUuid(
+          `${command.tradeId}:ownership:${tenure.sourceOwnershipId}:out`
+        ),
+        playerId: current.player.id,
+        eventTeamId: asset.source_team_id,
+        eventOwnershipId: tenure.sourceOwnershipId,
+        ownershipEventType: "trade_transfer_out",
+        beforeMetadataJson: JSON.stringify({
+          schemaVersion: 2,
+          exists: true,
+          ownership: {
+            id: tenure.sourceOwnershipId,
+            leagueId: command.leagueId,
+            seasonId: command.seasonId,
+            playerId: current.player.id,
+            teamId: asset.source_team_id,
+            ownershipKind: tenure.ownershipKind,
+            rosterCategory: tenure.rosterCategory,
+            positionGroup: tenure.positionGroup,
+            slotNumber: current.ownership.slotNumber ?? null,
+            version: tenure.sourceOwnershipVersion,
+          },
+        }),
+        afterMetadataJson: JSON.stringify({
+          schemaVersion: 2,
+          exists: false,
+          destinationOwnershipId: tenure.destinationOwnershipId,
+        }),
+      });
+      insertExecutionOwnershipEventStatement.run({
+        ...base,
+        historyId: deterministicUuid(
+          `${command.tradeId}:ownership:${tenure.destinationOwnershipId}:in`
+        ),
+        playerId: current.player.id,
+        eventTeamId: asset.destination_team_id,
+        eventOwnershipId: tenure.destinationOwnershipId,
+        ownershipEventType: "trade_transfer_in",
+        beforeMetadataJson: JSON.stringify({
+          schemaVersion: 2,
+          exists: false,
+          sourceOwnershipId: tenure.sourceOwnershipId,
+        }),
+        afterMetadataJson: JSON.stringify({
+          schemaVersion: 2,
+          exists: true,
+          ownership: {
+            id: tenure.destinationOwnershipId,
+            leagueId: command.leagueId,
+            seasonId: command.seasonId,
+            playerId: current.player.id,
+            teamId: asset.destination_team_id,
+            ownershipKind: tenure.ownershipKind,
+            rosterCategory: tenure.rosterCategory,
+            positionGroup: tenure.positionGroup,
+            slotNumber: tenure.plannedRosterSlotNumber,
+            version: tenure.destinationOwnershipVersion,
+          },
+        }),
+      });
+    }
+
     const transfers = [];
     for (const asset of preview.assets) {
       const current = asset.currentSnapshot;
@@ -2272,14 +2927,7 @@ function createSqliteTradeProposalRepository({ database } = {}) {
       };
       switch (asset.asset_type) {
         case "contract": {
-          requireExecutionChange(
-            updateExecutionOwnershipStatement.run({
-              ...base,
-              ownershipId: current.ownership.id,
-              ownershipVersion: current.ownership.version,
-              plannedRosterSlotNumber: asset.plannedRosterSlotNumber,
-            })
-          );
+          const tenure = ownershipTenures.get(asset.id);
           requireExecutionChange(
             updateExecutionContractStatement.run({
               ...base,
@@ -2287,26 +2935,7 @@ function createSqliteTradeProposalRepository({ database } = {}) {
               contractVersion: current.contract.version,
             })
           );
-          insertExecutionOwnershipEventStatement.run({
-            ...base,
-            historyId: deterministicUuid(
-              `${command.tradeId}:ownership:${current.ownership.id}`
-            ),
-            playerId: current.player.id,
-            ownershipId: current.ownership.id,
-            beforeMetadataJson: JSON.stringify({
-              schemaVersion: 1,
-              teamId: asset.source_team_id,
-              rosterCategory: current.ownership.rosterCategory,
-              slotNumber: current.ownership.slotNumber,
-            }),
-            afterMetadataJson: JSON.stringify({
-              schemaVersion: 1,
-              teamId: asset.destination_team_id,
-              rosterCategory: current.ownership.rosterCategory,
-              slotNumber: asset.plannedRosterSlotNumber,
-            }),
-          });
+          insertOwnershipTenureEvents({ asset, current, base, tenure });
           insertExecutionContractEventStatement.run({
             ...base,
             historyId: deterministicUuid(
@@ -2324,34 +2953,8 @@ function createSqliteTradeProposalRepository({ database } = {}) {
           break;
         }
         case "prospect_right": {
-          requireExecutionChange(
-            updateExecutionOwnershipStatement.run({
-              ...base,
-              ownershipId: current.ownership.id,
-              ownershipVersion: current.ownership.version,
-              plannedRosterSlotNumber: null,
-            })
-          );
-          insertExecutionOwnershipEventStatement.run({
-            ...base,
-            historyId: deterministicUuid(
-              `${command.tradeId}:ownership:${current.ownership.id}`
-            ),
-            playerId: current.player.id,
-            ownershipId: current.ownership.id,
-            beforeMetadataJson: JSON.stringify({
-              schemaVersion: 1,
-              teamId: asset.source_team_id,
-              rosterCategory: "Prospect",
-              slotNumber: null,
-            }),
-            afterMetadataJson: JSON.stringify({
-              schemaVersion: 1,
-              teamId: asset.destination_team_id,
-              rosterCategory: "Prospect",
-              slotNumber: null,
-            }),
-          });
+          const tenure = ownershipTenures.get(asset.id);
+          insertOwnershipTenureEvents({ asset, current, base, tenure });
           if (current.fantasyElc !== null) {
             requireExecutionChange(
               updateExecutionContractStatement.run({
@@ -2482,6 +3085,24 @@ function createSqliteTradeProposalRepository({ database } = {}) {
       );
     }
 
+    const ownershipTransfers = preview.assets
+      .filter((asset) => ownershipTenures.has(asset.id))
+      .map((asset) => {
+        const tenure = ownershipTenures.get(asset.id);
+        return Object.freeze({
+          sourceTeamId: asset.source_team_id,
+          destinationTeamId: asset.destination_team_id,
+          sourceOwnershipId: tenure.sourceOwnershipId,
+          sourceOwnershipVersion: tenure.sourceOwnershipVersion,
+          destinationOwnershipId: tenure.destinationOwnershipId,
+          destinationOwnershipVersion: tenure.destinationOwnershipVersion,
+        });
+      })
+      .sort((left, right) =>
+        left.sourceOwnershipId.localeCompare(right.sourceOwnershipId) ||
+        left.destinationOwnershipId.localeCompare(right.destinationOwnershipId)
+      );
+
     const automaticallyCancelledTradeIds = [];
     for (const conflict of listConflictingTradesStatement.all(command)) {
       if (
@@ -2540,6 +3161,7 @@ function createSqliteTradeProposalRepository({ database } = {}) {
       generallyIllegal: preview.generallyIllegal,
       teams: preview.teams,
       transfers,
+      ownershipTransfers,
       automaticallyCancelledTradeIds,
     });
     insertLifecycleEventStatement.run({
@@ -2586,6 +3208,27 @@ function createSqliteTradeProposalRepository({ database } = {}) {
       },
       occurredAtMs: command.occurredAtMs,
       tradeVersion: command.expectedVersion + 1,
+    });
+    candidateCardSummerSynchronizer.synchronize({
+      leagueId: command.leagueId,
+      affectedTeamIds: [
+        ...new Set([
+          command.proposingTeamId,
+          command.receivingTeamId,
+        ]),
+      ].sort(),
+      affectedPlayerIds: [
+        ...new Set(
+          preview.assets
+            .filter((asset) =>
+              ["contract", "prospect_right"].includes(asset.asset_type)
+            )
+            .map((asset) => asset.currentSnapshot.player.id)
+        ),
+      ].sort(),
+      sourceOperationId: command.eventId,
+      sourceKind: "trade_execution",
+      nowMs: command.occurredAtMs,
     });
     if (
       completeIdempotencyStatement.run({

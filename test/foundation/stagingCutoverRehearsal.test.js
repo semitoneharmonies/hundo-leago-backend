@@ -7,19 +7,34 @@ const { spawnSync } = require("node:child_process");
 const { describe, test } = require("node:test");
 
 const {
+  openReadonlyDatabase,
+} = require("../../src/infrastructure/database/connection");
+const {
+  discoverMigrations,
+} = require("../../src/infrastructure/database/migrate");
+const {
   serializeStagingDescriptor,
 } = require("../../src/infrastructure/database/stagingEnvironment");
 const {
+  inspectDatabase,
+} = require("../../src/infrastructure/database/sqliteBackup");
+const {
+  ACTIVATION_CANDIDATE_FILE,
   calculateRehearsalHash,
   rehearseStagingCutover,
+  ROLLBACK_CANDIDATE_FILE,
   STAGING_REHEARSAL_ERROR_CODES,
 } = require("../../src/infrastructure/migration/rehearseStagingCutover");
 const {
   runStagingImport,
 } = require("../../src/infrastructure/migration/runStagingImport");
 const {
+  canonicalize,
   inventorySourceBundle,
 } = require("../../src/infrastructure/migration/sourceInventory");
+const {
+  REPOSITORY_CATALOG,
+} = require("../../src/infrastructure/persistence/sqlite/repositoryCatalog");
 const {
   parseArguments,
 } = require("../../scripts/db-rehearse-staging-cutover");
@@ -31,6 +46,45 @@ const RESET_MANIFEST = path.join(
   "reset-manifests",
   "2026-season-1-reset.json"
 );
+const MIGRATIONS_DIRECTORY = path.join(
+  ROOT,
+  "database",
+  "migrations"
+);
+const FAD_STATE_TABLES = Object.freeze([
+  "auction_administration_command_results",
+  "candidate_card_entries",
+  "candidate_card_help_requests",
+  "candidate_card_revisions",
+  "candidate_card_snapshot_entries",
+  "candidate_card_snapshots",
+  "candidate_cards",
+  "entry_draft_rollover_bindings",
+  "free_agent_draft_allocation_correction_command_results",
+  "free_agent_draft_allocation_events",
+  "free_agent_draft_auction_participants",
+  "free_agent_draft_draws",
+  "free_agent_draft_nomination_queue",
+  "free_agent_draft_player_allocations",
+  "free_agent_draft_readiness_attempts",
+  "free_agent_draft_readiness_corrective_requeues",
+  "free_agent_draft_readiness_operations",
+  "free_agent_draft_readiness_retry_receipts",
+  "free_agent_draft_recoveries",
+  "free_agent_draft_recovery_action_command_results",
+  "free_agent_draft_rollovers",
+  "free_agent_draft_schedule_recoveries",
+  "free_agent_draft_schedule_recovery_jobs",
+  "free_agent_draft_schedule_recovery_matchups",
+  "free_agent_draft_schedule_recovery_weeks",
+  "free_agent_draft_setup_exemptions",
+  "free_agent_draft_teams",
+  "free_agent_drafts",
+  "season_rollover_attempts",
+  "season_rollover_items",
+  "season_rollover_occurrences",
+  "season_rollovers",
+]);
 
 function createImportedAttempt(t) {
   const root = fs.mkdtempSync(
@@ -178,6 +232,69 @@ function sha256(filePath) {
     .digest("hex");
 }
 
+function valueSha256(value) {
+  return crypto
+    .createHash("sha256")
+    .update(canonicalize(value), "utf8")
+    .digest("hex");
+}
+
+function databaseReconciliation(databasePath) {
+  const inspection = inspectDatabase(databasePath);
+  const definitions = new Map(
+    REPOSITORY_CATALOG.map((definition) => [
+      definition.tableName,
+      definition,
+    ])
+  );
+  let database;
+  try {
+    database = openReadonlyDatabase({ databasePath });
+    const tableInventory = database.prepare(`
+      SELECT name
+      FROM sqlite_schema
+      WHERE type = 'table'
+        AND name NOT LIKE 'sqlite_%'
+      ORDER BY name
+    `).all().map(({ name }) => name);
+    const tableState = Object.fromEntries(
+      tableInventory.map((tableName) => {
+        const keyColumn = tableName === "schema_migrations"
+          ? "migration_id"
+          : definitions.get(tableName)?.keyColumn;
+        assert.ok(
+          keyColumn,
+          `missing reconciliation key for ${tableName}`
+        );
+        const rows = database.prepare(
+          `SELECT * FROM "${tableName}" ` +
+            `ORDER BY "${keyColumn}"`
+        ).all();
+        return [
+          tableName,
+          Object.freeze({
+            rowCount: rows.length,
+            semanticSha256: valueSha256(rows),
+          }),
+        ];
+      })
+    );
+    const dataModelVersion = database.prepare(`
+      SELECT metadata_value
+      FROM application_metadata
+      WHERE metadata_key = 'data_model_version'
+    `).get()?.metadata_value;
+    return Object.freeze({
+      inspection,
+      tableInventory: Object.freeze(tableInventory),
+      tableState: Object.freeze(tableState),
+      dataModelVersion,
+    });
+  } finally {
+    if (database?.open) database.close();
+  }
+}
+
 function inputHashes(attempt) {
   return {
     descriptor: sha256(attempt.descriptorPath),
@@ -252,6 +369,80 @@ describe("M2-14 staging cutover and rollback rehearsal", () => {
       fs.existsSync(`${attempt.databasePath}-shm`),
       false
     );
+  });
+
+  test("reconciles the schema-49 activation and rollback copies", async (t) => {
+    const attempt = createImportedAttempt(t);
+    const source = databaseReconciliation(
+      attempt.databasePath
+    );
+    await rehearseStagingCutover(attempt);
+    const activation = databaseReconciliation(path.join(
+      attempt.rehearsalDirectory,
+      ACTIVATION_CANDIDATE_FILE
+    ));
+    const rollback = databaseReconciliation(path.join(
+      attempt.rehearsalDirectory,
+      ROLLBACK_CANDIDATE_FILE
+    ));
+    const expectedLedger = discoverMigrations({
+      migrationsDirectory: MIGRATIONS_DIRECTORY,
+    })
+      .filter(({ id }) => id <= 49)
+      .map(({ id, fileName, checksum }) => ({
+        id,
+        fileName,
+        checksum,
+      }));
+    const expectedTables = [
+      ...REPOSITORY_CATALOG.map(
+        ({ tableName }) => tableName
+      ),
+      "schema_migrations",
+    ].sort();
+
+    assert.equal(REPOSITORY_CATALOG.length, 131);
+    assert.deepEqual(
+      expectedLedger.map(({ id }) => id),
+      Array.from({ length: 49 }, (_, index) => index + 1)
+    );
+    assert.equal(
+      expectedLedger.at(-1).fileName,
+      "0049_require_canonical_fad_setup_exemption_publications.sql"
+    );
+    for (const candidate of [source, activation, rollback]) {
+      assert.equal(candidate.inspection.integrity, "ok");
+      assert.equal(
+        candidate.inspection.foreignKeyViolationCount,
+        0
+      );
+      assert.equal(candidate.inspection.userVersion, 49);
+      assert.equal(candidate.dataModelVersion, "49");
+      assert.deepEqual(
+        candidate.inspection.migrations,
+        expectedLedger
+      );
+      assert.equal(candidate.tableInventory.length, 132);
+      assert.deepEqual(
+        candidate.tableInventory,
+        expectedTables
+      );
+      assert.equal(
+        candidate.tableState.schema_migrations.rowCount,
+        49
+      );
+      for (const tableName of FAD_STATE_TABLES) {
+        assert.equal(
+          candidate.tableState[tableName].rowCount,
+          0,
+          `${tableName} must remain empty`
+        );
+      }
+    }
+
+    assert.equal(source.tableState.players.rowCount, 1);
+    assert.deepEqual(activation.tableState, source.tableState);
+    assert.deepEqual(rollback.tableState, source.tableState);
   });
 
   test("a failed restore cleans only owned outputs", async (t) => {

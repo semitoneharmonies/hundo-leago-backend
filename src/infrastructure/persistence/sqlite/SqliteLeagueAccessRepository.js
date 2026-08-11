@@ -1,8 +1,17 @@
+const crypto = require("node:crypto");
+
+const {
+  createEmptySocketRelated,
+  createSocketEventMetadata,
+} = require("../../../domain/leagues/socketInvalidation");
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
   repositoryError,
 } = require("./SqliteRepositoryError");
+const {
+  resolveSqliteLeagueOutboxWriter,
+} = require("./SqliteLeagueOutboxWriter");
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -25,7 +34,26 @@ function freezeRows(rows) {
   return Object.freeze(rows.map(freezeRow));
 }
 
-function createSqliteLeagueAccessRepository({ database } = {}) {
+function deterministicUuid(value) {
+  const hex = crypto
+    .createHash("sha256")
+    .update(value, "utf8")
+    .digest("hex");
+  return (
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-` +
+    `4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-` +
+    hex.slice(20, 32)
+  );
+}
+
+function createSqliteLeagueAccessRepository({
+  database,
+  leagueOutboxWriter,
+} = {}) {
+  const outbox = resolveSqliteLeagueOutboxWriter({
+    database,
+    leagueOutboxWriter,
+  });
   let listVisibleLeaguesStatement;
   let findActiveMembershipStatement;
   let findLeagueSummaryStatement;
@@ -34,6 +62,8 @@ function createSqliteLeagueAccessRepository({ database } = {}) {
   let listLeagueSeasonsStatement;
   let listInvitableUsersStatement;
   let findMembershipStatement;
+  let listEndingManagerAssignmentsStatement;
+  let findManagerAssignmentStatement;
   let endMembershipStatement;
   let endManagerAssignmentsStatement;
   let insertMembershipActivityStatement;
@@ -157,6 +187,23 @@ function createSqliteLeagueAccessRepository({ database } = {}) {
       WHERE league_id = @leagueId AND id = @membershipId
       LIMIT 2
     `);
+    listEndingManagerAssignmentsStatement = database.prepare(`
+      SELECT id, league_id, team_id, membership_id, status,
+        ended_at_ms, version
+      FROM team_manager_assignments
+      WHERE league_id = @leagueId
+        AND membership_id = @membershipId
+        AND status IN ('pending', 'accepted')
+        AND ended_at_ms IS NULL
+      ORDER BY team_id, id
+    `);
+    findManagerAssignmentStatement = database.prepare(`
+      SELECT id, league_id, team_id, membership_id, status,
+        ended_at_ms, version
+      FROM team_manager_assignments
+      WHERE league_id = @leagueId AND id = @assignmentId
+      LIMIT 2
+    `);
     endMembershipStatement = database.prepare(`
       UPDATE league_memberships
       SET status = 'ended', ended_at_ms = @occurredAtMs,
@@ -212,7 +259,19 @@ function createSqliteLeagueAccessRepository({ database } = {}) {
           "The league membership changed before removal."
         );
       }
-      endManagerAssignmentsStatement.run(command);
+      const currentManagerAssignments =
+        listEndingManagerAssignmentsStatement.all(command);
+      const endedManagerAssignments =
+        endManagerAssignmentsStatement.run(command);
+      if (
+        endedManagerAssignments.changes !==
+        currentManagerAssignments.length
+      ) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.versionConflict,
+          "A manager assignment changed before membership removal."
+        );
+      }
       const ended = endMembershipStatement.run(command);
       if (ended.changes !== 1) {
         throw repositoryError(
@@ -227,7 +286,61 @@ function createSqliteLeagueAccessRepository({ database } = {}) {
           removedUserId: current.user_id,
         }),
       });
-      return findMembershipStatement.get(command);
+      const endedMembership = findMembershipStatement.get(command);
+      outbox.write({
+        id: command.publicationId,
+        leagueId: command.leagueId,
+        eventType: "league.changed",
+        aggregateType: "league_membership",
+        aggregateId: endedMembership.id,
+        occurredAtMs: command.occurredAtMs,
+        payload: createSocketEventMetadata({
+          eventType: "league.changed",
+          version: endedMembership.version,
+          reasonCode: "membership_changed",
+          occurredAtMs: command.occurredAtMs,
+          related: createEmptySocketRelated(),
+        }),
+      });
+      for (const previous of currentManagerAssignments) {
+        const endedAssignment = findManagerAssignmentStatement.get({
+          leagueId: command.leagueId,
+          assignmentId: previous.id,
+        });
+        if (
+          !endedAssignment ||
+          endedAssignment.membership_id !== command.membershipId ||
+          endedAssignment.team_id !== previous.team_id ||
+          endedAssignment.status !== "ended" ||
+          endedAssignment.ended_at_ms !== command.occurredAtMs ||
+          endedAssignment.version !== previous.version + 1
+        ) {
+          throw repositoryError(
+            REPOSITORY_ERROR_CODES.versionConflict,
+            "A manager assignment changed before membership removal."
+          );
+        }
+        outbox.write({
+          id: deterministicUuid(
+            `${command.publicationId}:manager-assignment:${previous.id}`
+          ),
+          leagueId: command.leagueId,
+          eventType: "team.changed",
+          aggregateType: "team_manager_assignment",
+          aggregateId: endedAssignment.id,
+          occurredAtMs: command.occurredAtMs,
+          payload: createSocketEventMetadata({
+            eventType: "team.changed",
+            version: endedAssignment.version,
+            reasonCode: "manager_assignment_changed",
+            occurredAtMs: command.occurredAtMs,
+            related: createEmptySocketRelated({
+              teamId: endedAssignment.team_id,
+            }),
+          }),
+        });
+      }
+      return endedMembership;
     });
   } catch (error) {
     throw mapRepositoryError(error, {
@@ -334,6 +447,7 @@ function createSqliteLeagueAccessRepository({ database } = {}) {
             membershipId: stableId(command.membershipId),
             actorUserId: stableId(command.actorUserId),
             activityId: stableId(command.activityId),
+            publicationId: stableId(command.publicationId),
             expectedVersion: command.expectedVersion,
             occurredAtMs: command.occurredAtMs,
           })

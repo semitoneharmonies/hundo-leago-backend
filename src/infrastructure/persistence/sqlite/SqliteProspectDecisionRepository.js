@@ -28,7 +28,18 @@ function freezeRows(rows) {
   return Object.freeze(rows.map(freezeRow));
 }
 
-function createSqliteProspectDecisionRepository({ database } = {}) {
+function createSqliteProspectDecisionRepository({
+  database,
+  candidateCardSummerSynchronizer,
+} = {}) {
+  if (
+    !candidateCardSummerSynchronizer ||
+    typeof candidateCardSummerSynchronizer.synchronize !== "function"
+  ) {
+    throw new TypeError(
+      "createSqliteProspectDecisionRepository requires a Candidate Card summer synchronizer"
+    );
+  }
   const ownerships = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("player_ownerships"),
@@ -156,6 +167,14 @@ function createSqliteProspectDecisionRepository({ database } = {}) {
           occurred_at_ms: decision.occurredAtMs,
         })
       );
+      candidateCardSummerSynchronizer.synchronize({
+        leagueId: decision.leagueId,
+        affectedTeamIds: [decision.teamId],
+        affectedPlayerIds: [decision.playerId],
+        sourceOperationId: decision.ownershipEventId,
+        sourceKind: "prospect_decision",
+        nowMs: decision.occurredAtMs,
+      });
       return Object.freeze({
         ownership,
         contract,
@@ -225,6 +244,14 @@ function createSqliteProspectDecisionRepository({ database } = {}) {
           "The prospect right changed before release."
         );
       }
+      candidateCardSummerSynchronizer.synchronize({
+        leagueId: decision.leagueId,
+        affectedTeamIds: [decision.teamId],
+        affectedPlayerIds: [decision.playerId],
+        sourceOperationId: decision.ownershipEventId,
+        sourceKind: "prospect_decision",
+        nowMs: decision.occurredAtMs,
+      });
       return Object.freeze({
         releasedOwnership: current,
         ownershipEvent,

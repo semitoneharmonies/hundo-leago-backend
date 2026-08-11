@@ -10,10 +10,14 @@ const {
   FIXTURE_DATABASE_ID,
   FIXTURE_ENVIRONMENT_ID,
 } = require("../../../operations/release/releaseQaFixtureContract");
+const {
+  StagingMaintenanceExclusionError,
+} = require("./createStagingMaintenanceExclusionGuard");
 
 const CONFIRMATION = "IMPORT SPORTSDATAIO STAGING DATA";
 const OPERATION = "staging_sportsdataio_import";
 const EVENT_TYPE = "staging_sportsdataio_import";
+const MAINTENANCE_EXCLUSION = "staging_provider_catalog_import";
 const KEY_PATTERN = /^[\x21-\x7e]{1,200}$/;
 const UUID_PATTERN =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -222,6 +226,7 @@ function createStagingSportsDataIoImportService({
   leagueWriteMode,
   scheduledJobsEnabled,
   providerEnabled,
+  maintenanceExclusionGuard,
   platformAuthorization,
   importService,
   clock,
@@ -249,6 +254,11 @@ function createStagingSportsDataIoImportService({
       "staging SportsDataIO import requires database and ID boundaries"
     );
   }
+  assertMethod(
+    maintenanceExclusionGuard,
+    "assertExclusion",
+    "a staging maintenance-exclusion guard"
+  );
   assertMethod(
     platformAuthorization,
     "requireAdministrator",
@@ -306,6 +316,9 @@ function createStagingSportsDataIoImportService({
     result,
   }) => {
     assertFixtureIdentity(database);
+    maintenanceExclusionGuard.assertExclusion(
+      MAINTENANCE_EXCLUSION
+    );
     const eventId = createId();
     insertEvent.run(
       eventId,
@@ -335,6 +348,9 @@ function createStagingSportsDataIoImportService({
   function recordFailure({ actorUserId, reason, error }) {
     try {
       assertFixtureIdentity(database);
+      maintenanceExclusionGuard.assertExclusion(
+        MAINTENANCE_EXCLUSION
+      );
       insertEvent.run(
         createId(),
         "failed",
@@ -411,6 +427,9 @@ function createStagingSportsDataIoImportService({
     }
 
     assertFixtureIdentity(database);
+    maintenanceExclusionGuard.assertExclusion(
+      MAINTENANCE_EXCLUSION
+    );
     importInProgress = true;
     try {
       const authorizePersist = async () => {
@@ -418,6 +437,9 @@ function createStagingSportsDataIoImportService({
           platformAuthorization.requireAdministrator(authenticated);
         assertAuthorityUnchanged(authority, refreshedAuthority);
         assertFixtureIdentity(database);
+        maintenanceExclusionGuard.assertExclusion(
+          MAINTENANCE_EXCLUSION
+        );
         return refreshedAuthority;
       };
       const imported = await importService.importLastSeason({
@@ -436,13 +458,16 @@ function createStagingSportsDataIoImportService({
         result,
       });
     } catch (error) {
-      recordFailure({
-        actorUserId: authority.actorUserId,
-        reason: body.reason,
-        error,
-      });
+      if (!(error instanceof StagingMaintenanceExclusionError)) {
+        recordFailure({
+          actorUserId: authority.actorUserId,
+          reason: body.reason,
+          error,
+        });
+      }
       if (
         error instanceof StagingSportsDataIoImportError ||
+        error instanceof StagingMaintenanceExclusionError ||
         error?.code === "PLATFORM_ADMINISTRATOR_REQUIRED"
       ) {
         throw error;

@@ -1,9 +1,9 @@
 const {
   reportTargetStartupFailure,
-  startTargetProcess,
-} = require("./src/bootstrap/startTargetProcess");
+  startBackendProcess,
+} = require("./src/bootstrap/startBackendProcess");
 
-startTargetProcess().catch((error) => {
+startBackendProcess().catch((error) => {
   reportTargetStartupFailure(error);
   process.exitCode = 1;
 });

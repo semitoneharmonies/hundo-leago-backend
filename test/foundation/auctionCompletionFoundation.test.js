@@ -6,18 +6,15 @@ const path = require("node:path");
 const { describe, test } = require("node:test");
 
 const {
-  AUCTION_COMPLETION_CODES,
-  AuctionCompletionPolicyError,
-  planAuctionContractSeasons,
-} = require(
-  "../../src/domain/auctions/auctionCompletionPolicy"
-);
-const {
   buildAuctionResolutionOccurrenceKey,
 } = require("../../src/domain/auctions/auctionResolutionPolicy");
 const {
   createAuctionResolutionService,
 } = require("../../src/application/services/auctions/createAuctionResolutionService");
+const {
+  JOB_NAME,
+  createResolveTargetAuctionsJob,
+} = require("../../src/jobs/definitions/resolveTargetAuctions");
 const {
   openDatabase,
 } = require("../../src/infrastructure/database/connection");
@@ -30,6 +27,9 @@ const {
 const {
   createSqliteAuctionResolutionRepository,
 } = require("../../src/infrastructure/persistence/sqlite/SqliteAuctionResolutionRepository");
+const {
+  REPOSITORY_ERROR_CODES,
+} = require("../../src/infrastructure/persistence/sqlite/SqliteRepositoryError");
 
 const MIGRATIONS_DIRECTORY = path.resolve(
   __dirname,
@@ -44,15 +44,6 @@ const NOW_MS = Date.parse("2026-07-26T23:00:00.000Z");
 function uuid(value) {
   return `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 }
-
-const IDS = Object.freeze({
-  league: uuid(1),
-  current: uuid(2),
-  future1: uuid(3),
-  future2: uuid(4),
-  generated1: uuid(5),
-  generated2: uuid(6),
-});
 
 const PERSISTED = Object.freeze({
   league: uuid(1_000),
@@ -74,37 +65,9 @@ const PERSISTED = Object.freeze({
   source: uuid(1_016),
   existingOwnership: uuid(1_017),
   blockingOutbox: uuid(1_018),
+  futureSeason1: uuid(1_019),
+  futureSeason2: uuid(1_020),
 });
-
-function season(id, label, status = "planned") {
-  return {
-    id,
-    label,
-    nhlSeasonKey: `${label}${Number(label) + 1}`,
-    status,
-  };
-}
-
-function input(overrides = {}) {
-  const currentSeason = season(IDS.current, "2026", "active");
-  return {
-    leagueId: IDS.league,
-    currentSeason,
-    existingSeasons: [currentSeason],
-    futureSeasonIds: [IDS.generated1, IDS.generated2],
-    termYears: 3,
-    nowMs: 1_000,
-    ...overrides,
-  };
-}
-
-function assertPolicyError(callback, reasonCode) {
-  assert.throws(callback, (error) =>
-    error instanceof AuctionCompletionPolicyError &&
-    error.code === AUCTION_COMPLETION_CODES.inputInvalid &&
-    error.reasonCode === reasonCode
-  );
-}
 
 function semanticHash(database) {
   const rows = database
@@ -122,6 +85,32 @@ function semanticHash(database) {
     .createHash("sha256")
     .update(JSON.stringify(rows))
     .digest("hex");
+}
+
+function replaceAuctionContextForIsolationTest(
+  database,
+  sourceKind
+) {
+  database.exec(`
+    DROP TRIGGER auction_contexts_immutable_update;
+    DROP TRIGGER auction_contexts_immutable_delete;
+    PRAGMA ignore_check_constraints = ON;
+  `);
+  if (sourceKind === null) {
+    database
+      .prepare(
+        "DELETE FROM auction_contexts WHERE auction_id = ?"
+      )
+      .run(PERSISTED.auction);
+    return;
+  }
+  database
+    .prepare(`
+      UPDATE auction_contexts
+      SET source_kind = ?
+      WHERE auction_id = ?
+    `)
+    .run(sourceKind, PERSISTED.auction);
 }
 
 function insertUser(repositories, id, name) {
@@ -231,6 +220,8 @@ function createPersistenceRuntime(
     playoffsStartAtMs = NOW_MS + 86_400_000,
     resolvesAtMs = NOW_MS,
     salaryCapCents = 10_000,
+    lateLockCoordinator,
+    candidateCardSummerSynchronizer,
   } = {}
 ) {
   const temporaryRoot = fs.mkdtempSync(
@@ -354,6 +345,17 @@ function createPersistenceRuntime(
     updated_at_ms: OPEN_MS,
     version: 1,
   });
+  repositories.auction_contexts.insert({
+    id: PERSISTED.auction,
+    league_id: PERSISTED.league,
+    season_id: PERSISTED.season,
+    auction_id: PERSISTED.auction,
+    source_kind: "ordinary_weekly",
+    fad_id: null,
+    fad_rollover_id: null,
+    fad_allocation_id: null,
+    created_at_ms: OPEN_MS,
+  });
 
   function insertBid({
     id,
@@ -445,11 +447,30 @@ function createPersistenceRuntime(
       ...bidB,
     });
   }
+  const summerSynchronizationCalls = [];
+  const resolvedCandidateCardSummerSynchronizer = {
+    synchronize(input) {
+      summerSynchronizationCalls.push({
+        inTransaction: connection.database.inTransaction,
+        input,
+      });
+      return candidateCardSummerSynchronizer?.synchronize(input);
+    },
+  };
   const repository = createSqliteAuctionResolutionRepository({
     database: connection.database,
+    candidateCardSummerSynchronizer:
+      resolvedCandidateCardSummerSynchronizer,
   });
   let nextId = 10_000;
   const secureRandom = { id: () => uuid(nextId++) };
+  const lateLockCalls = [];
+  const resolvedLateLockCoordinator = lateLockCoordinator || {
+    async coordinateCommittedRoster(batch) {
+      lateLockCalls.push(batch);
+      return Object.freeze({ status: "not_applicable" });
+    },
+  };
   return {
     connection,
     database: connection.database,
@@ -457,7 +478,16 @@ function createPersistenceRuntime(
     repositories,
     repository,
     secureRandom,
-    service: createAuctionResolutionService({ repository, secureRandom }),
+    summerSynchronizationCalls,
+    candidateCardSummerSynchronizer:
+      resolvedCandidateCardSummerSynchronizer,
+    lateLockCalls,
+    lateLockCoordinator: resolvedLateLockCoordinator,
+    service: createAuctionResolutionService({
+      repository,
+      lateLockCoordinator: resolvedLateLockCoordinator,
+      secureRandom,
+    }),
   };
 }
 
@@ -500,110 +530,10 @@ function directCompletion(overrides = {}) {
   };
 }
 
-describe("M5-04 auction contract-season planning", () => {
-  test("creates only the missing planned seasons required by the term", () => {
-    const plan = planAuctionContractSeasons(input());
-
-    assert.deepEqual(plan.seasonIds, [
-      IDS.current,
-      IDS.generated1,
-      IDS.generated2,
-    ]);
-    assert.deepEqual(plan.seasonsToCreate, [
-      {
-        id: IDS.generated1,
-        leagueId: IDS.league,
-        label: "2027",
-        nhlSeasonKey: "20272028",
-        status: "planned",
-        createdAtMs: 1_000,
-        updatedAtMs: 1_000,
-      },
-      {
-        id: IDS.generated2,
-        leagueId: IDS.league,
-        label: "2028",
-        nhlSeasonKey: "20282029",
-        status: "planned",
-        createdAtMs: 1_000,
-        updatedAtMs: 1_000,
-      },
-    ]);
-    assert.equal(Object.isFrozen(plan), true);
-    assert.equal(Object.isFrozen(plan.seasonsToCreate[0]), true);
-  });
-
-  test("reuses matching future seasons and never changes their lifecycle", () => {
-    const current = season(IDS.current, "2026", "active");
-    const future1 = season(IDS.future1, "2027", "planned");
-    const future2 = season(IDS.future2, "2028", "active");
-    const plan = planAuctionContractSeasons(input({
-      currentSeason: current,
-      existingSeasons: [current, future1, future2],
-    }));
-
-    assert.deepEqual(plan.seasonIds, [
-      IDS.current,
-      IDS.future1,
-      IDS.future2,
-    ]);
-    assert.deepEqual(plan.seasonsToCreate, []);
-  });
-
-  test("a one-year term neither consumes nor creates a future season", () => {
-    const plan = planAuctionContractSeasons(input({ termYears: 1 }));
-    assert.deepEqual(plan.seasonIds, [IDS.current]);
-    assert.deepEqual(plan.seasonsToCreate, []);
-  });
-
-  test("rejects mismatched current, completed future, and conflicting seasons", () => {
-    const current = season(IDS.current, "2026", "active");
-    for (const value of [
-      input({ existingSeasons: [] }),
-      input({
-        existingSeasons: [
-          current,
-          season(IDS.future1, "2027", "completed"),
-        ],
-      }),
-      input({
-        existingSeasons: [
-          current,
-          season(IDS.future1, "2027"),
-          season(IDS.future2, "2027"),
-        ],
-      }),
-    ]) {
-      assertPolicyError(
-        () => planAuctionContractSeasons(value),
-        AUCTION_COMPLETION_CODES.seasonConflict
-      );
-    }
-  });
-
-  test("rejects malformed terms, IDs, timestamps, and extra input", () => {
-    const cases = [
-      [input({ termYears: 4 }), AUCTION_COMPLETION_CODES.termInvalid],
-      [input({ leagueId: "bad" }), AUCTION_COMPLETION_CODES.stableIdInvalid],
-      [input({ nowMs: -1 }), AUCTION_COMPLETION_CODES.timestampInvalid],
-      [
-        { ...input(), unexpected: true },
-        AUCTION_COMPLETION_CODES.inputInvalid,
-      ],
-    ];
-    for (const [value, reasonCode] of cases) {
-      assertPolicyError(
-        () => planAuctionContractSeasons(value),
-        reasonCode
-      );
-    }
-  });
-});
-
 describe("M5-04 atomic SQLite auction completion", () => {
-  test("commits one winner, contract schedule, ownership, activity, and metadata-only outbox", (t) => {
+  test("commits one winner, contract schedule, ownership, activity, and metadata-only outbox", async (t) => {
     const runtime = createPersistenceRuntime(t);
-    const result = resolve(runtime.service);
+    const result = await resolve(runtime.service);
 
     assert.deepEqual(
       {
@@ -621,6 +551,39 @@ describe("M5-04 atomic SQLite auction completion", () => {
         generalIllegal: false,
       }
     );
+    assert.deepEqual(result.lateLock, { status: "not_applicable" });
+    assert.deepEqual(runtime.summerSynchronizationCalls, [
+      {
+        inTransaction: true,
+        input: {
+          leagueId: PERSISTED.league,
+          affectedTeamIds: [PERSISTED.teamA],
+          affectedPlayerIds: [PERSISTED.player],
+          sourceOperationId: result.resolutionId,
+          sourceKind: "auction_allocation",
+          nowMs: NOW_MS,
+        },
+      },
+    ]);
+    assert.deepEqual(runtime.lateLockCalls, [
+      {
+        mutationKind: "auction_resolution",
+        teams: [
+          {
+            leagueId: PERSISTED.league,
+            seasonId: PERSISTED.season,
+            teamId: PERSISTED.teamA,
+            ownershipWitnesses: [
+              {
+                ownershipId: result.ownershipId,
+                ownershipVersion: 1,
+                state: "present",
+              },
+            ],
+          },
+        ],
+      },
+    ]);
     const auction = runtime.database
       .prepare("SELECT status, version FROM auctions WHERE id = ?")
       .get(PERSISTED.auction);
@@ -675,14 +638,14 @@ describe("M5-04 atomic SQLite auction completion", () => {
         .slice(1),
       [
         {
-          label: "2027",
+          label: "2027-28",
           nhl_season_key: "20272028",
           status: "planned",
           regular_season_starts_at_ms: null,
           fantasy_playoffs_start_at_ms: null,
         },
         {
-          label: "2028",
+          label: "2028-29",
           nhl_season_key: "20282029",
           status: "planned",
           regular_season_starts_at_ms: null,
@@ -713,12 +676,23 @@ describe("M5-04 atomic SQLite auction completion", () => {
     const outbox = runtime.database.prepare("SELECT * FROM outbox_events").get();
     const payload = JSON.parse(outbox.payload_json);
     assert.deepEqual(payload, {
-      kind: "invalidation",
-      eventType: "auction.updated",
-      scope: "league",
-      scopeId: PERSISTED.league,
+      eventId: outbox.id,
+      type: "auction.changed",
+      leagueId: PERSISTED.league,
+      resourceId: PERSISTED.auction,
       version: 2,
-      changedAtMs: NOW_MS,
+      reasonCode: "auction_changed",
+      occurredAt: NOW_MS,
+      related: {
+        fadId: null,
+        teamId: null,
+        cardId: null,
+        allocationId: null,
+        auctionId: PERSISTED.auction,
+        recoveryId: null,
+        nominationQueueId: null,
+        scheduleRecoveryOperationId: null,
+      },
     });
     assert.equal(/bid|value|term/i.test(outbox.payload_json), false);
     assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
@@ -726,9 +700,12 @@ describe("M5-04 atomic SQLite auction completion", () => {
     const after = semanticHash(runtime.database);
     const restartedRepository = createSqliteAuctionResolutionRepository({
       database: runtime.database,
+      candidateCardSummerSynchronizer:
+        runtime.candidateCardSummerSynchronizer,
     });
-    const replay = createAuctionResolutionService({
+    const replay = await createAuctionResolutionService({
       repository: restartedRepository,
+      lateLockCoordinator: runtime.lateLockCoordinator,
       secureRandom: runtime.secureRandom,
     }).resolveDue({
       leagueId: PERSISTED.league,
@@ -740,10 +717,364 @@ describe("M5-04 atomic SQLite auction completion", () => {
     assert.equal(replay.completed, true);
     assert.equal(replay.replayed, true);
     assert.equal(replay.resolutionId, result.resolutionId);
+    assert.deepEqual(replay.lateLock, { status: "not_applicable" });
+    assert.equal(runtime.lateLockCalls.length, 2);
+    assert.deepEqual(runtime.lateLockCalls[1], runtime.lateLockCalls[0]);
+    assert.equal(runtime.summerSynchronizationCalls.length, 1);
     assert.equal(semanticHash(runtime.database), after);
   });
 
-  test("preserves tied anti-bluff pricing at the winning current AAV", (t) => {
+  test("contains post-commit coordinator failure without rejecting an auction winner", async (t) => {
+    const runtime = createPersistenceRuntime(t, {
+      lateLockCoordinator: {
+        async coordinateCommittedRoster() {
+          throw new Error("late-lock unavailable");
+        },
+      },
+    });
+
+    const result = await resolve(runtime.service);
+
+    assert.equal(result.completed, true);
+    assert.equal(result.status, "resolved");
+    assert.deepEqual(result.lateLock, { status: "awaiting_data" });
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM player_ownerships")
+        .get().count,
+      1
+    );
+  });
+
+  test(
+    "keeps the real scheduled resolver on the ordinary context and idempotently completes it once",
+    async (t) => {
+      const runtime = createPersistenceRuntime(t);
+      const job = createResolveTargetAuctionsJob({
+        repository: runtime.repository,
+        resolutionService: runtime.service,
+        clock: { nowMs: () => NOW_MS },
+        secureRandom: runtime.secureRandom,
+        leaseOwner: "fad-06-ordinary-worker",
+        leaseDurationMs: 60_000,
+        batchSize: 10,
+        logger: { error() {} },
+      });
+
+      assert.deepEqual(await job.run(), {
+        job: JOB_NAME,
+        status: "succeeded",
+        due: 1,
+        acquired: 1,
+        completed: 1,
+        failed: 0,
+        skipped: 0,
+      });
+      assert.equal(
+        runtime.database
+          .prepare(
+            "SELECT status FROM auctions WHERE id = ?"
+          )
+          .get(PERSISTED.auction).status,
+        "resolved"
+      );
+      assert.equal(
+        runtime.database
+          .prepare(
+            "SELECT COUNT(*) AS count FROM auction_resolutions"
+          )
+          .get().count,
+        1
+      );
+      assert.equal(
+        runtime.database
+          .prepare(
+            "SELECT status FROM job_runs WHERE job_type = 'auction.resolve.target'"
+          )
+          .get().status,
+        "succeeded"
+      );
+      assert.deepEqual(await job.run(), {
+        job: JOB_NAME,
+        status: "succeeded",
+        due: 0,
+        acquired: 0,
+        completed: 0,
+        failed: 0,
+        skipped: 0,
+      });
+      assert.equal(
+        runtime.database
+          .prepare(
+            "SELECT COUNT(*) AS count FROM auction_resolutions"
+          )
+          .get().count,
+        1
+      );
+    }
+  );
+
+  test(
+    "fails closed for missing and FAD contexts in due reads, direct completion, and the real scheduled resolver",
+    async (t) => {
+      for (const sourceKind of [
+        "fad_open_rapid",
+        "fad_restricted",
+        null,
+      ]) {
+        await t.test(
+          sourceKind || "missing",
+          async (contextTest) => {
+            const runtime =
+              createPersistenceRuntime(contextTest);
+            replaceAuctionContextForIsolationTest(
+              runtime.database,
+              sourceKind
+            );
+            const before = semanticHash(
+              runtime.database
+            );
+
+            assert.deepEqual(
+              runtime.repository.listDue({
+                nowMs: NOW_MS,
+                limit: 10,
+              }),
+              []
+            );
+            assert.equal(
+              runtime.repository.loadCandidate({
+                leagueId: PERSISTED.league,
+                auctionId: PERSISTED.auction,
+                nowMs: NOW_MS,
+              }),
+              null
+            );
+            assert.throws(
+              () =>
+                runtime.repository.completeDue(
+                  directCompletion()
+                ),
+              ({ code }) =>
+                code ===
+                REPOSITORY_ERROR_CODES.recordNotFound
+            );
+
+            const job = createResolveTargetAuctionsJob({
+              repository: runtime.repository,
+              resolutionService: runtime.service,
+              clock: { nowMs: () => NOW_MS },
+              secureRandom: runtime.secureRandom,
+              leaseOwner:
+                "fad-06-context-isolation-worker",
+              leaseDurationMs: 60_000,
+              batchSize: 10,
+              logger: { error() {} },
+            });
+            assert.deepEqual(await job.run(), {
+              job: JOB_NAME,
+              status: "succeeded",
+              due: 0,
+              acquired: 0,
+              completed: 0,
+              failed: 0,
+              skipped: 0,
+            });
+            assert.equal(
+              semanticHash(runtime.database),
+              before
+            );
+          }
+        );
+      }
+    }
+  );
+
+  test("persists exact one- and two-year plans through the shared planner", async (t) => {
+    const oneYear = createPersistenceRuntime(t, {
+      bidA: {
+        totalValueCents: 400,
+        termYears: 1,
+        lowestOfferedAavCents: 100,
+      },
+    });
+    await resolve(oneYear.service);
+    assert.equal(
+      oneYear.database
+        .prepare("SELECT COUNT(*) AS count FROM seasons")
+        .get().count,
+      1
+    );
+    assert.deepEqual(
+      oneYear.database
+        .prepare(`
+          SELECT year_number, season_id, status
+          FROM contract_years
+          ORDER BY year_number
+        `)
+        .all(),
+      [
+        {
+          year_number: 1,
+          season_id: PERSISTED.season,
+          status: "current",
+        },
+      ]
+    );
+
+    const twoYear = createPersistenceRuntime(t, {
+      bidA: {
+        totalValueCents: 800,
+        termYears: 2,
+        lowestOfferedAavCents: 100,
+      },
+    });
+    await resolve(twoYear.service);
+    assert.deepEqual(
+      twoYear.database
+        .prepare(`
+          SELECT label, nhl_season_key, status
+          FROM seasons
+          WHERE id <> ?
+        `)
+        .all(PERSISTED.season),
+      [
+        {
+          label: "2027-28",
+          nhl_season_key: "20272028",
+          status: "planned",
+        },
+      ]
+    );
+    assert.equal(
+      twoYear.database
+        .prepare("SELECT COUNT(*) AS count FROM contract_years")
+        .get().count,
+      2
+    );
+  });
+
+  test("reuses canonical planned seasons without lifecycle or pointer mutation", async (t) => {
+    const runtime = createPersistenceRuntime(t);
+    const insertSeason = (id, label, nhlSeasonKey) => {
+      runtime.repositories.seasons.insert({
+        id,
+        league_id: PERSISTED.league,
+        label,
+        nhl_season_key: nhlSeasonKey,
+        status: "planned",
+        regular_season_starts_at_ms: null,
+        regular_season_ends_at_ms: null,
+        fantasy_playoffs_start_at_ms: null,
+        fantasy_playoffs_end_at_ms: null,
+        free_agent_draft_completed_at_ms: null,
+        created_at_ms: OPEN_MS,
+        updated_at_ms: OPEN_MS,
+        version: 4,
+      });
+    };
+    insertSeason(
+      PERSISTED.futureSeason1,
+      "2027-28",
+      "20272028"
+    );
+    insertSeason(
+      PERSISTED.futureSeason2,
+      "2028-29",
+      "20282029"
+    );
+    const before = runtime.database
+      .prepare(`
+        SELECT *
+        FROM seasons
+        WHERE id IN (?, ?)
+        ORDER BY id
+      `)
+      .all(
+        PERSISTED.futureSeason1,
+        PERSISTED.futureSeason2
+      );
+
+    await resolve(runtime.service);
+
+    assert.deepEqual(
+      runtime.database
+        .prepare(`
+          SELECT *
+          FROM seasons
+          WHERE id IN (?, ?)
+          ORDER BY id
+        `)
+        .all(
+          PERSISTED.futureSeason1,
+          PERSISTED.futureSeason2
+        ),
+      before
+    );
+    assert.deepEqual(
+      runtime.database
+        .prepare(`
+          SELECT year_number, season_id
+          FROM contract_years
+          ORDER BY year_number
+        `)
+        .all(),
+      [
+        {
+          year_number: 1,
+          season_id: PERSISTED.season,
+        },
+        {
+          year_number: 2,
+          season_id: PERSISTED.futureSeason1,
+        },
+        {
+          year_number: 3,
+          season_id: PERSISTED.futureSeason2,
+        },
+      ]
+    );
+    assert.equal(
+      runtime.database
+        .prepare(`
+          SELECT current_season_id
+          FROM leagues
+          WHERE id = ?
+        `)
+        .get(PERSISTED.league).current_season_id,
+      PERSISTED.season
+    );
+  });
+
+  test("rolls the whole completion back when canonical season identity conflicts", async (t) => {
+    const runtime = createPersistenceRuntime(t);
+    runtime.repositories.seasons.insert({
+      id: PERSISTED.futureSeason1,
+      league_id: PERSISTED.league,
+      label: "legacy-2027",
+      nhl_season_key: "20272028",
+      status: "planned",
+      regular_season_starts_at_ms: null,
+      regular_season_ends_at_ms: null,
+      fantasy_playoffs_start_at_ms: null,
+      fantasy_playoffs_end_at_ms: null,
+      free_agent_draft_completed_at_ms: null,
+      created_at_ms: OPEN_MS,
+      updated_at_ms: OPEN_MS,
+      version: 1,
+    });
+    const before = semanticHash(runtime.database);
+
+    await assert.rejects(
+      resolve(runtime.service),
+      (error) =>
+        error?.code ===
+        REPOSITORY_ERROR_CODES.operationFailed
+    );
+    assert.equal(semanticHash(runtime.database), before);
+  });
+
+  test("preserves tied anti-bluff pricing at the winning current AAV", async (t) => {
     const runtime = createPersistenceRuntime(t, {
       bidA: {
         totalValueCents: 333,
@@ -757,7 +1088,7 @@ describe("M5-04 atomic SQLite auction completion", () => {
       },
     });
 
-    resolve(runtime.service);
+    await resolve(runtime.service);
     const resolution = runtime.database
       .prepare(`
         SELECT winning_bid_id, second_price_input_cents,
@@ -773,12 +1104,12 @@ describe("M5-04 atomic SQLite auction completion", () => {
     });
   });
 
-  test("persists no-winner outcomes without signing side effects and hides skipped invalid details from activity", (t) => {
+  test("persists no-winner outcomes without signing side effects and hides skipped invalid details from activity", async (t) => {
     const empty = createPersistenceRuntime(t, {
       includeBidA: false,
       includeBidB: false,
     });
-    const emptyResult = resolve(empty.service);
+    const emptyResult = await resolve(empty.service);
     assert.equal(emptyResult.status, "no_winner");
     assert.equal(
       empty.database.prepare("SELECT status FROM auctions").get().status,
@@ -796,12 +1127,13 @@ describe("M5-04 atomic SQLite auction completion", () => {
         .count,
       1
     );
+    assert.deepEqual(empty.summerSynchronizationCalls, []);
 
     const invalid = createPersistenceRuntime(t, {
       includeBidB: false,
       corruptBidAAuthority: true,
     });
-    const invalidResult = resolve(invalid.service);
+    const invalidResult = await resolve(invalid.service);
     assert.equal(invalidResult.status, "no_winner");
     assert.equal(
       invalid.database.prepare("SELECT status FROM auction_bids").get().status,
@@ -827,9 +1159,10 @@ describe("M5-04 atomic SQLite auction completion", () => {
         .get().metadata_json
     );
     assert.equal(history.skippedBids.length, 1);
+    assert.deepEqual(invalid.summerSynchronizationCalls, []);
   });
 
-  test("cancels an already-owned player and an auction open at playoff start", (t) => {
+  test("cancels an already-owned player and an auction open at playoff start", async (t) => {
     const owned = createPersistenceRuntime(t);
     owned.repositories.player_ownerships.insert({
       id: PERSISTED.existingOwnership,
@@ -847,7 +1180,7 @@ describe("M5-04 atomic SQLite auction completion", () => {
       updated_at_ms: NOW_MS - 1,
       version: 1,
     });
-    const ownedResult = resolve(owned.service);
+    const ownedResult = await resolve(owned.service);
     assert.equal(ownedResult.status, "cancelled");
     assert.equal(ownedResult.outcomeCode, "player_unavailable");
     assert.equal(
@@ -878,7 +1211,7 @@ describe("M5-04 atomic SQLite auction completion", () => {
       playoffsStartAtMs: NOW_MS,
       resolvesAtMs: NOW_MS + 86_400_000,
     });
-    const closedResult = resolve(closed.service);
+    const closedResult = await resolve(closed.service);
     assert.equal(closedResult.status, "cancelled");
     assert.equal(closedResult.outcomeCode, "season_closed");
     assert.equal(
@@ -887,7 +1220,7 @@ describe("M5-04 atomic SQLite auction completion", () => {
     );
   });
 
-  test("completes a cap-and-roster-illegal winner as explicitly unplaced", (t) => {
+  test("completes a cap-and-roster-illegal winner as explicitly unplaced", async (t) => {
     const runtime = createPersistenceRuntime(t, { salaryCapCents: 100 });
     for (let slot = 1; slot <= 12; slot += 1) {
       const playerId = uuid(30_000 + slot);
@@ -915,7 +1248,7 @@ describe("M5-04 atomic SQLite auction completion", () => {
       });
     }
 
-    const result = resolve(runtime.service);
+    const result = await resolve(runtime.service);
     assert.equal(result.status, "resolved");
     assert.equal(result.generalIllegal, true);
     assert.equal(
@@ -936,15 +1269,15 @@ describe("M5-04 atomic SQLite auction completion", () => {
     assert.equal(ownership.acquired_transaction_type, "auction_resolution");
   });
 
-  test("rejects stale and cross-league work and leaves before-deadline work unchanged", (t) => {
+  test("rejects stale and cross-league work and leaves before-deadline work unchanged", async (t) => {
     const runtime = createPersistenceRuntime(t);
     const before = semanticHash(runtime.database);
-    assert.throws(
-      () => resolve(runtime.service, { expectedAuctionVersion: 2 }),
+    await assert.rejects(
+      resolve(runtime.service, { expectedAuctionVersion: 2 }),
       ({ code }) => code === "REPOSITORY_VERSION_CONFLICT"
     );
-    assert.throws(
-      () => resolve(runtime.service, { leagueId: uuid(40_000) }),
+    await assert.rejects(
+      resolve(runtime.service, { leagueId: uuid(40_000) }),
       ({ code }) => code === "REPOSITORY_RECORD_NOT_FOUND"
     );
     assert.equal(semanticHash(runtime.database), before);
@@ -953,7 +1286,7 @@ describe("M5-04 atomic SQLite auction completion", () => {
       resolvesAtMs: NOW_MS + 1,
     });
     const earlyBefore = semanticHash(early.database);
-    const earlyResult = resolve(early.service, {
+    const earlyResult = await resolve(early.service, {
       occurrenceKey: occurrenceKey(NOW_MS + 1),
     });
     assert.deepEqual(earlyResult, {
@@ -1003,5 +1336,90 @@ describe("M5-04 atomic SQLite auction completion", () => {
         .get().count,
       0
     );
+  });
+
+  test("runs summer synchronization inside the allocation transaction and rolls every winner write back when it fails", (t) => {
+    const forcedError = new Error("forced Candidate Card synchronization failure");
+    let observedState = null;
+    let runtime;
+    runtime = createPersistenceRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize(input) {
+          observedState = {
+            input,
+            inTransaction: runtime.database.inTransaction,
+            contractCount: runtime.database
+              .prepare("SELECT COUNT(*) AS count FROM contracts")
+              .get().count,
+            ownershipCount: runtime.database
+              .prepare("SELECT COUNT(*) AS count FROM player_ownerships")
+              .get().count,
+            resolutionCount: runtime.database
+              .prepare("SELECT COUNT(*) AS count FROM auction_resolutions")
+              .get().count,
+            activityCount: runtime.database
+              .prepare("SELECT COUNT(*) AS count FROM league_activity")
+              .get().count,
+            outboxCount: runtime.database
+              .prepare("SELECT COUNT(*) AS count FROM outbox_events")
+              .get().count,
+          };
+          throw forcedError;
+        },
+      },
+    });
+    const before = semanticHash(runtime.database);
+    const command = directCompletion();
+
+    assert.throws(
+      () => runtime.repository.completeDue(command),
+      ({ code, cause }) =>
+        code === REPOSITORY_ERROR_CODES.operationFailed &&
+        cause === forcedError
+    );
+    assert.deepEqual(runtime.summerSynchronizationCalls, [
+      {
+        inTransaction: true,
+        input: {
+          leagueId: PERSISTED.league,
+          affectedTeamIds: [PERSISTED.teamA],
+          affectedPlayerIds: [PERSISTED.player],
+          sourceOperationId: command.resolutionId,
+          sourceKind: "auction_allocation",
+          nowMs: NOW_MS,
+        },
+      },
+    ]);
+    assert.deepEqual(observedState, {
+      input: runtime.summerSynchronizationCalls[0].input,
+      inTransaction: true,
+      contractCount: 1,
+      ownershipCount: 1,
+      resolutionCount: 1,
+      activityCount: 1,
+      outboxCount: 1,
+    });
+    assert.equal(semanticHash(runtime.database), before);
+    assert.equal(
+      runtime.database.prepare("SELECT status FROM auctions").get().status,
+      "open"
+    );
+    for (const table of [
+      "contracts",
+      "contract_years",
+      "contract_events",
+      "player_ownerships",
+      "ownership_events",
+      "auction_resolutions",
+      "league_activity",
+      "outbox_events",
+    ]) {
+      assert.equal(
+        runtime.database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()
+          .count,
+        0,
+        table
+      );
+    }
   });
 });

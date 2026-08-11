@@ -2,7 +2,9 @@ const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 
 const RATE_LIMIT_BUCKETS = Object.freeze({
+  league: "league",
   network: "network",
+  session: "session",
   subject: "subject",
 });
 
@@ -55,6 +57,18 @@ const AUTHENTICATION_RATE_LIMITS =
       network: null,
       subject: rule(5, HOUR_MS, ATTEMPTS),
     }),
+    fad_candidate_write: Object.freeze({
+      session: rule(120, 15 * MINUTE_MS, ATTEMPTS),
+      league: rule(600, 15 * MINUTE_MS, ATTEMPTS),
+    }),
+    fad_help_write: Object.freeze({
+      session: rule(5, HOUR_MS, ATTEMPTS),
+      league: rule(25, HOUR_MS, ATTEMPTS),
+    }),
+    fad_operational_write: Object.freeze({
+      session: rule(30, 15 * MINUTE_MS, ATTEMPTS),
+      league: rule(120, 15 * MINUTE_MS, ATTEMPTS),
+    }),
   });
 
 const AUTHENTICATION_RATE_LIMIT_ACTIONS =
@@ -78,9 +92,11 @@ function getAuthenticationRateLimitRule(
       "an approved authentication rate-limit action and bucket are required"
     );
   }
-  return AUTHENTICATION_RATE_LIMITS[action][
-    bucket
-  ];
+  return (
+    AUTHENTICATION_RATE_LIMITS[action][
+      bucket
+    ] ?? null
+  );
 }
 
 function createRateLimitWindow(

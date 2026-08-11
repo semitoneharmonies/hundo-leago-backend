@@ -10,6 +10,9 @@ const {
   OPERATION: PROVIDER_IMPORT_OPERATION,
 } = require("./createStagingSportsDataIoImportService");
 const {
+  StagingMaintenanceExclusionError,
+} = require("./createStagingMaintenanceExclusionGuard");
+const {
   createVerifiedBackup,
 } = require("../../../infrastructure/database/sqliteBackup");
 const {
@@ -27,6 +30,7 @@ const {
 
 const CONFIRMATION = "RESET STAGING TEST LEAGUES";
 const OPERATION = "staging_fixture_reset";
+const MAINTENANCE_EXCLUSION = "release_qa_fixture_reset";
 const KEY_PATTERN = /^[\x21-\x7e]{1,200}$/;
 const FIXTURE_LEAGUE_IDS = Object.freeze(
   LEAGUE_ALIASES.map((alias) => fixtureId(`league:${alias}`))
@@ -39,6 +43,94 @@ const FIXTURE_PLAYER_IDS = Object.freeze(
     fixtureId(`player:${player.alias}`)
   )
 );
+const FIXTURE_RESET_PROTECTED_TRIGGER_NAMES = Object.freeze([
+  "auction_administration_command_results_immutable_delete",
+  "auction_contexts_immutable_delete",
+  "candidate_card_entries_open_delete",
+  "candidate_card_entries_valid_carryover_delete",
+  "candidate_card_help_command_results_immutable_delete",
+  "candidate_card_help_requests_immutable_delete",
+  "candidate_card_revisions_immutable_delete",
+  "candidate_card_snapshot_entries_immutable_delete",
+  "candidate_card_snapshots_immutable_delete",
+  "candidate_cards_immutable_delete",
+  "commissioner_corrections_fad_allocation_immutable_delete",
+  "entry_draft_on_clock_trades_immutable_delete",
+  "entry_draft_pick_clocks_immutable_delete",
+  "entry_draft_rollover_bindings_immutable_delete",
+  "entry_draft_schedule_operations_immutable_delete",
+  "fad_auction_bids_immutable_delete",
+  "fad_auction_events_immutable_delete",
+  "fad_auction_resolutions_immutable_delete",
+  "free_agent_draft_allocation_correction_results_immutable_delete",
+  "free_agent_draft_allocation_events_immutable_delete",
+  "free_agent_draft_allocations_immutable_delete",
+  "free_agent_draft_auction_participants_immutable_delete",
+  "free_agent_draft_draws_immutable_delete",
+  "free_agent_draft_eligibility_revalidation_immutable_delete",
+  "free_agent_draft_nomination_queue_immutable_delete",
+  "free_agent_draft_readiness_attempts_immutable_delete",
+  "free_agent_draft_readiness_corrective_requeues_immutable_delete",
+  "free_agent_draft_readiness_operations_immutable_delete",
+  "free_agent_draft_readiness_retry_receipts_immutable_delete",
+  "free_agent_draft_recoveries_immutable_delete",
+  "free_agent_draft_recovery_action_results_immutable_delete",
+  "free_agent_draft_rollovers_immutable_delete",
+  "free_agent_draft_schedule_recoveries_immutable_delete",
+  "free_agent_draft_schedule_recovery_jobs_immutable_delete",
+  "free_agent_draft_schedule_recovery_matchups_immutable_delete",
+  "free_agent_draft_schedule_recovery_weeks_immutable_delete",
+  "free_agent_draft_setup_exemptions_immutable_delete",
+  "free_agent_draft_teams_immutable_delete",
+  "free_agent_drafts_immutable_delete",
+  "idempotency_requests_auction_administration_result_delete",
+  "idempotency_requests_candidate_card_help_result_delete",
+  "idempotency_requests_entry_draft_schedule_delete",
+  "idempotency_requests_fad_allocation_correction_result_delete",
+  "idempotency_requests_fad_nomination_queue_delete",
+  "idempotency_requests_fad_open_rapid_start_delete",
+  "idempotency_requests_fad_recovery_action_result_delete",
+  "idempotency_requests_lifecycle_delete_0029",
+  "idempotency_requests_lifecycle_v2_delete",
+  "idempotency_requests_matchup_schedule_result_delete",
+  "idempotency_requests_standings_finalization_immutable_delete",
+  "job_runs_fad_eligibility_revalidation_identity_delete",
+  "matchup_operations_result_correct_immutable_delete",
+  "matchup_operations_schedule_generate_immutable_delete",
+  "matchup_result_versions_immutable_delete",
+  "matchup_roster_game_exclusion_sets_immutable_delete",
+  "matchup_roster_game_exclusions_immutable_delete",
+  "matchup_schedule_command_results_immutable_delete",
+  "matchup_schedule_job_bindings_immutable_delete",
+  "nhl_game_state_observation_snapshots_immutable_delete",
+  "nhl_game_state_observations_immutable_delete",
+  "operational_events_fad_eligibility_catalog_immutable_delete",
+  "player_game_stat_observations_immutable_delete",
+  "player_source_state_fad_eligibility_evidence_delete",
+  "season_matchup_schedule_generations_immutable_delete",
+  "season_rollover_attempts_immutable_delete",
+  "season_rollover_items_immutable_delete",
+  "season_rollover_occurrences_immutable_delete",
+  "season_rollovers_immutable_delete",
+  "standings_operations_finalization_immutable_delete",
+  "standings_rows_canonical_delete",
+  "standings_snapshot_finalizations_immutable_delete",
+  "standings_snapshot_result_versions_immutable_delete",
+  "standings_snapshot_team_identities_immutable_delete",
+  "standings_snapshots_canonical_delete",
+  "stat_refresh_player_game_coverage_immutable_delete",
+  "stat_refresh_player_game_coverage_immutable_update",
+  "stat_refresh_player_game_coverage_stage_before_set",
+  "stat_refresh_player_game_sets_immutable_delete",
+]);
+const FIXTURE_RESET_DELETE_TRIGGER_NAMES =
+  FIXTURE_RESET_PROTECTED_TRIGGER_NAMES;
+const FIXTURE_RESET_NON_DELETE_TRIGGER_OPERATIONS = Object.freeze({
+  stat_refresh_player_game_coverage_immutable_update:
+    "BEFORE UPDATE ON",
+  stat_refresh_player_game_coverage_stage_before_set:
+    "BEFORE INSERT ON",
+});
 
 class StagingFixtureResetError extends Error {
   constructor(code, message, options = {}) {
@@ -298,8 +390,78 @@ function deleteWhereAnyColumnMatches(database, tableName, columns, ids) {
     .run(...columns.flatMap(() => ids));
 }
 
+function expectedFixtureProtectionOperation(name) {
+  return (
+    FIXTURE_RESET_NON_DELETE_TRIGGER_OPERATIONS[name] ||
+    "BEFORE DELETE ON"
+  );
+}
+
+function suspendFixtureProtectionTriggers(database) {
+  const placeholders = FIXTURE_RESET_PROTECTED_TRIGGER_NAMES
+    .map(() => "?")
+    .join(", ");
+  const rows = database
+    .prepare(`
+      SELECT name, sql
+      FROM sqlite_schema
+      WHERE type = 'trigger'
+        AND name IN (${placeholders})
+      ORDER BY name ASC
+    `)
+    .all(...FIXTURE_RESET_PROTECTED_TRIGGER_NAMES);
+  if (
+    rows.length !== FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.length ||
+    rows.some(({ name, sql }, index) =>
+      name !==
+        [...FIXTURE_RESET_PROTECTED_TRIGGER_NAMES].sort()[index] ||
+      typeof sql !== "string" ||
+      !sql.includes(expectedFixtureProtectionOperation(name))
+    )
+  ) {
+    fail(
+      "STAGING_FIXTURE_RESET_SCHEMA_INVALID",
+      "The staging fixture protections do not match the approved schema."
+    );
+  }
+  for (const { name } of rows) {
+    database.exec(`DROP TRIGGER ${quoteIdentifier(name)}`);
+  }
+  return rows;
+}
+
+function restoreFixtureProtectionTriggers(database, triggerRows) {
+  for (const { sql } of triggerRows) {
+    database.exec(sql);
+  }
+  const restored = database
+    .prepare(`
+      SELECT name, sql
+      FROM sqlite_schema
+      WHERE type = 'trigger'
+        AND name IN (
+          ${triggerRows.map(() => "?").join(", ")}
+        )
+      ORDER BY name ASC
+    `)
+    .all(...triggerRows.map(({ name }) => name));
+  if (
+    restored.length !== triggerRows.length ||
+    restored.some(({ name, sql }, index) =>
+      name !== triggerRows[index].name ||
+      sql !== triggerRows[index].sql
+    )
+  ) {
+    fail(
+      "STAGING_FIXTURE_RESET_SCHEMA_INVALID",
+      "The staging fixture protections were not restored exactly."
+    );
+  }
+}
+
 function resetFixtureRows({
   database,
+  maintenanceExclusionGuard,
   passwordHash,
   actorUserId,
   backup,
@@ -308,6 +470,11 @@ function resetFixtureRows({
   createId,
   reason,
 }) {
+  assertMethod(
+    maintenanceExclusionGuard,
+    "assertExclusion",
+    "a staging maintenance-exclusion guard"
+  );
   const leagueIds = FIXTURE_LEAGUE_IDS;
   const userIds = FIXTURE_USER_IDS;
   const playerIds = FIXTURE_PLAYER_IDS;
@@ -330,6 +497,11 @@ function resetFixtureRows({
     database.exec("BEGIN IMMEDIATE");
     assertFixtureIdentity(database);
     assertFixtureResetScope(database);
+    maintenanceExclusionGuard.assertExclusion(
+      MAINTENANCE_EXCLUSION
+    );
+    const suspendedProtectionTriggers =
+      suspendFixtureProtectionTriggers(database);
 
     for (const tableName of tables) {
       const columns = tableColumns(database, tableName);
@@ -405,6 +577,22 @@ function resetFixtureRows({
       }
     }
     database
+      .prepare(
+        "DELETE FROM player_game_stat_observations WHERE stat_source_id = ?"
+      )
+      .run(statSourceId);
+    database
+      .prepare(
+        "DELETE FROM stat_refresh_player_game_coverage_entries " +
+          "WHERE stat_source_id = ?"
+      )
+      .run(statSourceId);
+    database
+      .prepare(
+        "DELETE FROM stat_refresh_player_game_sets WHERE stat_source_id = ?"
+      )
+      .run(statSourceId);
+    database
       .prepare("DELETE FROM player_stat_totals WHERE stat_source_id = ?")
       .run(statSourceId);
     database
@@ -429,6 +617,10 @@ function resetFixtureRows({
       )
       .run(...userIds);
 
+    restoreFixtureProtectionTriggers(
+      database,
+      suspendedProtectionTriggers
+    );
     seedFixture(database, passwordHash, {
       includeIdentityMetadata: false,
     });
@@ -553,6 +745,7 @@ function createStagingFixtureResetService({
   appEnv,
   environmentId,
   databaseId,
+  maintenanceExclusionGuard,
   platformAuthorization,
   clock,
   createId = crypto.randomUUID,
@@ -585,12 +778,16 @@ function createStagingFixtureResetService({
     );
   }
   assertMethod(
+    maintenanceExclusionGuard,
+    "assertExclusion",
+    "a staging maintenance-exclusion guard"
+  );
+  assertMethod(
     platformAuthorization,
     "requireAdministrator",
     "platform-administrator authorization"
   );
   assertMethod(clock, "nowMs", "a clock");
-
   const findIdempotency = database.prepare(`
     SELECT *
     FROM idempotency_requests
@@ -691,6 +888,9 @@ function createStagingFixtureResetService({
     }
 
     assertFixtureIdentity(database);
+    maintenanceExclusionGuard.assertExclusion(
+      MAINTENANCE_EXCLUSION
+    );
     assertFixtureResetScope(database);
     requireFixturePasswordHash();
     const occurredAtMs = clock.nowMs();
@@ -714,6 +914,9 @@ function createStagingFixtureResetService({
         capturedAtMs: occurredAtMs,
         temporaryRoot: persistentRoot,
       });
+      maintenanceExclusionGuard.assertExclusion(
+        MAINTENANCE_EXCLUSION
+      );
       const refreshedAuthority =
         platformAuthorization.requireAdministrator(authenticated);
       assertAuthorityUnchanged(authority, refreshedAuthority);
@@ -722,6 +925,7 @@ function createStagingFixtureResetService({
       const passwordHash = requireFixturePasswordHash();
       return resetFixtureRows({
         database,
+        maintenanceExclusionGuard,
         passwordHash,
         actorUserId: refreshedAuthority.actorUserId,
         backup,
@@ -737,6 +941,7 @@ function createStagingFixtureResetService({
     } catch (error) {
       if (
         error instanceof StagingFixtureResetError ||
+        error instanceof StagingMaintenanceExclusionError ||
         error?.code === "PLATFORM_ADMINISTRATOR_REQUIRED"
       ) {
         throw error;
@@ -756,6 +961,8 @@ function createStagingFixtureResetService({
 
 module.exports = {
   CONFIRMATION,
+  FIXTURE_RESET_DELETE_TRIGGER_NAMES,
+  FIXTURE_RESET_PROTECTED_TRIGGER_NAMES,
   StagingFixtureResetError,
   createStagingFixtureResetService,
   resetFixtureRows,

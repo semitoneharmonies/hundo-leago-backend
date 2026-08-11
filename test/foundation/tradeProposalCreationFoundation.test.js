@@ -35,6 +35,7 @@ const {
   createPreviewTradeAcceptanceService,
 } = require("../../src/application/services/trades/previewTradeAcceptanceService");
 const {
+  IDEMPOTENCY_LIFETIME_MS,
   createAcceptTradeProposalService,
 } = require("../../src/application/services/trades/acceptTradeProposalService");
 const {
@@ -602,7 +603,10 @@ function count(database, tableName, where = "") {
     .get().count;
 }
 
-function createRuntime(t) {
+function createRuntime(
+  t,
+  { candidateCardSummerSynchronizer } = {}
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m5-06-create-"));
   const connection = openDatabase({
     databasePath: path.join(root, "league.sqlite3"),
@@ -628,13 +632,34 @@ function createRuntime(t) {
       database: connection.database,
     }),
   });
+  const summerSynchronizer =
+    candidateCardSummerSynchronizer ??
+    Object.freeze({
+      synchronize() {
+        return Object.freeze({
+          affectedCardCount: 0,
+          changedCardCount: 0,
+        });
+      },
+    });
   const repository = createSqliteTradeProposalRepository({
     database: connection.database,
+    candidateCardSummerSynchronizer: summerSynchronizer,
   });
   let nextId = 1_000;
   let nowMs = NOW_MS;
   const clock = Object.freeze({ nowMs: () => nowMs });
   const secureRandom = Object.freeze({ id: () => uuid(nextId++) });
+  const lateLockBatches = [];
+  let coordinateLateLock = async () => Object.freeze({
+    status: "not_applicable",
+  });
+  const lateLockCoordinator = Object.freeze({
+    async coordinateCommittedRoster(batch) {
+      lateLockBatches.push(batch);
+      return coordinateLateLock(batch);
+    },
+  });
   const service = createTradeProposalService({
     leagueAuthorization,
     teamAuthorization,
@@ -663,15 +688,18 @@ function createRuntime(t) {
     leagueAuthorization,
     teamAuthorization,
     repository,
+    lateLockCoordinator,
     clock,
     secureRandom,
   });
   const recoveryRepository = createSqliteTradeReversalRepository({
     database: connection.database,
+    candidateCardSummerSynchronizer: summerSynchronizer,
   });
   const recoveryService = createTradeReversalService({
     leagueAuthorization,
     repository: recoveryRepository,
+    lateLockCoordinator,
     clock,
     secureRandom,
   });
@@ -693,6 +721,9 @@ function createRuntime(t) {
     database: connection.database,
     repositories: context.repositories,
     repository,
+    leagueAuthorization,
+    clock,
+    secureRandom,
     service,
     readService,
     lifecycleService,
@@ -700,6 +731,10 @@ function createRuntime(t) {
     acceptanceService,
     recoveryRepository,
     recoveryService,
+    lateLockBatches,
+    setCoordinateLateLock(value) {
+      coordinateLateLock = value;
+    },
     expiryRepository,
     expiryJob,
     setNow(value) {
@@ -753,6 +788,30 @@ function accept(
   });
 }
 
+function executeAcceptanceRepository(runtime, tradeId, idempotencyKey) {
+  const proposal = runtime.repository.findLifecycleParticipants({
+    leagueId: IDS.league,
+    tradeId,
+  });
+  return runtime.repository.executeAcceptance({
+    tradeId,
+    eventId: uuid(990_001),
+    idempotencyRequestId: uuid(990_002),
+    leagueId: IDS.league,
+    seasonId: IDS.currentSeason,
+    proposingTeamId: IDS.teamA,
+    receivingTeamId: IDS.teamB,
+    expectedVersion: proposal.version,
+    actorUserId: IDS.receivingManager,
+    actorMembershipId: IDS.receivingMembership,
+    actorAuthority: "manager",
+    occurredAtMs: NOW_MS,
+    effectiveDeadlineAtMs: proposal.effective_deadline_at_ms,
+    idempotencyKey,
+    idempotencyExpiresAtMs: NOW_MS + IDEMPOTENCY_LIFETIME_MS,
+  });
+}
+
 function assertAssetReason(action, reasonCode) {
   assert.throws(action, (error) => {
     assert.ok(error instanceof TradeAssetPolicyError);
@@ -771,6 +830,22 @@ function assertLifecycleReason(action, reasonCode) {
 
 function assertExecutionReason(action, reasonCode) {
   assert.throws(action, (error) => {
+    assert.ok(error instanceof TradeExecutionPolicyError);
+    assert.equal(error.reasonCode, reasonCode);
+    return true;
+  });
+}
+
+async function assertAsyncAssetReason(action, reasonCode) {
+  await assert.rejects(action, (error) => {
+    assert.ok(error instanceof TradeAssetPolicyError);
+    assert.equal(error.reasonCode, reasonCode);
+    return true;
+  });
+}
+
+async function assertAsyncExecutionReason(action, reasonCode) {
+  await assert.rejects(action, (error) => {
     assert.ok(error instanceof TradeExecutionPolicyError);
     assert.equal(error.reasonCode, reasonCode);
     return true;
@@ -1152,7 +1227,96 @@ describe("M5-07 read-only trade acceptance preview", () => {
 });
 
 describe("M5-08 atomic typed-asset trade execution", () => {
-  test("transfers every asset once, preserves terms, and cancels conflicts", (t) => {
+  test("synchronizes both trade teams and every moved player once inside acceptance", (t) => {
+    const calls = [];
+    let runtime;
+    runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize(command) {
+          assert.equal(runtime.database.inTransaction, true);
+          calls.push(command);
+          return Object.freeze({
+            affectedCardCount: 0,
+            changedCardCount: 0,
+          });
+        },
+      },
+    });
+    const proposal = create(runtime, "execution-summer-sync");
+    const beforePreview = runtime.database.serialize();
+
+    preview(runtime, proposal.proposal.id);
+
+    assert.equal(beforePreview.equals(runtime.database.serialize()), true);
+    assert.deepEqual(calls, []);
+    executeAcceptanceRepository(
+      runtime,
+      proposal.proposal.id,
+      "execution-summer-sync-acceptance"
+    );
+    assert.deepEqual(calls, [
+      {
+        leagueId: IDS.league,
+        affectedTeamIds: [IDS.teamA, IDS.teamB],
+        affectedPlayerIds: [IDS.contractPlayer, IDS.prospectPlayer],
+        sourceOperationId: uuid(990_001),
+        sourceKind: "trade_execution",
+        nowMs: NOW_MS,
+      },
+    ]);
+
+    executeAcceptanceRepository(
+      runtime,
+      proposal.proposal.id,
+      "execution-summer-sync-acceptance"
+    );
+    assert.equal(calls.length, 1);
+  });
+
+  test("rolls every acceptance effect back when Candidate synchronization fails", (t) => {
+    const runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize({ sourceKind }) {
+          if (sourceKind === "trade_execution") {
+            throw new Error("injected Candidate synchronization failure");
+          }
+        },
+      },
+    });
+    const proposal = create(runtime, "execution-summer-sync-rollback");
+    const before = runtime.database.serialize();
+
+    assert.throws(
+      () => executeAcceptanceRepository(
+        runtime,
+        proposal.proposal.id,
+        "execution-summer-sync-rollback-acceptance"
+      ),
+      { code: "REPOSITORY_OPERATION_FAILED" }
+    );
+
+    assert.equal(before.equals(runtime.database.serialize()), true);
+    assert.deepEqual(
+      runtime.database.prepare(
+        "SELECT status, version FROM trades WHERE id = ?"
+      ).get(proposal.proposal.id),
+      { status: "proposed", version: 1 }
+    );
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT team_id FROM player_ownerships WHERE player_id = ?"
+      ).get(IDS.contractPlayer).team_id,
+      IDS.teamA
+    );
+    assert.deepEqual(
+      runtime.database.prepare(
+        "SELECT current_team_id, version FROM contracts WHERE id = ?"
+      ).get(IDS.contract),
+      { current_team_id: IDS.teamA, version: 1 }
+    );
+  });
+
+  test("transfers every asset once, preserves terms, and cancels conflicts", async (t) => {
     const runtime = createRuntime(t);
     insertContract(runtime.repositories, {
       id: IDS.prospectContract,
@@ -1179,8 +1343,28 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     const buyoutBefore = runtime.database
       .prepare("SELECT * FROM buyout_obligations WHERE id = ?")
       .get(IDS.buyout);
+    runtime.database.prepare(`
+      INSERT INTO roster_display_order_sets (
+        id, league_id, season_id, team_id, updated_by_user_id,
+        created_at_ms, updated_at_ms, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+    `).run(
+      uuid(970_001),
+      IDS.league,
+      IDS.currentSeason,
+      IDS.teamA,
+      IDS.manager,
+      NOW_MS,
+      NOW_MS
+    );
+    runtime.database.prepare(`
+      INSERT INTO roster_display_order_entries (
+        id, league_id, order_set_id, ownership_id,
+        position_group, display_order, created_at_ms
+      ) VALUES (?, ?, ?, ?, 'F', 1, ?)
+    `).run(uuid(970_002), IDS.league, uuid(970_001), IDS.ownership, NOW_MS);
 
-    const result = accept(
+    const result = await accept(
       runtime,
       acceptedProposal.proposal.id,
       "accept-every-asset"
@@ -1192,21 +1376,137 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     assert.equal(result.proposal.version, 2);
     assert.equal(result.generallyIllegal, false);
     assert.equal(result.transfers.length, 8);
+    assert.deepEqual(result.lateLock, { status: "not_applicable" });
     assert.deepEqual(result.automaticallyCancelledTradeIds, [conflict.proposal.id]);
     const ownership = runtime.database
-      .prepare("SELECT * FROM player_ownerships WHERE id = ?")
-      .get(IDS.ownership);
+      .prepare("SELECT * FROM player_ownerships WHERE player_id = ?")
+      .get(IDS.contractPlayer);
+    assert.notEqual(ownership.id, IDS.ownership);
+    assert.equal(ownership.version, 1);
     assert.equal(ownership.team_id, IDS.teamB);
     assert.equal(ownership.roster_category, "Active");
     assert.equal(ownership.slot_number, 1);
     assert.equal(ownership.acquired_transaction_type, "trade_execution");
     assert.equal(ownership.acquired_transaction_id, acceptedProposal.proposal.id);
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT COUNT(*) AS count FROM roster_display_order_entries WHERE ownership_id = ?"
+      ).get(IDS.ownership).count,
+      0
+    );
     const prospect = runtime.database
-      .prepare("SELECT * FROM player_ownerships WHERE id = ?")
-      .get(IDS.prospectOwnership);
+      .prepare("SELECT * FROM player_ownerships WHERE player_id = ?")
+      .get(IDS.prospectPlayer);
+    assert.notEqual(prospect.id, IDS.prospectOwnership);
+    assert.equal(prospect.version, 1);
     assert.equal(prospect.team_id, IDS.teamB);
     assert.equal(prospect.ownership_kind, "Prospect Right");
     assert.equal(prospect.roster_category, "Prospect");
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT COUNT(*) AS count FROM player_ownerships WHERE id IN (?, ?)"
+      ).get(IDS.ownership, IDS.prospectOwnership).count,
+      0
+    );
+    const acceptanceMetadata = JSON.parse(
+      runtime.database.prepare(
+        "SELECT metadata_json FROM trade_events WHERE trade_id = ? AND event_type = 'proposal_accepted'"
+      ).get(acceptedProposal.proposal.id).metadata_json
+    );
+    const contractMapping = acceptanceMetadata.ownershipTransfers.find(
+      ({ sourceOwnershipId }) => sourceOwnershipId === IDS.ownership
+    );
+    const prospectMapping = acceptanceMetadata.ownershipTransfers.find(
+      ({ sourceOwnershipId }) => sourceOwnershipId === IDS.prospectOwnership
+    );
+    assert.deepEqual(
+      Object.keys(contractMapping).sort(),
+      [
+        "destinationOwnershipId",
+        "destinationOwnershipVersion",
+        "destinationTeamId",
+        "sourceOwnershipId",
+        "sourceOwnershipVersion",
+        "sourceTeamId",
+      ]
+    );
+    assert.deepEqual(
+      {
+        sourceOwnershipId: contractMapping.sourceOwnershipId,
+        sourceOwnershipVersion: contractMapping.sourceOwnershipVersion,
+        destinationOwnershipId: contractMapping.destinationOwnershipId,
+        destinationOwnershipVersion: contractMapping.destinationOwnershipVersion,
+      },
+      {
+        sourceOwnershipId: IDS.ownership,
+        sourceOwnershipVersion: 1,
+        destinationOwnershipId: ownership.id,
+        destinationOwnershipVersion: 1,
+      }
+    );
+    assert.equal(prospectMapping.sourceOwnershipId, IDS.prospectOwnership);
+    assert.equal(prospectMapping.destinationOwnershipId, prospect.id);
+    assert.equal(
+      Object.hasOwn(
+        result.transfers.find(({ assetType }) => assetType === "contract"),
+        "sourceOwnershipId"
+      ),
+      false
+    );
+    assert.deepEqual(
+      runtime.database.prepare(
+        "SELECT event_type FROM ownership_events ORDER BY event_type, ownership_id"
+      ).all().map(({ event_type }) => event_type),
+      [
+        "trade_transfer_in",
+        "trade_transfer_in",
+        "trade_transfer_out",
+        "trade_transfer_out",
+      ]
+    );
+    assert.equal(runtime.lateLockBatches.length, 1);
+    assert.equal(runtime.lateLockBatches[0].mutationKind, "trade_acceptance");
+    assert.deepEqual(
+      runtime.lateLockBatches[0].teams.map(({ teamId }) => teamId),
+      [IDS.teamA, IDS.teamB]
+    );
+    assert.deepEqual(
+      runtime.lateLockBatches[0].teams.flatMap(({ ownershipWitnesses }) =>
+        ownershipWitnesses.map(({ ownershipId, ownershipVersion, state }) => ({
+          ownershipId,
+          ownershipVersion,
+          state,
+        }))
+      ),
+      [
+        [
+          {
+            ownershipId: IDS.ownership,
+            ownershipVersion: 1,
+            state: "deleted",
+          },
+          {
+            ownershipId: IDS.prospectOwnership,
+            ownershipVersion: 1,
+            state: "deleted",
+          },
+        ],
+        [
+          {
+            ownershipId: ownership.id,
+            ownershipVersion: 1,
+            state: "present",
+          },
+          {
+            ownershipId: prospect.id,
+            ownershipVersion: 1,
+            state: "present",
+          },
+        ].sort((left, right) =>
+          left.ownershipId.localeCompare(right.ownershipId)
+        ),
+      ].flat()
+    );
     assert.equal(
       runtime.database.prepare("SELECT current_team_id FROM contracts WHERE id = ?")
         .get(IDS.prospectContract).current_team_id,
@@ -1294,7 +1594,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
       ),
       1
     );
-    assert.equal(count(runtime.database, "ownership_events"), 2);
+    assert.equal(count(runtime.database, "ownership_events"), 4);
     assert.equal(count(runtime.database, "contract_events"), 2);
     assert.equal(count(runtime.database, "draft_pick_ownership_events"), 1);
     assert.equal(count(runtime.database, "league_activity"), 4);
@@ -1324,7 +1624,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
 
     const bytesAfter = runtime.database.serialize();
-    const replay = accept(
+    const replay = await accept(
       runtime,
       acceptedProposal.proposal.id,
       "accept-every-asset"
@@ -1332,6 +1632,9 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     assert.equal(replay.code, "TRADE_ACCEPTANCE_REPLAYED");
     assert.equal(replay.replayed, true);
     assert.deepEqual(replay.transfers, result.transfers);
+    assert.deepEqual(replay.lateLock, { status: "not_applicable" });
+    assert.equal(runtime.lateLockBatches.length, 2);
+    assert.deepEqual(runtime.lateLockBatches[1], runtime.lateLockBatches[0]);
     assert.equal(bytesAfter.equals(runtime.database.serialize()), true);
 
     const retrade = runtime.service.create({
@@ -1349,7 +1652,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
       idempotencyKey: "retrade-pick-proposal",
       authenticated: authenticated(IDS.receivingManager),
     });
-    accept(runtime, retrade.proposal.id, "retrade-pick-accept", IDS.manager);
+    await accept(runtime, retrade.proposal.id, "retrade-pick-accept", IDS.manager);
     const pick = runtime.database
       .prepare("SELECT * FROM draft_picks WHERE id = ?")
       .get(IDS.draftPick);
@@ -1358,10 +1661,220 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     assert.equal(count(runtime.database, "draft_pick_ownership_events"), 2);
   });
 
-  test("enforces receiver, commissioner-freeze, terminal, and deadline authority", (t) => {
+  test("reconstructs one hidden frozen two-team receipt and replays it without writes", (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "execution-repository-receipt");
+
+    const result = executeAcceptanceRepository(
+      runtime,
+      proposal.proposal.id,
+      "repository-receipt-acceptance"
+    );
+
+    assert.equal(result.replayed, false);
+    assert.equal(Object.keys(result).includes("committedTeams"), false);
+    assert.deepEqual(
+      Object.getOwnPropertyDescriptor(result, "committedTeams"),
+      {
+        configurable: false,
+        enumerable: false,
+        value: result.committedTeams,
+        writable: false,
+      }
+    );
+    assert.equal(Object.isFrozen(result), true);
+    assert.equal(Object.isFrozen(result.committedTeams), true);
+    assert.equal(Object.isFrozen(result.event.metadata.ownershipTransfers), true);
+    assert.equal(
+      result.event.metadata.ownershipTransfers.every(Object.isFrozen),
+      true
+    );
+    assert.deepEqual(
+      result.committedTeams.map((team) => team.teamId),
+      [IDS.teamA, IDS.teamB]
+    );
+    assert.equal(
+      result.committedTeams.every(
+        (team) =>
+          Object.isFrozen(team) &&
+          Object.isFrozen(team.ownershipWitnesses) &&
+          team.ownershipWitnesses.every(Object.isFrozen)
+      ),
+      true
+    );
+    assert.deepEqual(
+      result.committedTeams[0].ownershipWitnesses,
+      [
+        {
+          ownershipId: IDS.ownership,
+          ownershipVersion: 1,
+          state: "deleted",
+        },
+        {
+          ownershipId: IDS.prospectOwnership,
+          ownershipVersion: 1,
+          state: "deleted",
+        },
+      ]
+    );
+    assert.equal(
+      result.committedTeams[1].ownershipWitnesses.every(
+        ({ ownershipVersion, state }) =>
+          ownershipVersion === 1 && state === "present"
+      ),
+      true
+    );
+    assert.equal(
+      result.event.metadata.transfers.some((transfer) =>
+        Object.hasOwn(transfer, "sourceOwnershipId")
+      ),
+      false
+    );
+    const bytesAfter = runtime.database.serialize();
+
+    const replay = executeAcceptanceRepository(
+      runtime,
+      proposal.proposal.id,
+      "repository-receipt-acceptance"
+    );
+
+    assert.equal(replay.replayed, true);
+    assert.deepEqual(
+      replay.event.metadata.ownershipTransfers,
+      result.event.metadata.ownershipTransfers
+    );
+    assert.deepEqual(replay.committedTeams, result.committedTeams);
+    assert.equal(bytesAfter.equals(runtime.database.serialize()), true);
+  });
+
+  test("returns both participant receipts with no synthetic witnesses for a cap-only trade", (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(
+      runtime,
+      "execution-cap-only-receipt",
+      creationInput({
+        proposingAssets: [
+          {
+            type: "future_consideration_instruction",
+            description: "Cap-only receipt consideration",
+          },
+        ],
+        receivingAssets: [
+          {
+            type: "retention_obligation",
+            retentionObligationId: IDS.assetRetention,
+          },
+        ],
+      })
+    );
+
+    const result = executeAcceptanceRepository(
+      runtime,
+      proposal.proposal.id,
+      "cap-only-receipt-acceptance"
+    );
+
+    assert.deepEqual(result.event.metadata.ownershipTransfers, []);
+    assert.deepEqual(
+      result.committedTeams.map(({ teamId, ownershipWitnesses }) => ({
+        teamId,
+        ownershipWitnesses,
+      })),
+      [
+        { teamId: IDS.teamA, ownershipWitnesses: [] },
+        { teamId: IDS.teamB, ownershipWitnesses: [] },
+      ]
+    );
+    assert.equal(
+      result.committedTeams.every(
+        (team) => Object.isFrozen(team.ownershipWitnesses)
+      ),
+      true
+    );
+    assert.equal(count(runtime.database, "ownership_events"), 0);
+  });
+
+  test("rejects a tampered tenure mapping and rolls an initial acceptance back", (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "execution-tampered-mapping");
+    runtime.database.exec(`
+      CREATE TRIGGER tamper_trade_acceptance_ownership_mapping
+      AFTER INSERT ON trade_events
+      WHEN NEW.trade_id = '${proposal.proposal.id}'
+        AND NEW.event_type = 'proposal_accepted'
+      BEGIN
+        UPDATE trade_events
+        SET metadata_json = json_set(
+          metadata_json,
+          '$.ownershipTransfers[0].destinationOwnershipVersion',
+          2
+        )
+        WHERE id = NEW.id;
+      END;
+    `);
+    const before = runtime.database.serialize();
+
+    assert.throws(
+      () =>
+        executeAcceptanceRepository(
+          runtime,
+          proposal.proposal.id,
+          "tampered-mapping-acceptance"
+        ),
+      (error) => error?.code === "REPOSITORY_SCHEMA_INCOMPATIBLE"
+    );
+
+    assert.equal(before.equals(runtime.database.serialize()), true);
+    assert.equal(
+      runtime.database.prepare("SELECT status FROM trades WHERE id = ?")
+        .get(proposal.proposal.id).status,
+      "proposed"
+    );
+    assert.equal(
+      runtime.database.prepare("SELECT team_id FROM player_ownerships WHERE id = ?")
+        .get(IDS.ownership).team_id,
+      IDS.teamA
+    );
+    assert.equal(count(runtime.database, "ownership_events"), 0);
+  });
+
+  test("rejects a tampered replay receipt without performing another write", (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "execution-tampered-replay");
+    executeAcceptanceRepository(
+      runtime,
+      proposal.proposal.id,
+      "tampered-replay-acceptance"
+    );
+    runtime.database.prepare(`
+      UPDATE trade_events
+      SET metadata_json = json_set(
+        metadata_json,
+        '$.ownershipTransfers[0].destinationOwnershipVersion',
+        2
+      )
+      WHERE trade_id = ? AND event_type = 'proposal_accepted'
+    `).run(proposal.proposal.id);
+    const beforeReplay = runtime.database.serialize();
+
+    assert.throws(
+      () =>
+        executeAcceptanceRepository(
+          runtime,
+          proposal.proposal.id,
+          "tampered-replay-acceptance"
+        ),
+      (error) => error?.code === "REPOSITORY_SCHEMA_INCOMPATIBLE"
+    );
+
+    assert.equal(beforeReplay.equals(runtime.database.serialize()), true);
+    assert.equal(count(runtime.database, "ownership_events"), 4);
+  });
+
+  test("enforces receiver, commissioner-freeze, terminal, and deadline authority", async (t) => {
     const wrongTeam = createRuntime(t);
     const wrongTeamProposal = create(wrongTeam, "execution-wrong-team");
-    assert.throws(
+    await assert.rejects(
       () =>
         wrongTeam.acceptanceService.accept({
           leagueId: IDS.league,
@@ -1371,7 +1884,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
         }),
       (error) => error?.code === "LEAGUE_NOT_FOUND"
     );
-    assert.throws(
+    await assert.rejects(
       () =>
         wrongTeam.acceptanceService.accept({
           leagueId: uuid(999),
@@ -1381,7 +1894,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
         }),
       (error) => error?.code === "LEAGUE_NOT_FOUND"
     );
-    assert.throws(
+    await assert.rejects(
       () =>
         accept(
           wrongTeam,
@@ -1396,7 +1909,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
         "UPDATE league_memberships SET status = 'suspended', ended_at_ms = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
       )
       .run(NOW_MS, NOW_MS, IDS.receivingMembership);
-    assert.throws(
+    await assert.rejects(
       () =>
         accept(
           wrongTeam,
@@ -1414,7 +1927,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
         "UPDATE leagues SET status = 'frozen', updated_at_ms = ?, version = version + 1 WHERE id = ?"
       )
       .run(NOW_MS, IDS.league);
-    assertExecutionReason(
+    await assertAsyncExecutionReason(
       () =>
         accept(
           frozen,
@@ -1425,12 +1938,12 @@ describe("M5-08 atomic typed-asset trade execution", () => {
       TRADE_EXECUTION_CODES.roleDenied
     );
     assert.equal(
-      accept(
+      (await accept(
         frozen,
         frozenProposal.proposal.id,
         "frozen-commissioner-accept",
         IDS.commissioner
-      ).code,
+      )).code,
       "TRADE_ACCEPTED"
     );
     assert.equal(
@@ -1442,7 +1955,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
         .get(frozenProposal.proposal.id).id
     );
     const afterComplete = frozen.database.serialize();
-    assertExecutionReason(
+    await assertAsyncExecutionReason(
       () =>
         accept(
           frozen,
@@ -1458,7 +1971,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     const deadlineProposal = create(deadline, "execution-deadline");
     deadline.setNow(TRADE_DEADLINE_MS);
     const beforeDeadlineDenial = deadline.database.serialize();
-    assertExecutionReason(
+    await assertAsyncExecutionReason(
       () =>
         accept(
           deadline,
@@ -1470,7 +1983,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     assert.equal(beforeDeadlineDenial.equals(deadline.database.serialize()), true);
   });
 
-  test("persists an explicit unplaced transfer and general-illegality evidence", (t) => {
+  test("persists an explicit unplaced transfer and general-illegality evidence", async (t) => {
     const runtime = createRuntime(t);
     for (let slotNumber = 1; slotNumber <= 12; slotNumber += 1) {
       const playerId = uuid(200 + slotNumber);
@@ -1503,7 +2016,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     }
     const proposal = create(runtime, "execution-unplaced");
 
-    const result = accept(runtime, proposal.proposal.id, "accept-unplaced");
+    const result = await accept(runtime, proposal.proposal.id, "accept-unplaced");
 
     assert.equal(result.generallyIllegal, true);
     assert.ok(
@@ -1512,8 +2025,9 @@ describe("M5-08 atomic typed-asset trade execution", () => {
         .issues.some((issue) => issue.code === "NORMAL_ROSTER_SLOT_UNPLACED")
     );
     const ownership = runtime.database
-      .prepare("SELECT * FROM player_ownerships WHERE id = ?")
-      .get(IDS.ownership);
+      .prepare("SELECT * FROM player_ownerships WHERE player_id = ?")
+      .get(IDS.contractPlayer);
+    assert.notEqual(ownership.id, IDS.ownership);
     assert.equal(ownership.team_id, IDS.teamB);
     assert.equal(ownership.roster_category, "Active");
     assert.equal(ownership.slot_number, null);
@@ -1521,7 +2035,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
   });
 
-  test("rolls every transfer, activity, outbox, and idempotency record back after a late failure", (t) => {
+  test("rolls every transfer, activity, outbox, and idempotency record back after a late failure", async (t) => {
     const runtime = createRuntime(t);
     const proposal = create(runtime, "execution-late-failure");
     runtime.database.exec(`
@@ -1535,7 +2049,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     `);
     const before = runtime.database.serialize();
 
-    assert.throws(
+    await assert.rejects(
       () => accept(runtime, proposal.proposal.id, "late-acceptance"),
       (error) =>
         error?.code === "REPOSITORY_CONSTRAINT" &&
@@ -1549,13 +2063,36 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     );
   });
 
-  test("rejects conflicting key reuse and stale assets without partial execution", (t) => {
+  test("contains a post-commit late-lock failure after accepting the trade", async (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(runtime, "execution-late-lock-failure");
+    runtime.setCoordinateLateLock(async () => {
+      throw new Error("forced post-commit coordinator failure");
+    });
+
+    const result = await accept(
+      runtime,
+      proposal.proposal.id,
+      "accept-with-late-lock-failure"
+    );
+
+    assert.equal(result.code, "TRADE_ACCEPTED");
+    assert.equal(runtime.lateLockBatches.length, 1);
+    assert.deepEqual(result.lateLock, { status: "awaiting_data" });
+    assert.equal(
+      runtime.database.prepare("SELECT status FROM trades WHERE id = ?")
+        .get(proposal.proposal.id).status,
+      "completed"
+    );
+  });
+
+  test("rejects conflicting key reuse and stale assets without partial execution", async (t) => {
     const runtime = createRuntime(t);
     const first = create(runtime, "execution-key-first");
     const second = create(runtime, "execution-key-second");
-    accept(runtime, first.proposal.id, "shared-acceptance-key");
+    await accept(runtime, first.proposal.id, "shared-acceptance-key");
     const beforeConflict = runtime.database.serialize();
-    assertExecutionReason(
+    await assertAsyncExecutionReason(
       () => accept(runtime, second.proposal.id, "shared-acceptance-key"),
       TRADE_EXECUTION_CODES.idempotencyConflict
     );
@@ -1569,7 +2106,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
       )
       .run(IDS.teamB, NOW_MS, IDS.draftPick);
     const beforeStale = stale.database.serialize();
-    assertAssetReason(
+    await assertAsyncAssetReason(
       () => accept(stale, staleProposal.proposal.id, "stale-acceptance"),
       TRADE_ASSET_CODES.ineligible
     );
@@ -1607,7 +2144,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
       created_at_ms: NOW_MS,
     });
     const beforeDuplicate = duplicateRetention.database.serialize();
-    assertAssetReason(
+    await assertAsyncAssetReason(
       () =>
         accept(
           duplicateRetention,
@@ -1973,7 +2510,7 @@ describe("M5-07 durable proposal expiry", () => {
   });
 });
 
-function createAcceptedRecoveryTrade(runtime, key) {
+async function createAcceptedRecoveryTrade(runtime, key) {
   insertContract(runtime.repositories, {
     id: IDS.prospectContract,
     yearId: IDS.prospectContractYear,
@@ -1986,7 +2523,7 @@ function createAcceptedRecoveryTrade(runtime, key) {
     .prepare("UPDATE contracts SET contract_type = 'fantasy_elc' WHERE id = ?")
     .run(IDS.prospectContract);
   const proposal = create(runtime, `${key}-proposal`);
-  const accepted = accept(runtime, proposal.proposal.id, `${key}-accept`);
+  const accepted = await accept(runtime, proposal.proposal.id, `${key}-accept`);
   return Object.freeze({ proposal, accepted });
 }
 
@@ -2007,6 +2544,33 @@ function reverseTrade(runtime, tradeId, idempotencyKey) {
   });
 }
 
+function executeReversalRepository(runtime, tradeId, idempotencyKey) {
+  const trade = runtime.recoveryRepository.findRecoveryTarget({
+    leagueId: IDS.league,
+    tradeId,
+  });
+  const occurredAtMs = TRADE_DEADLINE_MS + 1;
+  return runtime.recoveryRepository.recover({
+    tradeId,
+    eventId: uuid(995_001),
+    correctionId: uuid(995_002),
+    activityId: uuid(995_003),
+    outboxEventId: uuid(995_004),
+    idempotencyRequestId: uuid(995_005),
+    leagueId: IDS.league,
+    seasonId: IDS.currentSeason,
+    expectedVersion: trade.version,
+    actorUserId: IDS.commissioner,
+    actorMembershipId: IDS.commissionerMembership,
+    actorAuthority: "commissioner",
+    action: "reverse",
+    confirmed: true,
+    occurredAtMs,
+    idempotencyKey,
+    idempotencyExpiresAtMs: occurredAtMs + IDEMPOTENCY_LIFETIME_MS,
+  });
+}
+
 function markTradeCorrectionRequired(runtime, tradeId, idempotencyKey) {
   return runtime.recoveryService.markCorrectionRequired({
     leagueId: IDS.league,
@@ -2018,6 +2582,14 @@ function markTradeCorrectionRequired(runtime, tradeId, idempotencyKey) {
 
 function assertRecoveryReason(action, reasonCode) {
   assert.throws(action, (error) => {
+    assert.ok(error instanceof TradeReversalPolicyError);
+    assert.equal(error.reasonCode, reasonCode);
+    return true;
+  });
+}
+
+async function assertAsyncRecoveryReason(action, reasonCode) {
+  await assert.rejects(action, (error) => {
     assert.ok(error instanceof TradeReversalPolicyError);
     assert.equal(error.reasonCode, reasonCode);
     return true;
@@ -2053,9 +2625,104 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     );
   });
 
-  test("keeps preview read-only and denies every non-current-commissioner identity", (t) => {
+  test("synchronizes both trade teams and every reversed player once inside reversal", async (t) => {
+    const calls = [];
+    let runtime;
+    runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize(command) {
+          assert.equal(runtime.database.inTransaction, true);
+          calls.push(command);
+          return Object.freeze({
+            affectedCardCount: 0,
+            changedCardCount: 0,
+          });
+        },
+      },
+    });
+    const { proposal } = await createAcceptedRecoveryTrade(
+      runtime,
+      "reversal-summer-sync"
+    );
+    calls.length = 0;
+    const beforePreview = runtime.database.serialize();
+
+    recoveryPreview(runtime, proposal.proposal.id);
+
+    assert.equal(beforePreview.equals(runtime.database.serialize()), true);
+    assert.deepEqual(calls, []);
+    executeReversalRepository(
+      runtime,
+      proposal.proposal.id,
+      "reversal-summer-sync-write"
+    );
+    assert.deepEqual(calls, [
+      {
+        leagueId: IDS.league,
+        affectedTeamIds: [IDS.teamA, IDS.teamB],
+        affectedPlayerIds: [IDS.contractPlayer, IDS.prospectPlayer],
+        sourceOperationId: uuid(995_001),
+        sourceKind: "trade_reversal",
+        nowMs: TRADE_DEADLINE_MS + 1,
+      },
+    ]);
+
+    executeReversalRepository(
+      runtime,
+      proposal.proposal.id,
+      "reversal-summer-sync-write"
+    );
+    assert.equal(calls.length, 1);
+  });
+
+  test("rolls every reversal effect back when Candidate synchronization fails", async (t) => {
+    const runtime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize({ sourceKind }) {
+          if (sourceKind === "trade_reversal") {
+            throw new Error("injected Candidate synchronization failure");
+          }
+          return Object.freeze({
+            affectedCardCount: 0,
+            changedCardCount: 0,
+          });
+        },
+      },
+    });
+    const { proposal } = await createAcceptedRecoveryTrade(
+      runtime,
+      "reversal-summer-sync-rollback"
+    );
+    const before = runtime.database.serialize();
+
+    assert.throws(
+      () => executeReversalRepository(
+        runtime,
+        proposal.proposal.id,
+        "reversal-summer-sync-rollback-write"
+      ),
+      { code: "REPOSITORY_OPERATION_FAILED" }
+    );
+
+    assert.equal(before.equals(runtime.database.serialize()), true);
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT status FROM trades WHERE id = ?"
+      ).get(proposal.proposal.id).status,
+      "completed"
+    );
+    assert.equal(
+      runtime.database.prepare(`
+        SELECT COUNT(*) AS count FROM trade_events
+        WHERE trade_id = ? AND event_type = 'trade_reversed'
+      `).get(proposal.proposal.id).count,
+      0
+    );
+  });
+
+  test("keeps preview read-only and denies every non-current-commissioner identity", async (t) => {
     const runtime = createRuntime(t);
-    const { proposal } = createAcceptedRecoveryTrade(runtime, "recovery-auth");
+    const { proposal } = await createAcceptedRecoveryTrade(runtime, "recovery-auth");
     const before = runtime.database.serialize();
 
     assert.throws(
@@ -2105,12 +2772,306 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     );
   });
 
-  test("reverses all eight asset forms after the deadline and replays without writes", (t) => {
+  test("reconstructs one hidden frozen two-team reversal receipt and replays it without writes", async (t) => {
+    const runtime = createRuntime(t);
+    const { proposal } = await createAcceptedRecoveryTrade(
+      runtime,
+      "reversal-repository-receipt"
+    );
+
+    const result = executeReversalRepository(
+      runtime,
+      proposal.proposal.id,
+      "reversal-repository-receipt-write"
+    );
+
+    assert.equal(Object.keys(result).includes("committedTeams"), false);
+    assert.deepEqual(
+      Object.getOwnPropertyDescriptor(result, "committedTeams"),
+      {
+        configurable: false,
+        enumerable: false,
+        value: result.committedTeams,
+        writable: false,
+      }
+    );
+    assert.equal(Object.isFrozen(result), true);
+    assert.equal(Object.isFrozen(result.committedTeams), true);
+    assert.equal(
+      Object.isFrozen(result.event.metadata.ownershipTenureMappings),
+      true
+    );
+    assert.equal(
+      result.event.metadata.ownershipTenureMappings.every(Object.isFrozen),
+      true
+    );
+    assert.deepEqual(
+      result.committedTeams.map(({ teamId }) => teamId),
+      [IDS.teamA, IDS.teamB]
+    );
+    assert.equal(
+      result.committedTeams.every(
+        (team) =>
+          Object.isFrozen(team) &&
+          Object.isFrozen(team.ownershipWitnesses)
+      ),
+      true
+    );
+    assert.equal(
+      result.committedTeams[0].ownershipWitnesses.every(
+        (witness) => witness.state === "present" && Object.isFrozen(witness)
+      ),
+      true
+    );
+    assert.equal(
+      result.committedTeams[1].ownershipWitnesses.every(
+        (witness) => witness.state === "deleted" && Object.isFrozen(witness)
+      ),
+      true
+    );
+
+    const bytesAfter = runtime.database.serialize();
+    const replay = executeReversalRepository(
+      runtime,
+      proposal.proposal.id,
+      "reversal-repository-receipt-write"
+    );
+    assert.equal(replay.replayed, true);
+    assert.deepEqual(
+      replay.event.metadata.ownershipTenureMappings,
+      result.event.metadata.ownershipTenureMappings
+    );
+    assert.deepEqual(replay.committedTeams, result.committedTeams);
+    assert.equal(bytesAfter.equals(runtime.database.serialize()), true);
+  });
+
+  test("coordinates both participant teams with empty witnesses for a cap-only reversal", async (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(
+      runtime,
+      "reversal-cap-only-receipt",
+      creationInput({
+        proposingAssets: [
+          {
+            type: "future_consideration_instruction",
+            description: "Cap-only reversal consideration",
+          },
+        ],
+        receivingAssets: [
+          {
+            type: "retention_obligation",
+            retentionObligationId: IDS.assetRetention,
+          },
+        ],
+      })
+    );
+    await accept(
+      runtime,
+      proposal.proposal.id,
+      "reversal-cap-only-acceptance"
+    );
+    runtime.setNow(TRADE_DEADLINE_MS + 1);
+
+    const result = await reverseTrade(
+      runtime,
+      proposal.proposal.id,
+      "reversal-cap-only-write"
+    );
+
+    assert.deepEqual(result.lateLock, { status: "not_applicable" });
+    assert.equal(
+      Object.hasOwn(result.event.metadata, "ownershipTenureMappings"),
+      false
+    );
+    assert.equal(runtime.lateLockBatches.length, 2);
+    assert.deepEqual(runtime.lateLockBatches[1], {
+      mutationKind: "trade_reversal",
+      teams: [
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.currentSeason,
+          teamId: IDS.teamA,
+          ownershipWitnesses: [],
+        },
+        {
+          leagueId: IDS.league,
+          seasonId: IDS.currentSeason,
+          teamId: IDS.teamB,
+          ownershipWitnesses: [],
+        },
+      ],
+    });
+  });
+
+  test("rejects a tampered initial reversal receipt and rolls every tenure effect back", async (t) => {
+    const runtime = createRuntime(t);
+    const { proposal } = await createAcceptedRecoveryTrade(
+      runtime,
+      "reversal-tampered-initial"
+    );
+    runtime.database.exec(`
+      CREATE TRIGGER tamper_trade_reversal_ownership_mapping
+      AFTER INSERT ON trade_events
+      WHEN NEW.trade_id = '${proposal.proposal.id}'
+        AND NEW.event_type = 'trade_reversed'
+      BEGIN
+        UPDATE trade_events
+        SET metadata_json = json_set(
+          metadata_json,
+          '$.ownershipTenureMappings[0].destinationOwnershipVersion',
+          2
+        )
+        WHERE id = NEW.id;
+      END;
+    `);
+    runtime.setNow(TRADE_DEADLINE_MS + 1);
+    const before = runtime.database.serialize();
+
+    await assert.rejects(
+      () => reverseTrade(
+        runtime,
+        proposal.proposal.id,
+        "reversal-tampered-initial-write"
+      ),
+      (error) => error?.code === "REPOSITORY_SCHEMA_INCOMPATIBLE"
+    );
+
+    assert.equal(before.equals(runtime.database.serialize()), true);
+    assert.equal(
+      runtime.database.prepare("SELECT status FROM trades WHERE id = ?")
+        .get(proposal.proposal.id).status,
+      "completed"
+    );
+    assert.equal(
+      runtime.database.prepare(`
+        SELECT COUNT(*) AS count FROM ownership_events
+        WHERE source_type = 'trade_reversal' AND source_id = ?
+      `).get(proposal.proposal.id).count,
+      0
+    );
+  });
+
+  test("rejects tampered replay mapping or schema-v2 history without writes or resurrection", async (t) => {
+    const cases = [
+      ["mapping", (database, tradeId) => {
+        database.prepare(`
+          UPDATE trade_events
+          SET metadata_json = json_set(
+            metadata_json,
+            '$.ownershipTenureMappings[0].destinationOwnershipVersion',
+            2
+          )
+          WHERE trade_id = ? AND event_type = 'trade_reversed'
+        `).run(tradeId);
+      }],
+      ["history", (database, tradeId) => {
+        database.prepare(`
+          UPDATE ownership_events
+          SET after_metadata_json = json_set(
+            after_metadata_json,
+            '$.schemaVersion',
+            1
+          )
+          WHERE source_type = 'trade_reversal'
+            AND source_id = ?
+            AND event_type = 'trade_reversal_in'
+        `).run(tradeId);
+      }],
+    ];
+
+    for (const [label, tamper] of cases) {
+      const runtime = createRuntime(t);
+      const { proposal } = await createAcceptedRecoveryTrade(
+        runtime,
+        `reversal-tampered-replay-${label}`
+      );
+      runtime.setNow(TRADE_DEADLINE_MS + 1);
+      await reverseTrade(
+        runtime,
+        proposal.proposal.id,
+        `reversal-tampered-replay-${label}-write`
+      );
+      const reversalOwnershipId = runtime.database.prepare(`
+        SELECT id FROM player_ownerships
+        WHERE acquired_transaction_type = 'trade_reversal'
+          AND acquired_transaction_id = ?
+        ORDER BY id LIMIT 1
+      `).get(proposal.proposal.id).id;
+      tamper(runtime.database, proposal.proposal.id);
+      const beforeReplay = runtime.database.serialize();
+
+      await assert.rejects(
+        () => reverseTrade(
+          runtime,
+          proposal.proposal.id,
+          `reversal-tampered-replay-${label}-write`
+        ),
+        (error) => error?.code === "REPOSITORY_SCHEMA_INCOMPATIBLE"
+      );
+
+      assert.equal(
+        beforeReplay.equals(runtime.database.serialize()),
+        true,
+        label
+      );
+      assert.equal(
+        runtime.database.prepare(`
+          SELECT COUNT(*) AS count FROM player_ownerships
+          WHERE id IN (?, ?, ?)
+        `).get(
+          IDS.ownership,
+          IDS.prospectOwnership,
+          reversalOwnershipId
+        ).count,
+        1,
+        label
+      );
+    }
+  });
+
+  test("reverses all eight asset forms after the deadline and replays without writes", async (t) => {
     const runtime = createRuntime(t);
     const contractBefore = runtime.database
       .prepare("SELECT * FROM contracts WHERE id = ?")
       .get(IDS.contract);
-    const { proposal } = createAcceptedRecoveryTrade(runtime, "safe-recovery");
+    const { proposal } = await createAcceptedRecoveryTrade(runtime, "safe-recovery");
+    const acceptanceMetadata = JSON.parse(
+      runtime.database.prepare(
+        "SELECT metadata_json FROM trade_events WHERE trade_id = ? AND event_type = 'proposal_accepted'"
+      ).get(proposal.proposal.id).metadata_json
+    );
+    const acceptedContractMapping = acceptanceMetadata.ownershipTransfers.find(
+      ({ sourceOwnershipId }) => sourceOwnershipId === IDS.ownership
+    );
+    const acceptedProspectMapping = acceptanceMetadata.ownershipTransfers.find(
+      ({ sourceOwnershipId }) => sourceOwnershipId === IDS.prospectOwnership
+    );
+    runtime.database.prepare(`
+      INSERT INTO roster_display_order_sets (
+        id, league_id, season_id, team_id, updated_by_user_id,
+        created_at_ms, updated_at_ms, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+    `).run(
+      uuid(971_001),
+      IDS.league,
+      IDS.currentSeason,
+      IDS.teamB,
+      IDS.receivingManager,
+      NOW_MS,
+      NOW_MS
+    );
+    runtime.database.prepare(`
+      INSERT INTO roster_display_order_entries (
+        id, league_id, order_set_id, ownership_id,
+        position_group, display_order, created_at_ms
+      ) VALUES (?, ?, ?, ?, 'F', 1, ?)
+    `).run(
+      uuid(971_002),
+      IDS.league,
+      uuid(971_001),
+      acceptedContractMapping.destinationOwnershipId,
+      NOW_MS
+    );
     const createdAssets = runtime.database.prepare(`
       SELECT id, asset_type, future_consideration_description
       FROM trade_assets WHERE trade_id = ? ORDER BY sequence
@@ -2128,7 +3089,7 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     assert.equal(beforePreview.equals(runtime.database.serialize()), true);
 
     const beforeWrongRoute = runtime.database.serialize();
-    assertRecoveryReason(
+    await assertAsyncRecoveryReason(
       () => markTradeCorrectionRequired(
         runtime,
         proposal.proposal.id,
@@ -2139,7 +3100,7 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     assert.equal(beforeWrongRoute.equals(runtime.database.serialize()), true);
 
     runtime.setNow(TRADE_DEADLINE_MS + 1);
-    const reversed = reverseTrade(
+    const reversed = await reverseTrade(
       runtime,
       proposal.proposal.id,
       "safe-recovery-reverse"
@@ -2147,22 +3108,151 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     assert.equal(reversed.code, "TRADE_REVERSED");
     assert.equal(reversed.trade.storageStatus, "reversed");
     assert.equal(reversed.trade.version, 3);
+    assert.deepEqual(reversed.lateLock, { status: "not_applicable" });
+    assert.equal(
+      Object.hasOwn(reversed.event.metadata, "ownershipTenureMappings"),
+      false
+    );
 
     const ownership = runtime.database
-      .prepare("SELECT * FROM player_ownerships WHERE id = ?")
-      .get(IDS.ownership);
+      .prepare("SELECT * FROM player_ownerships WHERE player_id = ?")
+      .get(IDS.contractPlayer);
+    assert.notEqual(ownership.id, IDS.ownership);
+    assert.notEqual(ownership.id, acceptedContractMapping.destinationOwnershipId);
     assert.equal(ownership.team_id, IDS.teamA);
     assert.equal(ownership.roster_category, "Active");
     assert.equal(ownership.slot_number, 1);
     assert.equal(ownership.acquired_transaction_type, "trade_reversal");
     assert.equal(ownership.acquired_transaction_id, proposal.proposal.id);
-    assert.equal(ownership.version, 3);
+    assert.equal(ownership.version, 1);
     const prospect = runtime.database
-      .prepare("SELECT * FROM player_ownerships WHERE id = ?")
-      .get(IDS.prospectOwnership);
+      .prepare("SELECT * FROM player_ownerships WHERE player_id = ?")
+      .get(IDS.prospectPlayer);
+    assert.notEqual(prospect.id, IDS.prospectOwnership);
+    assert.notEqual(prospect.id, acceptedProspectMapping.destinationOwnershipId);
     assert.equal(prospect.team_id, IDS.teamA);
     assert.equal(prospect.roster_category, "Prospect");
-    assert.equal(prospect.version, 3);
+    assert.equal(prospect.version, 1);
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT COUNT(*) AS count FROM player_ownerships WHERE id IN (?, ?, ?, ?)"
+      ).get(
+        IDS.ownership,
+        IDS.prospectOwnership,
+        acceptedContractMapping.destinationOwnershipId,
+        acceptedProspectMapping.destinationOwnershipId
+      ).count,
+      0
+    );
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT COUNT(*) AS count FROM roster_display_order_entries WHERE ownership_id = ?"
+      ).get(acceptedContractMapping.destinationOwnershipId).count,
+      0
+    );
+    const reversalMetadata = JSON.parse(
+      runtime.database.prepare(
+        "SELECT metadata_json FROM trade_events WHERE trade_id = ? AND event_type = 'trade_reversed'"
+      ).get(proposal.proposal.id).metadata_json
+    );
+    const reversedContractMapping = reversalMetadata.ownershipTenureMappings.find(
+      ({ sourceOwnershipId }) =>
+        sourceOwnershipId === acceptedContractMapping.destinationOwnershipId
+    );
+    assert.deepEqual(
+      {
+        sourceTeamId: reversedContractMapping.sourceTeamId,
+        destinationTeamId: reversedContractMapping.destinationTeamId,
+        sourceOwnershipId: reversedContractMapping.sourceOwnershipId,
+        sourceOwnershipVersion: reversedContractMapping.sourceOwnershipVersion,
+        destinationOwnershipId: reversedContractMapping.destinationOwnershipId,
+        destinationOwnershipVersion:
+          reversedContractMapping.destinationOwnershipVersion,
+      },
+      {
+        sourceTeamId: IDS.teamB,
+        destinationTeamId: IDS.teamA,
+        sourceOwnershipId: acceptedContractMapping.destinationOwnershipId,
+        sourceOwnershipVersion: 1,
+        destinationOwnershipId: ownership.id,
+        destinationOwnershipVersion: 1,
+      }
+    );
+    assert.deepEqual(
+      runtime.database.prepare(
+        "SELECT event_type FROM ownership_events ORDER BY event_type, ownership_id"
+      ).all().map(({ event_type }) => event_type),
+      [
+        "trade_reversal_in",
+        "trade_reversal_in",
+        "trade_reversal_out",
+        "trade_reversal_out",
+        "trade_transfer_in",
+        "trade_transfer_in",
+        "trade_transfer_out",
+        "trade_transfer_out",
+      ]
+    );
+    const reversalHistory = runtime.database.prepare(`
+      SELECT event_type, before_metadata_json, after_metadata_json
+      FROM ownership_events
+      WHERE source_type = 'trade_reversal' AND source_id = ?
+      ORDER BY event_type, ownership_id
+    `).all(proposal.proposal.id).map((row) => ({
+      eventType: row.event_type,
+      before: JSON.parse(row.before_metadata_json),
+      after: JSON.parse(row.after_metadata_json),
+    }));
+    assert.equal(reversalHistory.length, 4);
+    assert.equal(
+      reversalHistory.every(
+        ({ before, after }) =>
+          before.schemaVersion === 2 && after.schemaVersion === 2
+      ),
+      true
+    );
+    assert.equal(
+      reversalHistory.every(({ eventType, before, after }) =>
+        eventType === "trade_reversal_out"
+          ? before.exists === true && after.exists === false
+          : before.exists === false && after.exists === true
+      ),
+      true
+    );
+    assert.equal(runtime.lateLockBatches.length, 2);
+    assert.equal(runtime.lateLockBatches[1].mutationKind, "trade_reversal");
+    assert.deepEqual(
+      runtime.lateLockBatches[1].teams.map((team) => ({
+        teamId: team.teamId,
+        witnesses: team.ownershipWitnesses,
+      })),
+      [
+        {
+          teamId: IDS.teamA,
+          witnesses: reversalMetadata.ownershipTenureMappings
+            .map((mapping) => ({
+              ownershipId: mapping.destinationOwnershipId,
+              ownershipVersion: mapping.destinationOwnershipVersion,
+              state: "present",
+            }))
+            .sort((left, right) =>
+              left.ownershipId.localeCompare(right.ownershipId)
+            ),
+        },
+        {
+          teamId: IDS.teamB,
+          witnesses: reversalMetadata.ownershipTenureMappings
+            .map((mapping) => ({
+              ownershipId: mapping.sourceOwnershipId,
+              ownershipVersion: mapping.sourceOwnershipVersion,
+              state: "deleted",
+            }))
+            .sort((left, right) =>
+              left.ownershipId.localeCompare(right.ownershipId)
+            ),
+        },
+      ]
+    );
 
     const contractAfter = runtime.database
       .prepare("SELECT * FROM contracts WHERE id = ?")
@@ -2243,20 +3333,23 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
 
     const beforeReplay = runtime.database.serialize();
-    const replay = reverseTrade(
+    const replay = await reverseTrade(
       runtime,
       proposal.proposal.id,
       "safe-recovery-reverse"
     );
     assert.equal(replay.code, "TRADE_RECOVERY_REPLAYED");
     assert.equal(replay.event.id, reversed.event.id);
+    assert.deepEqual(replay.lateLock, { status: "not_applicable" });
+    assert.equal(runtime.lateLockBatches.length, 3);
+    assert.deepEqual(runtime.lateLockBatches[2], runtime.lateLockBatches[1]);
     assert.equal(beforeReplay.equals(runtime.database.serialize()), true);
 
     runtime.setNow(NOW_MS);
     const second = create(runtime, "safe-recovery-second-proposal");
-    accept(runtime, second.proposal.id, "safe-recovery-second-accept");
+    await accept(runtime, second.proposal.id, "safe-recovery-second-accept");
     const beforeConflict = runtime.database.serialize();
-    assertRecoveryReason(
+    await assertAsyncRecoveryReason(
       () => reverseTrade(
         runtime,
         second.proposal.id,
@@ -2267,12 +3360,12 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     assert.equal(beforeConflict.equals(runtime.database.serialize()), true);
   });
 
-  test("reports every bounded unsafe post-trade state without writes", (t) => {
+  test("reports every bounded unsafe post-trade state without writes", async (t) => {
     const cases = [
       [TRADE_REVERSAL_REASON_CODES.assetMoved, (runtime) => {
         runtime.database.prepare(
-          "UPDATE player_ownerships SET team_id = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
-        ).run(IDS.teamA, NOW_MS + 1, IDS.ownership);
+          "UPDATE player_ownerships SET team_id = ?, updated_at_ms = ?, version = version + 1 WHERE player_id = ?"
+        ).run(IDS.teamA, NOW_MS + 1, IDS.contractPlayer);
       }],
       [TRADE_REVERSAL_REASON_CODES.assetChanged, (runtime) => {
         runtime.database.prepare(
@@ -2333,15 +3426,15 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
       [TRADE_REVERSAL_REASON_CODES.assetMissing, (runtime) => {
         runtime.database.pragma("foreign_keys = OFF");
         runtime.database.prepare(
-          "DELETE FROM player_ownerships WHERE id = ?"
-        ).run(IDS.ownership);
+          "DELETE FROM player_ownerships WHERE player_id = ?"
+        ).run(IDS.contractPlayer);
         runtime.database.pragma("foreign_keys = ON");
       }],
     ];
 
     for (const [reasonCode, mutate] of cases) {
       const runtime = createRuntime(t);
-      const { proposal } = createAcceptedRecoveryTrade(
+      const { proposal } = await createAcceptedRecoveryTrade(
         runtime,
         `unsafe-${reasonCode.toLowerCase()}`
       );
@@ -2359,9 +3452,9 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     }
   });
 
-  test("reports consumed state, rejects direct reversal, and routes correction without moving assets", (t) => {
+  test("reports consumed state, rejects direct reversal, and routes correction without moving assets", async (t) => {
     const runtime = createRuntime(t);
-    const { proposal } = createAcceptedRecoveryTrade(runtime, "unsafe-recovery");
+    const { proposal } = await createAcceptedRecoveryTrade(runtime, "unsafe-recovery");
     runtime.database.prepare(
       "UPDATE draft_picks SET status = 'forfeited', updated_at_ms = ?, version = version + 1 WHERE id = ?"
     ).run(NOW_MS + 1, IDS.draftPick);
@@ -2374,7 +3467,7 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     assert.equal(beforePreview.equals(runtime.database.serialize()), true);
 
     const beforeRejectedReverse = runtime.database.serialize();
-    assertRecoveryReason(
+    await assertAsyncRecoveryReason(
       () => reverseTrade(runtime, proposal.proposal.id, "unsafe-direct-reverse"),
       TRADE_REVERSAL_CODES.safeReversalRequired
     );
@@ -2385,7 +3478,7 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
 
     const assetsBeforeRouting = sourceState(runtime.database);
     runtime.setNow(NOW_MS + 2);
-    const routed = markTradeCorrectionRequired(
+    const routed = await markTradeCorrectionRequired(
       runtime,
       proposal.proposal.id,
       "unsafe-correction-route"
@@ -2411,7 +3504,7 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
       "trade.changed"
     );
     const beforeReplay = runtime.database.serialize();
-    const replay = markTradeCorrectionRequired(
+    const replay = await markTradeCorrectionRequired(
       runtime,
       proposal.proposal.id,
       "unsafe-correction-route"
@@ -2421,9 +3514,93 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     assert.equal(beforeReplay.equals(runtime.database.serialize()), true);
   });
 
-  test("rolls back every reversal effect after a late transactional failure", (t) => {
+  test("contains a post-commit late-lock failure after reversing the trade", async (t) => {
     const runtime = createRuntime(t);
-    const { proposal } = createAcceptedRecoveryTrade(runtime, "rollback-recovery");
+    const { proposal } = await createAcceptedRecoveryTrade(
+      runtime,
+      "reversal-late-lock-failure"
+    );
+    runtime.setCoordinateLateLock(async () => {
+      throw new Error("forced post-commit coordinator failure");
+    });
+    runtime.setNow(TRADE_DEADLINE_MS + 1);
+
+    const result = await reverseTrade(
+      runtime,
+      proposal.proposal.id,
+      "reverse-with-late-lock-failure"
+    );
+
+    assert.equal(result.code, "TRADE_REVERSED");
+    assert.deepEqual(result.lateLock, { status: "awaiting_data" });
+    assert.equal(runtime.lateLockBatches.length, 2);
+    assert.equal(
+      runtime.database.prepare("SELECT status FROM trades WHERE id = ?")
+        .get(proposal.proposal.id).status,
+      "reversed"
+    );
+  });
+
+  test("contains an unsafe private reversal receipt after the roster commit", async (t) => {
+    const runtime = createRuntime(t);
+    const { proposal } = await createAcceptedRecoveryTrade(
+      runtime,
+      "reversal-unsafe-private-receipt"
+    );
+    const unsafeRepository = Object.freeze({
+      findRecoveryTarget(options) {
+        return runtime.recoveryRepository.findRecoveryTarget(options);
+      },
+      preview(options) {
+        return runtime.recoveryRepository.preview(options);
+      },
+      recover(options) {
+        const committed = runtime.recoveryRepository.recover(options);
+        return Object.freeze({
+          ...committed,
+          committedTeams: committed.committedTeams,
+        });
+      },
+    });
+    let coordinatorReached = false;
+    const unsafeService = createTradeReversalService({
+      leagueAuthorization: runtime.leagueAuthorization,
+      repository: unsafeRepository,
+      lateLockCoordinator: Object.freeze({
+        async coordinateCommittedRoster() {
+          coordinatorReached = true;
+          throw new Error("an unsafe receipt must not reach the coordinator");
+        },
+      }),
+      clock: runtime.clock,
+      secureRandom: runtime.secureRandom,
+    });
+    runtime.setNow(TRADE_DEADLINE_MS + 1);
+
+    const result = await unsafeService.reverse({
+      leagueId: IDS.league,
+      input: { tradeId: proposal.proposal.id, confirmed: true },
+      idempotencyKey: "reversal-unsafe-private-receipt-write",
+      authenticated: authenticated(IDS.commissioner),
+    });
+
+    assert.equal(result.code, "TRADE_REVERSED");
+    assert.deepEqual(result.lateLock, { status: "awaiting_data" });
+    assert.equal(coordinatorReached, false);
+    assert.equal(
+      Object.hasOwn(result.event.metadata, "ownershipTenureMappings"),
+      false
+    );
+    assert.equal(
+      runtime.database.prepare("SELECT status FROM trades WHERE id = ?")
+        .get(proposal.proposal.id).status,
+      "reversed"
+    );
+  });
+
+  test("rolls back every reversal effect after a late transactional failure", async (t) => {
+    const runtime = createRuntime(t);
+    const { proposal } = await createAcceptedRecoveryTrade(runtime, "rollback-recovery");
     runtime.database.exec(`
       CREATE TRIGGER reject_m5_10_recovery_outbox
       BEFORE INSERT ON outbox_events
@@ -2434,7 +3611,7 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
       END;
     `);
     const before = runtime.database.serialize();
-    assert.throws(
+    await assert.rejects(
       () => reverseTrade(runtime, proposal.proposal.id, "rollback-reverse"),
       { code: "REPOSITORY_CONSTRAINT" }
     );

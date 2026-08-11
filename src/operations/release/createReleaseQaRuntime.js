@@ -197,6 +197,7 @@ async function createReleaseQaRuntime({
       buildId: "m7-local-backend",
       environmentId: databaseIdentity.environmentId,
       frontendBuildId: "m7-local-frontend",
+      freeAgentDraftRoutesEnabled: true,
       leagueWriteMode,
       accountEmailDeliveryEnabled: false,
       scheduledJobsEnabled: false,

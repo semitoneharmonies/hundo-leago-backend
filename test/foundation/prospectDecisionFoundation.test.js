@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -171,7 +172,10 @@ function seed(context) {
   });
 }
 
-function createRuntime(t) {
+function createRuntime(
+  t,
+  { candidateCardSummerSynchronizer } = {}
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m4-06-"));
   const connection = openDatabase({
     databasePath: path.join(root, "league.sqlite3"),
@@ -196,6 +200,15 @@ function createRuntime(t) {
     database: connection.database,
     repository: createSqliteProspectDecisionRepository({
       database: connection.database,
+      candidateCardSummerSynchronizer:
+        candidateCardSummerSynchronizer ?? {
+          synchronize() {
+            return Object.freeze({
+              affectedCardCount: 0,
+              changedCardCount: 0,
+            });
+          },
+        },
     }),
   };
 }
@@ -254,6 +267,27 @@ function count(database, tableName) {
   return database
     .prepare(`SELECT COUNT(*) AS count FROM ${tableName}`)
     .get().count;
+}
+
+function databaseSemanticHash(database) {
+  const tableNames = database
+    .prepare(
+      "SELECT name FROM sqlite_schema " +
+        "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' " +
+        "ORDER BY name ASC"
+    )
+    .all()
+    .map(({ name }) => name);
+  const state = tableNames.map((tableName) => ({
+    tableName,
+    rows: database
+      .prepare(`SELECT * FROM "${tableName}" ORDER BY rowid ASC`)
+      .all(),
+  }));
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(state), "utf8")
+    .digest("hex");
 }
 
 function seedConflictingActivity(context) {
@@ -351,6 +385,58 @@ describe("M4-06 fantasy ELC and unsigned-right decision policy", () => {
 });
 
 describe("M4-06 atomic prospect decisions", () => {
+  test("synchronizes each signed or released prospect inside its mutation transaction", (t) => {
+    const calls = [];
+    let signingRuntime;
+    signingRuntime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize(command) {
+          assert.equal(signingRuntime.database.inTransaction, true);
+          calls.push(command);
+          return Object.freeze({
+            affectedCardCount: 0,
+            changedCardCount: 0,
+          });
+        },
+      },
+    });
+    signingRuntime.repository.signFantasyElc(signingInput());
+
+    let releaseRuntime;
+    releaseRuntime = createRuntime(t, {
+      candidateCardSummerSynchronizer: {
+        synchronize(command) {
+          assert.equal(releaseRuntime.database.inTransaction, true);
+          calls.push(command);
+          return Object.freeze({
+            affectedCardCount: 0,
+            changedCardCount: 0,
+          });
+        },
+      },
+    });
+    releaseRuntime.repository.releaseUnsignedRights(releaseInput());
+
+    assert.deepEqual(calls, [
+      {
+        leagueId: IDS.league,
+        affectedTeamIds: [IDS.team],
+        affectedPlayerIds: [IDS.player],
+        sourceOperationId: IDS.ownershipEvent,
+        sourceKind: "prospect_decision",
+        nowMs: NOW_MS + 1,
+      },
+      {
+        leagueId: IDS.league,
+        affectedTeamIds: [IDS.team],
+        affectedPlayerIds: [IDS.player],
+        sourceOperationId: IDS.ownershipEvent,
+        sourceKind: "prospect_decision",
+        nowMs: NOW_MS + 1,
+      },
+    ]);
+  });
+
   test("signs one ELC and converts the right to a cap-exempt rostered Prospect", (t) => {
     const { database, repository } = createRuntime(t);
     const result = repository.signFantasyElc(signingInput());
@@ -446,5 +532,30 @@ describe("M4-06 atomic prospect decisions", () => {
     assert.equal(count(second.database, "player_ownerships"), 1);
     assert.equal(count(second.database, "ownership_events"), 0);
     assert.equal(count(second.database, "league_activity"), 1);
+  });
+
+  test("rolls every signing or release effect back when Candidate synchronization fails", (t) => {
+    for (const execute of [
+      (repository) => repository.signFantasyElc(signingInput()),
+      (repository) => repository.releaseUnsignedRights(releaseInput()),
+    ]) {
+      const runtime = createRuntime(t, {
+        candidateCardSummerSynchronizer: {
+          synchronize() {
+            throw new Error("injected Candidate synchronization failure");
+          },
+        },
+      });
+      const before = databaseSemanticHash(runtime.database);
+
+      assert.throws(
+        () => execute(runtime.repository),
+        (error) =>
+          error.code === REPOSITORY_ERROR_CODES.operationFailed &&
+          error.cause?.message ===
+            "injected Candidate synchronization failure"
+      );
+      assert.equal(databaseSemanticHash(runtime.database), before);
+    }
   });
 });

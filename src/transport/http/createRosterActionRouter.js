@@ -146,12 +146,12 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
   router.post(
     "/api/v1/leagues/:leagueId/teams/:teamId/roster/:ownershipId/move",
     requestSecurity.authenticateUnsafe,
-    (request, response) => {
+    async (request, response) => {
       try {
         return successResponse(
           request,
           response,
-          rosterActionService.moveRosterPlayer({
+          await rosterActionService.moveRosterPlayer({
             authenticated: requestSecurity.getAuthenticatedSession(request),
             leagueId: request.params.leagueId,
             teamId: request.params.teamId,
@@ -168,12 +168,12 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
   router.post(
     "/api/v1/leagues/:leagueId/teams/:teamId/roster/:ownershipId/move-to-ir",
     requestSecurity.authenticateUnsafe,
-    (request, response) => {
+    async (request, response) => {
       try {
         return successResponse(
           request,
           response,
-          rosterActionService.moveToInjuredReserve({
+          await rosterActionService.moveToInjuredReserve({
             authenticated: requestSecurity.getAuthenticatedSession(request),
             leagueId: request.params.leagueId,
             teamId: request.params.teamId,
@@ -190,12 +190,12 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
   router.post(
     "/api/v1/leagues/:leagueId/teams/:teamId/contracts/:contractId/buyout",
     requestSecurity.authenticateUnsafe,
-    (request, response) => {
+    async (request, response) => {
       try {
         return successResponse(
           request,
           response,
-          rosterActionService.buyOutContract({
+          await rosterActionService.buyOutContract({
             authenticated: requestSecurity.getAuthenticatedSession(request),
             leagueId: request.params.leagueId,
             teamId: request.params.teamId,

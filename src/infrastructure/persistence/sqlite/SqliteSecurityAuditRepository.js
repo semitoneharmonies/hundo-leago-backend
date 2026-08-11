@@ -17,6 +17,7 @@ const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const SAFE_TEXT_PATTERN =
   /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const CLIENT_METADATA_KEYS = new Set([
+  "actorAuthority",
   "networkSourceCategory",
   "origin",
   "userAgentFamily",
@@ -118,6 +119,15 @@ function assertClientMetadata(value) {
     parsed
   )) {
     if (typeof entry !== "string") {
+      invalid("Safe audit client metadata is required.");
+    }
+    if (
+      key === "actorAuthority" &&
+      ![
+        "commissioner",
+        "platform_administrator_as_commissioner",
+      ].includes(entry)
+    ) {
       invalid("Safe audit client metadata is required.");
     }
     if (

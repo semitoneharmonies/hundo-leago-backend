@@ -39,7 +39,16 @@ function requireUniqueRow(rows, message) {
 
 function createSqliteLeaguePlayerOwnershipRepository({
   database,
+  candidateCardSummerSynchronizer,
 } = {}) {
+  if (
+    !candidateCardSummerSynchronizer ||
+    typeof candidateCardSummerSynchronizer.synchronize !== "function"
+  ) {
+    throw new TypeError(
+      "createSqliteLeaguePlayerOwnershipRepository requires a Candidate Card summer synchronizer"
+    );
+  }
   const corrections = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition(
@@ -105,6 +114,21 @@ function createSqliteLeaguePlayerOwnershipRepository({
         }
 
         const created = freezeRow(corrections.insert(replacement));
+        const ownership = requireUniqueRow(
+          findOwnershipStatement.all({
+            leagueId: replacement.league_id,
+            playerId: replacement.player_id,
+          }),
+          "A league player has multiple current ownership records."
+        );
+        candidateCardSummerSynchronizer.synchronize({
+          leagueId: replacement.league_id,
+          affectedTeamIds: ownership ? [ownership.team_id] : [],
+          affectedPlayerIds: [replacement.player_id],
+          sourceOperationId: replacement.id,
+          sourceKind: "position_correction",
+          nowMs: replacement.effective_at_ms,
+        });
         return Object.freeze({
           previous,
           current: created,
