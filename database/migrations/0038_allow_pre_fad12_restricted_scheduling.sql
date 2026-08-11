@@ -421,3 +421,4 @@ SET metadata_value = '38',
     END
 WHERE metadata_key = 'data_model_version'
   AND metadata_value = '37';
+
