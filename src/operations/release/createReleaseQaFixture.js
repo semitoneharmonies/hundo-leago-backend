@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const Database = require("better-sqlite3");
 
 const {
   openDatabase,
@@ -262,6 +263,172 @@ function assertSafeFixturePath({ databasePath, environment, temporaryRoot }) {
     );
   }
   return resolvedDatabasePath;
+}
+
+function assertProviderCatalogSourcePath({
+  providerCatalogSourceDatabasePath,
+  targetDatabasePath,
+}) {
+  if (providerCatalogSourceDatabasePath === undefined) return null;
+  if (!path.isAbsolute(providerCatalogSourceDatabasePath || "")) {
+    fail(
+      "RELEASE_QA_PROVIDER_CATALOG_PATH_INVALID",
+      "The provider-catalog source database path must be absolute."
+    );
+  }
+  let sourcePath;
+  try {
+    sourcePath = fs.realpathSync(providerCatalogSourceDatabasePath);
+  } catch (error) {
+    fail(
+      "RELEASE_QA_PROVIDER_CATALOG_PATH_INVALID",
+      "The provider-catalog source database must already exist.",
+      error
+    );
+  }
+  if (
+    sourcePath === path.resolve(targetDatabasePath) ||
+    !fs.statSync(sourcePath).isFile()
+  ) {
+    fail(
+      "RELEASE_QA_PROVIDER_CATALOG_PATH_INVALID",
+      "The provider-catalog source must be a distinct regular file."
+    );
+  }
+  return sourcePath;
+}
+
+function importProviderCatalogFromDatabase({
+  database,
+  providerCatalogSourceDatabasePath,
+}) {
+  if (providerCatalogSourceDatabasePath === null) {
+    return Object.freeze({ importedPlayerCount: 0 });
+  }
+  const source = new Database(providerCatalogSourceDatabasePath, {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    source.pragma("query_only = ON");
+    if (source.pragma("quick_check", { simple: true }) !== "ok") {
+      fail(
+        "RELEASE_QA_PROVIDER_CATALOG_INVALID",
+        "The provider-catalog source database failed its integrity check."
+      );
+    }
+    const rows = source.prepare(`
+      SELECT
+        player.id AS player_id,
+        player.first_name,
+        player.last_name,
+        player.full_name,
+        player.birth_date,
+        player.status,
+        player.created_at_ms AS player_created_at_ms,
+        player.updated_at_ms AS player_updated_at_ms,
+        player.version AS player_version,
+        external.id AS external_id,
+        external.external_value,
+        external.created_at_ms AS external_created_at_ms,
+        source.id AS source_state_id,
+        source.source_position,
+        source.normalized_position,
+        source.nhl_team_abbreviation,
+        source.active,
+        source.source_version,
+        source.source_payload_json,
+        source.effective_at_ms,
+        source.ended_at_ms,
+        source.created_at_ms AS source_created_at_ms
+      FROM players AS player
+      INNER JOIN player_external_ids AS external
+        ON external.player_id = player.id
+       AND external.provider = 'sportsdataio-discovery-lab'
+      INNER JOIN player_source_state AS source
+        ON source.player_id = player.id
+       AND source.provider = 'sportsdataio-discovery-lab'
+       AND source.ended_at_ms IS NULL
+       AND source.normalized_position IN ('F', 'D')
+      ORDER BY lower(player.full_name) ASC, player.id ASC
+    `).all();
+    if (rows.length < PLAYER_BLUEPRINTS.length) {
+      fail(
+        "RELEASE_QA_PROVIDER_CATALOG_INSUFFICIENT",
+        "The provider-catalog source does not contain enough current players."
+      );
+    }
+    const insertPlayer = database.prepare(`
+      INSERT INTO players (
+        id, first_name, last_name, full_name, birth_date, status,
+        created_at_ms, updated_at_ms, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertExternal = database.prepare(`
+      INSERT INTO player_external_ids (
+        id, player_id, provider, external_value, created_at_ms
+      ) VALUES (?, ?, 'sportsdataio-discovery-lab', ?, ?)
+    `);
+    const insertSource = database.prepare(`
+      INSERT INTO player_source_state (
+        id, player_id, provider, source_position, normalized_position,
+        nhl_team_abbreviation, active, source_version, source_payload_json,
+        effective_at_ms, ended_at_ms, created_at_ms
+      ) VALUES (
+        ?, ?, 'sportsdataio-discovery-lab', ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )
+    `);
+    database.transaction(() => {
+      if (database.prepare("SELECT COUNT(*) FROM players").pluck().get() !== 0) {
+        fail(
+          "RELEASE_QA_PROVIDER_CATALOG_TARGET_NOT_EMPTY",
+          "The provider catalog can only be copied into a fresh fixture database."
+        );
+      }
+      for (const row of rows) {
+        insertPlayer.run(
+          row.player_id,
+          row.first_name,
+          row.last_name,
+          row.full_name,
+          row.birth_date,
+          row.status,
+          row.player_created_at_ms,
+          row.player_updated_at_ms,
+          row.player_version
+        );
+        insertExternal.run(
+          row.external_id,
+          row.player_id,
+          row.external_value,
+          row.external_created_at_ms
+        );
+        insertSource.run(
+          row.source_state_id,
+          row.player_id,
+          row.source_position,
+          row.normalized_position,
+          row.nhl_team_abbreviation,
+          row.active,
+          row.source_version,
+          row.source_payload_json,
+          row.effective_at_ms,
+          row.ended_at_ms,
+          row.source_created_at_ms
+        );
+      }
+    }).immediate();
+    return Object.freeze({ importedPlayerCount: rows.length });
+  } catch (error) {
+    if (error instanceof ReleaseQaFixtureError) throw error;
+    fail(
+      "RELEASE_QA_PROVIDER_CATALOG_INVALID",
+      "The provider catalog could not be copied safely.",
+      error
+    );
+  } finally {
+    source.close();
+  }
 }
 
 function deterministicPasswordHasher() {
@@ -1862,6 +2029,7 @@ async function createReleaseQaFixture({
   environment,
   migrationsDirectory,
   password,
+  providerCatalogSourceDatabasePath,
   temporaryRoot,
 } = {}) {
   const resolvedDatabasePath = assertSafeFixturePath({
@@ -1869,6 +2037,11 @@ async function createReleaseQaFixture({
     environment,
     temporaryRoot,
   });
+  const resolvedProviderCatalogSourcePath =
+    assertProviderCatalogSourcePath({
+      providerCatalogSourceDatabasePath,
+      targetDatabasePath: resolvedDatabasePath,
+    });
   if (!path.isAbsolute(migrationsDirectory || "")) {
     fail(
       "RELEASE_QA_MIGRATIONS_REQUIRED",
@@ -1893,6 +2066,11 @@ async function createReleaseQaFixture({
       migrationsDirectory,
       applicationBuildId: FIXTURE_BUILD_ID,
       now: () => FIXTURE_NOW_MS,
+    });
+    importProviderCatalogFromDatabase({
+      database: connection.database,
+      providerCatalogSourceDatabasePath:
+        resolvedProviderCatalogSourcePath,
     });
     const seedResult = connection.database.transaction(() =>
       seedFixture(connection.database, passwordHash)
@@ -1923,5 +2101,6 @@ module.exports = {
   ReleaseQaFixtureError,
   assertSafeFixturePath,
   createReleaseQaFixture,
+  importProviderCatalogFromDatabase,
   seedFixture,
 };

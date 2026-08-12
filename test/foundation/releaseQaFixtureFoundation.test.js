@@ -8,7 +8,6 @@ const {
   ReleaseQaFixtureError,
   assertSafeFixturePath,
   createReleaseQaFixture,
-  seedFixture,
 } = require("../../src/operations/release/createReleaseQaFixture");
 const {
   ReleaseQaFixtureVerificationError,
@@ -530,8 +529,12 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
 
 test("release-QA fixture uses and verifies retained provider-backed NHL identities", async (t) => {
   const root = temporaryRoot(t);
+  const sourceDatabasePath = path.join(root, "provider-catalog.sqlite3");
   const databasePath = path.join(root, "provider-release-qa.sqlite3");
-  const connection = openDatabase({ databasePath, environment: "test" });
+  const connection = openDatabase({
+    databasePath: sourceDatabasePath,
+    environment: "test",
+  });
   migrateDatabase({
     database: connection.database,
     migrationsDirectory: MIGRATIONS_DIRECTORY,
@@ -592,24 +595,28 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
       FIXTURE_NOW_MS
     );
   }
-  const seedResult = connection.database.transaction(() =>
-    seedFixture(connection.database, "provider-fixture-password-hash")
-  ).immediate();
-  const acceptanceResults = await Promise.all(seedResult.acceptancePromises);
-  seedResult.assertLateLockCoverage();
-  assert.equal(acceptanceResults.length, 2);
-  assert.deepEqual(
-    acceptanceResults.map(({ lateLock }) => lateLock),
-    [{ status: "not_applicable" }, { status: "not_applicable" }]
-  );
-  const fadPlayers = selectCatalogPlayers(connection.database);
+  connection.database.close();
+
+  await createReleaseQaFixture({
+    databasePath,
+    environment: "test",
+    migrationsDirectory: MIGRATIONS_DIRECTORY,
+    password: FIXTURE_PASSWORD,
+    providerCatalogSourceDatabasePath: sourceDatabasePath,
+    temporaryRoot: root,
+  });
+  const providerFixture = openDatabase({
+    databasePath,
+    environment: "test",
+  });
+  const fadPlayers = selectCatalogPlayers(providerFixture.database);
   assert.equal(
     Object.values(fadPlayers).every(({ fullName }) =>
       fullName.startsWith("NHL ") && !fullName.startsWith("Fixture Player ")
     ),
     true
   );
-  connection.database.close();
+  providerFixture.database.close();
 
   const manifest = verifyReleaseQaFixture({ databasePath });
   assert.equal(manifest.global.playerCount, PLAYER_BLUEPRINTS.length);
@@ -717,6 +724,18 @@ test("release-QA command requires exact arguments and keeps the password out of 
   assert.deepEqual(
     parseArguments(["--database", "C:\\Temp\\x.sqlite3", "--temporary-root", "C:\\Temp"]),
     { databasePath: "C:\\Temp\\x.sqlite3", temporaryRoot: "C:\\Temp" }
+  );
+  assert.deepEqual(
+    parseArguments([
+      "--database", "C:\\Temp\\x.sqlite3",
+      "--temporary-root", "C:\\Temp",
+      "--provider-catalog-database", "C:\\Data\\catalog.sqlite3",
+    ]),
+    {
+      databasePath: "C:\\Temp\\x.sqlite3",
+      providerCatalogSourceDatabasePath: "C:\\Data\\catalog.sqlite3",
+      temporaryRoot: "C:\\Temp",
+    }
   );
   assert.throws(
     () => parseArguments(["--database", "x"]),

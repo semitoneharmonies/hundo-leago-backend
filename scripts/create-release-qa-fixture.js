@@ -20,6 +20,7 @@ function parseArguments(argv) {
   const options = {};
   const names = new Map([
     ["--database", "databasePath"],
+    ["--provider-catalog-database", "providerCatalogSourceDatabasePath"],
     ["--temporary-root", "temporaryRoot"],
   ]);
   if (!Array.isArray(argv)) {
@@ -36,9 +37,13 @@ function parseArguments(argv) {
     }
     options[name] = value;
   }
-  if (Object.keys(options).length !== names.size) {
+  if (
+    !Object.hasOwn(options, "databasePath") ||
+    !Object.hasOwn(options, "temporaryRoot") ||
+    ![2, 3].includes(Object.keys(options).length)
+  ) {
     throw new ReleaseQaFixtureArgumentError(
-      "--database and --temporary-root are each required exactly once."
+      "--database and --temporary-root are required; the provider catalog is optional."
     );
   }
   return Object.freeze(options);
