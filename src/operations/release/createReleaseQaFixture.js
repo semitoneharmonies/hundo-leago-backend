@@ -1,10 +1,10 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const Database = require("better-sqlite3");
 
 const {
   openDatabase,
+  openReadonlyDatabase,
 } = require("../../infrastructure/database/connection");
 const {
   migrateDatabase,
@@ -305,9 +305,8 @@ function importProviderCatalogFromDatabase({
   if (providerCatalogSourceDatabasePath === null) {
     return Object.freeze({ importedPlayerCount: 0 });
   }
-  const source = new Database(providerCatalogSourceDatabasePath, {
-    readonly: true,
-    fileMustExist: true,
+  const source = openReadonlyDatabase({
+    databasePath: providerCatalogSourceDatabasePath,
   });
   try {
     source.pragma("query_only = ON");

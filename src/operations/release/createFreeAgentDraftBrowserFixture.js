@@ -75,7 +75,7 @@ function nextVancouverMondayAtOrAfter(timestamp) {
 
 function schedulesFor(nowMs) {
   const alphaFirstWeekStartsAtMs = nextVancouverMondayAtOrAfter(
-    nowMs + 8 * DAY_MS
+    nowMs + 10 * DAY_MS
   );
   const betaFirstWeekStartsAtMs = alphaFirstWeekStartsAtMs + 7 * DAY_MS;
   const schedule = (firstWeekStartsAtMs) => Object.freeze({
