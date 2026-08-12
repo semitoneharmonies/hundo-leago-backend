@@ -393,6 +393,14 @@ function openDeployedTargetRuntime({
       connection.database,
       runtimeConfig
     );
+    const stagingAccountAutoVerificationEnabled =
+      config.appEnv === "staging" &&
+      config.environmentId === FIXTURE_ENVIRONMENT_ID &&
+      config.databaseId === FIXTURE_DATABASE_ID &&
+      config.leagueWriteMode === "closed" &&
+      config.scheduledJobsEnabled === false &&
+      config.accountEmailDeliveryEnabled === false &&
+      config.security.email.deliveryMode === "capture";
     const runtime = createRuntimeFunction({
       database: connection.database,
       migrationsDirectory: config.migrationsDirectory,
@@ -409,6 +417,7 @@ function openDeployedTargetRuntime({
       leagueWriteMode: config.leagueWriteMode,
       freeAgentDraftRoutesEnabled:
         config.freeAgentDraftRoutesEnabled,
+      stagingAccountAutoVerificationEnabled,
     });
     const health = createRuntimeHealthService({
       database: connection.database,

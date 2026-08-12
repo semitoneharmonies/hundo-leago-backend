@@ -63,6 +63,7 @@ function internalRegistrationResult({
   user,
   credentialId,
   token,
+  rawVerificationToken,
   outboxEventId,
 }) {
   const result = { ...GENERIC_ACCEPTED_RESULT };
@@ -71,6 +72,7 @@ function internalRegistrationResult({
     user,
     credentialId,
     token,
+    rawVerificationToken,
     outboxEventId,
   })) {
     Object.defineProperty(result, key, {
@@ -284,6 +286,7 @@ function createSelfServiceAccountService({
           user,
           credentialId,
           token: token.token,
+          rawVerificationToken: token.rawToken,
           outboxEventId,
         });
       });

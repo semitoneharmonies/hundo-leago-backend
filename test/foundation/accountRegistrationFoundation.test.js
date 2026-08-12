@@ -1070,7 +1070,10 @@ async function httpRequest(
 async function startAccountApi(
   t,
   runtime,
-  { rateLimiter: suppliedRateLimiter } = {}
+  {
+    rateLimiter: suppliedRateLimiter,
+    automaticVerificationEnabled = false,
+  } = {}
 ) {
   const sessionCookie = createSessionCookie({
     appEnv: "staging",
@@ -1146,6 +1149,7 @@ async function startAccountApi(
     networkSourceResolver() {
       return "198.51.100.0/24";
     },
+    automaticVerificationEnabled,
   });
   const app = express();
   app.use(router);
@@ -1169,6 +1173,56 @@ async function startAccountApi(
 }
 
 describe("M3-07 isolated public account HTTP contracts", () => {
+  test("automatically verifies only when the staging fixture capability is explicitly enabled", async (t) => {
+    const runtime = createRuntime(
+      t,
+      "hundo-m3-07-staging-auto-verification-"
+    );
+    const api = await startAccountApi(t, runtime, {
+      automaticVerificationEnabled: true,
+    });
+    const signUp = await httpRequest(
+      api.baseUrl,
+      "/api/v1/accounts",
+      {
+        headers: browserJsonHeaders(),
+        body: JSON.stringify(registration()),
+      }
+    );
+
+    assert.equal(signUp.status, 201);
+    assert.equal(signUp.json.data.accepted, true);
+    assert.equal(
+      signUp.json.data.automaticVerification,
+      true
+    );
+    assert.equal(signUp.json.data.user.status, "active");
+    assert.equal(signUp.json.data.session.status, "active");
+    assert.match(
+      signUp.json.data.csrfToken,
+      /^[A-Za-z0-9_-]{43}$/
+    );
+    assert.match(
+      signUp.headers.get("set-cookie"),
+      /^__Host-hl_session=[A-Za-z0-9_-]{43}; /
+    );
+    assert.equal(
+      runtime.users.findByNormalizedEmail(
+        "manager.one@example.test"
+      ).status,
+      "active"
+    );
+    const outbox = runtime.database
+      .prepare(
+        "SELECT status, payload_json FROM outbox_events"
+      )
+      .get();
+    assert.deepEqual(outbox, {
+      status: "discarded",
+      payload_json: CLEARED_PAYLOAD_JSON,
+    });
+  });
+
   test("registers, generically resends, verifies, and sets only the opaque session cookie", async (t) => {
     const runtime = createRuntime(
       t,

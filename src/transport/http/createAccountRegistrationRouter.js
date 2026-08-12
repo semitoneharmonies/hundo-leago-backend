@@ -58,6 +58,7 @@ function createAccountRegistrationRouter({
   rateLimiter,
   sessionCookie,
   networkSourceResolver = (request) => request.ip,
+  automaticVerificationEnabled = false,
 } = {}) {
   for (const method of [
     "assignRequestId",
@@ -109,6 +110,11 @@ function createAccountRegistrationRouter({
   if (typeof networkSourceResolver !== "function") {
     throw new TypeError(
       "account registration routes require a network-source resolver"
+    );
+  }
+  if (typeof automaticVerificationEnabled !== "boolean") {
+    throw new TypeError(
+      "account registration routes require explicit automatic-verification enablement"
     );
   }
 
@@ -287,6 +293,36 @@ function createAccountRegistrationRouter({
           request.body,
           { auditContext: auditContext(request) }
         );
+        if (
+          automaticVerificationEnabled &&
+          result.created === true
+        ) {
+          const verification = verificationService.verify({
+            rawToken: result.rawVerificationToken,
+            clientMetadata:
+              sessionClientMetadata(request),
+            auditContext: auditContext(request),
+          });
+          if (!verification.verified) {
+            throw new Error(
+              "automatic staging account verification failed"
+            );
+          }
+          response.set(
+            "Set-Cookie",
+            sessionCookie.serialize(
+              verification.rawSessionToken
+            )
+          );
+          successResponse(request, response, 201, {
+            accepted: result.accepted,
+            automaticVerification: true,
+            csrfToken: verification.rawCsrfToken,
+            session: verification.session,
+            user: verification.user,
+          });
+          return;
+        }
         successResponse(request, response, 202, {
           accepted: result.accepted,
         });

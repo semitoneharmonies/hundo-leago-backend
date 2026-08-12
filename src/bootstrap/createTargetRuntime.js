@@ -2862,6 +2862,7 @@ function createTargetRouters({
   services,
   securityFoundations,
   networkSourceResolver,
+  stagingAccountAutoVerificationEnabled = false,
 } = {}) {
   const { config, secureRandom } = securityFoundations;
   if (typeof networkSourceResolver !== "function") {
@@ -2898,6 +2899,8 @@ function createTargetRouters({
       rateLimiter: services.rateLimiter,
       sessionCookie,
       networkSourceResolver,
+      automaticVerificationEnabled:
+        stagingAccountAutoVerificationEnabled,
     }),
     accountProfile: createAccountProfileRouter({
       requestSecurity,
@@ -3052,6 +3055,7 @@ function createTargetRuntime({
   leagueInvalidationPublisher,
   leagueWriteMode = "open",
   freeAgentDraftRoutesEnabled = true,
+  stagingAccountAutoVerificationEnabled = false,
   sportsDataIoNhl,
   sportsDataIoLiveNhl,
   sportsDataIoFetchImplementation,
@@ -3090,6 +3094,7 @@ function createTargetRuntime({
     services,
     securityFoundations,
     networkSourceResolver,
+    stagingAccountAutoVerificationEnabled,
   });
   const app = createTargetApplication({
     routers: transport.routers,
