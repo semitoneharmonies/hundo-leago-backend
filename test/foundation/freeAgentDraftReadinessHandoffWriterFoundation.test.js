@@ -1291,6 +1291,39 @@ describe("FAD readiness transaction-bound handoff writer", () => {
       operations: 0,
     });
 
+    const completeResetOrigin = createRuntime(
+      t,
+      "complete-reset-origin"
+    );
+    const completeResetIds = seedLeague(
+      completeResetOrigin
+    );
+    seedResetMigrationMarker(
+      completeResetOrigin,
+      completeResetIds
+    );
+    seedResetBootstrapMarker(
+      completeResetOrigin,
+      completeResetIds
+    );
+    const completeResetWriter =
+      createSqliteFreeAgentDraftReadinessHandoffWriter({
+        database: completeResetOrigin,
+      });
+    assertRepositoryError(
+      () =>
+        transaction(completeResetOrigin, () =>
+          completeResetWriter.write(
+            handoffInput({ ids: completeResetIds })
+          )
+        ),
+      REPOSITORY_ERROR_CODES.versionConflict
+    );
+    assert.deepEqual(pairCounts(completeResetOrigin), {
+      jobs: 0,
+      operations: 0,
+    });
+
     const occurrenceConflict = createRuntime(
       t,
       "occurrence-conflict"

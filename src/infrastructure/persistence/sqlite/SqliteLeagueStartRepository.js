@@ -1,7 +1,25 @@
 const {
+  ResetMigrationReportEvidenceError,
+  validateSucceededResetMigrationReportRow,
+} = require("../../migration/migrationReportEvidence");
+const {
+  LEAGUE_START_ORIGINS,
+} = require("../../../domain/leagues/leagueStartPolicy");
+const {
   createEmptySocketRelated,
   createSocketEventMetadata,
 } = require("../../../domain/leagues/socketInvalidation");
+const {
+  RESET_ORIGINAL_LEAGUE_ACTIVITY_METADATA_JSON,
+  RESET_ORIGINAL_LEAGUE_BOOTSTRAP_AUDIT_EVENT,
+  RESET_ORIGINAL_LEAGUE_IDEMPOTENCY_LIFETIME_MS,
+  RESET_ORIGINAL_LEAGUE_BOOTSTRAP_OPERATION,
+  RESET_ORIGINAL_LEAGUE_BOOTSTRAP_REASON,
+  RESET_ORIGINAL_LEAGUE_NHL_SEASON_KEY,
+  RESET_ORIGINAL_LEAGUE_SEASON_LABEL,
+} = require(
+  "../../../domain/leagues/resetOriginalLeagueBootstrapPolicy"
+);
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
@@ -110,6 +128,87 @@ function freezeRow(row) {
   return row ? Object.freeze({ ...row }) : null;
 }
 
+function safeStoredTimestamp(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function isEligibleResetRequest(
+  row,
+  { leagueId, createdAtMs }
+) {
+  return (
+    row.league_id === leagueId &&
+    UUID_PATTERN.test(row.id || "") &&
+    UUID_PATTERN.test(row.actor_user_id || "") &&
+    row.operation ===
+      RESET_ORIGINAL_LEAGUE_BOOTSTRAP_OPERATION &&
+    DIGEST_PATTERN.test(row.client_key || "") &&
+    DIGEST_PATTERN.test(row.request_hash || "") &&
+    row.status === "completed" &&
+    row.result_type === "league" &&
+    row.result_id === leagueId &&
+    row.created_at_ms === createdAtMs &&
+    row.completed_at_ms === createdAtMs &&
+    row.expires_at_ms ===
+      createdAtMs +
+        RESET_ORIGINAL_LEAGUE_IDEMPOTENCY_LIFETIME_MS
+  );
+}
+
+function isEligibleResetActivity(
+  row,
+  {
+    actorUserId,
+    createdAtMs,
+    leagueId,
+    leagueName,
+    seasonId,
+  }
+) {
+  return (
+    row.league_id === leagueId &&
+    row.season_id === seasonId &&
+    UUID_PATTERN.test(row.id || "") &&
+    row.event_type === "league_created" &&
+    row.actor_user_id === actorUserId &&
+    row.actor_authority === "platform_administrator" &&
+    row.team_id === null &&
+    row.player_id === null &&
+    row.related_type === "league" &&
+    row.related_id === leagueId &&
+    row.display_summary ===
+      `${leagueName} was created in Setup.` &&
+    row.reason === null &&
+    row.metadata_json ===
+      RESET_ORIGINAL_LEAGUE_ACTIVITY_METADATA_JSON &&
+    row.occurred_at_ms === createdAtMs
+  );
+}
+
+function isEligibleResetAudit(
+  row,
+  { actorUserId, createdAtMs, leagueId }
+) {
+  return (
+    UUID_PATTERN.test(row.id || "") &&
+    row.event_type ===
+      RESET_ORIGINAL_LEAGUE_BOOTSTRAP_AUDIT_EVENT &&
+    row.outcome === "success" &&
+    row.actor_user_id === actorUserId &&
+    row.target_user_id === null &&
+    row.league_id === leagueId &&
+    row.session_id === null &&
+    row.request_correlation_id === null &&
+    row.reason_code ===
+      RESET_ORIGINAL_LEAGUE_BOOTSTRAP_REASON &&
+    row.network_key_version === null &&
+    row.network_metadata_digest === null &&
+    row.client_metadata_json === null &&
+    row.unknown_account_digest === null &&
+    row.occurred_at_ms === createdAtMs
+  );
+}
+
 function projectStartedMetadata(
   metadataJson,
   { leagueId, seasonId }
@@ -193,6 +292,11 @@ function createSqliteLeagueStartRepository({
   let idempotency;
   let outboxWriter;
   let findStartContextStatement;
+  let findStartOriginStatement;
+  let findResetReportMarkersStatement;
+  let findResetRequestMarkersStatement;
+  let findResetActivityCandidatesStatement;
+  let findResetAuditMarkersStatement;
   let findStartedAggregateStatement;
   let findStartedResultStatement;
   let findIdempotencyByScopeStatement;
@@ -373,6 +477,51 @@ function createSqliteLeagueStartRepository({
       WHERE leagues.id = @leagueId
       LIMIT 2
     `);
+    findStartOriginStatement = database.prepare(`
+      SELECT
+        league.id AS league_id,
+        league.name AS league_name,
+        league.created_at_ms AS league_created_at_ms,
+        season.id AS season_id,
+        season.created_at_ms AS season_created_at_ms,
+        season.label AS season_label,
+        season.nhl_season_key AS nhl_season_key
+      FROM leagues AS league
+      JOIN seasons AS season
+        ON season.league_id = league.id
+       AND season.id = @seasonId
+      WHERE league.id = @leagueId
+        AND league.current_season_id = season.id
+      LIMIT 2
+    `);
+    findResetReportMarkersStatement = database.prepare(`
+      SELECT *
+      FROM migration_reports
+      WHERE league_id = @leagueId
+      ORDER BY created_at_ms, id
+    `);
+    findResetRequestMarkersStatement = database.prepare(`
+      SELECT *
+      FROM idempotency_requests
+      WHERE league_id = @leagueId
+        AND operation = @bootstrapOperation
+      ORDER BY created_at_ms, id
+    `);
+    findResetActivityCandidatesStatement = database.prepare(`
+      SELECT *
+      FROM league_activity
+      WHERE league_id = @leagueId
+        AND season_id = @seasonId
+        AND event_type = 'league_created'
+      ORDER BY occurred_at_ms, id
+    `);
+    findResetAuditMarkersStatement = database.prepare(`
+      SELECT *
+      FROM security_audit_events
+      WHERE league_id = @leagueId
+        AND event_type = @bootstrapAuditEvent
+      ORDER BY occurred_at_ms, id
+    `);
     findStartedAggregateStatement = database.prepare(`
       SELECT
         leagues.id AS league_id,
@@ -510,6 +659,136 @@ function createSqliteLeagueStartRepository({
   }
 
   return Object.freeze({
+    classifyStartOrigin(options) {
+      exactObject(
+        options,
+        ["leagueId", "seasonId"],
+        "An exact league-start origin lookup is required."
+      );
+      const parameters = {
+        leagueId: stableId(options.leagueId),
+        seasonId: stableId(options.seasonId),
+        bootstrapOperation:
+          RESET_ORIGINAL_LEAGUE_BOOTSTRAP_OPERATION,
+        bootstrapAuditEvent:
+          RESET_ORIGINAL_LEAGUE_BOOTSTRAP_AUDIT_EVENT,
+      };
+      try {
+        const origin = uniqueRow(
+          findStartOriginStatement,
+          parameters,
+          {
+            operation: "findLeagueStartOrigin",
+            tableName: "leagues",
+            message:
+              "The league-start origin is not unique.",
+          }
+        );
+        const reports =
+          findResetReportMarkersStatement.all(parameters);
+        const requests =
+          findResetRequestMarkersStatement.all(parameters);
+        const activities =
+          findResetActivityCandidatesStatement.all(
+            parameters
+          );
+        const audits =
+          findResetAuditMarkersStatement.all(parameters);
+        const hasResetMarker =
+          reports.length > 0 ||
+          requests.length > 0 ||
+          audits.length > 0;
+        if (!hasResetMarker) {
+          return Object.freeze({
+            kind: LEAGUE_START_ORIGINS.ordinaryInaugural,
+          });
+        }
+        if (
+          reports.length !== 1 ||
+          requests.length !== 1 ||
+          activities.length !== 1 ||
+          audits.length !== 1 ||
+          !origin ||
+          origin.league_id !== parameters.leagueId ||
+          origin.season_id !== parameters.seasonId ||
+          !safeStoredTimestamp(
+            origin.league_created_at_ms
+          ) ||
+          origin.season_created_at_ms !==
+            origin.league_created_at_ms ||
+          origin.season_label !==
+            RESET_ORIGINAL_LEAGUE_SEASON_LABEL ||
+          origin.nhl_season_key !==
+            RESET_ORIGINAL_LEAGUE_NHL_SEASON_KEY
+        ) {
+          return Object.freeze({
+            kind: LEAGUE_START_ORIGINS.invalidResetEvidence,
+          });
+        }
+        let resetReport;
+        try {
+          resetReport =
+            validateSucceededResetMigrationReportRow(
+              reports[0]
+            );
+        } catch (error) {
+          if (
+            error instanceof
+            ResetMigrationReportEvidenceError
+          ) {
+            return Object.freeze({
+              kind:
+                LEAGUE_START_ORIGINS.invalidResetEvidence,
+            });
+          }
+          throw error;
+        }
+        if (
+          resetReport.leagueId !== parameters.leagueId ||
+          resetReport.startedAtMs !==
+            resetReport.completedAtMs ||
+          resetReport.startedAtMs !==
+            resetReport.createdAtMs ||
+          resetReport.createdAtMs <
+            origin.league_created_at_ms ||
+          !isEligibleResetRequest(requests[0], {
+            leagueId: parameters.leagueId,
+            createdAtMs:
+              origin.league_created_at_ms,
+          })
+        ) {
+          return Object.freeze({
+            kind: LEAGUE_START_ORIGINS.invalidResetEvidence,
+          });
+        }
+        const actorUserId =
+          requests[0].actor_user_id;
+        const identity = {
+          actorUserId,
+          createdAtMs: origin.league_created_at_ms,
+          leagueId: parameters.leagueId,
+          leagueName: origin.league_name,
+          seasonId: parameters.seasonId,
+        };
+        return Object.freeze({
+          kind:
+            isEligibleResetActivity(
+              activities[0],
+              identity
+            ) &&
+            isEligibleResetAudit(audits[0], identity)
+              ? LEAGUE_START_ORIGINS
+                  .resetOriginalInitialSeason2
+              : LEAGUE_START_ORIGINS
+                  .invalidResetEvidence,
+        });
+      } catch (error) {
+        throw mapRepositoryError(error, {
+          operation: "classifyLeagueStartOrigin",
+          tableName: "migration_reports",
+        });
+      }
+    },
     findStartContext(options) {
       exactObject(
         options,

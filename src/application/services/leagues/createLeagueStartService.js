@@ -10,6 +10,7 @@ const {
 );
 
 const {
+  LEAGUE_START_ORIGINS,
   UUID_PATTERN,
   validateLeagueStartExpectedVersion,
   validateLeagueStartIdempotencyKey,
@@ -264,6 +265,7 @@ function createLeagueStartService({
     "activateSetupLeague",
     "activateSetupTeams",
     "appendStartedActivity",
+    "classifyStartOrigin",
     "completeIdempotency",
     "findIdempotency",
     "findStartedAggregate",
@@ -477,6 +479,21 @@ function createLeagueStartService({
             "LEAGUE_START_TEAM_MANAGER_REQUIRED"
           );
         }
+        const startOrigin =
+          leagueStartRepository.classifyStartOrigin({
+            leagueId: canonicalLeagueId,
+            seasonId: context.current_season_id,
+          });
+        if (
+          !startOrigin ||
+          ![
+            LEAGUE_START_ORIGINS.ordinaryInaugural,
+            LEAGUE_START_ORIGINS
+              .resetOriginalInitialSeason2,
+          ].includes(startOrigin.kind)
+        ) {
+          fail("LEAGUE_START_NOT_ALLOWED");
+        }
 
         leagueStartRepository
           .insertStartedIdempotency({
@@ -520,51 +537,56 @@ function createLeagueStartService({
                 context.league_version,
               nowMs,
             });
-        const readinessPlan =
-          createFreeAgentDraftReadinessTriggerPlan({
-            operationId:
-              ids.readinessOperation,
-            jobRunId: ids.readinessJob,
-            leagueId: canonicalLeagueId,
-            seasonId: season.id,
-            triggerKind:
-              "no_draft_inaugural",
-            triggerResourceId: season.id,
-            entryDraftId: null,
-            setupExemptionId: null,
-            createdAtMs: nowMs,
-          });
-        const readinessHandoff =
-          freeAgentDraftReadinessHandoffWriter.write(
-            {
+        if (
+          startOrigin.kind ===
+          LEAGUE_START_ORIGINS.ordinaryInaugural
+        ) {
+          const readinessPlan =
+            createFreeAgentDraftReadinessTriggerPlan({
               operationId:
-                readinessPlan.readiness
-                  .operationId,
-              jobRunId:
-                readinessPlan.job.id,
-              leagueId:
-                readinessPlan.readiness.leagueId,
-              seasonId:
-                readinessPlan.readiness.seasonId,
+                ids.readinessOperation,
+              jobRunId: ids.readinessJob,
+              leagueId: canonicalLeagueId,
+              seasonId: season.id,
               triggerKind:
-                readinessPlan.readiness
-                  .triggerKind,
+                "no_draft_inaugural",
               triggerResourceId: season.id,
-              entryDraftId:
-                readinessPlan.readiness
-                  .entryDraftId,
-              setupExemptionId:
-                readinessPlan.readiness
-                  .setupExemptionId,
-              createdAtMs:
-                readinessPlan.readiness
-                  .createdAtMs,
-            }
+              entryDraftId: null,
+              setupExemptionId: null,
+              createdAtMs: nowMs,
+            });
+          const readinessHandoff =
+            freeAgentDraftReadinessHandoffWriter.write(
+              {
+                operationId:
+                  readinessPlan.readiness
+                    .operationId,
+                jobRunId:
+                  readinessPlan.job.id,
+                leagueId:
+                  readinessPlan.readiness.leagueId,
+                seasonId:
+                  readinessPlan.readiness.seasonId,
+                triggerKind:
+                  readinessPlan.readiness
+                    .triggerKind,
+                triggerResourceId: season.id,
+                entryDraftId:
+                  readinessPlan.readiness
+                    .entryDraftId,
+                setupExemptionId:
+                  readinessPlan.readiness
+                    .setupExemptionId,
+                createdAtMs:
+                  readinessPlan.readiness
+                    .createdAtMs,
+              }
+            );
+          requireFreshReadinessHandoff(
+            readinessHandoff,
+            readinessPlan
           );
-        requireFreshReadinessHandoff(
-          readinessHandoff,
-          readinessPlan
-        );
+        }
         const metadataJson = JSON.stringify({
           activatedTeamCount:
             teams.activatedTeamCount,

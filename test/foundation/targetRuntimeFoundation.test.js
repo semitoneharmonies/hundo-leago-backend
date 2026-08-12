@@ -51,6 +51,11 @@ const {
 const {
   fixtureId,
 } = require("../../src/operations/release/releaseQaFixtureContract");
+const {
+  createResetMigrationReportFixture,
+} = require(
+  "../helpers/createResetMigrationReportFixture"
+);
 
 const ROOT_DIRECTORY = path.resolve(__dirname, "..", "..");
 const MIGRATIONS_DIRECTORY = path.join(
@@ -932,26 +937,29 @@ function seedCommissionerInvitationScenario(runtime) {
   });
 }
 
-function seedComposedLeagueStartScenario(runtime) {
+function seedComposedLeagueStartScenario(
+  runtime,
+  { teamCount = 4 } = {}
+) {
   const repositories = runtime.repositories.context.repositories;
   const commissionerUserId = uuid(91_001);
   const commissionerMembershipId = uuid(91_002);
   const leagueId = uuid(91_003);
   const seasonId = uuid(91_004);
   const managerUserIds = Array.from(
-    { length: 4 },
+    { length: teamCount },
     (_, index) => uuid(91_010 + index)
   );
   const managerMembershipIds = Array.from(
-    { length: 4 },
+    { length: teamCount },
     (_, index) => uuid(91_020 + index)
   );
   const teamIds = Array.from(
-    { length: 4 },
+    { length: teamCount },
     (_, index) => uuid(91_030 + index)
   );
   const assignmentIds = Array.from(
-    { length: 4 },
+    { length: teamCount },
     (_, index) => uuid(91_040 + index)
   );
   const createdAtMs = NOW_MS - 10_000;
@@ -1099,6 +1107,85 @@ function seedComposedLeagueStartScenario(runtime) {
     session,
     teamIds,
   });
+}
+
+function seedComposedResetOriginalEvidence(
+  runtime,
+  scenario
+) {
+  const repositories =
+    runtime.repositories.context.repositories;
+  const createdAtMs = NOW_MS - 10_000;
+  repositories.platform_roles.insert({
+    id: uuid(91_050),
+    user_id: scenario.commissionerUserId,
+    role: "platform_administrator",
+    status: "active",
+    granted_by_user_id: scenario.commissionerUserId,
+    granted_at_ms: createdAtMs,
+    ended_at_ms: null,
+    version: 1,
+  });
+  repositories.idempotency_requests.insert({
+    id: uuid(91_051),
+    league_id: scenario.leagueId,
+    actor_user_id: scenario.commissionerUserId,
+    operation:
+      "admin.league.bootstrap_reset_original.v1",
+    client_key: "4".repeat(64),
+    request_hash: "1".repeat(64),
+    status: "completed",
+    result_type: "league",
+    result_id: scenario.leagueId,
+    created_at_ms: createdAtMs,
+    completed_at_ms: createdAtMs,
+    expires_at_ms: createdAtMs + 86_400_000,
+  });
+  repositories.league_activity.insert({
+    id: uuid(91_052),
+    league_id: scenario.leagueId,
+    season_id: scenario.seasonId,
+    event_type: "league_created",
+    actor_user_id: scenario.commissionerUserId,
+    actor_authority: "platform_administrator",
+    team_id: null,
+    player_id: null,
+    related_type: "league",
+    related_id: scenario.leagueId,
+    display_summary:
+      "FAD Runtime Launch League was created in Setup.",
+    reason: null,
+    metadata_json:
+      '{"leagueStatus":"setup","seasonStatus":"planned"}',
+    occurred_at_ms: createdAtMs,
+  });
+  repositories.security_audit_events.insert({
+    id: uuid(91_053),
+    event_type:
+      "system_bootstrap.reset_original_league_created",
+    outcome: "success",
+    actor_user_id: scenario.commissionerUserId,
+    target_user_id: null,
+    league_id: scenario.leagueId,
+    session_id: null,
+    request_correlation_id: null,
+    reason_code: "closed_write_reset_handoff",
+    network_key_version: null,
+    network_metadata_digest: null,
+    client_metadata_json: null,
+    unknown_account_digest: null,
+    occurred_at_ms: createdAtMs,
+  });
+  repositories.migration_reports.insert(
+    createResetMigrationReportFixture({
+      id: uuid(91_054),
+      leagueId: scenario.leagueId,
+      bundleCharacter: "3",
+      startedAtMs: createdAtMs + 1,
+      completedAtMs: createdAtMs + 1,
+      createdAtMs: createdAtMs + 1,
+    })
+  );
 }
 
 async function startRuntimeApp(t, runtime) {
@@ -2249,10 +2336,61 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(before.equals(database.serialize()), true);
   });
 
-  test("composes T-036 readiness handoff on the shared SQLite connection without changing its response contract", (t) => {
+  test("composes the six-team reset-original T-036 activation without an inaugural readiness handoff", (t) => {
     const database = createDatabase(t);
     const runtime = createTargetRuntime(runtimeOptions(database));
-    const scenario = seedComposedLeagueStartScenario(runtime);
+    const scenario = seedComposedLeagueStartScenario(runtime, {
+      teamCount: 6,
+    });
+    seedComposedResetOriginalEvidence(runtime, scenario);
+    const authenticated =
+      runtime.services.sessionService.resolveWithoutActivity(
+        scenario.session.rawSessionToken
+      );
+
+    const result = runtime.services.league.start.start({
+      leagueId: scenario.leagueId,
+      input: {},
+      expectedLeagueVersion:
+        scenario.expectedLeagueVersion,
+      idempotencyKey:
+        "target-runtime-reset-original-start",
+      authenticated,
+    });
+
+    assert.equal(result.replayed, false);
+    assert.equal(result.code, "LEAGUE_STARTED");
+    assert.equal(result.league.status, "active");
+    assert.equal(result.league.currentSeason.status, "active");
+    assert.equal(result.activatedTeamCount, 6);
+    assert.deepEqual(
+      database
+        .prepare(
+          `SELECT
+             (SELECT COUNT(*)
+              FROM free_agent_draft_readiness_operations) AS operations,
+             (SELECT COUNT(*)
+              FROM job_runs
+              WHERE job_type = 'fad_readiness') AS jobs,
+             (SELECT COUNT(*)
+              FROM free_agent_draft_setup_exemptions
+              WHERE league_id = @leagueId
+                AND season_id = @seasonId) AS exemptions`
+        )
+        .get({
+          leagueId: scenario.leagueId,
+          seasonId: scenario.seasonId,
+        }),
+      { operations: 0, jobs: 0, exemptions: 0 }
+    );
+  });
+
+  test("composes the ordinary ten-team T-036 readiness handoff without changing its response contract", (t) => {
+    const database = createDatabase(t);
+    const runtime = createTargetRuntime(runtimeOptions(database));
+    const scenario = seedComposedLeagueStartScenario(runtime, {
+      teamCount: 10,
+    });
     const authenticated =
       runtime.services.sessionService.resolveWithoutActivity(
         scenario.session.rawSessionToken
@@ -2304,7 +2442,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
           version: 2,
         },
       },
-      activatedTeamCount: 4,
+      activatedTeamCount: 10,
       startedAtMs: NOW_MS,
     });
     const readiness = database
@@ -5225,6 +5363,69 @@ describe("M3-19 exact-schema target dependency composition", () => {
 });
 
 describe("M3-19 composed target HTTP boundary", () => {
+  test("starts the verified six-team reset-original league through T-036 without publishing inaugural readiness", async (t) => {
+    const database = createDatabase(t);
+    const runtime = createTargetRuntime(runtimeOptions(database));
+    const scenario = seedComposedLeagueStartScenario(runtime, {
+      teamCount: 6,
+    });
+    seedComposedResetOriginalEvidence(runtime, scenario);
+    const baseUrl = await startRuntimeApp(t, runtime);
+
+    const response = await fetch(
+      new URL(
+        `/api/v1/leagues/${scenario.leagueId}/start`,
+        baseUrl
+      ),
+      {
+        method: "POST",
+        headers: browserHeaders({
+          Cookie:
+            `${runtime.transport.sessionCookie.name}=` +
+            scenario.session.rawSessionToken,
+          "X-CSRF-Token": scenario.session.rawCsrfToken,
+          "If-Match":
+            `"${scenario.expectedLeagueVersion}"`,
+          "Idempotency-Key":
+            "target-runtime-reset-original-http-start",
+        }),
+        body: "{}",
+      }
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.headers.get("cache-control"),
+      "no-store"
+    );
+    assert.equal(body.data.code, "LEAGUE_STARTED");
+    assert.equal(body.data.league.id, scenario.leagueId);
+    assert.equal(body.data.league.status, "active");
+    assert.equal(
+      body.data.league.currentSeason.status,
+      "active"
+    );
+    assert.equal(body.data.activatedTeamCount, 6);
+    assert.equal(
+      JSON.stringify(body).includes("replayed"),
+      false
+    );
+    assert.deepEqual(
+      database
+        .prepare(
+          `SELECT
+             (SELECT COUNT(*)
+              FROM free_agent_draft_readiness_operations) AS operations,
+             (SELECT COUNT(*)
+              FROM job_runs
+              WHERE job_type = 'fad_readiness') AS jobs`
+        )
+        .get(),
+      { operations: 0, jobs: 0 }
+    );
+  });
+
   test("routes T-145 preflight, authentication, and input validation through the composed boundary without writes", async (t) => {
     const database = createDatabase(t);
     const runtime = createTargetRuntime(runtimeOptions(database));

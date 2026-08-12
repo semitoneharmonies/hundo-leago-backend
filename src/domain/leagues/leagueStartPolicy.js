@@ -1,5 +1,11 @@
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const LEAGUE_START_ORIGINS = Object.freeze({
+  ordinaryInaugural: "ordinary_inaugural",
+  resetOriginalInitialSeason2:
+    "reset_original_initial_season2",
+  invalidResetEvidence: "invalid_reset_evidence",
+});
 
 class LeagueStartPolicyError extends Error {
   constructor(reasonCode) {
@@ -70,6 +76,7 @@ function validateLeagueStartIdempotencyKey(value) {
 }
 
 module.exports = {
+  LEAGUE_START_ORIGINS,
   LeagueStartPolicyError,
   UUID_PATTERN,
   validateLeagueStartExpectedVersion,

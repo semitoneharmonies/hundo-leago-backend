@@ -18,6 +18,7 @@ const {
   "../../src/application/services/leagues/createLeagueStartService"
 );
 const {
+  LEAGUE_START_ORIGINS,
   LeagueStartPolicyError,
   validateLeagueStartExpectedVersion,
   validateLeagueStartIdempotencyKey,
@@ -65,6 +66,11 @@ const {
   createSqliteRepositoryContext,
 } = require(
   "../../src/infrastructure/persistence/sqlite/createSqliteRepositoryContext"
+);
+const {
+  createResetMigrationReportFixture,
+} = require(
+  "../helpers/createResetMigrationReportFixture"
 );
 
 const ROOT_DIRECTORY = path.resolve(__dirname, "..", "..");
@@ -114,6 +120,11 @@ const IDS = Object.freeze({
     uuid(62),
     uuid(63),
   ]),
+  resetMigrationReport: uuid(70),
+  resetMigrationReportDuplicate: uuid(71),
+  resetBootstrapRequest: uuid(72),
+  resetBootstrapActivity: uuid(73),
+  resetBootstrapAudit: uuid(74),
 });
 
 const PARTICIPATING_TABLES = Object.freeze([
@@ -123,6 +134,7 @@ const PARTICIPATING_TABLES = Object.freeze([
   "league_activity",
   "league_settings",
   "leagues",
+  "migration_reports",
   "outbox_event_audiences",
   "outbox_events",
   "seasons",
@@ -367,6 +379,95 @@ function seedDatabase(
   return Object.freeze({
     expectedLeagueVersion: league.version,
   });
+}
+
+function seedResetMigrationReport(
+  runtime,
+  {
+    id = IDS.resetMigrationReport,
+    bundleCharacter = "a",
+    rowOverrides = {},
+  } = {}
+) {
+  runtime.context.repositories.migration_reports.insert(
+    {
+      ...createResetMigrationReportFixture({
+        id,
+        leagueId: IDS.league,
+        bundleCharacter,
+        startedAtMs: NOW_MS - 9_999,
+        completedAtMs: NOW_MS - 9_999,
+        createdAtMs: NOW_MS - 9_999,
+      }),
+      ...rowOverrides,
+    }
+  );
+}
+
+function seedResetBootstrapEvidence(runtime) {
+  const createdAtMs = NOW_MS - 10_000;
+  runtime.database
+    .prepare(
+      `UPDATE seasons
+       SET label = '2026', nhl_season_key = '20262027'
+       WHERE league_id = ? AND id = ?`
+    )
+    .run(IDS.league, IDS.season);
+  runtime.context.repositories.idempotency_requests.insert({
+    id: IDS.resetBootstrapRequest,
+    league_id: IDS.league,
+    actor_user_id: IDS.commissioner,
+    operation:
+      "admin.league.bootstrap_reset_original.v1",
+    client_key: "3".repeat(64),
+    request_hash: "2".repeat(64),
+    status: "completed",
+    result_type: "league",
+    result_id: IDS.league,
+    created_at_ms: createdAtMs,
+    completed_at_ms: createdAtMs,
+    expires_at_ms: createdAtMs + 86_400_000,
+  });
+  runtime.context.repositories.league_activity.insert({
+    id: IDS.resetBootstrapActivity,
+    league_id: IDS.league,
+    season_id: IDS.season,
+    event_type: "league_created",
+    actor_user_id: IDS.commissioner,
+    actor_authority: "platform_administrator",
+    team_id: null,
+    player_id: null,
+    related_type: "league",
+    related_id: IDS.league,
+    display_summary:
+      "FAD Launch League was created in Setup.",
+    reason: null,
+    metadata_json:
+      '{"leagueStatus":"setup","seasonStatus":"planned"}',
+    occurred_at_ms: createdAtMs,
+  });
+  runtime.context.repositories.security_audit_events.insert({
+    id: IDS.resetBootstrapAudit,
+    event_type:
+      "system_bootstrap.reset_original_league_created",
+    outcome: "success",
+    actor_user_id: IDS.commissioner,
+    target_user_id: null,
+    league_id: IDS.league,
+    session_id: null,
+    request_correlation_id: null,
+    reason_code: "closed_write_reset_handoff",
+    network_key_version: null,
+    network_metadata_digest: null,
+    client_metadata_json: null,
+    unknown_account_digest: null,
+    occurred_at_ms: createdAtMs,
+  });
+}
+
+function seedResetOriginalEvidence(runtime) {
+  seedResetMigrationReport(runtime);
+  seedResetBootstrapEvidence(runtime);
 }
 
 function authenticatedCommissioner() {
@@ -773,6 +874,12 @@ describe("FAD-04 T-036 league-start policy", () => {
       LEAGUE_START_OPERATION,
       "league.start.v1"
     );
+    assert.deepEqual(LEAGUE_START_ORIGINS, {
+      ordinaryInaugural: "ordinary_inaugural",
+      resetOriginalInitialSeason2:
+        "reset_original_initial_season2",
+      invalidResetEvidence: "invalid_reset_evidence",
+    });
   });
 });
 
@@ -1068,6 +1175,248 @@ describe("FAD-04 T-036 atomic initial league start", () => {
     assert.equal(
       crossLeagueSnapshot(runtime.database),
       otherBefore
+    );
+  });
+
+  test("activates the verified reset-created original league without creating inaugural FAD readiness", (t) => {
+    const runtime = createRuntime(t);
+    seedResetOriginalEvidence(runtime);
+    assert.deepEqual(
+      runtime.leagueStartRepository.classifyStartOrigin({
+        leagueId: IDS.league,
+        seasonId: IDS.season,
+      }),
+      {
+        kind:
+          LEAGUE_START_ORIGINS
+            .resetOriginalInitialSeason2,
+      }
+    );
+
+    const result = runtime.service.start(
+      startCommand(runtime)
+    );
+
+    assert.equal(result.code, "LEAGUE_STARTED");
+    assert.equal(result.replayed, false);
+    assert.equal(result.league.status, "active");
+    assert.equal(
+      result.league.currentSeason.status,
+      "active"
+    );
+    assert.equal(result.league.currentSeason.label, "2026");
+    assert.equal(result.activatedTeamCount, 4);
+    assert.equal(
+      tableCount(
+        runtime.database,
+        "free_agent_draft_readiness_operations"
+      ),
+      0
+    );
+    assert.equal(
+      runtime.database
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM job_runs
+           WHERE job_type = 'fad_readiness'`
+        )
+        .get().count,
+      0
+    );
+    assert.equal(
+      runtime.database
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM free_agent_draft_setup_exemptions
+           WHERE league_id = ? AND season_id = ?`
+        )
+        .get(IDS.league, IDS.season).count,
+      0
+    );
+    assert.equal(runtime.nextSecureId, 506);
+  });
+
+  test("rejects partial and ambiguous reset evidence atomically", (t) => {
+    const partial = createRuntime(t);
+    seedResetMigrationReport(partial);
+    assert.deepEqual(
+      partial.leagueStartRepository.classifyStartOrigin({
+        leagueId: IDS.league,
+        seasonId: IDS.season,
+      }),
+      {
+        kind:
+          LEAGUE_START_ORIGINS.invalidResetEvidence,
+      }
+    );
+    assertFailureWithoutWrites(
+      partial,
+      "LEAGUE_START_NOT_ALLOWED"
+    );
+
+    const bootstrapOnly = createRuntime(t);
+    seedResetBootstrapEvidence(bootstrapOnly);
+    assert.deepEqual(
+      bootstrapOnly.leagueStartRepository
+        .classifyStartOrigin({
+          leagueId: IDS.league,
+          seasonId: IDS.season,
+        }),
+      {
+        kind:
+          LEAGUE_START_ORIGINS.invalidResetEvidence,
+      }
+    );
+    assertFailureWithoutWrites(
+      bootstrapOnly,
+      "LEAGUE_START_NOT_ALLOWED"
+    );
+
+    const ambiguous = createRuntime(t);
+    seedResetOriginalEvidence(ambiguous);
+    seedResetMigrationReport(ambiguous, {
+      id: IDS.resetMigrationReportDuplicate,
+      bundleCharacter: "2",
+    });
+    assert.deepEqual(
+      ambiguous.leagueStartRepository.classifyStartOrigin({
+        leagueId: IDS.league,
+        seasonId: IDS.season,
+      }),
+      {
+        kind:
+          LEAGUE_START_ORIGINS.invalidResetEvidence,
+      }
+    );
+    assertFailureWithoutWrites(
+      ambiguous,
+      "LEAGUE_START_NOT_ALLOWED"
+    );
+  });
+
+  test("rejects noncanonical reports and malformed reset-marker siblings atomically", (t) => {
+    const noncanonicalReport = createRuntime(t);
+    seedResetBootstrapEvidence(noncanonicalReport);
+    seedResetMigrationReport(noncanonicalReport, {
+      rowOverrides: {
+        warnings_json: '["unexpected"]',
+      },
+    });
+    assertFailureWithoutWrites(
+      noncanonicalReport,
+      "LEAGUE_START_NOT_ALLOWED"
+    );
+
+    const unequalReportTimes = createRuntime(t);
+    seedResetBootstrapEvidence(unequalReportTimes);
+    seedResetMigrationReport(unequalReportTimes, {
+      rowOverrides: {
+        completed_at_ms: NOW_MS - 9_998,
+      },
+    });
+    assertFailureWithoutWrites(
+      unequalReportTimes,
+      "LEAGUE_START_NOT_ALLOWED"
+    );
+
+    const predatingReport = createRuntime(t);
+    seedResetBootstrapEvidence(predatingReport);
+    seedResetMigrationReport(predatingReport, {
+      rowOverrides: {
+        started_at_ms: NOW_MS - 10_001,
+        completed_at_ms: NOW_MS - 10_001,
+        created_at_ms: NOW_MS - 10_001,
+      },
+    });
+    assertFailureWithoutWrites(
+      predatingReport,
+      "LEAGUE_START_NOT_ALLOWED"
+    );
+
+    const reportSibling = createRuntime(t);
+    seedResetOriginalEvidence(reportSibling);
+    seedResetMigrationReport(reportSibling, {
+      id: IDS.resetMigrationReportDuplicate,
+      bundleCharacter: "2",
+      rowOverrides: {
+        reset_manifest_id: "wrong-reset-manifest",
+        status: "failed",
+      },
+    });
+    assertFailureWithoutWrites(
+      reportSibling,
+      "LEAGUE_START_NOT_ALLOWED"
+    );
+
+    const requestSibling = createRuntime(t);
+    seedResetOriginalEvidence(requestSibling);
+    requestSibling.context.repositories
+      .idempotency_requests.insert({
+        id: uuid(75),
+        league_id: IDS.league,
+        actor_user_id: IDS.commissioner,
+        operation:
+          "admin.league.bootstrap_reset_original.v1",
+        client_key: "5".repeat(64),
+        request_hash: "6".repeat(64),
+        status: "started",
+        result_type: null,
+        result_id: null,
+        created_at_ms: NOW_MS - 9_999,
+        completed_at_ms: null,
+        expires_at_ms: NOW_MS + 86_400_000,
+      });
+    assertFailureWithoutWrites(
+      requestSibling,
+      "LEAGUE_START_NOT_ALLOWED"
+    );
+
+    const activitySibling = createRuntime(t);
+    seedResetOriginalEvidence(activitySibling);
+    activitySibling.context.repositories.league_activity.insert({
+      id: uuid(76),
+      league_id: IDS.league,
+      season_id: IDS.season,
+      event_type: "league_created",
+      actor_user_id: IDS.commissioner,
+      actor_authority: "commissioner",
+      team_id: null,
+      player_id: null,
+      related_type: "league",
+      related_id: IDS.league,
+      display_summary: "Malformed reset sibling.",
+      reason: null,
+      metadata_json: "{}",
+      occurred_at_ms: NOW_MS - 9_999,
+    });
+    assertFailureWithoutWrites(
+      activitySibling,
+      "LEAGUE_START_NOT_ALLOWED"
+    );
+
+    const auditSibling = createRuntime(t);
+    seedResetOriginalEvidence(auditSibling);
+    auditSibling.context.repositories.security_audit_events
+      .insert({
+        id: uuid(77),
+        event_type:
+          "system_bootstrap.reset_original_league_created",
+        outcome: "failure",
+        actor_user_id: IDS.commissioner,
+        target_user_id: null,
+        league_id: IDS.league,
+        session_id: null,
+        request_correlation_id: null,
+        reason_code: "closed_write_reset_handoff",
+        network_key_version: null,
+        network_metadata_digest: null,
+        client_metadata_json: null,
+        unknown_account_digest: null,
+        occurred_at_ms: NOW_MS - 9_999,
+      });
+    assertFailureWithoutWrites(
+      auditSibling,
+      "LEAGUE_START_NOT_ALLOWED"
     );
   });
 
@@ -1474,6 +1823,7 @@ describe("FAD-04 T-036 atomic initial league start", () => {
 
   test("rolls back every write and post-write verification seam", (t) => {
     const repositorySeams = [
+      "classifyStartOrigin",
       "insertStartedIdempotency",
       "activateSetupTeams",
       "activatePlannedSeason",
