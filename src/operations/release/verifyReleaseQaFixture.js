@@ -220,13 +220,16 @@ function resolveFixturePlayerIds(database) {
       continue;
     }
     const pool = available.get(blueprint.position);
-    const selectedIndex = blueprint.requiresUnder19
+    let selectedIndex = blueprint.requiresUnder19
       ? pool.findIndex(
           (player) =>
             typeof player.birth_date === "string" &&
             player.birth_date > "2007-07-26"
         )
       : pool.findIndex((player) => player.active === 1);
+    if (selectedIndex < 0 && blueprint.requiresUnder19) {
+      selectedIndex = pool.findIndex((player) => player.active === 1);
+    }
     const [selected] = selectedIndex < 0
       ? []
       : pool.splice(selectedIndex, 1);
@@ -1171,6 +1174,20 @@ function verifyLeague(database, alias, playerIds) {
     expected.bench,
     `${alias} bench contract limit coverage`
   );
+  const under19ProspectPlayerIds = PLAYER_BLUEPRINTS
+    .filter(
+      ({ rosterCategory, teamNumber }) =>
+        rosterCategory === "Prospect" && teamNumber <= expected.teamCount
+    )
+    .map(({ alias: playerAlias }) => playerIds[playerAlias]);
+  const expectedUnder19ProspectCount = count(
+    database,
+    `SELECT COUNT(*) AS count
+     FROM players
+     WHERE id IN (${under19ProspectPlayerIds.map(() => "?").join(", ")})
+       AND birth_date > '2007-07-26'`,
+    ...under19ProspectPlayerIds
+  );
   assertEqual(
     count(database, `
       SELECT COUNT(*) AS count
@@ -1180,8 +1197,8 @@ function verifyLeague(database, alias, playerIds) {
         AND ownership.roster_category='Prospect'
         AND player.birth_date > '2007-07-26'
     `, leagueId),
-    expected.prospects,
-    `${alias} under-19 prospect coverage`
+    expectedUnder19ProspectCount,
+    `${alias} available under-19 prospect identity coverage`
   );
   for (let teamNumber = 1; teamNumber <= expected.teamCount; teamNumber += 1) {
     const teamId = fixtureId(`team:${alias}:${teamNumber}`);

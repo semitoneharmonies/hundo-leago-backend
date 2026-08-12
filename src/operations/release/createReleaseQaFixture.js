@@ -546,13 +546,16 @@ function insertGlobalPlayers(database) {
   ];
   for (const blueprint of selectionOrder) {
     const pool = available.get(blueprint.position);
-    const selectedIndex = blueprint.requiresUnder19
+    let selectedIndex = blueprint.requiresUnder19
       ? pool.findIndex(
           (player) =>
             typeof player.birth_date === "string" &&
             player.birth_date > "2007-07-26"
         )
       : pool.findIndex((player) => player.active === 1);
+    if (selectedIndex < 0 && blueprint.requiresUnder19) {
+      selectedIndex = pool.findIndex((player) => player.active === 1);
+    }
     if (selectedIndex >= 0) {
       const [selected] = pool.splice(selectedIndex, 1);
       selectedByAlias.set(blueprint.alias, selected);

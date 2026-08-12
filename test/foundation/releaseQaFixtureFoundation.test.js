@@ -575,7 +575,7 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
       firstName,
       lastName,
       `${firstName} ${lastName}`,
-      positionIndex < 20 ? "2008-01-01" : "1998-01-01",
+      positionIndex < 2 ? "2008-01-01" : "1998-01-01",
       FIXTURE_NOW_MS,
       FIXTURE_NOW_MS
     );
