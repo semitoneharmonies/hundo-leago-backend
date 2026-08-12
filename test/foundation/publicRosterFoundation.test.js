@@ -33,6 +33,7 @@ const IDS = Object.freeze({
   activePlayer: uuid(40), prospectPlayer: uuid(41), activeOwnership: uuid(50),
   prospectOwnership: uuid(51), contract: uuid(60), contractYear: uuid(61),
   statSource: uuid(70), statRefresh: uuid(71), statTotal: uuid(72),
+  priorStatRefresh: uuid(73), priorStatTotal: uuid(74),
 });
 
 function seed(context, database) {
@@ -130,6 +131,20 @@ function seed(context, database) {
     assists: 6, nhl_points: 10, fantasy_points_hundredths: 1_250,
     source_updated_at_ms: NOW_MS + 7, created_at_ms: NOW_MS + 7,
   });
+  context.repositories.stat_refreshes.insert({
+    id: IDS.priorStatRefresh, stat_source_id: IDS.statSource,
+    nhl_season_key: "20252026", source_version: "prior-season-decoy",
+    status: "succeeded", started_at_ms: NOW_MS + 100,
+    completed_at_ms: NOW_MS + 101, player_count: 1,
+    error_code: null, metadata_json: null, version: 1,
+  });
+  context.repositories.player_stat_totals.insert({
+    id: IDS.priorStatTotal, stat_source_id: IDS.statSource,
+    refresh_id: IDS.priorStatRefresh, nhl_season_key: "20252026",
+    player_id: IDS.prospectPlayer, games_played: 82, goals: 50,
+    assists: 50, nhl_points: 100, fantasy_points_hundredths: 99_999,
+    source_updated_at_ms: NOW_MS + 102, created_at_ms: NOW_MS + 102,
+  });
 }
 
 function createRuntime(t) {
@@ -200,7 +215,7 @@ describe("M4-10 public roster projection policy", () => {
 });
 
 describe("M4-10 SQLite public roster reader", () => {
-  test("returns exact safe identity, contracts, age, persisted stats, and public cap", (t) => {
+  test("returns current-season stats without leaking a newer prior-season total", (t) => {
     const { repository } = createRuntime(t);
     const result = repository.read({
       leagueId: IDS.league, teamId: IDS.team, asOfDate: "2026-07-21",
@@ -218,6 +233,7 @@ describe("M4-10 SQLite public roster reader", () => {
     assert.equal(result.players[1].aavCents, null);
     assert.equal(result.players[1].remainingContractYears, 0);
     assert.equal(result.players[1].age, null);
+    assert.equal(result.players[1].seasonStatistics, null);
     assert.deepEqual(result.cap, {
       capLimitCents: 10_000, capUsageCents: 1_000,
       capSpaceCents: 9_000, retainedSalaryTotalCents: 0,

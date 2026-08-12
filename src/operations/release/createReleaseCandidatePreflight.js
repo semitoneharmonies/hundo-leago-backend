@@ -100,6 +100,14 @@ function inspectRenderProbeSafety(directory) {
     "RESEND_API_KEY",
     "STAGING_EMAIL_RECIPIENT_ALLOWLIST",
   ].filter((key) => environment?.has(key));
+  const forbiddenLiveProviderInputs = [
+    "SPORTSDATAIO_NHL_LIVE_API_KEY",
+    "SPORTSDATAIO_NHL_LIVE_API_ORIGIN",
+    "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
+    "SPORTSDATAIO_NHL_LIVE_CAPABILITY_KEY_VERSION",
+    "SPORTSDATAIO_NHL_LIVE_CAPABILITY_ARTIFACT",
+    "SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST",
+  ].filter((key) => environment?.has(key));
   const facts = {
     nodeMode: value("NODE_ENV"),
     maintenanceHold: value("STAGING_MAINTENANCE_HOLD"),
@@ -114,13 +122,14 @@ function inspectRenderProbeSafety(directory) {
     emailDeliveryMode: value("EMAIL_DELIVERY_MODE"),
     backupScheduleEnabled: value("BACKUP_SCHEDULE_ENABLED"),
     forbiddenEmailInputs,
+    forbiddenLiveProviderInputs,
   };
   return Object.freeze({
     ...facts,
     safe:
       facts.nodeMode === "production" &&
       facts.maintenanceHold === "false" &&
-      facts.liveMode === "probe" &&
+      facts.liveMode === "disabled" &&
       facts.leagueWriteMode === "closed" &&
       facts.scheduledJobsEnabled === "false" &&
       facts.freeAgentDraftRoutesEnabled === "false" &&
@@ -128,7 +137,8 @@ function inspectRenderProbeSafety(directory) {
       facts.debugRoutesEnabled === "false" &&
       facts.emailDeliveryMode === "capture" &&
       facts.backupScheduleEnabled === "false" &&
-      forbiddenEmailInputs.length === 0,
+      forbiddenEmailInputs.length === 0 &&
+      forbiddenLiveProviderInputs.length === 0,
   });
 }
 
@@ -387,6 +397,10 @@ function assertBackendReleaseFacts(facts) {
     render.forbiddenEmailInputs.some(
       (value) => typeof value !== "string" || value === ""
     ) ||
+    !Array.isArray(render.forbiddenLiveProviderInputs) ||
+    render.forbiddenLiveProviderInputs.some(
+      (value) => typeof value !== "string" || value === ""
+    ) ||
     [
       render.nodeMode,
       render.maintenanceHold,
@@ -412,7 +426,7 @@ function renderProbeIsSafe(render) {
     render.safe === true &&
     render.nodeMode === "production" &&
     render.maintenanceHold === "false" &&
-    render.liveMode === "probe" &&
+    render.liveMode === "disabled" &&
     render.leagueWriteMode === "closed" &&
     render.scheduledJobsEnabled === "false" &&
     render.freeAgentDraftRoutesEnabled === "false" &&
@@ -420,7 +434,8 @@ function renderProbeIsSafe(render) {
     render.debugRoutesEnabled === "false" &&
     render.emailDeliveryMode === "capture" &&
     render.backupScheduleEnabled === "false" &&
-    render.forbiddenEmailInputs.length === 0
+    render.forbiddenEmailInputs.length === 0 &&
+    render.forbiddenLiveProviderInputs.length === 0
   );
 }
 
@@ -466,25 +481,27 @@ function backendReleaseBlockers(facts) {
   ) {
     blockers.push("BACKEND_RESET_POLICY_MISMATCH");
   }
-  if (!manifest.exists) {
-    blockers.push("BACKEND_PROBE_MANIFEST_MISSING");
-  } else {
-    if (!manifest.tracked) {
-      blockers.push("BACKEND_PROBE_MANIFEST_NOT_TRACKED");
-    }
-    if (
-      !manifest.valid ||
-      manifest.relativePath !==
-        EXPECTED_PROBE_MANIFEST_RELATIVE_PATH ||
-      !SHA256_PATTERN.test(manifest.manifestSha256 || "")
-    ) {
-      blockers.push("BACKEND_PROBE_MANIFEST_INVALID");
-    } else if (
-      manifest.configuredNhlSeasonKey !==
-        EXPECTED_CONFIGURED_NHL_SEASON_KEY ||
-      manifest.probeNhlSeasonKey !== EXPECTED_PROBE_NHL_SEASON_KEY
-    ) {
-      blockers.push("BACKEND_PROBE_MANIFEST_SEASON_MISMATCH");
+  if (facts.renderProbe.liveMode !== "disabled") {
+    if (!manifest.exists) {
+      blockers.push("BACKEND_PROBE_MANIFEST_MISSING");
+    } else {
+      if (!manifest.tracked) {
+        blockers.push("BACKEND_PROBE_MANIFEST_NOT_TRACKED");
+      }
+      if (
+        !manifest.valid ||
+        manifest.relativePath !==
+          EXPECTED_PROBE_MANIFEST_RELATIVE_PATH ||
+        !SHA256_PATTERN.test(manifest.manifestSha256 || "")
+      ) {
+        blockers.push("BACKEND_PROBE_MANIFEST_INVALID");
+      } else if (
+        manifest.configuredNhlSeasonKey !==
+          EXPECTED_CONFIGURED_NHL_SEASON_KEY ||
+        manifest.probeNhlSeasonKey !== EXPECTED_PROBE_NHL_SEASON_KEY
+      ) {
+        blockers.push("BACKEND_PROBE_MANIFEST_SEASON_MISMATCH");
+      }
     }
   }
   if (!renderProbeIsSafe(facts.renderProbe)) {

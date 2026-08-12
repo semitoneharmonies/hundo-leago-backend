@@ -15,6 +15,7 @@ const {
   "../../src/bootstrap/startStagingMaintenanceHoldProcess"
 );
 const {
+  FORBIDDEN_HOLD_FIELDS,
   REQUIRED_HOLD_VALUES,
   StagingMaintenanceHoldConfigError,
   loadStagingMaintenanceHoldConfig,
@@ -97,6 +98,10 @@ test("hold configuration is exact, staging-only, and validates every quiescence 
     loadStagingMaintenanceHoldConfig({ env: holdEnvironment() }),
     { enabled: true, port: 10000 }
   );
+  assert.equal(
+    REQUIRED_HOLD_VALUES.SPORTSDATAIO_NHL_LIVE_MODE,
+    "disabled"
+  );
   assert.deepEqual(
     loadStagingMaintenanceHoldConfig({ env: {} }),
     { enabled: false }
@@ -111,6 +116,7 @@ test("hold configuration is exact, staging-only, and validates every quiescence 
   const driftCases = [
     ["STAGING_MAINTENANCE_HOLD", "TRUE"],
     ...Object.keys(REQUIRED_HOLD_VALUES).map((field) => [field, "drift"]),
+    ...FORBIDDEN_HOLD_FIELDS.map((field) => [field, "configured"]),
     ["PORT", "0"],
     ["PORT", "65536"],
   ];

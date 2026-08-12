@@ -130,7 +130,6 @@ describe("M2 gate staging Render blueprint", () => {
       "MIGRATION_SOURCE_ROOT",
       "MIGRATION_REPORT_ROOT",
       "SQLITE_BACKUP_ROOT",
-      "SPORTSDATAIO_NHL_LIVE_CAPABILITY_ARTIFACT",
     ];
 
     for (const key of pathKeys) {
@@ -155,7 +154,7 @@ describe("M2 gate staging Render blueprint", () => {
     assert.equal(environment.get("NODE_ENV")?.value, "production");
   });
 
-  test("starts the provider probe with writes, jobs, FAD routes, and email quiesced", () => {
+  test("starts the provider-disabled candidate with writes, jobs, FAD routes, and email quiesced", () => {
     const [service] = loadBlueprint().services;
     const environment = environmentByKey(service);
 
@@ -200,7 +199,7 @@ describe("M2 gate staging Render blueprint", () => {
     );
   });
 
-  test("uses the exact initial live-provider probe configuration without a manifest override", () => {
+  test("keeps the optional live provider disabled with no credential, capability, artifact, or manifest binding", () => {
     const [service] = loadBlueprint().services;
     const environment = environmentByKey(service);
 
@@ -208,57 +207,19 @@ describe("M2 gate staging Render blueprint", () => {
       environment.get("SPORTSDATAIO_NHL_LIVE_MODE"),
       {
         key: "SPORTSDATAIO_NHL_LIVE_MODE",
-        value: "probe",
+        value: "disabled",
       }
     );
-    assert.deepEqual(
-      environment.get("SPORTSDATAIO_NHL_LIVE_API_KEY"),
-      {
-        key: "SPORTSDATAIO_NHL_LIVE_API_KEY",
-        sync: false,
-      }
-    );
-    assert.deepEqual(
-      environment.get(
-        "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET"
-      ),
-      {
-        key: "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
-        generateValue: true,
-      }
-    );
-    assert.deepEqual(
-      environment.get(
-        "SPORTSDATAIO_NHL_LIVE_CAPABILITY_KEY_VERSION"
-      ),
-      {
-        key: "SPORTSDATAIO_NHL_LIVE_CAPABILITY_KEY_VERSION",
-        value: "1",
-      }
-    );
-    assert.deepEqual(
-      environment.get(
-        "SPORTSDATAIO_NHL_LIVE_CAPABILITY_ARTIFACT"
-      ),
-      {
-        key: "SPORTSDATAIO_NHL_LIVE_CAPABILITY_ARTIFACT",
-        value:
-          `${STAGING_ROOT}/provider-capability/` +
-          "sportsdataio-live-v1.json",
-      }
-    );
-    assert.equal(
-      environment.has(
-        "SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST"
-      ),
-      false
-    );
-    assert.equal(
-      service.envVars.some((entry) =>
-        entry.key.includes("PROBE_MANIFEST")
-      ),
-      false
-    );
+    for (const key of [
+      "SPORTSDATAIO_NHL_LIVE_API_KEY",
+      "SPORTSDATAIO_NHL_LIVE_API_ORIGIN",
+      "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
+      "SPORTSDATAIO_NHL_LIVE_CAPABILITY_KEY_VERSION",
+      "SPORTSDATAIO_NHL_LIVE_CAPABILITY_ARTIFACT",
+      "SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST",
+    ]) {
+      assert.equal(environment.has(key), false, `${key} must be absent`);
+    }
   });
 
   test("contains secret references or generated values, never secret literals", () => {
@@ -269,11 +230,8 @@ describe("M2 gate staging Render blueprint", () => {
       "AUDIT_METADATA_SECRET",
       "ACTION_TOKEN_DELIVERY_KEY",
       "STATS_REFRESH_TOKEN",
-      "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
     ];
     const providerSecretKeys = [
-      "SPORTSDATAIO_NHL_API_KEY",
-      "SPORTSDATAIO_NHL_LIVE_API_KEY",
       "BACKUP_OBJECT_ACCESS_KEY_ID",
       "BACKUP_OBJECT_SECRET_ACCESS_KEY",
       "BACKUP_ENCRYPTION_KEY",
@@ -338,22 +296,13 @@ describe("M2 gate staging Render blueprint", () => {
       environment.get("CURRENT_NHL_SEASON_KEY")?.value,
       "20262027"
     );
-    assert.equal(
-      environment.get("SPORTSDATAIO_NHL_API_ORIGIN")?.value,
-      "https://api.sportsdata.io/api/nhl/fantasy"
-    );
-    assert.equal(
-      environment.get(
-        "SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR"
-      )?.value,
-      "2025"
-    );
-    assert.equal(
-      environment.get(
-        "SPORTSDATAIO_NHL_LIVE_API_ORIGIN"
-      )?.value,
-      "https://api.sportsdata.io"
-    );
+    for (const key of [
+      "SPORTSDATAIO_NHL_API_KEY",
+      "SPORTSDATAIO_NHL_API_ORIGIN",
+      "SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR",
+    ]) {
+      assert.equal(environment.has(key), false, `${key} must be absent`);
+    }
     assert.equal(environment.has("NHL_API_ORIGIN"), false);
   });
 });

@@ -473,6 +473,7 @@ describe("M7-01 deployed target runtime configuration", () => {
 
     for (const [field, value] of [
       ["SPORTSDATAIO_NHL_LIVE_API_KEY", SPORTSDATAIO_LIVE_API_KEY],
+      ["SPORTSDATAIO_NHL_LIVE_API_ORIGIN", "https://api.sportsdata.io"],
       [
         "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
         SPORTSDATAIO_LIVE_CAPABILITY_SECRET,
@@ -596,19 +597,21 @@ describe("M7-01 deployed target runtime configuration", () => {
       deployedEnvironment({ FREE_AGENT_DRAFT_ROUTES_ENABLED: "TRUE" }),
       "FREE_AGENT_DRAFT_ROUTES_ENABLED"
     );
-    assertConfigError(
-      deployedEnvironment({ FREE_AGENT_DRAFT_ROUTES_ENABLED: "true" }),
-      "FREE_AGENT_DRAFT_ROUTES_ENABLED"
-    );
-    assert.equal(
-      loadTargetRuntimeConfig({
-        env: liveProviderEnvironment("required", {
+    for (const mode of ["disabled", "probe", "required"]) {
+      const env = mode === "disabled"
+        ? deployedEnvironment({
+            FREE_AGENT_DRAFT_ROUTES_ENABLED: "true",
+          })
+        : liveProviderEnvironment(mode, {
           FREE_AGENT_DRAFT_ROUTES_ENABLED: "true",
-        }),
+        });
+      const config = loadTargetRuntimeConfig({
+        env,
         backendRoot: ROOT,
-      }).freeAgentDraftRoutesEnabled,
-      true
-    );
+      });
+      assert.equal(config.freeAgentDraftRoutesEnabled, true);
+      assert.equal(config.sportsDataIoLiveNhl.mode, mode);
+    }
     assertConfigError(
       deployedEnvironment({ ACCOUNT_EMAIL_DELIVERY_ENABLED: "TRUE" }),
       "ACCOUNT_EMAIL_DELIVERY_ENABLED"
@@ -1093,7 +1096,7 @@ describe("M7-01 deployed target runtime configuration", () => {
 
   test("opens an existing exact-migration staging database with matching immutable identity", (t) => {
     const input = deployedRuntimeInput(t);
-    for (const invalidValue of [undefined, "false", true]) {
+    for (const invalidValue of [undefined, "false"]) {
       assert.throws(
         () => openDeployedTargetRuntime({
           ...input,
@@ -1229,7 +1232,6 @@ describe("M7-01 deployed target runtime configuration", () => {
         "auction_resolution",
         "free_agent_draft_completion",
         "trade_expiry",
-        "matchup_occurrences",
         "league_outbox",
       ]
     );
@@ -1351,8 +1353,15 @@ describe("M7-01 deployed target runtime configuration", () => {
     );
   });
 
-  test("serves minimal public health and administrator-only safe operational health without writes", async (t) => {
-    const input = deployedRuntimeInput(t);
+  test("serves FAD routes and safe operational health independently from disabled live statistics without writes", async (t) => {
+    const baseInput = deployedRuntimeInput(t);
+    const input = {
+      ...baseInput,
+      config: Object.freeze({
+        ...baseInput.config,
+        freeAgentDraftRoutesEnabled: true,
+      }),
+    };
     const runtime = openDeployedTargetRuntime(input);
     t.after(() => runtime.close());
     t.after(() =>
@@ -1375,6 +1384,16 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.equal(ready.headers.get("x-powered-by"), null);
     assert.deepEqual(await live.json(), { data: { status: "live" } });
     assert.deepEqual(await ready.json(), { data: { status: "ready" } });
+
+    const fadRoute = await fetch(
+      new URL(
+        `/api/v1/leagues/${uuid(7001)}/free-agent-drafts/navigation`,
+        baseUrl
+      ),
+      { headers: { Origin: "https://staging.hundoleago.com" } }
+    );
+    assert.equal(fadRoute.status, 401);
+    assert.equal((await fadRoute.json()).error.code, "SESSION_REQUIRED");
 
     const beforeBlockedWrite = runtime.database.serialize();
     const blockedWrite = await fetch(new URL("/api/v1/accounts", baseUrl), {
@@ -1464,7 +1483,7 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.equal(body.data.schemaVersion, 49);
     assert.equal(body.data.scheduler.state, "disabled");
     assert.deepEqual(body.data.accountEmailDelivery, { enabled: false });
-    assert.deepEqual(body.data.freeAgentDraftRoutes, { enabled: false });
+    assert.deepEqual(body.data.freeAgentDraftRoutes, { enabled: true });
     assert.deepEqual(body.data.maintenance, { state: "closed" });
     assert.deepEqual(body.data.sportsDataIoNhl, {
       provider: "sportsdataio-discovery-lab",

@@ -866,6 +866,25 @@ describe("FAD-04 reset original-league bootstrap postcondition", () => {
     assert.deepEqual(
       runtime.database
         .prepare(
+          "SELECT nhl_season_key FROM seasons WHERE id = ?"
+        )
+        .get(binding.seasonId),
+      { nhl_season_key: "20262027" }
+    );
+    for (const tableName of [
+      "stat_sources",
+      "stat_refreshes",
+      "player_stat_totals",
+    ]) {
+      assert.equal(
+        tableCount(runtime.database, tableName),
+        0,
+        `new-season ${tableName}`
+      );
+    }
+    assert.deepEqual(
+      runtime.database
+        .prepare(
           "SELECT status, published_at_ms, " +
             "last_error_code, attempt_count, version " +
             "FROM outbox_events"

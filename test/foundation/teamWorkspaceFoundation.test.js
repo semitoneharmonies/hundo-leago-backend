@@ -30,7 +30,7 @@ const MIGRATIONS_DIRECTORY = path.resolve(
   "migrations"
 );
 
-test("authenticated team workspace projects cap, picks, assets, and persisted line order", async (t) => {
+test("authenticated team workspace projects current-season stats, cap, picks, assets, and persisted line order", async (t) => {
   const root = fs.mkdtempSync(
     path.join(os.tmpdir(), "hundo-team-workspace-")
   );
@@ -48,11 +48,55 @@ test("authenticated team workspace projects cap, picks, assets, and persisted li
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  const leagueId = fixtureId("league:leagueA");
+  const teamId = fixtureId("team:leagueA:2");
+  const seasonId = fixtureId("season:leagueA:current");
+  const decoyPlayerId = connection.database.prepare(`
+    SELECT player_id
+    FROM player_ownerships
+    WHERE league_id = ? AND season_id = ? AND team_id = ?
+    ORDER BY player_id
+    LIMIT 1
+  `).get(leagueId, seasonId, teamId).player_id;
+  const decoySourceId = fixtureId("stat-source:prior-season-team-audit");
+  const decoyRefreshId = fixtureId("stat-refresh:prior-season-team-audit");
+  connection.database.prepare(`
+    INSERT INTO stat_sources (
+      id, provider, status, created_at_ms, updated_at_ms, version
+    ) VALUES (?, 'prior-season-team-audit', 'active', ?, ?, 1)
+  `).run(decoySourceId, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
+  connection.database.prepare(`
+    INSERT INTO stat_refreshes (
+      id, stat_source_id, nhl_season_key, source_version, status,
+      started_at_ms, completed_at_ms, player_count, error_code,
+      metadata_json, version
+    ) VALUES (?, ?, '20252026', 'prior-season-decoy', 'succeeded',
+      ?, ?, 1, NULL, NULL, 1)
+  `).run(
+    decoyRefreshId,
+    decoySourceId,
+    FIXTURE_NOW_MS + 200_000,
+    FIXTURE_NOW_MS + 200_001
+  );
+  connection.database.prepare(`
+    INSERT INTO player_stat_totals (
+      id, stat_source_id, refresh_id, nhl_season_key, player_id,
+      games_played, goals, assists, nhl_points,
+      fantasy_points_hundredths, source_updated_at_ms, created_at_ms
+    ) VALUES (?, ?, ?, '20252026', ?, 82, 50, 50, 100,
+      99999, ?, ?)
+  `).run(
+    fixtureId("stat-total:prior-season-team-audit"),
+    decoySourceId,
+    decoyRefreshId,
+    decoyPlayerId,
+    FIXTURE_NOW_MS + 200_002,
+    FIXTURE_NOW_MS + 200_002
+  );
+
   const repository = createSqliteTeamWorkspaceRepository({
     database: connection.database,
   });
-  const leagueId = fixtureId("league:leagueA");
-  const teamId = fixtureId("team:leagueA:2");
   const actorUserId = fixtureId("account:leagueAManagerOne");
   const service = createTeamWorkspaceService({
     leagueAuthorization: {
@@ -113,6 +157,12 @@ test("authenticated team workspace projects cap, picks, assets, and persisted li
     ).length
   );
   assert.equal(workspace.orderVersion, 0);
+  assert.notEqual(
+    workspace.players.find(
+      ({ playerId }) => playerId === decoyPlayerId
+    ).statistics?.fantasyPointsHundredths,
+    99_999
+  );
 
   const forwards = workspace.players.filter(
     (player) =>

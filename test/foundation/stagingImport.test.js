@@ -267,6 +267,9 @@ describe("M2-12 repeated persistent staging import", () => {
         "free_agent_draft_teams",
         "free_agent_drafts",
         "outbox_event_audiences",
+        "stat_sources",
+        "stat_refreshes",
+        "player_stat_totals",
         "season_rollover_items",
         "season_rollovers",
       ]) {

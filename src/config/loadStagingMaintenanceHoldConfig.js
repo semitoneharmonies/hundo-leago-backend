@@ -7,9 +7,17 @@ const REQUIRED_HOLD_VALUES = Object.freeze({
   ACCOUNT_EMAIL_DELIVERY_ENABLED: "false",
   DEBUG_ROUTES_ENABLED: "false",
   EMAIL_DELIVERY_MODE: "capture",
-  SPORTSDATAIO_NHL_LIVE_MODE: "probe",
+  SPORTSDATAIO_NHL_LIVE_MODE: "disabled",
   BACKUP_SCHEDULE_ENABLED: "false",
 });
+const FORBIDDEN_HOLD_FIELDS = Object.freeze([
+  "SPORTSDATAIO_NHL_LIVE_API_KEY",
+  "SPORTSDATAIO_NHL_LIVE_API_ORIGIN",
+  "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
+  "SPORTSDATAIO_NHL_LIVE_CAPABILITY_KEY_VERSION",
+  "SPORTSDATAIO_NHL_LIVE_CAPABILITY_ARTIFACT",
+  "SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST",
+]);
 
 class StagingMaintenanceHoldConfigError extends Error {
   constructor(field, reason) {
@@ -59,6 +67,11 @@ function loadStagingMaintenanceHoldConfig({ env = process.env } = {}) {
       fail(field, `the value must be exactly ${required}`);
     }
   }
+  for (const field of FORBIDDEN_HOLD_FIELDS) {
+    if (env[field] !== undefined && env[field] !== null) {
+      fail(field, "the value is forbidden while live provider mode is disabled");
+    }
+  }
 
   return Object.freeze({
     enabled: true,
@@ -67,6 +80,7 @@ function loadStagingMaintenanceHoldConfig({ env = process.env } = {}) {
 }
 
 module.exports = {
+  FORBIDDEN_HOLD_FIELDS,
   REQUIRED_HOLD_VALUES,
   StagingMaintenanceHoldConfigError,
   loadStagingMaintenanceHoldConfig,

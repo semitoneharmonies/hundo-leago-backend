@@ -60,19 +60,18 @@ function backendReleaseFacts(overrides = {}) {
     probeManifest: Object.freeze({
       relativePath:
         EXPECTED_PROBE_MANIFEST_RELATIVE_PATH,
-      exists: true,
-      tracked: true,
-      valid: true,
-      manifestSha256: MANIFEST_HASH,
-      configuredNhlSeasonKey:
-        EXPECTED_CONFIGURED_NHL_SEASON_KEY,
-      probeNhlSeasonKey: EXPECTED_PROBE_NHL_SEASON_KEY,
+      exists: false,
+      tracked: false,
+      valid: false,
+      manifestSha256: null,
+      configuredNhlSeasonKey: null,
+      probeNhlSeasonKey: null,
       ...overrides.probeManifest,
     }),
     renderProbe: Object.freeze({
       nodeMode: "production",
       maintenanceHold: "false",
-      liveMode: "probe",
+      liveMode: "disabled",
       leagueWriteMode: "closed",
       scheduledJobsEnabled: "false",
       freeAgentDraftRoutesEnabled: "false",
@@ -81,6 +80,7 @@ function backendReleaseFacts(overrides = {}) {
       emailDeliveryMode: "capture",
       backupScheduleEnabled: "false",
       forbiddenEmailInputs: Object.freeze([]),
+      forbiddenLiveProviderInputs: Object.freeze([]),
       safe: true,
       ...overrides.renderProbe,
     }),
@@ -142,7 +142,7 @@ test("release-candidate preflight blocks invalid identity and commit mismatch", 
   assert.equal(report.status, "blocked");
 });
 
-test("release-candidate preflight blocks missing provider evidence and every drifted schema source fact", () => {
+test("release-candidate preflight ignores absent optional provider evidence while blocking every drifted schema source fact", () => {
   const report = evaluateReleaseCandidatePreflight({
     frontend: repository("frontend"),
     backend: repository("backend", {
@@ -189,7 +189,6 @@ test("release-candidate preflight blocks missing provider evidence and every dri
     "BACKEND_MIGRATION_CHECKSUM_SET_MISMATCH",
     "BACKEND_REPOSITORY_CATALOG_MISMATCH",
     "BACKEND_RESET_POLICY_MISMATCH",
-    "BACKEND_PROBE_MANIFEST_MISSING",
     "BACKEND_RENDER_PROBE_NOT_QUIESCED",
   ]);
   assert.equal(report.status, "blocked");
@@ -197,7 +196,7 @@ test("release-candidate preflight blocks missing provider evidence and every dri
   assert.equal(report.mutationsPerformed, false);
 });
 
-test("release-candidate preflight distinguishes untracked, invalid, and season-mismatched probe evidence", () => {
+test("release-candidate preflight validates provider evidence if a future candidate selects live probe mode", () => {
   const cases = [
     {
       manifest: { tracked: false },
@@ -217,7 +216,20 @@ test("release-candidate preflight distinguishes untracked, invalid, and season-m
       frontend: repository("frontend"),
       backend: repository("backend", {
         releaseFacts: backendReleaseFacts({
-          probeManifest: manifest,
+          probeManifest: {
+            exists: true,
+            tracked: true,
+            valid: true,
+            manifestSha256: MANIFEST_HASH,
+            configuredNhlSeasonKey:
+              EXPECTED_CONFIGURED_NHL_SEASON_KEY,
+            probeNhlSeasonKey: EXPECTED_PROBE_NHL_SEASON_KEY,
+            ...manifest,
+          },
+          renderProbe: {
+            liveMode: "probe",
+            safe: false,
+          },
         }),
       }),
       candidate: {
@@ -227,7 +239,10 @@ test("release-candidate preflight distinguishes untracked, invalid, and season-m
       },
       nodeVersion: EXPECTED_NODE_VERSION,
     });
-    assert.deepEqual(report.blockers, [blocker]);
+    assert.deepEqual(report.blockers, [
+      blocker,
+      "BACKEND_RENDER_PROBE_NOT_QUIESCED",
+    ]);
     assert.equal(report.status, "blocked");
   }
 });
@@ -256,6 +271,72 @@ test("release-candidate preflight rejects every final Blueprint transition drift
       "BACKEND_RENDER_PROBE_NOT_QUIESCED",
     ]);
     assert.equal(report.status, "blocked");
+  }
+});
+
+test("release-candidate preflight rejects every forbidden live-provider Blueprint input while mode is disabled", (t) => {
+  const forbiddenFields = [
+    "SPORTSDATAIO_NHL_LIVE_API_KEY",
+    "SPORTSDATAIO_NHL_LIVE_API_ORIGIN",
+    "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
+    "SPORTSDATAIO_NHL_LIVE_CAPABILITY_KEY_VERSION",
+    "SPORTSDATAIO_NHL_LIVE_CAPABILITY_ARTIFACT",
+    "SPORTSDATAIO_NHL_LIVE_PROBE_MANIFEST",
+  ];
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), "hundo-release-provider-input-")
+  );
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const safeEnvironment = [
+    ["NODE_ENV", "production"],
+    ["STAGING_MAINTENANCE_HOLD", "false"],
+    ["SPORTSDATAIO_NHL_LIVE_MODE", "disabled"],
+    ["LEAGUE_WRITE_MODE", "closed"],
+    ["SCHEDULED_JOBS_ENABLED", "false"],
+    ["FREE_AGENT_DRAFT_ROUTES_ENABLED", "false"],
+    ["ACCOUNT_EMAIL_DELIVERY_ENABLED", "false"],
+    ["DEBUG_ROUTES_ENABLED", "false"],
+    ["EMAIL_DELIVERY_MODE", "capture"],
+    ["BACKUP_SCHEDULE_ENABLED", "false"],
+  ].map(([key, value]) => ({ key, value }));
+
+  for (const field of forbiddenFields) {
+    fs.writeFileSync(
+      path.join(root, "render.yaml"),
+      JSON.stringify({
+        services: [{
+          envVars: [
+            ...safeEnvironment,
+            { key: field, value: "configured" },
+          ],
+        }],
+      })
+    );
+    const inspected = inspectBackendReleaseFacts({
+      directory: root,
+      runGit: () => "",
+    }).renderProbe;
+    assert.deepEqual(inspected.forbiddenLiveProviderInputs, [field]);
+    assert.equal(inspected.safe, false);
+
+    const report = evaluateReleaseCandidatePreflight({
+      frontend: repository("frontend"),
+      backend: repository("backend", {
+        releaseFacts: backendReleaseFacts({ renderProbe: inspected }),
+      }),
+      candidate: {
+        releaseId: "HL-20260722-1",
+        frontendCommit: FRONTEND_COMMIT,
+        backendCommit: BACKEND_COMMIT,
+      },
+      nodeVersion: EXPECTED_NODE_VERSION,
+    });
+    assert.deepEqual(
+      report.blockers,
+      ["BACKEND_RENDER_PROBE_NOT_QUIESCED"],
+      field
+    );
   }
 });
 
@@ -300,7 +381,7 @@ test("repository inspection hashes exact inputs and reports status without expos
   assert.equal(calls.length, 3);
 });
 
-test("backend release-source inspection proves schema 22 through 49 and the quiesced probe Blueprint", () => {
+test("backend release-source inspection proves schema 22 through 49 and the provider-disabled Blueprint", () => {
   const facts = inspectBackendReleaseFacts({
     directory: path.resolve(__dirname, "..", ".."),
   });
@@ -332,6 +413,7 @@ test("backend release-source inspection proves schema 22 through 49 and the quie
   assert.equal(facts.renderProbe.debugRoutesEnabled, "false");
   assert.equal(facts.renderProbe.backupScheduleEnabled, "false");
   assert.deepEqual(facts.renderProbe.forbiddenEmailInputs, []);
+  assert.deepEqual(facts.renderProbe.forbiddenLiveProviderInputs, []);
   if (facts.probeManifest.exists) {
     assert.equal(facts.probeManifest.tracked, true);
     assert.equal(facts.probeManifest.valid, true);

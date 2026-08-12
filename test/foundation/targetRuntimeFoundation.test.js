@@ -2020,7 +2020,6 @@ describe("M3-19 exact-schema target dependency composition", () => {
         "auction_resolution",
         "free_agent_draft_completion",
         "trade_expiry",
-        "matchup_occurrences",
         "league_outbox",
       ]
     );
@@ -4652,6 +4651,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const statisticBindings = [];
     const gameStateBindings = [];
     const networkUses = [];
+    const scheduledJobNames = [];
     const descriptors = [
       Object.freeze({
         mode: "disabled",
@@ -4696,7 +4696,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
       });
       Object.freeze(sharedAdapter);
 
-      createTargetRuntime(
+      const runtime = createTargetRuntime(
         runtimeOptions(database, {
           sportsDataIoLiveNhl: descriptor,
           sportsDataIoFetchImplementation: fetchImplementation,
@@ -4716,10 +4716,29 @@ describe("M3-19 exact-schema target dependency composition", () => {
           },
         })
       );
+      scheduledJobNames.push(
+        runtime.services.league.scheduledJobs.map(
+          ({ name }) => name
+        )
+      );
       compositionCounts.push(compositions);
     }
 
     assert.deepEqual(compositionCounts, [0, 0, 1]);
+    assert.deepEqual(
+      scheduledJobNames.map((names) =>
+        names.includes("matchup_occurrences")
+      ),
+      [false, false, true]
+    );
+    assert.deepEqual(
+      scheduledJobNames.map((names) =>
+        names.filter(
+          (name) => name !== "matchup_occurrences"
+        )
+      ),
+      [scheduledJobNames[0], scheduledJobNames[0], scheduledJobNames[0]]
+    );
     assert.deepEqual(statisticBindings, ["required"]);
     assert.deepEqual(gameStateBindings, ["required"]);
     assert.deepEqual(networkUses, []);

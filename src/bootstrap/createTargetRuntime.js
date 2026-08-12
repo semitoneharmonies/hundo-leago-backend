@@ -2706,10 +2706,14 @@ function createTargetServices({
         runner: freeAgentDraftCompletionJob,
       }),
       Object.freeze({ name: "trade_expiry", runner: tradeProposalExpiry }),
-      Object.freeze({
-        name: "matchup_occurrences",
-        runner: matchupOccurrenceJob,
-      }),
+      ...(liveSportsDataIoAdapter
+        ? [
+            Object.freeze({
+              name: "matchup_occurrences",
+              runner: matchupOccurrenceJob,
+            }),
+          ]
+        : []),
       Object.freeze({ name: "league_outbox", runner: outboxPublicationJob }),
     ]),
     creation: createAdministrativeLeagueService({

@@ -303,8 +303,6 @@ function assertConfig(config, securityFoundations) {
     typeof config.environmentId !== "string" ||
     typeof config.databaseId !== "string" ||
     typeof config.freeAgentDraftRoutesEnabled !== "boolean" ||
-    (config.freeAgentDraftRoutesEnabled &&
-      config.sportsDataIoLiveNhl?.mode !== "required") ||
     !config.currentSeason
   ) {
     throw new TypeError(

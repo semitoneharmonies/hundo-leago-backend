@@ -257,6 +257,30 @@ describe("M6-08 standings policy", () => {
 describe("M6-08 SELECT-only authoritative standings", () => {
   test("uses only current finalized versions, retains zero-game teams, and never writes", (t) => {
     const { database, service } = createRuntime(t);
+    const priorPlayerId = uuid(9_001);
+    const priorRefreshId = uuid(9_002);
+    database.prepare(`
+      INSERT INTO players (
+        id, first_name, last_name, full_name, birth_date, status,
+        created_at_ms, updated_at_ms, version
+      ) VALUES (?, 'Prior', 'Season', 'Prior Season', NULL, 'historical',
+        1, 1, 1)
+    `).run(priorPlayerId);
+    database.prepare(`
+      INSERT INTO stat_refreshes (
+        id, stat_source_id, nhl_season_key, source_version, status,
+        started_at_ms, completed_at_ms, player_count, error_code, version
+      ) VALUES (?, ?, '20252026', 'prior-season-decoy', 'succeeded',
+        999, 1000, 1, NULL, 1)
+    `).run(priorRefreshId, IDS.source);
+    database.prepare(`
+      INSERT INTO player_stat_totals (
+        id, stat_source_id, refresh_id, nhl_season_key, player_id,
+        games_played, goals, assists, nhl_points,
+        fantasy_points_hundredths, source_updated_at_ms, created_at_ms
+      ) VALUES (?, ?, ?, '20252026', ?, 82, 50, 50, 100,
+        99999, 1000, 1000)
+    `).run(uuid(9_003), IDS.source, priorRefreshId, priorPlayerId);
     const before = database.prepare("SELECT total_changes() AS count").get().count;
     const standings = service.read({ leagueId: IDS.league, seasonId: IDS.season });
     const after = database.prepare("SELECT total_changes() AS count").get().count;

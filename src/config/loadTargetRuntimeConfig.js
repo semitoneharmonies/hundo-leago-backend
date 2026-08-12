@@ -309,6 +309,7 @@ function sportsDataIoLiveNhlConfig({
   if (mode === "disabled") {
     for (const field of [
       "SPORTSDATAIO_NHL_LIVE_API_KEY",
+      "SPORTSDATAIO_NHL_LIVE_API_ORIGIN",
       "SPORTSDATAIO_NHL_LIVE_CAPABILITY_SECRET",
       "SPORTSDATAIO_NHL_LIVE_CAPABILITY_KEY_VERSION",
       "SPORTSDATAIO_NHL_LIVE_CAPABILITY_ARTIFACT",
@@ -424,15 +425,6 @@ function loadTargetRuntimeConfig({
     env,
     "FREE_AGENT_DRAFT_ROUTES_ENABLED"
   );
-  if (
-    freeAgentDraftRoutesEnabled &&
-    sportsDataIoLiveNhl.mode !== "required"
-  ) {
-    fail(
-      "FREE_AGENT_DRAFT_ROUTES_ENABLED",
-      "dedicated Free Agent Draft routes require live provider mode required"
-    );
-  }
   return Object.freeze({
     accountEmailDeliveryEnabled: exactBoolean(
       env,

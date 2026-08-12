@@ -2842,7 +2842,7 @@ describe(
   "SQLite Candidate eligible-player search",
   () => {
     test(
-      "returns the exact projection with Unicode/literal search, normalized-name paging, and no writes",
+      "returns the exact catalogue-only projection, ignores prior-season statistics, and preserves search paging without writes",
       (t) => {
         const runtime = createRuntime(t);
         const alphaOne = uuid(4_100);
@@ -2870,6 +2870,41 @@ describe(
           playerId: defence,
           fullName: "Delta Defender",
           positionGroup: "D",
+        });
+        insert(runtime.database, "stat_sources", {
+          id: uuid(4_190),
+          provider: "prior-season-candidate-audit",
+          status: "active",
+          created_at_ms: 20,
+          updated_at_ms: 20,
+          version: 1,
+        });
+        insert(runtime.database, "stat_refreshes", {
+          id: uuid(4_191),
+          stat_source_id: uuid(4_190),
+          nhl_season_key: "20252026",
+          source_version: "prior-season-decoy",
+          status: "succeeded",
+          started_at_ms: 20,
+          completed_at_ms: 21,
+          player_count: 1,
+          error_code: null,
+          metadata_json: null,
+          version: 1,
+        });
+        insert(runtime.database, "player_stat_totals", {
+          id: uuid(4_192),
+          stat_source_id: uuid(4_190),
+          refresh_id: uuid(4_191),
+          nhl_season_key: "20252026",
+          player_id: alphaOne,
+          games_played: 82,
+          goals: 50,
+          assists: 50,
+          nhl_points: 100,
+          fantasy_points_hundredths: 99_999,
+          source_updated_at_ms: 21,
+          created_at_ms: 21,
         });
 
         const beforeBytes = databaseBytes(

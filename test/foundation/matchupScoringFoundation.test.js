@@ -840,6 +840,34 @@ describe("M6-06 live matchup scoring policy", () => {
 describe("M6-06 SELECT-only live scoring", () => {
   test("uses the last successful refresh, scores illegal zero, and performs no writes", (t) => {
     const { database, service } = createRuntime(t);
+    const priorRefreshId = uuid(8_001);
+    database.prepare(`
+      INSERT INTO stat_refreshes (
+        id, stat_source_id, nhl_season_key, source_version, status,
+        started_at_ms, completed_at_ms, player_count, error_code, version
+      ) VALUES (?, ?, '20252026', 'prior-season-decoy', 'succeeded',
+        ?, ?, 1, NULL, 1)
+    `).run(
+      priorRefreshId,
+      IDS.source,
+      NOW_MS + 1_000,
+      NOW_MS + 1_001
+    );
+    database.prepare(`
+      INSERT INTO player_stat_totals (
+        id, stat_source_id, refresh_id, nhl_season_key, player_id,
+        games_played, goals, assists, nhl_points,
+        fantasy_points_hundredths, source_updated_at_ms, created_at_ms
+      ) VALUES (?, ?, ?, '20252026', ?, 82, 50, 50, 100,
+        99999, ?, ?)
+    `).run(
+      uuid(8_002),
+      IDS.source,
+      priorRefreshId,
+      IDS.player,
+      NOW_MS + 1_002,
+      NOW_MS + 1_002
+    );
     const changesBefore = database.prepare("SELECT total_changes() AS count").get().count;
     const result = service.readLive(input());
     const changesAfter = database.prepare("SELECT total_changes() AS count").get().count;
