@@ -238,7 +238,7 @@ async function createEncryptedOffsiteBackup({
       contentType: "application/octet-stream",
       metadata: {
         sha256: encryptedArtifactSha256,
-        keyVersion: config.encryption.keyVersion,
+        "key-version": config.encryption.keyVersion,
       },
     });
     const remote = await objectStorage.headPrivateObject({
@@ -289,7 +289,7 @@ async function createEncryptedOffsiteBackup({
       objectKey: manifestObjectKey,
       body: manifestBytes,
       contentType: "application/json",
-      metadata: { sha256: manifestSha256, backupId },
+      metadata: { sha256: manifestSha256, "backup-id": backupId },
     });
     const remoteManifest = await objectStorage.headPrivateObject({
       objectKey: manifestObjectKey,
