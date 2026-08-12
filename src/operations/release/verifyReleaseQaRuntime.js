@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 
 const {
   ACCOUNT_ALIASES,
+  TEAM_NAMES_BY_LEAGUE,
   canonicalize,
   fixtureEmail,
   fixtureId,
@@ -119,7 +120,12 @@ async function request(baseUrl, frontendOrigin, requestPath, {
 
 function expectStatus(checkId, response, status) {
   if (response.status !== status) {
-    fail(checkId, `Release-QA check expected HTTP ${status} and received ${response.status}.`);
+    const publicCode = response.json?.error?.code;
+    fail(
+      checkId,
+      `Release-QA check expected HTTP ${status} and received ${response.status}` +
+        `${typeof publicCode === "string" ? ` (${publicCode})` : ""}.`
+    );
   }
   return response.json;
 }
@@ -220,8 +226,13 @@ async function verifyManagerScope(baseUrl, frontendOrigin, alias, visibleAlias, 
     );
     const teamsJson = expectStatus(`teams:${alias}`, teams, 200);
     const visibleTeams = teamsJson?.data?.teams;
-    if (!Array.isArray(visibleTeams) || visibleTeams.length !== 6) {
-      fail(`teams:${alias}`, "The release-QA league did not expose all six teams.");
+    const expectedTeamCount = TEAM_NAMES_BY_LEAGUE[visibleAlias]?.length;
+    if (
+      !Number.isSafeInteger(expectedTeamCount) ||
+      !Array.isArray(visibleTeams) ||
+      visibleTeams.length !== expectedTeamCount
+    ) {
+      fail(`teams:${alias}`, "The release-QA league did not expose its complete team set.");
     }
     const firstTeamId = visibleTeams[0]?.id;
     if (typeof firstTeamId !== "string") {
@@ -254,20 +265,29 @@ async function verifyManagerScope(baseUrl, frontendOrigin, alias, visibleAlias, 
         "The release-QA public roster returned unusable team presentation data."
       );
     }
+    const rosterPlayer = rosterJson?.data?.roster?.players?.[0];
+    if (
+      typeof rosterPlayer?.playerReference !== "string" ||
+      typeof rosterPlayer?.name !== "string"
+    ) {
+      fail(`players:${alias}`, "The release-QA roster did not expose a searchable player.");
+    }
     const players = await request(
       baseUrl,
       frontendOrigin,
-      "/api/v1/players?query=fixture%20player%2001&limit=5",
+      `/api/v1/players?query=${encodeURIComponent(rosterPlayer.name)}&limit=5`,
       { cookie: session.cookie }
     );
     const playersJson = expectStatus(`players:${alias}`, players, 200);
     const visiblePlayers = playersJson?.data;
-    const firstPlayer = visiblePlayers?.[0];
+    const firstPlayer = visiblePlayers?.find(
+      ({ id }) => id === rosterPlayer.playerReference
+    );
     if (
       !Array.isArray(visiblePlayers) ||
-      visiblePlayers.length !== 1 ||
-      firstPlayer?.fullName !== "Fixture Player 01" ||
-      playersJson?.page?.hasMore !== false
+      visiblePlayers.length < 1 ||
+      firstPlayer?.id !== rosterPlayer.playerReference ||
+      firstPlayer?.fullName !== rosterPlayer.name
     ) {
       fail(
         `players:${alias}`,
@@ -287,7 +307,9 @@ async function verifyManagerScope(baseUrl, frontendOrigin, alias, visibleAlias, 
     );
     if (
       playerDetailJson?.data?.id !== firstPlayer.id ||
-      playerDetailJson?.data?.externalIds?.[0]?.provider !== "release_qa"
+      !playerDetailJson?.data?.externalIds?.some(({ provider }) =>
+        ["release_qa", "sportsdataio-discovery-lab"].includes(provider)
+      )
     ) {
       fail(
         `player-detail:${alias}`,
@@ -326,7 +348,7 @@ async function verifyManagerScope(baseUrl, frontendOrigin, alias, visibleAlias, 
       { cookie: session.cookie }
     );
     const standingsJson = expectStatus(`standings:${alias}`, standings, 200);
-    if (standingsJson?.data?.rows?.length !== 6) {
+    if (standingsJson?.data?.rows?.length !== expectedTeamCount) {
       fail(
         `standings:${alias}`,
         "The release-QA standings omitted registered season participants."

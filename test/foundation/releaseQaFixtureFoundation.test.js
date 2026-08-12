@@ -15,6 +15,11 @@ const {
   verifyReleaseQaFixture,
 } = require("../../src/operations/release/verifyReleaseQaFixture");
 const {
+  selectCatalogPlayers,
+} = require(
+  "../../src/operations/release/createFreeAgentDraftBrowserFixture"
+);
+const {
   ACCOUNT_ALIASES,
   FIXTURE_ID_NAMESPACE,
   PLAYER_BLUEPRINTS,
@@ -142,13 +147,13 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
   assert.equal(first.manifest.manifestChecksum, checksumManifest(first.manifest));
   assert.match(first.manifest.manifestChecksum, /^[0-9a-f]{64}$/);
   assert.equal(first.manifest.global.leagueCount, 2);
-  assert.equal(first.manifest.global.playerCount, 146);
-  assert.equal(first.manifest.global.overlappingPlayerCount, 146);
+  assert.equal(first.manifest.global.playerCount, PLAYER_BLUEPRINTS.length);
+  assert.equal(first.manifest.global.overlappingPlayerCount, PLAYER_BLUEPRINTS.length);
   assert.equal(first.manifest.global.overlappingTeamNameCount, 0);
-  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.teams), [6, 6]);
-  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.populatedRosterTeams), [6, 6]);
-  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.syntheticPlayerTotals), [146, 146]);
-  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.matchupPlayers), [216, 216]);
+  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.teams), [6, 10]);
+  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.populatedRosterTeams), [6, 10]);
+  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.syntheticPlayerTotals), [PLAYER_BLUEPRINTS.length, PLAYER_BLUEPRINTS.length]);
+  assert.deepEqual(first.manifest.leagues.map(({ counts }) => counts.matchupPlayers), [216, 360]);
   assert.deepEqual(
     first.manifest.leagues.map(
       ({ counts }) => counts.scheduleGenerations
@@ -199,7 +204,7 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
       database
         .prepare("SELECT status FROM matchups WHERE id = ?")
         .get(fixtureId("matchup:leagueA:current")).status,
-      "scheduled"
+      "awaiting_data"
     );
     assert.equal(
       database
@@ -225,7 +230,7 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
       );
     }
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM teams WHERE league_id=?").get(leagueA).count, 6);
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM teams WHERE league_id=?").get(leagueB).count, 6);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM teams WHERE league_id=?").get(leagueB).count, 10);
     assert.equal(database.prepare(`
       SELECT COUNT(*) AS count FROM teams a JOIN teams b
       ON b.name_normalized=a.name_normalized
@@ -474,21 +479,20 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
     const scoring = createMatchupScoringService({
       repository: createSqliteMatchupScoringRepository({ database }),
     });
-    assert.throws(
-      () =>
-        scoring.readLive({
-          leagueId: leagueA,
-          seasonId: fixtureId("season:leagueA:current"),
-          weekId: fixtureId("matchup-week:leagueA:current"),
-          matchupId: fixtureId("matchup:leagueA:current"),
-          providers: [
-            "sportsdataio-discovery-lab",
-            "release_qa_fixture",
-          ],
-          nowMs: FIXTURE_NOW_MS,
-        }),
-      (error) => error?.code === "MATCHUP_SCORING_STATE_INVALID"
-    );
+    const liveScore = scoring.readLive({
+      leagueId: leagueA,
+      seasonId: fixtureId("season:leagueA:current"),
+      weekId: fixtureId("matchup-week:leagueA:current"),
+      matchupId: fixtureId("matchup:leagueA:current"),
+      providers: [
+        "sportsdataio-discovery-lab",
+        "release_qa_fixture",
+      ],
+      nowMs: FIXTURE_NOW_MS,
+    });
+    assert.equal(liveScore.status, "awaiting_data");
+    assert.equal(liveScore.home.scoreHundredths > 0, true);
+    assert.equal(liveScore.away.scoreHundredths > 0, true);
     for (const alias of ACCOUNT_ALIASES) {
       const user = database.prepare(`
         SELECT display_name, email_normalized
@@ -555,9 +559,9 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
       '2026REG', NULL, ?, NULL, ?
     )
   `);
-  for (let index = 0; index < 160; index += 1) {
-    const position = index < 100 ? "F" : "D";
-    const positionIndex = position === "F" ? index : index - 100;
+  for (let index = 0; index < 280; index += 1) {
+    const position = index < 190 ? "F" : "D";
+    const positionIndex = position === "F" ? index : index - 190;
     const playerId = providerUuid(10_000 + index);
     const firstName = "NHL";
     const lastName = `${position === "F" ? "Forward" : "Defence"} ${String(
@@ -568,7 +572,7 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
       firstName,
       lastName,
       `${firstName} ${lastName}`,
-      positionIndex < 10 ? "2008-01-01" : "1998-01-01",
+      positionIndex < 20 ? "2008-01-01" : "1998-01-01",
       FIXTURE_NOW_MS,
       FIXTURE_NOW_MS
     );
@@ -583,7 +587,7 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
       playerId,
       position === "F" ? "C" : "D",
       position,
-      positionIndex < 10 ? 0 : 1,
+      1,
       FIXTURE_NOW_MS,
       FIXTURE_NOW_MS
     );
@@ -597,6 +601,13 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
   assert.deepEqual(
     acceptanceResults.map(({ lateLock }) => lateLock),
     [{ status: "not_applicable" }, { status: "not_applicable" }]
+  );
+  const fadPlayers = selectCatalogPlayers(connection.database);
+  assert.equal(
+    Object.values(fadPlayers).every(({ fullName }) =>
+      fullName.startsWith("NHL ") && !fullName.startsWith("Fixture Player ")
+    ),
+    true
   );
   connection.database.close();
 

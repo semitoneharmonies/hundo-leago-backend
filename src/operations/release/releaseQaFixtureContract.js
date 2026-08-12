@@ -1,9 +1,9 @@
 const crypto = require("node:crypto");
 
-const FIXTURE_VERSION = 10;
-const FIXTURE_BUILD_ID = "m7-release-qa-fixture-v10";
+const FIXTURE_VERSION = 11;
+const FIXTURE_BUILD_ID = "m7-release-qa-fixture-v11";
 const FIXTURE_ID_NAMESPACE = "m7-release-qa-fixture-v1";
-const FIXTURE_CREATED_AT = "2026-07-25T12:00:00.000Z";
+const FIXTURE_CREATED_AT = "2026-08-12T12:00:00.000Z";
 const FIXTURE_NOW_MS = Date.parse(FIXTURE_CREATED_AT);
 const FIXTURE_ENVIRONMENT_ID = "test:release-qa";
 const FIXTURE_DATABASE_ID = "m7-release-qa-fixture";
@@ -50,6 +50,10 @@ const TEAM_NAMES_BY_LEAGUE = Object.freeze({
     "Beta Kraken",
     "Beta Lynx",
     "Beta Mustangs",
+    "Beta Cyclones",
+    "Beta Bisons",
+    "Beta Guardians",
+    "Beta Thunder",
   ]),
 });
 const BETA_PLAYER_TEAM_NUMBERS = Object.freeze({
@@ -75,6 +79,33 @@ const CORE_PLAYER_BLUEPRINTS = [
     rosterCategory: "Active",
     slotNumber: 1,
     teamNumber: index + 1,
+    ownershipKind: "Rostered",
+    contract: true,
+  })),
+  ...Array.from({ length: 4 }, (_, index) => Object.freeze({
+    alias: `activeForward${index * 2 + 13}`,
+    position: "F",
+    rosterCategory: "Active",
+    slotNumber: 1,
+    teamNumber: index + 7,
+    ownershipKind: "Rostered",
+    contract: true,
+  })),
+  ...Array.from({ length: 4 }, (_, index) => Object.freeze({
+    alias: `activeForward${index * 2 + 14}`,
+    position: "F",
+    rosterCategory: "Active",
+    slotNumber: 2,
+    teamNumber: index + 7,
+    ownershipKind: "Rostered",
+    contract: true,
+  })),
+  ...Array.from({ length: 4 }, (_, index) => Object.freeze({
+    alias: `activeDefence${index + 7}`,
+    position: "D",
+    rosterCategory: "Active",
+    slotNumber: 1,
+    teamNumber: index + 7,
     ownershipKind: "Rostered",
     contract: true,
   })),
@@ -136,7 +167,7 @@ const CORE_PLAYER_BLUEPRINTS = [
   Object.freeze({ alias: "boughtOutForward", position: "F" }),
 ];
 
-const ACTIVE_FILLERS = Array.from({ length: 6 }, (_, teamIndex) => [
+const ACTIVE_FILLERS = Array.from({ length: 10 }, (_, teamIndex) => [
   ...Array.from({ length: 10 }, (_, index) => Object.freeze({
     alias: `team${teamIndex + 1}ActiveForward${index + 3}`,
     position: "F",
@@ -157,8 +188,8 @@ const ACTIVE_FILLERS = Array.from({ length: 6 }, (_, teamIndex) => [
   })),
 ]).flat();
 
-const BENCH_TARGETS = Object.freeze([1, 2, 3, 4, 1, 2]);
-const BENCH_FILLERS = Array.from({ length: 6 }, (_, teamIndex) => {
+const BENCH_TARGETS = Object.freeze([1, 2, 3, 4, 1, 2, 3, 4, 2, 3]);
+const BENCH_FILLERS = Array.from({ length: 10 }, (_, teamIndex) => {
   const existing = teamIndex < 2 ? 1 : 0;
   return Array.from(
     { length: BENCH_TARGETS[teamIndex] - existing },
@@ -209,9 +240,31 @@ const INJURED_RESERVE_FILLERS = [
     aavCents: 400,
     injuredReserveEligible: true,
   }),
+  Object.freeze({
+    alias: "team7InjuredReserve1",
+    position: "F",
+    rosterCategory: "Injured Reserve",
+    slotNumber: 1,
+    teamNumber: 7,
+    ownershipKind: "Rostered",
+    contract: true,
+    aavCents: 400,
+    injuredReserveEligible: true,
+  }),
+  Object.freeze({
+    alias: "team9InjuredReserve1",
+    position: "D",
+    rosterCategory: "Injured Reserve",
+    slotNumber: 1,
+    teamNumber: 9,
+    ownershipKind: "Rostered",
+    contract: true,
+    aavCents: 400,
+    injuredReserveEligible: true,
+  }),
 ];
 
-const PROSPECT_FILLERS = Array.from({ length: 6 }, (_, teamIndex) => {
+const PROSPECT_FILLERS = Array.from({ length: 10 }, (_, teamIndex) => {
   const existing = teamIndex === 3 || teamIndex === 4 ? 1 : 0;
   return Array.from({ length: 3 - existing }, (_, index) => {
     const signed = (teamIndex + index + existing) % 2 === 0;

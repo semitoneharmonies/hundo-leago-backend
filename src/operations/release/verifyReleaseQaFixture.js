@@ -51,6 +51,66 @@ function count(database, sql, ...parameters) {
   return database.prepare(sql).get(...parameters).count;
 }
 
+function expectedLeagueCounts(alias) {
+  const teamCount = TEAM_NAMES_BY_LEAGUE[alias]?.length;
+  if (!Number.isSafeInteger(teamCount) || teamCount < 2) {
+    fail(
+      "RELEASE_QA_FIXTURE_MISMATCH",
+      `Release-QA fixture mismatch: ${alias} expected team count.`
+    );
+  }
+  const owned = PLAYER_BLUEPRINTS.map((blueprint, index) => {
+    if (!blueprint.rosterCategory) return false;
+    const betaOverride = alias === "leagueB"
+      ? BETA_PLAYER_TEAM_NUMBERS[blueprint.alias]
+      : undefined;
+    const teamNumber = betaOverride === undefined
+      ? blueprint.teamNumber || ((index % teamCount) + 1)
+      : betaOverride;
+    return teamNumber <= teamCount
+      ? Object.freeze({ blueprint, teamNumber })
+      : false;
+  }).filter(Boolean);
+  const rosterCategoryCount = (category) =>
+    owned.filter(({ blueprint }) => blueprint.rosterCategory === category).length;
+  const activeContracts = owned.filter(({ blueprint }) => blueprint.contract).length;
+  const matchupCountPerWeek = teamCount / 2;
+  const depthByTeam = Array.from({ length: teamCount }, (_, index) => {
+    const teamNumber = index + 1;
+    const teamPlayers = owned.filter((ownedPlayer) =>
+      ownedPlayer.teamNumber === teamNumber
+    );
+    return Object.freeze(Object.fromEntries(
+      ["Active", "Bench", "Injured Reserve", "Prospect"].map((category) => [
+        category,
+        teamPlayers.filter(({ blueprint }) =>
+          blueprint.rosterCategory === category
+        ).length,
+      ])
+    ));
+  });
+  return Object.freeze({
+    activeContracts,
+    activeRoster: rosterCategoryCount("Active"),
+    awaitingDataMatchups: matchupCountPerWeek,
+    bench: rosterCategoryCount("Bench"),
+    contracts: activeContracts + 1,
+    draftPicks: teamCount * 4 * 4,
+    depthByTeam: Object.freeze(depthByTeam),
+    finalMatchups: matchupCountPerWeek,
+    injuredReserve: rosterCategoryCount("Injured Reserve"),
+    matchupLocks: teamCount * 2,
+    matchupPlayers: rosterCategoryCount("Active") * 2,
+    ownerships: owned.length,
+    populatedRosterTeams: teamCount,
+    prospects: rosterCategoryCount("Prospect"),
+    scheduledMatchups: matchupCountPerWeek * 20,
+    standingsRows: teamCount,
+    statSnapshots: teamCount * 2,
+    teamCount,
+  });
+}
+
 function deterministicTradeUuid(value) {
   const hex = crypto.createHash("sha256").update(value, "utf8").digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-` +
@@ -1024,6 +1084,7 @@ function verifyAccounts(database) {
 function verifyLeague(database, alias, playerIds) {
   const leagueId = fixtureId(`league:${alias}`);
   const expectedMembershipCount = alias === "leagueA" ? 4 : 3;
+  const expected = expectedLeagueCounts(alias);
   const row = database.prepare(`
     SELECT l.status, l.timezone,
       s.salary_cap_cents AS salaryCapCents,
@@ -1037,12 +1098,12 @@ function verifyLeague(database, alias, playerIds) {
   assertEqual(row?.timezone, "America/Vancouver", `${alias} timezone`);
   assertEqual(row?.salaryCapCents, 10_000, `${alias} salary cap`);
   assertEqual(row?.maximumBenchAavCents, 400, `${alias} bench AAV limit`);
-  assertEqual(row?.maximumTeams, 6, `${alias} maximum teams`);
+  assertEqual(row?.maximumTeams, expected.teamCount, `${alias} maximum teams`);
 
   const teamNames = database.prepare(
     "SELECT name FROM teams WHERE league_id=? ORDER BY name"
   ).all(leagueId).map(({ name }) => name);
-  assertEqual(teamNames.length, 6, `${alias} team count`);
+  assertEqual(teamNames.length, expected.teamCount, `${alias} team count`);
   assertEqual(
     JSON.stringify(teamNames),
     JSON.stringify([...TEAM_NAMES_BY_LEAGUE[alias]].sort()),
@@ -1082,11 +1143,11 @@ function verifyLeague(database, alias, playerIds) {
     `${alias} commissioner has no implicit team assignment`
   );
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM seasons WHERE league_id=?", leagueId), 4, `${alias} season count`);
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM draft_picks WHERE league_id=? AND status='unused'", leagueId), 96, `${alias} four-season draft-pick count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM draft_picks WHERE league_id=? AND status='unused'", leagueId), expected.draftPicks, `${alias} four-season draft-pick count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM league_player_positions WHERE league_id=?", leagueId), PLAYER_BLUEPRINTS.length, `${alias} player-position count`);
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM player_ownerships WHERE league_id=?", leagueId), 143, `${alias} ownership count`);
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM contracts WHERE league_id=?", leagueId), 135, `${alias} contract count`);
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM contracts WHERE league_id=? AND status='active'", leagueId), 134, `${alias} active contract count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM player_ownerships WHERE league_id=?", leagueId), expected.ownerships, `${alias} ownership count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM contracts WHERE league_id=?", leagueId), expected.contracts, `${alias} contract count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM contracts WHERE league_id=? AND status='active'", leagueId), expected.activeContracts, `${alias} active contract count`);
   assertEqual(count(database, "SELECT COUNT(DISTINCT original_term_years) AS count FROM contracts WHERE league_id=? AND status='active'", leagueId), 3, `${alias} contract term coverage`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM retention_obligations WHERE league_id=? AND status='active'", leagueId), 1, `${alias} retention count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM buyout_obligations WHERE league_id=? AND status='active'", leagueId), 1, `${alias} buyout count`);
@@ -1095,10 +1156,10 @@ function verifyLeague(database, alias, playerIds) {
     SELECT roster_category AS category, COUNT(*) AS count
     FROM player_ownerships WHERE league_id=? GROUP BY roster_category
   `).all(leagueId).map(({ category, count: categoryCount }) => [category, categoryCount]));
-  assertEqual(categories.Active, 108, `${alias} active roster count`);
-  assertEqual(categories.Bench, 13, `${alias} bench count`);
-  assertEqual(categories["Injured Reserve"], 4, `${alias} injured-reserve count`);
-  assertEqual(categories.Prospect, 18, `${alias} prospect count`);
+  assertEqual(categories.Active, expected.activeRoster, `${alias} active roster count`);
+  assertEqual(categories.Bench, expected.bench, `${alias} bench count`);
+  assertEqual(categories["Injured Reserve"], expected.injuredReserve, `${alias} injured-reserve count`);
+  assertEqual(categories.Prospect, expected.prospects, `${alias} prospect count`);
   assertEqual(
     count(database, `
       SELECT COUNT(*) AS count
@@ -1107,7 +1168,7 @@ function verifyLeague(database, alias, playerIds) {
       WHERE o.league_id=? AND o.roster_category='Bench'
         AND c.status='active' AND c.aav_cents <= 400
     `, leagueId),
-    13,
+    expected.bench,
     `${alias} bench contract limit coverage`
   );
   assertEqual(
@@ -1119,18 +1180,16 @@ function verifyLeague(database, alias, playerIds) {
         AND ownership.roster_category='Prospect'
         AND player.birth_date > '2007-07-26'
     `, leagueId),
-    18,
+    expected.prospects,
     `${alias} under-19 prospect coverage`
   );
-  const expectedBenchByTeam = [1, 2, 3, 4, 1, 2];
-  const expectedIrByTeam = [1, 0, 2, 0, 1, 0];
-  for (let teamNumber = 1; teamNumber <= 6; teamNumber += 1) {
+  for (let teamNumber = 1; teamNumber <= expected.teamCount; teamNumber += 1) {
     const teamId = fixtureId(`team:${alias}:${teamNumber}`);
-    for (const [category, expected] of [
-      ["Active", 18],
-      ["Bench", expectedBenchByTeam[teamNumber - 1]],
-      ["Injured Reserve", expectedIrByTeam[teamNumber - 1]],
-      ["Prospect", 3],
+    for (const [category, expectedDepth] of [
+      ["Active", expected.depthByTeam[teamNumber - 1].Active],
+      ["Bench", expected.depthByTeam[teamNumber - 1].Bench],
+      ["Injured Reserve", expected.depthByTeam[teamNumber - 1]["Injured Reserve"]],
+      ["Prospect", expected.depthByTeam[teamNumber - 1].Prospect],
     ]) {
       assertEqual(
         count(
@@ -1141,7 +1200,7 @@ function verifyLeague(database, alias, playerIds) {
           teamId,
           category
         ),
-        expected,
+        expectedDepth,
         `${alias} team ${teamNumber} ${category} depth`
       );
     }
@@ -1183,7 +1242,7 @@ function verifyLeague(database, alias, playerIds) {
       FROM player_ownerships
       WHERE league_id=?
     `, leagueId),
-    6,
+    expected.populatedRosterTeams,
     `${alias} populated-roster team coverage`
   );
   for (const playerAlias of ["freeAgentForward", "freeAgentDefence"]) {
@@ -1335,13 +1394,14 @@ function verifyLeague(database, alias, playerIds) {
     0,
     `${alias} maintenance-blocking matchup count`
   );
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchups WHERE league_id=? AND status='final'", leagueId), 3, `${alias} final matchup count`);
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchups WHERE league_id=? AND status='scheduled'", leagueId), 63, `${alias} scheduled matchup count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchups WHERE league_id=? AND status='final'", leagueId), expected.finalMatchups, `${alias} final matchup count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchups WHERE league_id=? AND status='scheduled'", leagueId), expected.scheduledMatchups, `${alias} scheduled matchup count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchups WHERE league_id=? AND status='awaiting_data'", leagueId), expected.awaitingDataMatchups, `${alias} score-readable matchup count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchup_results WHERE league_id=? AND status='official'", leagueId), 1, `${alias} official result count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM player_stat_totals WHERE refresh_id=?", fixtureId(`stat-refresh:${alias}`)), PLAYER_BLUEPRINTS.length, `${alias} synthetic player-stat total count`);
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM stat_snapshots WHERE league_id=?", leagueId), 12, `${alias} matchup snapshot count`);
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchup_roster_locks WHERE league_id=?", leagueId), 12, `${alias} matchup lock count`);
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchup_roster_players WHERE league_id=?", leagueId), 216, `${alias} locked-player row count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM stat_snapshots WHERE league_id=?", leagueId), expected.statSnapshots, `${alias} matchup snapshot count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchup_roster_locks WHERE league_id=?", leagueId), expected.matchupLocks, `${alias} matchup lock count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM matchup_roster_players WHERE league_id=?", leagueId), expected.matchupPlayers, `${alias} locked-player row count`);
   const syntheticRefresh = database.prepare(`
     SELECT stat_sources.provider, stat_refreshes.metadata_json
     FROM stat_refreshes
@@ -1356,7 +1416,7 @@ function verifyLeague(database, alias, playerIds) {
     fail("RELEASE_QA_FIXTURE_MISMATCH", `Release-QA fixture mismatch: ${alias} synthetic statistics metadata.`);
   }
   assertEqual(metadata?.sourceKind, "synthetic_release_qa", `${alias} synthetic statistics label`);
-  assertEqual(count(database, "SELECT COUNT(*) AS count FROM standings_rows WHERE league_id=?", leagueId), 6, `${alias} standings row count`);
+  assertEqual(count(database, "SELECT COUNT(*) AS count FROM standings_rows WHERE league_id=?", leagueId), expected.standingsRows, `${alias} standings row count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM league_activity WHERE league_id=?", leagueId), 8, `${alias} activity count`);
   const notificationCount = count(
     database,
@@ -1441,26 +1501,26 @@ function verifyLeague(database, alias, playerIds) {
     salaryCapCents: 10_000,
     counts: Object.freeze({
       activity: 8,
-      activeContracts: 134,
-      activeRoster: 108,
+      activeContracts: expected.activeContracts,
+      activeRoster: expected.activeRoster,
       auctions: 1,
-      bench: 13,
+      bench: expected.bench,
       buyouts: 1,
-      draftPicks: 96,
-      injuredReserve: 4,
+      draftPicks: expected.draftPicks,
+      injuredReserve: expected.injuredReserve,
       memberships: expectedMembershipCount,
       notifications: notificationCount,
-      ownerships: 143,
-      prospects: 18,
+      ownerships: expected.ownerships,
+      prospects: expected.prospects,
       retentions: 1,
       scheduleGenerations: 1,
-      standingsRows: 6,
-      statSnapshots: 12,
+      standingsRows: expected.standingsRows,
+      statSnapshots: expected.statSnapshots,
       syntheticPlayerTotals: PLAYER_BLUEPRINTS.length,
-      matchupLocks: 12,
-      matchupPlayers: 216,
-      teams: 6,
-      populatedRosterTeams: 6,
+      matchupLocks: expected.matchupLocks,
+      matchupPlayers: expected.matchupPlayers,
+      teams: expected.teamCount,
+      populatedRosterTeams: expected.populatedRosterTeams,
       trades: 5,
     }),
   });

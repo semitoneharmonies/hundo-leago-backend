@@ -10,6 +10,7 @@ const {
   BROWSER_FIXTURE_SCHEMA_VERSION,
   FreeAgentDraftBrowserFixtureError,
   createFreeAgentDraftBrowserFixture,
+  schedulesFor,
 } = require(
   "../../src/operations/release/createFreeAgentDraftBrowserFixture"
 );
@@ -17,6 +18,19 @@ const {
   createReleaseQaRuntime,
 } = require(
   "../../src/operations/release/createReleaseQaRuntime"
+);
+const {
+  EXPECTED_LEAGUE_IDS,
+  assertNoPriorFixture,
+  assertStagingScope,
+} = require(
+  "../../scripts/create-staging-fad-test-leagues"
+);
+const {
+  FIXTURE_DATABASE_ID,
+  FIXTURE_ENVIRONMENT_ID,
+} = require(
+  "../../src/operations/release/releaseQaFixtureContract"
 );
 
 const ROOT_DIRECTORY = path.resolve(
@@ -173,6 +187,72 @@ async function startRuntime(t) {
 }
 
 test(
+  "staging FAD activation refuses production, wrong fixture identity, unsafe scheduling, and duplicates",
+  () => {
+    const valid = {
+      appEnv: "staging",
+      environmentId: FIXTURE_ENVIRONMENT_ID,
+      databaseId: FIXTURE_DATABASE_ID,
+      leagueWriteMode: "open",
+      freeAgentDraftRoutesEnabled: true,
+      scheduledJobsEnabled: false,
+    };
+    assert.doesNotThrow(() => assertStagingScope(valid));
+    for (const overrides of [
+      { appEnv: "production" },
+      { environmentId: "production" },
+      { databaseId: "production" },
+      { leagueWriteMode: "closed" },
+      { freeAgentDraftRoutesEnabled: false },
+      { scheduledJobsEnabled: true },
+    ]) {
+      assert.throws(
+        () => assertStagingScope({ ...valid, ...overrides }),
+        (error) => error.code === "STAGING_FAD_TEST_SCOPE_INVALID"
+      );
+    }
+    assert.doesNotThrow(() =>
+      assertNoPriorFixture({
+        prepare() {
+          return { all: () => [] };
+        },
+      })
+    );
+    assert.throws(
+      () =>
+        assertNoPriorFixture({
+          prepare() {
+            return { all: () => [{ id: EXPECTED_LEAGUE_IDS[0] }] };
+          },
+        }),
+      (error) => error.code === "STAGING_FAD_TEST_ALREADY_EXISTS"
+    );
+  }
+);
+
+test(
+  "staging FAD schedule keeps Week 1 on a Vancouver Monday more than one week ahead",
+  () => {
+    const nowMs = Date.parse("2026-08-12T18:00:00.000Z");
+    const schedules = schedulesFor(nowMs);
+    assert.equal(
+      schedules.alpha.firstWeekStartsAtMs,
+      Date.parse("2026-08-24T07:00:00.000Z")
+    );
+    assert.equal(
+      schedules.alpha.firstWeekStartsAtMs >
+        nowMs + 8 * 24 * 60 * 60 * 1_000,
+      true
+    );
+    assert.equal(
+      schedules.beta.firstWeekStartsAtMs -
+        schedules.alpha.firstWeekStartsAtMs,
+      7 * 24 * 60 * 60 * 1_000
+    );
+  }
+);
+
+test(
   "FAD browser fixture rejects anything except an open schema-49 release-QA runtime",
   async () => {
     const source = fs.readFileSync(
@@ -201,7 +281,7 @@ test(
 );
 
 test(
-  "FAD browser fixture uses real lifecycle, card, and help services with strict privacy isolation",
+  "FAD browser fixture uses real lifecycle and card services with strict privacy isolation",
   async (t) => {
     const started = await startRuntime(t);
     const triggerBaseline =
@@ -237,17 +317,18 @@ test(
       "alpha",
       "beta",
     ]);
-    for (const league of
-      Object.values(manifest.leagues)) {
+    for (const [leagueAlias, league] of
+      Object.entries(manifest.leagues)) {
+      const expectedTeamCount = leagueAlias === "alpha" ? 6 : 10;
       assert.equal(UUID_PATTERN.test(league.leagueId), true);
       assert.equal(UUID_PATTERN.test(league.seasonId), true);
       assert.equal(UUID_PATTERN.test(league.fadId), true);
       assert.equal(league.phase, "cards_open");
-      assert.equal(league.teams.length, 6);
+      assert.equal(league.teams.length, expectedTeamCount);
       assert.equal(
         new Set(league.teams.map(({ teamId }) => teamId))
           .size,
-        6
+        expectedTeamCount
       );
       assert.equal(
         league.helpOpensAtMs >=
@@ -264,8 +345,8 @@ test(
     const alpha = manifest.leagues.alpha;
     const beta = manifest.leagues.beta;
     assert.equal(
-      alpha.helpOpensAtMs,
-      alpha.openedAtMs
+      alpha.helpOpensAtMs > alpha.openedAtMs,
+      true
     );
     assert.equal(
       beta.helpOpensAtMs > beta.openedAtMs,
@@ -333,6 +414,15 @@ test(
       "alphaTeam3"
     );
     assert.equal(
+      alpha.sentinels.exactCommissionerHelp.status,
+      "not_open"
+    );
+    assert.equal(
+      alpha.sentinels.exactCommissionerHelp.helpOpensAtMs >
+        manifest.fixedNowMs,
+      true
+    );
+    assert.equal(
       alpha.sentinels.cardReadyNotification.eventType,
       "fad_cards_opened"
     );
@@ -352,15 +442,12 @@ test(
       manifest.privacyChecks.commissionerHelpTeamAlias,
       "alphaTeam3"
     );
-    assert.deepEqual(
-      manifest.privacyChecks.privateMarkers,
-      [
-        "Alpha Locked Carryover Sentinel",
-        "Alpha Managed Private Candidate Sentinel",
-        "Alpha Help Card Private Sentinel",
-        "Alpha Denied Card Private Sentinel",
-        "Beta Private Candidate Sentinel",
-      ]
+    assert.equal(manifest.privacyChecks.privateMarkers.length, 5);
+    assert.equal(
+      manifest.privacyChecks.privateMarkers.every(
+        (name) => typeof name === "string" && !name.includes("Sentinel")
+      ),
+      true
     );
 
     const database = started.runtime.database;
@@ -400,9 +487,9 @@ test(
       }),
       {
         fads: 2,
-        cards: 12,
-        help_requests: 1,
-        card_ready: 12,
+        cards: 16,
+        help_requests: 0,
+        card_ready: 16,
       }
     );
     assert.equal(
@@ -466,7 +553,7 @@ test(
         assert.equal(
           String(error.message).includes(
             alpha.sentinels.exactCommissionerHelp
-              .message
+              .privatePlayerFullName
           ),
           false
         );
@@ -502,30 +589,16 @@ test(
       started.runtime,
       manifest.accounts.alphaCommissioner.userId
     );
-    const helpedCard = started.runtime.services.league
-      .candidateCards.privateCard({
-        authenticated: alphaCommissioner,
-        leagueId: alpha.leagueId,
-        fadId: alpha.fadId,
-        teamId: deniedAlphaTeam.teamId,
-      });
-    assert.equal(
-      helpedCard.accessReason,
-      "help_grant_commissioner"
-    );
-    assert.equal(
-      helpedCard.helpContext.helpRequestId,
-      alpha.sentinels.exactCommissionerHelp
-        .helpRequestId
-    );
-    assert.equal(
-      helpedCard.slots.some(
-        (slot) =>
-          slot.player?.fullName ===
-          alpha.sentinels.exactCommissionerHelp
-            .privatePlayerFullName
-      ),
-      true
+    assert.throws(
+      () =>
+        started.runtime.services.league
+          .candidateCards.privateCard({
+            authenticated: alphaCommissioner,
+            leagueId: alpha.leagueId,
+            fadId: alpha.fadId,
+            teamId: deniedAlphaTeam.teamId,
+          }),
+      (error) => error.code === "CANDIDATE_CARD_NOT_FOUND"
     );
     const commissionerDeniedTeam = alpha.teams.find(
       ({ alias }) =>
@@ -549,7 +622,9 @@ test(
         );
         assert.equal(
           String(error.message).includes(
-            "Alpha Denied Card Private Sentinel"
+            alpha.sentinels.privateCandidates.find(
+              ({ alias }) => alias === "commissionerDeniedCandidate"
+            ).playerFullName
           ),
           false
         );

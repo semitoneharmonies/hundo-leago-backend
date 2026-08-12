@@ -54,6 +54,12 @@ const {
   createSqliteUserRepository,
 } = require("../../infrastructure/persistence/sqlite/SqliteUserRepository");
 const {
+  createPlayerGameCoverageSetEvidence,
+} = require("../../domain/statistics/playerGameCoveragePolicy");
+const {
+  createPlayerGameObservationSetEvidence,
+} = require("../../domain/statistics/playerGameStatisticsPolicy");
+const {
   assertReleaseQaPassword,
 } = require("./releaseQaPasswordPolicy");
 const {
@@ -456,6 +462,13 @@ function insertLeagueBase(database, leagueAlias, accounts) {
   const managerAliases = leagueAlias === "leagueA"
     ? ["leagueAManagerOne", "leagueAManagerTwo"]
     : ["leagueBManagerOne"];
+  const maximumTeams = TEAM_NAMES_BY_LEAGUE[leagueAlias]?.length;
+  if (!Number.isSafeInteger(maximumTeams) || maximumTeams < 2) {
+    fail(
+      "RELEASE_QA_TEAM_NAMES_REQUIRED",
+      `The release-QA fixture has no valid team count for ${leagueAlias}.`
+    );
+  }
 
   database.prepare(`
     INSERT INTO leagues (
@@ -471,8 +484,14 @@ function insertLeagueBase(database, leagueAlias, accounts) {
       maximum_bench_aav_cents, injured_reserve_slots,
       prospect_slots_unlimited, scoring_rule_version, standings_rule_version,
       created_at_ms, updated_at_ms, version
-    ) VALUES (?, 10000, ?, 6, 12, 6, 4, 400, 4, 1, 1, 1, ?, ?, 1)
-  `).run(leagueId, FIXTURE_NOW_MS + 30 * 86_400_000, FIXTURE_NOW_MS, FIXTURE_NOW_MS);
+    ) VALUES (?, 10000, ?, ?, 12, 6, 4, 400, 4, 1, 1, 1, ?, ?, 1)
+  `).run(
+    leagueId,
+    FIXTURE_NOW_MS + 30 * 86_400_000,
+    maximumTeams,
+    FIXTURE_NOW_MS,
+    FIXTURE_NOW_MS
+  );
 
   const seasons = [
     "current",
@@ -697,13 +716,12 @@ function insertLeaguePlayerState(database, league, players, accounts) {
       league.alias === "leagueB"
         ? BETA_PLAYER_TEAM_NUMBERS[blueprint.alias]
         : undefined;
-    const assignedTeam = league.teams[
-      blueprint.alias === "boughtOutForward"
-        ? league.teams.length - 1
-        : assignedTeamNumber === undefined
-          ? (blueprint.teamNumber || ((index % league.teams.length) + 1)) - 1
-          : assignedTeamNumber - 1
-    ];
+    const assignedTeamIndex = blueprint.alias === "boughtOutForward"
+      ? Math.min(5, league.teams.length - 1)
+      : assignedTeamNumber === undefined
+        ? (blueprint.teamNumber || ((index % league.teams.length) + 1)) - 1
+        : assignedTeamNumber - 1;
+    const assignedTeam = league.teams[assignedTeamIndex] || null;
     insertPosition.run(
       fixtureId(`position:${league.alias}:${blueprint.alias}`),
       league.leagueId,
@@ -734,7 +752,7 @@ function insertLeaguePlayerState(database, league, players, accounts) {
         `).run(JSON.stringify({ ...payload, Status: "Injured Reserve" }), source.id);
       }
     }
-    if (blueprint.rosterCategory) {
+    if (blueprint.rosterCategory && assignedTeam) {
       insertOwnership.run(
         fixtureId(`ownership:${league.alias}:${blueprint.alias}`),
         league.leagueId,
@@ -755,7 +773,10 @@ function insertLeaguePlayerState(database, league, players, accounts) {
         slotNumber: blueprint.slotNumber,
       }));
     }
-    if (!blueprint.contract && blueprint.alias !== "boughtOutForward") return;
+    if (
+      (!blueprint.contract && blueprint.alias !== "boughtOutForward") ||
+      !assignedTeam
+    ) return;
 
     const contractId = fixtureId(`contract:${league.alias}:${blueprint.alias}`);
     const termYears = blueprint.alias === "boughtOutForward"
@@ -1253,7 +1274,22 @@ function insertMatchupAndReleaseSignals(
       status, created_at_ms, updated_at_ms, version
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
   `);
-  const pairings = [[0, 1], [2, 3], [4, 5]];
+  const roundRobinRounds = (() => {
+    const rotating = league.teams.map((_, index) => index);
+    const rounds = [];
+    for (let roundIndex = 0; roundIndex < rotating.length - 1; roundIndex += 1) {
+      const round = [];
+      for (let index = 0; index < rotating.length / 2; index += 1) {
+        const left = rotating[index];
+        const right = rotating[rotating.length - 1 - index];
+        round.push(roundIndex % 2 === 0 ? [left, right] : [right, left]);
+      }
+      rounds.push(round);
+      rotating.splice(1, 0, rotating.pop());
+    }
+    return rounds;
+  })();
+  const pairings = roundRobinRounds[0];
   pairings.forEach(([homeIndex, awayIndex], index) => {
     const suffix = index === 0 ? "" : `:${index + 1}`;
     insertMatchup.run(
@@ -1278,18 +1314,12 @@ function insertMatchupAndReleaseSignals(
       league.teams[awayIndex].id,
       league.teams[homeIndex].name,
       league.teams[awayIndex].name,
-      "scheduled",
+      "awaiting_data",
       FIXTURE_NOW_MS - day,
       FIXTURE_NOW_MS
     );
   });
-  const futureRounds = [
-    [[0, 5], [1, 4], [2, 3]],
-    [[0, 4], [5, 3], [1, 2]],
-    [[0, 3], [4, 2], [5, 1]],
-    [[0, 2], [3, 1], [4, 5]],
-    [[0, 1], [2, 5], [3, 4]],
-  ];
+  const futureRounds = roundRobinRounds.slice(1);
   for (let sequence = 3; sequence <= matchupWeekCount; sequence += 1) {
     const weekId = fixtureId(
       `matchup-week:${league.alias}:future:${sequence}`
@@ -1369,6 +1399,112 @@ function insertMatchupAndReleaseSignals(
       FIXTURE_NOW_MS - 7 * day
     );
     totalsByPlayerId.set(playerId, total);
+  });
+
+  const playerGameSetId = fixtureId(
+    `stat-player-game-set:${league.alias}`
+  );
+  const capturedAtMs = FIXTURE_NOW_MS - 7 * day;
+  const providerIdentity = database.prepare(`
+    SELECT external_value
+    FROM player_external_ids
+    WHERE player_id = ?
+      AND provider = 'sportsdataio-discovery-lab'
+  `);
+  const requiredPlayers = [];
+  const coverage = [];
+  for (const blueprint of PLAYER_BLUEPRINTS) {
+    const playerId = players[blueprint.alias].id;
+    const identity = providerIdentity.get(playerId);
+    if (typeof identity?.external_value !== "string") {
+      fail(
+        "RELEASE_QA_PROVIDER_IDENTITY_REQUIRED",
+        `The ${league.alias} score fixture is missing a provider player identity.`
+      );
+    }
+    requiredPlayers.push({
+      playerId,
+      providerPlayerId: identity.external_value,
+    });
+    coverage.push({
+      coverageEntryId: fixtureId(
+        `stat-player-game-coverage:${league.alias}:${blueprint.alias}`
+      ),
+      playerId,
+      providerPlayerId: identity.external_value,
+      providerTeamId: null,
+      disposition: "no_team",
+      nhlGameId: null,
+      nhlGameScheduledStartsAtMs: null,
+    });
+  }
+  const coverageEvidence = createPlayerGameCoverageSetEvidence({
+    setId: playerGameSetId,
+    statSourceId,
+    refreshId,
+    nhlSeasonKey: "20262027",
+    provider: "release_qa_fixture",
+    sourceVersion: "release-qa-v4",
+    capturedAtMs,
+    requiredPlayers,
+    coverage,
+  });
+  const observationEvidence = createPlayerGameObservationSetEvidence({
+    setId: playerGameSetId,
+    statSourceId,
+    refreshId,
+    nhlSeasonKey: "20262027",
+    provider: "release_qa_fixture",
+    sourceVersion: "release-qa-v4",
+    capturedAtMs,
+    observations: [],
+  });
+  const insertCoverage = database.prepare(`
+    INSERT INTO stat_refresh_player_game_coverage_entries (
+      id, stat_source_id, refresh_id, observation_set_id,
+      nhl_season_key, player_id, provider_player_id,
+      provider_team_id, disposition, nhl_game_id,
+      nhl_game_scheduled_starts_at_ms, created_at_ms, version
+    ) VALUES (
+      @coverageEntryId, @statSourceId, @refreshId, @setId,
+      '20262027', @playerId, @providerPlayerId,
+      NULL, 'no_team', NULL, NULL, @capturedAtMs, 1
+    )
+  `);
+  for (const row of coverage) {
+    insertCoverage.run({
+      ...row,
+      setId: playerGameSetId,
+      statSourceId,
+      refreshId,
+      capturedAtMs,
+    });
+  }
+  database.prepare(`
+    INSERT INTO stat_refresh_player_game_sets (
+      id, stat_source_id, refresh_id, nhl_season_key, provider,
+      source_version, captured_at_ms, required_player_count,
+      coverage_entry_count, expected_player_game_count,
+      coverage_schema_version, coverage_sha256, observation_count,
+      evidence_schema_version, evidence_sha256, created_at_ms, version
+    ) VALUES (
+      @setId, @statSourceId, @refreshId, '20262027',
+      'release_qa_fixture', 'release-qa-v4', @capturedAtMs,
+      @requiredPlayerCount, @coverageEntryCount,
+      @expectedPlayerGameCount, 1, @coverageSha256,
+      @observationCount, 1, @evidenceSha256, @capturedAtMs, 1
+    )
+  `).run({
+    setId: playerGameSetId,
+    statSourceId,
+    refreshId,
+    capturedAtMs,
+    requiredPlayerCount: coverageEvidence.requiredPlayerCount,
+    coverageEntryCount: coverageEvidence.coverageEntryCount,
+    expectedPlayerGameCount: coverageEvidence.expectedPlayerGameCount,
+    coverageSha256: coverageEvidence.coverageSha256,
+    observationCount: observationEvidence.observationCount,
+    evidenceSha256: observationEvidence.evidenceSha256,
   });
 
   const insertSnapshot = database.prepare(`
@@ -1491,6 +1627,7 @@ function insertMatchupAndReleaseSignals(
 
   const resultId = fixtureId(`matchup-result:${league.alias}`);
   const resultVersionId = fixtureId(`matchup-result-version:${league.alias}`);
+  const [resultHomeIndex, resultAwayIndex] = pairings[0];
   database.prepare(`
     INSERT INTO matchup_results (
       id, league_id, season_id, matchup_id, current_version_id,
@@ -1511,7 +1648,9 @@ function insertMatchupAndReleaseSignals(
       'calculated', NULL, NULL, NULL, ?)
   `).run(
     resultVersionId, league.leagueId, league.seasons[0].id, resultId,
-    league.teams[0].id, league.teams[1].id, priorSnapshotIds.get(league.teams[0].id),
+    league.teams[resultHomeIndex].id,
+    league.teams[resultAwayIndex].id,
+    priorSnapshotIds.get(league.teams[resultHomeIndex].id),
     FIXTURE_NOW_MS - 7 * day
   );
   database.prepare(`
@@ -1530,10 +1669,18 @@ function insertMatchupAndReleaseSignals(
     FIXTURE_NOW_MS - 7 * day, FIXTURE_NOW_MS - 7 * day
   );
   league.teams.forEach((team, index) => {
-    const wins = index === 0 ? 1 : 0;
-    const losses = index === 1 ? 1 : 0;
-    const pointsFor = index === 0 ? 1250 : index === 1 ? 975 : 0;
-    const pointsAgainst = index === 0 ? 975 : index === 1 ? 1250 : 0;
+    const wins = index === resultHomeIndex ? 1 : 0;
+    const losses = index === resultAwayIndex ? 1 : 0;
+    const pointsFor = index === resultHomeIndex
+      ? 1250
+      : index === resultAwayIndex
+        ? 975
+        : 0;
+    const pointsAgainst = index === resultHomeIndex
+      ? 975
+      : index === resultAwayIndex
+        ? 1250
+        : 0;
     database.prepare(`
       INSERT INTO standings_rows (
         id, league_id, season_id, standings_snapshot_id, team_id, rank,

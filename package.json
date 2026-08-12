@@ -38,6 +38,7 @@
     "release:qa:recovery": "node scripts/rehearse-m7-release-qa-recovery.js",
     "release:qa:start": "node scripts/start-m7-release-qa.js",
     "release:qa:verify": "node scripts/verify-m7-release-qa.js",
+    "release:qa:fad:staging": "node scripts/create-staging-fad-test-leagues.js",
     "release:candidate:preflight": "node scripts/release-candidate-preflight.js"
   },
   "keywords": [],

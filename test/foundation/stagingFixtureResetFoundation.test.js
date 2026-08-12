@@ -356,7 +356,7 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
     `)
     .get().count;
   const fixtureStatSourceId = fixtureId("stat-source");
-  const scoringRefresh = target.database
+  const fixtureRefresh = target.database
     .prepare(`
       SELECT
         id,
@@ -369,6 +369,26 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
       LIMIT 1
     `)
     .get(fixtureStatSourceId);
+  const scoringRefresh = {
+    id: crypto.randomUUID(),
+    nhl_season_key: fixtureRefresh.nhl_season_key,
+    source_version: "reset-test-player-games",
+    completed_at_ms: fixtureRefresh.completed_at_ms + 1,
+  };
+  target.database.prepare(`
+    INSERT INTO stat_refreshes (
+      id, stat_source_id, nhl_season_key, source_version, status,
+      started_at_ms, completed_at_ms, player_count, error_code,
+      metadata_json, version
+    ) VALUES (?, ?, ?, ?, 'succeeded', ?, ?, 1, NULL, NULL, 1)
+  `).run(
+    scoringRefresh.id,
+    fixtureStatSourceId,
+    scoringRefresh.nhl_season_key,
+    scoringRefresh.source_version,
+    scoringRefresh.completed_at_ms - 1,
+    scoringRefresh.completed_at_ms
+  );
   const scoringPlayerId = target.database
     .prepare(`
       SELECT player_id
@@ -377,7 +397,7 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
       ORDER BY player_id ASC
       LIMIT 1
     `)
-    .get(scoringRefresh.id).player_id;
+    .get(fixtureRefresh.id).player_id;
   const playerGameCoverageId = crypto.randomUUID();
   const playerGameObservationId = crypto.randomUUID();
   const playerGameSetId = crypto.randomUUID();

@@ -12,38 +12,84 @@ const {
 );
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
-const BROWSER_FIXTURE_SCHEMA_VERSION = 1;
+const BROWSER_FIXTURE_SCHEMA_VERSION = 2;
 const BROWSER_FIXTURE_KIND = "free_agent_draft_browser";
 const HELP_MESSAGE =
   "Alpha exact commissioner help private sentinel.";
-const BASE_SCHEDULE = Object.freeze({
-  nhlRegularSeasonStartsAtMs: Date.parse(
-    "2026-07-28T07:00:00.000Z"
-  ),
-  nhlRegularSeasonEndsAtMs: Date.parse(
-    "2027-04-12T07:00:00.000Z"
-  ),
-  fantasyPlayoffsStartAtMs: Date.parse(
-    "2027-03-15T07:00:00.000Z"
-  ),
-  fantasyPlayoffsEndAtMs: Date.parse(
-    "2027-04-12T07:00:00.000Z"
-  ),
-});
-const SCHEDULES = Object.freeze({
-  alpha: Object.freeze({
-    ...BASE_SCHEDULE,
-    firstWeekStartsAtMs: Date.parse(
-      "2026-08-03T07:00:00.000Z"
-    ),
-  }),
-  beta: Object.freeze({
-    ...BASE_SCHEDULE,
-    firstWeekStartsAtMs: Date.parse(
-      "2026-08-10T07:00:00.000Z"
-    ),
-  }),
-});
+const VANCOUVER_TIME_ZONE = "America/Vancouver";
+
+function vancouverDateParts(timestamp) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: VANCOUVER_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  return Object.fromEntries(
+    parts
+      .filter(({ type }) => ["year", "month", "day"].includes(type))
+      .map(({ type, value }) => [type, Number(value)])
+  );
+}
+
+function vancouverMidnightMs(year, month, day) {
+  const utcNoon = Date.UTC(year, month - 1, day, 12);
+  const zoneName = new Intl.DateTimeFormat("en-CA", {
+    timeZone: VANCOUVER_TIME_ZONE,
+    timeZoneName: "longOffset",
+  }).formatToParts(new Date(utcNoon)).find(
+    ({ type }) => type === "timeZoneName"
+  )?.value;
+  const match = /^GMT([+-])(\d{2}):(\d{2})$/.exec(zoneName || "");
+  if (!match) {
+    fail(
+      "FREE_AGENT_DRAFT_BROWSER_FIXTURE_CLOCK_INVALID",
+      "The FAD browser fixture could not resolve Vancouver time."
+    );
+  }
+  const direction = match[1] === "+" ? 1 : -1;
+  const offsetMinutes =
+    direction * (Number(match[2]) * 60 + Number(match[3]));
+  return Date.UTC(year, month - 1, day) - offsetMinutes * 60_000;
+}
+
+function nextVancouverMondayAtOrAfter(timestamp) {
+  const local = vancouverDateParts(timestamp);
+  for (let offset = 0; offset < 14; offset += 1) {
+    const candidateDate = new Date(
+      Date.UTC(local.year, local.month - 1, local.day + offset)
+    );
+    if (candidateDate.getUTCDay() !== 1) continue;
+    const candidate = vancouverMidnightMs(
+      candidateDate.getUTCFullYear(),
+      candidateDate.getUTCMonth() + 1,
+      candidateDate.getUTCDate()
+    );
+    if (candidate >= timestamp) return candidate;
+  }
+  fail(
+    "FREE_AGENT_DRAFT_BROWSER_FIXTURE_CLOCK_INVALID",
+    "The FAD browser fixture could not resolve its next Monday."
+  );
+}
+
+function schedulesFor(nowMs) {
+  const alphaFirstWeekStartsAtMs = nextVancouverMondayAtOrAfter(
+    nowMs + 8 * DAY_MS
+  );
+  const betaFirstWeekStartsAtMs = alphaFirstWeekStartsAtMs + 7 * DAY_MS;
+  const schedule = (firstWeekStartsAtMs) => Object.freeze({
+    nhlRegularSeasonStartsAtMs: firstWeekStartsAtMs - 6 * DAY_MS,
+    nhlRegularSeasonEndsAtMs: firstWeekStartsAtMs + 252 * DAY_MS,
+    fantasyPlayoffsStartAtMs: firstWeekStartsAtMs + 224 * DAY_MS,
+    fantasyPlayoffsEndAtMs: firstWeekStartsAtMs + 252 * DAY_MS,
+    firstWeekStartsAtMs,
+  });
+  return Object.freeze({
+    alpha: schedule(alphaFirstWeekStartsAtMs),
+    beta: schedule(betaFirstWeekStartsAtMs),
+  });
+}
 
 const ACCOUNT_BLUEPRINTS = Object.freeze({
   platformAdmin: Object.freeze({
@@ -68,7 +114,7 @@ const ACCOUNT_BLUEPRINTS = Object.freeze({
 
 const LEAGUE_BLUEPRINTS = Object.freeze({
   alpha: Object.freeze({
-    name: "FAD Browser Alpha League",
+    name: "Pre-Week 1 FAD Test - Alpha (6 Teams)",
     commissionerAccountAlias: "alphaCommissioner",
     memberAccountAliases: Object.freeze([
       "platformAdmin",
@@ -86,7 +132,7 @@ const LEAGUE_BLUEPRINTS = Object.freeze({
     ]),
   }),
   beta: Object.freeze({
-    name: "FAD Browser Beta League",
+    name: "Pre-Week 1 FAD Test - Beta (10 Teams)",
     commissionerAccountAlias: "betaCommissioner",
     memberAccountAliases: Object.freeze([
       "platformAdmin",
@@ -100,39 +146,28 @@ const LEAGUE_BLUEPRINTS = Object.freeze({
       "betaManager",
       "betaManager",
       "betaManager",
+      "betaManager",
+      "betaManager",
+      "betaManager",
+      "betaManager",
     ]),
   }),
 });
 
 const PLAYER_BLUEPRINTS = Object.freeze({
   alphaLockedCarryover: Object.freeze({
-    firstName: "Alpha",
-    lastName: "Locked Carryover Sentinel",
-    fullName: "Alpha Locked Carryover Sentinel",
     positionGroup: "F",
   }),
   alphaManagedPrivateCandidate: Object.freeze({
-    firstName: "Alpha",
-    lastName: "Managed Private Candidate Sentinel",
-    fullName: "Alpha Managed Private Candidate Sentinel",
     positionGroup: "F",
   }),
   alphaCommissionerHelpCandidate: Object.freeze({
-    firstName: "Alpha",
-    lastName: "Help Card Private Sentinel",
-    fullName: "Alpha Help Card Private Sentinel",
     positionGroup: "D",
   }),
   alphaCommissionerDeniedCandidate: Object.freeze({
-    firstName: "Alpha",
-    lastName: "Denied Card Private Sentinel",
-    fullName: "Alpha Denied Card Private Sentinel",
     positionGroup: "F",
   }),
   betaPrivateCandidate: Object.freeze({
-    firstName: "Beta",
-    lastName: "Private Candidate Sentinel",
-    fullName: "Beta Private Candidate Sentinel",
     positionGroup: "D",
   }),
 });
@@ -255,8 +290,9 @@ function insertLeagueFoundations({
   accounts,
   leagueAlias,
   blueprint,
+  fixtureNowMs,
 }) {
-  const createdAtMs = FIXTURE_NOW_MS - DAY_MS;
+  const createdAtMs = fixtureNowMs - DAY_MS;
   const leagueId = fixtureId(
     `fad-browser:league:${leagueAlias}`
   );
@@ -283,8 +319,9 @@ function insertLeagueFoundations({
     league_id: leagueId,
     salary_cap_cents: 10_000,
     trade_deadline_at_ms:
-      FIXTURE_NOW_MS + 120 * DAY_MS,
-    maximum_teams: 6,
+      fixtureNowMs + 120 * DAY_MS,
+    maximum_teams:
+      blueprint.teamManagerAccountAliases.length,
     active_forward_slots: 12,
     active_defence_slots: 6,
     bench_slots: 4,
@@ -400,7 +437,7 @@ function insertLeagueFoundations({
           blueprint.commissionerAccountAlias
         ],
       current_season_id: seasonId,
-      updated_at_ms: FIXTURE_NOW_MS,
+      updated_at_ms: fixtureNowMs,
     },
   });
 
@@ -415,35 +452,55 @@ function insertLeagueFoundations({
   });
 }
 
-function insertPlayerFoundations({
-  repositories,
-  leagues,
-  accounts,
-}) {
+function selectCatalogPlayers(database) {
+  const rows = database.prepare(`
+    SELECT player.id, player.full_name, position.position_group
+    FROM players AS player
+    INNER JOIN player_external_ids AS external
+      ON external.player_id = player.id
+     AND external.provider = 'sportsdataio-discovery-lab'
+    INNER JOIN league_player_positions AS position
+      ON position.player_id = player.id
+     AND position.league_id = ?
+     AND position.ended_at_ms IS NULL
+    WHERE player.status = 'active'
+    GROUP BY player.id, position.position_group
+    ORDER BY
+      CASE WHEN lower(player.full_name) LIKE 'fixture player %' THEN 1 ELSE 0 END,
+      lower(player.full_name) ASC,
+      player.id ASC
+  `).all(fixtureId("league:leagueA"));
+  const available = new Map([
+    ["F", rows.filter(({ position_group: position }) => position === "F")],
+    ["D", rows.filter(({ position_group: position }) => position === "D")],
+  ]);
   const players = {};
-  for (const [alias, blueprint] of
-    Object.entries(PLAYER_BLUEPRINTS)) {
-    const playerId = fixtureId(
-      `fad-browser:player:${alias}`
-    );
-    repositories.players.insert({
-      id: playerId,
-      first_name: blueprint.firstName,
-      last_name: blueprint.lastName,
-      full_name: blueprint.fullName,
-      birth_date: null,
-      status: "active",
-      created_at_ms: FIXTURE_NOW_MS,
-      updated_at_ms: FIXTURE_NOW_MS,
-      version: 1,
-    });
+  for (const [alias, blueprint] of Object.entries(PLAYER_BLUEPRINTS)) {
+    const selected = available.get(blueprint.positionGroup)?.shift();
+    if (!selected) {
+      fail(
+        "FREE_AGENT_DRAFT_BROWSER_FIXTURE_PLAYER_CATALOG_INCOMPLETE",
+        "The FAD browser fixture requires enough catalog-backed players."
+      );
+    }
     players[alias] = Object.freeze({
       alias,
-      playerId,
-      fullName: blueprint.fullName,
+      playerId: selected.id,
+      fullName: selected.full_name,
       positionGroup: blueprint.positionGroup,
     });
   }
+  return Object.freeze(players);
+}
+
+function insertPlayerFoundations({
+  database,
+  repositories,
+  leagues,
+  accounts,
+  fixtureNowMs,
+}) {
+  const players = selectCatalogPlayers(database);
 
   for (const [leagueAlias, playerAliases] of [
     [
@@ -472,7 +529,7 @@ function insertPlayerFoundations({
             leagues[leagueAlias]
               .commissionerAccountAlias
           ].userId,
-        effective_at_ms: FIXTURE_NOW_MS,
+        effective_at_ms: fixtureNowMs,
         ended_at_ms: null,
         version: 1,
       });
@@ -499,8 +556,8 @@ function insertPlayerFoundations({
     slot_number: 1,
     acquired_transaction_type: "migration",
     acquired_transaction_id: null,
-    created_at_ms: FIXTURE_NOW_MS,
-    updated_at_ms: FIXTURE_NOW_MS,
+    created_at_ms: fixtureNowMs,
+    updated_at_ms: fixtureNowMs,
     version: 1,
   });
   repositories.contracts.insert({
@@ -517,8 +574,8 @@ function insertPlayerFoundations({
     acquisition_source_type: "migration",
     acquisition_source_id: null,
     auction_buyout_lock_expires_at_ms: null,
-    created_at_ms: FIXTURE_NOW_MS,
-    updated_at_ms: FIXTURE_NOW_MS,
+    created_at_ms: fixtureNowMs,
+    updated_at_ms: fixtureNowMs,
     version: 1,
   });
   repositories.contract_years.insert({
@@ -532,13 +589,13 @@ function insertPlayerFoundations({
     aav_cents: 500,
     status: "current",
     rollover_at_ms: null,
-    created_at_ms: FIXTURE_NOW_MS,
+    created_at_ms: fixtureNowMs,
   });
 
   return Object.freeze(players);
 }
 
-function seedFoundations(runtime, accounts) {
+function seedFoundations(runtime, accounts, fixtureNowMs) {
   const repositories =
     runtime.repositories.context.repositories;
   return runtime.database.transaction(() => {
@@ -551,12 +608,15 @@ function seedFoundations(runtime, accounts) {
           accounts,
           leagueAlias,
           blueprint,
+          fixtureNowMs,
         });
     }
     const players = insertPlayerFoundations({
+      database: runtime.database,
       repositories,
       leagues,
       accounts,
+      fixtureNowMs,
     });
     return Object.freeze({
       leagues: Object.freeze(leagues),
@@ -587,8 +647,9 @@ function startAndScheduleLeague({
   runtime,
   accounts,
   league,
+  schedules,
 }) {
-  const scheduleInput = SCHEDULES[league.alias];
+  const scheduleInput = schedules[league.alias];
   if (!scheduleInput) {
     fail(
       "FREE_AGENT_DRAFT_BROWSER_FIXTURE_LIFECYCLE_FAILED",
@@ -623,13 +684,13 @@ function startAndScheduleLeague({
       authenticated,
     });
   if (
-    started.activatedTeamCount !== 6 ||
+    started.activatedTeamCount !== league.teams.length ||
     schedule.firstWeekStartsAtMs !==
       scheduleInput.firstWeekStartsAtMs
   ) {
     fail(
       "FREE_AGENT_DRAFT_BROWSER_FIXTURE_LIFECYCLE_FAILED",
-      "The local FAD browser fixture did not start its complete six-team league."
+      "The local FAD browser fixture did not start its complete league."
     );
   }
 }
@@ -654,10 +715,10 @@ function draftScope(database, league) {
     WHERE league_id = ? AND season_id = ? AND fad_id = ?
     ORDER BY team_id ASC
   `).all(league.leagueId, league.seasonId, fad.id);
-  if (cards.length !== 6) {
+  if (cards.length !== league.teams.length) {
     fail(
       "FREE_AGENT_DRAFT_BROWSER_FIXTURE_OPENING_FAILED",
-      "The local FAD browser fixture requires all six Candidate Cards."
+      "The local FAD browser fixture requires every Candidate Card."
     );
   }
   const cardByTeamId = new Map(
@@ -759,6 +820,7 @@ function alphaSentinels({
   league,
   scope,
   players,
+  fixtureNowMs,
 }) {
   const managedCandidate = candidateCommand({
     runtime,
@@ -837,65 +899,99 @@ function alphaSentinels({
   }
 
   const helpTeam = league.teams[2];
-  const helpManager = authenticate(
-    runtime,
-    accounts.alphaOtherManager.userId
-  );
-  const help = runtime.services.league.candidateCards
-    .requestHelp({
-      authenticated: helpManager,
-      leagueId: league.leagueId,
-      fadId: scope.fad.id,
-      teamId: helpTeam.teamId,
-      input: { message: HELP_MESSAGE },
-      idempotencyKey:
-        "fad-browser-alpha-exact-commissioner-help",
-    });
   const commissioner = authenticate(
     runtime,
     accounts.alphaCommissioner.userId
   );
-  const deniedTeam = league.teams[3];
-  let commissionerDenied = false;
-  try {
-    runtime.services.league.candidateCards.privateCard({
-      authenticated: commissioner,
-      leagueId: league.leagueId,
-      fadId: scope.fad.id,
-      teamId: deniedTeam.teamId,
-    });
-  } catch (error) {
-    commissionerDenied =
-      error?.code === "CANDIDATE_CARD_NOT_FOUND";
+  function commissionerIsDenied(team) {
+    try {
+      runtime.services.league.candidateCards.privateCard({
+        authenticated: commissioner,
+        leagueId: league.leagueId,
+        fadId: scope.fad.id,
+        teamId: team.teamId,
+      });
+      return false;
+    } catch (error) {
+      return error?.code === "CANDIDATE_CARD_NOT_FOUND";
+    }
   }
-  if (!commissionerDenied) {
+  const deniedTeam = league.teams[3];
+  if (!commissionerIsDenied(deniedTeam)) {
     fail(
       "FREE_AGENT_DRAFT_BROWSER_FIXTURE_PRIVACY_FAILED",
       "The local FAD browser fixture could not prove commissioner denial outside exact help."
     );
   }
-  const helpedCard =
-    runtime.services.league.candidateCards.privateCard({
-      authenticated: commissioner,
-      leagueId: league.leagueId,
-      fadId: scope.fad.id,
-      teamId: helpTeam.teamId,
-    });
+  let exactCommissionerHelp;
   if (
-    helpedCard.accessReason !==
-      "help_grant_commissioner" ||
-    helpedCard.helpContext?.helpRequestId !==
-      help.data.helpRequestId ||
-    !helpedCard.slots.some(
-      (slot) =>
-        slot.player?.playerId ===
-        players.alphaCommissionerHelpCandidate.playerId
-    )
+    fixtureNowMs >= scope.fad.help_opens_at_ms &&
+    fixtureNowMs < scope.fad.candidate_deadline_at_ms
   ) {
-    fail(
-      "FREE_AGENT_DRAFT_BROWSER_FIXTURE_HELP_FAILED",
-      "The local FAD browser fixture could not prove exact commissioner help authority."
+    const helpManager = authenticate(
+      runtime,
+      accounts.alphaOtherManager.userId
     );
+    const help = runtime.services.league.candidateCards
+      .requestHelp({
+        authenticated: helpManager,
+        leagueId: league.leagueId,
+        fadId: scope.fad.id,
+        teamId: helpTeam.teamId,
+        input: { message: HELP_MESSAGE },
+        idempotencyKey:
+          "fad-browser-alpha-exact-commissioner-help",
+      });
+    const helpedCard =
+      runtime.services.league.candidateCards.privateCard({
+        authenticated: commissioner,
+        leagueId: league.leagueId,
+        fadId: scope.fad.id,
+        teamId: helpTeam.teamId,
+      });
+    if (
+      helpedCard.accessReason !==
+        "help_grant_commissioner" ||
+      helpedCard.helpContext?.helpRequestId !==
+        help.data.helpRequestId ||
+      !helpedCard.slots.some(
+        (slot) =>
+          slot.player?.playerId ===
+          players.alphaCommissionerHelpCandidate.playerId
+      )
+    ) {
+      fail(
+        "FREE_AGENT_DRAFT_BROWSER_FIXTURE_HELP_FAILED",
+        "The local FAD browser fixture could not prove exact commissioner help authority."
+      );
+    }
+    exactCommissionerHelp = {
+      status: "active",
+      teamAlias: "alphaTeam3",
+      cardId: helpedCard.cardId,
+      helpRequestId: help.data.helpRequestId,
+      message: HELP_MESSAGE,
+      privatePlayerFullName:
+        players.alphaCommissionerHelpCandidate.fullName,
+      requestingAccountAlias: "alphaOtherManager",
+      commissionerAccountAlias: "alphaCommissioner",
+    };
+  } else {
+    if (!commissionerIsDenied(helpTeam)) {
+      fail(
+        "FREE_AGENT_DRAFT_BROWSER_FIXTURE_PRIVACY_FAILED",
+        "The local FAD browser fixture exposed a card before the help window."
+      );
+    }
+    exactCommissionerHelp = {
+      status: "not_open",
+      teamAlias: "alphaTeam3",
+      helpOpensAtMs: scope.fad.help_opens_at_ms,
+      privatePlayerFullName:
+        players.alphaCommissionerHelpCandidate.fullName,
+      requestingAccountAlias: "alphaOtherManager",
+      commissionerAccountAlias: "alphaCommissioner",
+    };
   }
 
   const notification = findCardReadyNotification({
@@ -952,16 +1048,7 @@ function alphaSentinels({
           deniedCandidate.data.changedEntryId,
       },
     ],
-    exactCommissionerHelp: {
-      teamAlias: "alphaTeam3",
-      cardId: helpedCard.cardId,
-      helpRequestId: help.data.helpRequestId,
-      message: HELP_MESSAGE,
-      privatePlayerFullName:
-        players.alphaCommissionerHelpCandidate.fullName,
-      requestingAccountAlias: "alphaOtherManager",
-      commissionerAccountAlias: "alphaCommissioner",
-    },
+    exactCommissionerHelp,
     cardReadyNotification: {
       notificationId: notification.id,
       eventType: notification.event_type,
@@ -1067,20 +1154,30 @@ function manifestLeague({
 
 async function createFreeAgentDraftBrowserFixture({
   runtime,
+  nowMs = FIXTURE_NOW_MS,
 } = {}) {
   const targetRuntime = assertRuntime(runtime);
+  if (!Number.isSafeInteger(nowMs) || nowMs < DAY_MS) {
+    fail(
+      "FREE_AGENT_DRAFT_BROWSER_FIXTURE_CLOCK_INVALID",
+      "The FAD browser fixture requires a safe current timestamp."
+    );
+  }
   try {
     const accounts = accountRecords();
     const foundations = seedFoundations(
       targetRuntime,
-      accounts
+      accounts,
+      nowMs
     );
+    const schedules = schedulesFor(nowMs);
     for (const league of
       Object.values(foundations.leagues)) {
       startAndScheduleLeague({
         runtime: targetRuntime,
         accounts,
         league,
+        schedules,
       });
     }
     const opening = await targetRuntime.services.league
@@ -1111,6 +1208,7 @@ async function createFreeAgentDraftBrowserFixture({
       league: foundations.leagues.alpha,
       scope: alphaScope,
       players: foundations.players,
+      fixtureNowMs: nowMs,
     });
     const betaFixtureSentinels = betaSentinels({
       runtime: targetRuntime,
@@ -1123,7 +1221,7 @@ async function createFreeAgentDraftBrowserFixture({
     return deepFreeze({
       schemaVersion: BROWSER_FIXTURE_SCHEMA_VERSION,
       fixtureKind: BROWSER_FIXTURE_KIND,
-      fixedNowMs: FIXTURE_NOW_MS,
+      fixedNowMs: nowMs,
       accounts,
       leagues: {
         alpha: manifestLeague({
@@ -1187,4 +1285,6 @@ module.exports = {
   BROWSER_FIXTURE_SCHEMA_VERSION,
   FreeAgentDraftBrowserFixtureError,
   createFreeAgentDraftBrowserFixture,
+  schedulesFor,
+  selectCatalogPlayers,
 };
