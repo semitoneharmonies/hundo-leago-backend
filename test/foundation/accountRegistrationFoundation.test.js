@@ -131,6 +131,17 @@ const {
   "../../src/transport/http/createAccountRegistrationRouter"
 );
 const {
+  isStagingAccountAutoVerificationEnabled,
+} = require(
+  "../../src/bootstrap/openDeployedTargetRuntime"
+);
+const {
+  FIXTURE_DATABASE_ID,
+  FIXTURE_ENVIRONMENT_ID,
+} = require(
+  "../../src/operations/release/releaseQaFixtureContract"
+);
+const {
   createTargetRequestSecurity,
 } = require(
   "../../src/transport/http/createTargetRequestSecurity"
@@ -1173,6 +1184,44 @@ async function startAccountApi(
 }
 
 describe("M3-07 isolated public account HTTP contracts", () => {
+  test("enables automatic verification only for the exact capture-only staging fixture", () => {
+    const eligible = Object.freeze({
+      accountEmailDeliveryEnabled: true,
+      appEnv: "staging",
+      databaseId: FIXTURE_DATABASE_ID,
+      environmentId: FIXTURE_ENVIRONMENT_ID,
+      leagueWriteMode: "closed",
+      scheduledJobsEnabled: false,
+      security: Object.freeze({
+        email: Object.freeze({ deliveryMode: "capture" }),
+      }),
+    });
+    assert.equal(
+      isStagingAccountAutoVerificationEnabled(eligible),
+      true
+    );
+    for (const changes of [
+      { appEnv: "production" },
+      { databaseId: "other-staging-database" },
+      { environmentId: "other-staging-environment" },
+      { leagueWriteMode: "open" },
+      { scheduledJobsEnabled: true },
+      {
+        security: Object.freeze({
+          email: Object.freeze({ deliveryMode: "send" }),
+        }),
+      },
+    ]) {
+      assert.equal(
+        isStagingAccountAutoVerificationEnabled({
+          ...eligible,
+          ...changes,
+        }),
+        false
+      );
+    }
+  });
+
   test("automatically verifies only when the staging fixture capability is explicitly enabled", async (t) => {
     const runtime = createRuntime(
       t,

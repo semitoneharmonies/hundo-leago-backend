@@ -319,6 +319,17 @@ function assertConfig(config, securityFoundations) {
   }
 }
 
+function isStagingAccountAutoVerificationEnabled(config) {
+  return (
+    config?.appEnv === "staging" &&
+    config.environmentId === FIXTURE_ENVIRONMENT_ID &&
+    config.databaseId === FIXTURE_DATABASE_ID &&
+    config.leagueWriteMode === "closed" &&
+    config.scheduledJobsEnabled === false &&
+    config.security?.email?.deliveryMode === "capture"
+  );
+}
+
 function openDeployedTargetRuntime({
   config,
   securityFoundations,
@@ -394,13 +405,7 @@ function openDeployedTargetRuntime({
       runtimeConfig
     );
     const stagingAccountAutoVerificationEnabled =
-      config.appEnv === "staging" &&
-      config.environmentId === FIXTURE_ENVIRONMENT_ID &&
-      config.databaseId === FIXTURE_DATABASE_ID &&
-      config.leagueWriteMode === "closed" &&
-      config.scheduledJobsEnabled === false &&
-      config.accountEmailDeliveryEnabled === false &&
-      config.security.email.deliveryMode === "capture";
+      isStagingAccountAutoVerificationEnabled(config);
     const runtime = createRuntimeFunction({
       database: connection.database,
       migrationsDirectory: config.migrationsDirectory,
@@ -586,6 +591,7 @@ module.exports = {
   SPORTS_DATA_IO_LIVE_CAPABILITY_STARTUP_ERROR_CODE,
   assertDatabaseIdentity,
   loadSportsDataIoLiveProbeManifest,
+  isStagingAccountAutoVerificationEnabled,
   openDeployedTargetRuntime,
   readDatabaseIdentity,
   verifyRequiredSportsDataIoLiveCapability,
