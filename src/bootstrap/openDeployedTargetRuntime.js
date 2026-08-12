@@ -324,7 +324,7 @@ function isStagingAccountAutoVerificationEnabled(config) {
     config?.appEnv === "staging" &&
     config.environmentId === FIXTURE_ENVIRONMENT_ID &&
     config.databaseId === FIXTURE_DATABASE_ID &&
-    config.leagueWriteMode === "closed" &&
+    config.leagueWriteMode === "open" &&
     config.scheduledJobsEnabled === false &&
     config.security?.email?.deliveryMode === "capture"
   );

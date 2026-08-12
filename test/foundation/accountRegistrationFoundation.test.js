@@ -1190,7 +1190,7 @@ describe("M3-07 isolated public account HTTP contracts", () => {
       appEnv: "staging",
       databaseId: FIXTURE_DATABASE_ID,
       environmentId: FIXTURE_ENVIRONMENT_ID,
-      leagueWriteMode: "closed",
+      leagueWriteMode: "open",
       scheduledJobsEnabled: false,
       security: Object.freeze({
         email: Object.freeze({ deliveryMode: "capture" }),
@@ -1204,7 +1204,7 @@ describe("M3-07 isolated public account HTTP contracts", () => {
       { appEnv: "production" },
       { databaseId: "other-staging-database" },
       { environmentId: "other-staging-environment" },
-      { leagueWriteMode: "open" },
+      { leagueWriteMode: "closed" },
       { scheduledJobsEnabled: true },
       {
         security: Object.freeze({
