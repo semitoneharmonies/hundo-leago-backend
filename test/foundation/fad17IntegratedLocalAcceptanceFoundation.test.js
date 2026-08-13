@@ -19,6 +19,11 @@ const {
   "../../src/infrastructure/persistence/sqlite/repositoryCatalog"
 );
 const {
+  createSqlitePlayerCatalogRepository,
+} = require(
+  "../../src/infrastructure/persistence/sqlite/SqlitePlayerCatalogRepository"
+);
+const {
   createTargetRuntime,
   TARGET_ENDPOINTS,
 } = require("../../src/bootstrap/createTargetRuntime");
@@ -54,6 +59,55 @@ const MIGRATIONS_DIRECTORY = path.join(
   "migrations"
 );
 const FRONTEND_ORIGIN = "http://127.0.0.1:5173";
+
+function seedRealPlayerCatalog(database) {
+  const catalog = JSON.parse(
+    fs.readFileSync(
+      path.join(ROOT_DIRECTORY, "players.json"),
+      "utf8"
+    )
+  );
+  const selected = [
+    ...catalog.filter(
+      ({ active, position }) =>
+        active === true && position === "F"
+    ).slice(0, 72),
+    ...catalog.filter(
+      ({ active, position }) =>
+        active === true && position === "D"
+    ).slice(0, 32),
+  ];
+  let idCounter = 0;
+  const repository = createSqlitePlayerCatalogRepository({
+    database,
+    createId: () =>
+      `30000000-0000-4000-8000-${String(
+        ++idCounter
+      ).padStart(12, "0")}`,
+    now: () => 1_700_000_000_100,
+  });
+  repository.applyCatalog({
+    sourceOperationId:
+      "20000000-0000-4000-8000-000000000001",
+    provider: "sportsdataio-discovery-lab",
+    capturedAtMs: 1_700_000_000_000,
+    rows: selected.map((player) => ({
+      providerPlayerId: String(player.id),
+      firstName: player.firstName,
+      lastName: player.lastName,
+      fullName: player.fullName,
+      birthDate: player.birthDate,
+      status: "active",
+      sourcePosition: player.position,
+      normalizedPosition: player.position,
+      nhlTeamAbbreviation:
+        player.teamAbbrev ?? null,
+      active: true,
+      sourceVersion: "players-json-2026",
+      sourceUpdatedAtMs: 1_700_000_000_000,
+    })),
+  });
+}
 
 function createMigrationRuntime(t, prefix) {
   const temporaryRoot = fs.mkdtempSync(
@@ -333,6 +387,7 @@ test(
     });
     t.after(() => started.close());
 
+    seedRealPlayerCatalog(started.runtime.database);
     const manifest =
       await createFreeAgentDraftBrowserFixture({
         runtime: started.runtime,
@@ -380,6 +435,7 @@ test(
       port: 0,
     });
     t.after(() => started.close());
+    seedRealPlayerCatalog(started.runtime.database);
     const manifest =
       await createFreeAgentDraftBrowserFixture({
         runtime: started.runtime,

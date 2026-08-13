@@ -764,7 +764,8 @@ function insertFutureContractYears({
         repositories.seasons.insert({
           id: futureSeasonId,
           league_id: league.leagueId,
-          label: String(year),
+          label:
+            `${year}-${String((year + 1) % 100).padStart(2, "0")}`,
           nhl_season_key: `${year}${year + 1}`,
           status: "planned",
           regular_season_starts_at_ms: null,

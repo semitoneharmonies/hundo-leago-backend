@@ -576,6 +576,20 @@ test(
       `).all(alpha.leagueId, beta.leagueId),
       [{ remaining_years: 2 }, { remaining_years: 3 }]
     );
+    for (const league of [alpha, beta]) {
+      assert.deepEqual(
+        database.prepare(`
+          SELECT label, nhl_season_key
+          FROM seasons
+          WHERE league_id = ? AND status = 'planned'
+          ORDER BY nhl_season_key ASC
+        `).all(league.leagueId),
+        [
+          { label: "2027-28", nhl_season_key: "20272028" },
+          { label: "2028-29", nhl_season_key: "20282029" },
+        ]
+      );
+    }
     assert.equal(
       database.prepare(`
         SELECT COUNT(*) AS count
