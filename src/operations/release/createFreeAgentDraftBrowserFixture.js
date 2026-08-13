@@ -12,7 +12,7 @@ const {
 );
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
-const BROWSER_FIXTURE_SCHEMA_VERSION = 2;
+const BROWSER_FIXTURE_SCHEMA_VERSION = 3;
 const BROWSER_FIXTURE_KIND = "free_agent_draft_browser";
 const HELP_MESSAGE =
   "Alpha exact commissioner help private sentinel.";
@@ -155,22 +155,54 @@ const LEAGUE_BLUEPRINTS = Object.freeze({
 });
 
 const PLAYER_BLUEPRINTS = Object.freeze({
-  alphaLockedCarryover: Object.freeze({
-    positionGroup: "F",
-  }),
   alphaManagedPrivateCandidate: Object.freeze({
+    leagueAlias: "alpha",
     positionGroup: "F",
   }),
   alphaCommissionerHelpCandidate: Object.freeze({
+    leagueAlias: "alpha",
     positionGroup: "D",
   }),
   alphaCommissionerDeniedCandidate: Object.freeze({
+    leagueAlias: "alpha",
     positionGroup: "F",
   }),
   betaPrivateCandidate: Object.freeze({
+    leagueAlias: "beta",
     positionGroup: "D",
   }),
 });
+
+const CARRYOVER_BLUEPRINTS = Object.freeze([
+  Object.freeze({
+    positionGroup: "F",
+    slotNumber: 1,
+    aavCents: 100,
+    termYears: 2,
+  }),
+  Object.freeze({
+    positionGroup: "F",
+    slotNumber: 2,
+    aavCents: 1_500,
+    termYears: 3,
+  }),
+  Object.freeze({
+    positionGroup: "F",
+    slotNumber: 3,
+    aavCents: 700,
+    termYears: 2,
+  }),
+  Object.freeze({
+    positionGroup: "D",
+    slotNumber: 1,
+    aavCents: 300,
+    termYears: 3,
+  }),
+]);
+
+function carryoverAlias(leagueAlias, teamIndex, carryoverIndex) {
+  return `${leagueAlias}Team${teamIndex + 1}Carryover${carryoverIndex + 1}`;
+}
 
 class FreeAgentDraftBrowserFixtureError extends Error {
   constructor(code, message, options = {}) {
@@ -349,7 +381,6 @@ function insertLeagueFoundations({
     updated_at_ms: createdAtMs,
     version: 1,
   });
-
   for (const accountAlias of
     blueprint.memberAccountAliases) {
     const account = accounts[accountAlias];
@@ -454,22 +485,27 @@ function insertLeagueFoundations({
 
 function selectCatalogPlayers(database) {
   const rows = database.prepare(`
-    SELECT player.id, player.full_name, position.position_group
+    SELECT
+      player.id,
+      player.full_name,
+      source.normalized_position AS position_group
     FROM players AS player
     INNER JOIN player_external_ids AS external
       ON external.player_id = player.id
      AND external.provider = 'sportsdataio-discovery-lab'
-    INNER JOIN league_player_positions AS position
-      ON position.player_id = player.id
-     AND position.league_id = ?
-     AND position.ended_at_ms IS NULL
+    INNER JOIN player_source_state AS source
+      ON source.player_id = player.id
+     AND source.provider = 'sportsdataio-discovery-lab'
+     AND source.ended_at_ms IS NULL
+     AND source.active = 1
+     AND source.normalized_position IN ('F', 'D')
     WHERE player.status = 'active'
-    GROUP BY player.id, position.position_group
+      AND lower(player.full_name) NOT LIKE 'fixture player %'
+    GROUP BY player.id, source.normalized_position
     ORDER BY
-      CASE WHEN lower(player.full_name) LIKE 'fixture player %' THEN 1 ELSE 0 END,
       lower(player.full_name) ASC,
       player.id ASC
-  `).all(fixtureId("league:leagueA"));
+  `).all();
   const available = new Map([
     ["F", rows.filter(({ position_group: position }) => position === "F")],
     ["D", rows.filter(({ position_group: position }) => position === "D")],
@@ -485,9 +521,42 @@ function selectCatalogPlayers(database) {
     }
     players[alias] = Object.freeze({
       alias,
+      kind: "candidate",
+      leagueAlias: blueprint.leagueAlias,
       playerId: selected.id,
       fullName: selected.full_name,
       positionGroup: blueprint.positionGroup,
+    });
+  }
+  for (const [leagueAlias, leagueBlueprint] of
+    Object.entries(LEAGUE_BLUEPRINTS)) {
+    leagueBlueprint.teamManagerAccountAliases.forEach((_, teamIndex) => {
+      CARRYOVER_BLUEPRINTS.forEach((blueprint, carryoverIndex) => {
+        const alias = carryoverAlias(
+          leagueAlias,
+          teamIndex,
+          carryoverIndex
+        );
+        const selected = available.get(blueprint.positionGroup)?.shift();
+        if (!selected) {
+          fail(
+            "FREE_AGENT_DRAFT_BROWSER_FIXTURE_PLAYER_CATALOG_INCOMPLETE",
+            "The FAD browser fixture requires enough catalog-backed carryover players."
+          );
+        }
+        players[alias] = Object.freeze({
+          alias,
+          kind: "carryover",
+          leagueAlias,
+          teamIndex,
+          playerId: selected.id,
+          fullName: selected.full_name,
+          positionGroup: blueprint.positionGroup,
+          slotNumber: blueprint.slotNumber,
+          aavCents: blueprint.aavCents,
+          termYears: blueprint.termYears,
+        });
+      });
     });
   }
   return Object.freeze(players);
@@ -502,95 +571,77 @@ function insertPlayerFoundations({
 }) {
   const players = selectCatalogPlayers(database);
 
-  for (const [leagueAlias, playerAliases] of [
-    [
-      "alpha",
-      [
-        "alphaLockedCarryover",
-        "alphaManagedPrivateCandidate",
-        "alphaCommissionerHelpCandidate",
-        "alphaCommissionerDeniedCandidate",
-      ],
-    ],
-    ["beta", ["betaPrivateCandidate"]],
-  ]) {
-    for (const playerAlias of playerAliases) {
-      const player = players[playerAlias];
-      repositories.league_player_positions.insert({
-        id: fixtureId(
-          `fad-browser:position:${leagueAlias}:${playerAlias}`
-        ),
-        league_id: leagues[leagueAlias].leagueId,
-        player_id: player.playerId,
-        position_group: player.positionGroup,
-        reason: "FAD browser fixture",
-        corrected_by_user_id:
-          accounts[
-            leagues[leagueAlias]
-              .commissionerAccountAlias
-          ].userId,
-        effective_at_ms: fixtureNowMs,
-        ended_at_ms: null,
-        version: 1,
-      });
-    }
-  }
+  for (const player of Object.values(players)) {
+    const league = leagues[player.leagueAlias];
+    repositories.league_player_positions.insert({
+      id: fixtureId(
+        `fad-browser:position:${player.leagueAlias}:${player.alias}`
+      ),
+      league_id: league.leagueId,
+      player_id: player.playerId,
+      position_group: player.positionGroup,
+      reason: "FAD browser fixture",
+      corrected_by_user_id:
+        accounts[league.commissionerAccountAlias].userId,
+      effective_at_ms: fixtureNowMs,
+      ended_at_ms: null,
+      version: 1,
+    });
+    if (player.kind !== "carryover") continue;
 
-  const alpha = leagues.alpha;
-  const carryover = players.alphaLockedCarryover;
-  const team = alpha.teams[0];
-  const contractId = fixtureId(
-    "fad-browser:contract:alphaLockedCarryover"
-  );
-  repositories.player_ownerships.insert({
-    id: fixtureId(
-      "fad-browser:ownership:alphaLockedCarryover"
-    ),
-    league_id: alpha.leagueId,
-    season_id: alpha.seasonId,
-    player_id: carryover.playerId,
-    team_id: team.teamId,
-    ownership_kind: "Rostered",
-    roster_category: "Active",
-    position_group: "F",
-    slot_number: 1,
-    acquired_transaction_type: "migration",
-    acquired_transaction_id: null,
-    created_at_ms: fixtureNowMs,
-    updated_at_ms: fixtureNowMs,
-    version: 1,
-  });
-  repositories.contracts.insert({
-    id: contractId,
-    league_id: alpha.leagueId,
-    player_id: carryover.playerId,
-    current_team_id: team.teamId,
-    contract_type: "normal",
-    original_total_value_cents: 500,
-    original_term_years: 1,
-    aav_cents: 500,
-    start_season_id: alpha.seasonId,
-    status: "active",
-    acquisition_source_type: "migration",
-    acquisition_source_id: null,
-    auction_buyout_lock_expires_at_ms: null,
-    created_at_ms: fixtureNowMs,
-    updated_at_ms: fixtureNowMs,
-    version: 1,
-  });
-  repositories.contract_years.insert({
-    id: fixtureId(
-      "fad-browser:contract-year:alphaLockedCarryover"
-    ),
-    league_id: alpha.leagueId,
-    contract_id: contractId,
-    season_id: alpha.seasonId,
-    year_number: 1,
-    aav_cents: 500,
-    status: "current",
-    rollover_at_ms: null,
-    created_at_ms: fixtureNowMs,
-  });
+    const team = league.teams[player.teamIndex];
+    const contractId = fixtureId(
+      `fad-browser:contract:${player.alias}`
+    );
+    repositories.player_ownerships.insert({
+      id: fixtureId(`fad-browser:ownership:${player.alias}`),
+      league_id: league.leagueId,
+      season_id: league.seasonId,
+      player_id: player.playerId,
+      team_id: team.teamId,
+      ownership_kind: "Rostered",
+      roster_category: "Active",
+      position_group: player.positionGroup,
+      slot_number: player.slotNumber,
+      acquired_transaction_type: "migration",
+      acquired_transaction_id: null,
+      created_at_ms: fixtureNowMs,
+      updated_at_ms: fixtureNowMs,
+      version: 1,
+    });
+    repositories.contracts.insert({
+      id: contractId,
+      league_id: league.leagueId,
+      player_id: player.playerId,
+      current_team_id: team.teamId,
+      contract_type: "normal",
+      original_total_value_cents:
+        player.aavCents * player.termYears,
+      original_term_years: player.termYears,
+      aav_cents: player.aavCents,
+      start_season_id: league.seasonId,
+      status: "active",
+      acquisition_source_type: "migration",
+      acquisition_source_id: null,
+      auction_buyout_lock_expires_at_ms: null,
+      created_at_ms: fixtureNowMs,
+      updated_at_ms: fixtureNowMs,
+      version: 1,
+    });
+    repositories.contract_years.insert({
+      id: fixtureId(
+        `fad-browser:contract-year:${player.alias}:1`
+      ),
+      league_id: league.leagueId,
+      contract_id: contractId,
+      season_id: league.seasonId,
+      year_number: 1,
+      aav_cents: player.aavCents,
+      status: "current",
+      rollover_at_ms: null,
+      created_at_ms: fixtureNowMs,
+    });
+  }
 
   return Object.freeze(players);
 }
@@ -693,6 +744,68 @@ function startAndScheduleLeague({
       "The local FAD browser fixture did not start its complete league."
     );
   }
+}
+
+function insertFutureContractYears({
+  runtime,
+  leagues,
+  players,
+  fixtureNowMs,
+}) {
+  const repositories = runtime.repositories.context.repositories;
+  runtime.database.transaction(() => {
+    const futureSeasonIdsByLeague = {};
+    for (const league of Object.values(leagues)) {
+      futureSeasonIdsByLeague[league.alias] = [1, 2].map((offset) => {
+        const year = 2026 + offset;
+        const futureSeasonId = fixtureId(
+          `fad-browser:season:${league.alias}:${year}`
+        );
+        repositories.seasons.insert({
+          id: futureSeasonId,
+          league_id: league.leagueId,
+          label: String(year),
+          nhl_season_key: `${year}${year + 1}`,
+          status: "planned",
+          regular_season_starts_at_ms: null,
+          regular_season_ends_at_ms: null,
+          fantasy_playoffs_start_at_ms: null,
+          fantasy_playoffs_end_at_ms: null,
+          free_agent_draft_completed_at_ms: null,
+          created_at_ms: fixtureNowMs,
+          updated_at_ms: fixtureNowMs,
+          version: 1,
+        });
+        return futureSeasonId;
+      });
+    }
+
+    for (const player of Object.values(players)) {
+      if (player.kind !== "carryover") continue;
+      const league = leagues[player.leagueAlias];
+      const contractId = fixtureId(
+        `fad-browser:contract:${player.alias}`
+      );
+      futureSeasonIdsByLeague[player.leagueAlias]
+        .slice(0, player.termYears - 1)
+        .forEach((seasonId, index) => {
+          const yearNumber = index + 2;
+          repositories.contract_years.insert({
+            id: fixtureId(
+              `fad-browser:contract-year:${player.alias}:${yearNumber}`
+            ),
+            league_id: league.leagueId,
+            contract_id: contractId,
+            season_id: seasonId,
+            year_number: yearNumber,
+            aav_cents: player.aavCents,
+            status: "future",
+            rollover_at_ms: null,
+            created_at_ms: fixtureNowMs,
+          });
+        });
+    }
+  }).immediate();
 }
 
 function draftScope(database, league) {
@@ -830,7 +943,7 @@ function alphaSentinels({
     teamIndex: 0,
     managerAccountAlias: "alphaMultiTeamManager",
     player: players.alphaManagedPrivateCandidate,
-    slotKey: "F02",
+    slotKey: "F04",
     totalValueCents: 600,
     termYears: 2,
   });
@@ -842,7 +955,7 @@ function alphaSentinels({
     teamIndex: 2,
     managerAccountAlias: "alphaOtherManager",
     player: players.alphaCommissionerHelpCandidate,
-    slotKey: "D01",
+    slotKey: "D02",
     totalValueCents: 900,
     termYears: 3,
   });
@@ -854,15 +967,16 @@ function alphaSentinels({
     teamIndex: 3,
     managerAccountAlias: "alphaOtherManager",
     player: players.alphaCommissionerDeniedCandidate,
-    slotKey: "F01",
+    slotKey: "F04",
     totalValueCents: 400,
     termYears: 1,
   });
   const candidateCard = managedCandidate.data.card;
+  const lockedCarryover = players[carryoverAlias("alpha", 0, 0)];
   const carryoverSlot = candidateCard.slots.find(
     (slot) =>
       slot.player?.playerId ===
-      players.alphaLockedCarryover.playerId
+      lockedCarryover.playerId
   );
   const managedCandidateSlot = candidateCard.slots.find(
     (slot) =>
@@ -885,11 +999,11 @@ function alphaSentinels({
     carryoverSlot?.slotKey !== "F01" ||
     carryoverSlot.occupantKind !== "carryover" ||
     carryoverSlot.locked !== true ||
-    managedCandidateSlot?.slotKey !== "F02" ||
+    managedCandidateSlot?.slotKey !== "F04" ||
     managedCandidateSlot.occupantKind !== "candidate" ||
-    helpCandidateSlot?.slotKey !== "D01" ||
+    helpCandidateSlot?.slotKey !== "D02" ||
     helpCandidateSlot.occupantKind !== "candidate" ||
-    deniedCandidateSlot?.slotKey !== "F01" ||
+    deniedCandidateSlot?.slotKey !== "F04" ||
     deniedCandidateSlot.occupantKind !== "candidate"
   ) {
     fail(
@@ -1006,9 +1120,9 @@ function alphaSentinels({
   return {
     lockedCarryover: {
       playerFullName:
-        players.alphaLockedCarryover.fullName,
+        lockedCarryover.fullName,
       playerId:
-        players.alphaLockedCarryover.playerId,
+        lockedCarryover.playerId,
       teamAlias: "alphaTeam1",
       slotKey: "F01",
       entryId: carryoverSlot.entryId,
@@ -1021,7 +1135,7 @@ function alphaSentinels({
         playerId:
           players.alphaManagedPrivateCandidate.playerId,
         teamAlias: "alphaTeam1",
-        slotKey: "F02",
+        slotKey: "F04",
         entryId:
           managedCandidate.data.changedEntryId,
       },
@@ -1032,7 +1146,7 @@ function alphaSentinels({
         playerId:
           players.alphaCommissionerHelpCandidate.playerId,
         teamAlias: "alphaTeam3",
-        slotKey: "D01",
+        slotKey: "D02",
         entryId:
           helpCandidate.data.changedEntryId,
       },
@@ -1043,7 +1157,7 @@ function alphaSentinels({
         playerId:
           players.alphaCommissionerDeniedCandidate.playerId,
         teamAlias: "alphaTeam4",
-        slotKey: "F01",
+        slotKey: "F04",
         entryId:
           deniedCandidate.data.changedEntryId,
       },
@@ -1077,7 +1191,7 @@ function betaSentinels({
     teamIndex: 0,
     managerAccountAlias: "betaManager",
     player: players.betaPrivateCandidate,
-    slotKey: "D01",
+    slotKey: "D02",
     totalValueCents: 900,
     termYears: 3,
   });
@@ -1087,7 +1201,7 @@ function betaSentinels({
       players.betaPrivateCandidate.playerId
   );
   if (
-    slot?.slotKey !== "D01" ||
+    slot?.slotKey !== "D02" ||
     slot.occupantKind !== "candidate"
   ) {
     fail(
@@ -1111,7 +1225,7 @@ function betaSentinels({
         playerId:
           players.betaPrivateCandidate.playerId,
         teamAlias: "betaTeam1",
-        slotKey: "D01",
+        slotKey: "D02",
         entryId: candidate.data.changedEntryId,
       },
     ],
@@ -1180,6 +1294,12 @@ async function createFreeAgentDraftBrowserFixture({
         schedules,
       });
     }
+    insertFutureContractYears({
+      runtime: targetRuntime,
+      leagues: foundations.leagues,
+      players: foundations.players,
+      fixtureNowMs: nowMs,
+    });
     const opening = await targetRuntime.services.league
       .freeAgentDraftReadinessJob.run();
     if (
@@ -1252,7 +1372,7 @@ async function createFreeAgentDraftBrowserFixture({
         commissionerHelpTeamAlias:
           "alphaTeam3",
         privateMarkers: [
-          foundations.players.alphaLockedCarryover
+          foundations.players[carryoverAlias("alpha", 0, 0)]
             .fullName,
           foundations.players.alphaManagedPrivateCandidate
             .fullName,

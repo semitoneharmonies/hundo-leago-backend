@@ -32,6 +32,11 @@ const {
 } = require(
   "../../src/operations/release/releaseQaFixtureContract"
 );
+const {
+  createSqlitePlayerCatalogRepository,
+} = require(
+  "../../src/infrastructure/persistence/sqlite/SqlitePlayerCatalogRepository"
+);
 
 const ROOT_DIRECTORY = path.resolve(
   __dirname,
@@ -49,6 +54,46 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const CANONICAL_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function seedRealPlayerCatalog(database) {
+  const catalog = JSON.parse(
+    fs.readFileSync(path.join(ROOT_DIRECTORY, "players.json"), "utf8")
+  );
+  const selected = [
+    ...catalog.filter(
+      ({ active, position }) => active === true && position === "F"
+    ).slice(0, 72),
+    ...catalog.filter(
+      ({ active, position }) => active === true && position === "D"
+    ).slice(0, 32),
+  ];
+  let idCounter = 0;
+  const repository = createSqlitePlayerCatalogRepository({
+    database,
+    createId: () =>
+      `30000000-0000-4000-8000-${String(++idCounter).padStart(12, "0")}`,
+    now: () => 1_700_000_000_100,
+  });
+  repository.applyCatalog({
+    sourceOperationId: "20000000-0000-4000-8000-000000000001",
+    provider: "sportsdataio-discovery-lab",
+    capturedAtMs: 1_700_000_000_000,
+    rows: selected.map((player) => ({
+      providerPlayerId: String(player.id),
+      firstName: player.firstName,
+      lastName: player.lastName,
+      fullName: player.fullName,
+      birthDate: player.birthDate,
+      status: "active",
+      sourcePosition: player.position,
+      normalizedPosition: player.position,
+      nhlTeamAbbreviation: player.teamAbbrev ?? null,
+      active: true,
+      sourceVersion: "players-json-2026",
+      sourceUpdatedAtMs: 1_700_000_000_000,
+    })),
+  });
+}
 
 function assertRecursivelyFrozen(value) {
   if (value === null || typeof value !== "object") {
@@ -284,6 +329,7 @@ test(
   "FAD browser fixture uses real lifecycle and card services with strict privacy isolation",
   async (t) => {
     const started = await startRuntime(t);
+    seedRealPlayerCatalog(started.runtime.database);
     const triggerBaseline =
       started.runtime.database.prepare(`
         SELECT name, sql
@@ -395,17 +441,17 @@ test(
         {
           alias: "managedTeamCandidate",
           teamAlias: "alphaTeam1",
-          slotKey: "F02",
+          slotKey: "F04",
         },
         {
           alias: "commissionerHelpCandidate",
           teamAlias: "alphaTeam3",
-          slotKey: "D01",
+          slotKey: "D02",
         },
         {
           alias: "commissionerDeniedCandidate",
           teamAlias: "alphaTeam4",
-          slotKey: "F01",
+          slotKey: "F04",
         },
       ]
     );
@@ -432,7 +478,7 @@ test(
     );
     assert.equal(
       beta.sentinels.privateCandidates[0].slotKey,
-      "D01"
+      "D02"
     );
     assert.equal(
       manifest.privacyChecks.commissionerDeniedTeamAlias,
@@ -491,6 +537,55 @@ test(
         help_requests: 0,
         card_ready: 16,
       }
+    );
+    const carryoverCounts = database.prepare(`
+      SELECT team_id, COUNT(*) AS count
+      FROM candidate_card_entries
+      WHERE league_id IN (?, ?)
+        AND entry_kind = 'carryover'
+      GROUP BY team_id
+      ORDER BY team_id ASC
+    `).all(alpha.leagueId, beta.leagueId);
+    assert.equal(carryoverCounts.length, 16);
+    assert.deepEqual(
+      [...new Set(carryoverCounts.map(({ count }) => count))],
+      [4]
+    );
+    assert.deepEqual(
+      database.prepare(`
+        SELECT DISTINCT carryover_aav_cents AS aav_cents
+        FROM candidate_card_entries
+        WHERE league_id IN (?, ?)
+          AND entry_kind = 'carryover'
+        ORDER BY carryover_aav_cents ASC
+      `).all(alpha.leagueId, beta.leagueId),
+      [
+        { aav_cents: 100 },
+        { aav_cents: 300 },
+        { aav_cents: 700 },
+        { aav_cents: 1_500 },
+      ]
+    );
+    assert.deepEqual(
+      database.prepare(`
+        SELECT DISTINCT remaining_years
+        FROM candidate_card_entries
+        WHERE league_id IN (?, ?)
+          AND entry_kind = 'carryover'
+        ORDER BY remaining_years ASC
+      `).all(alpha.leagueId, beta.leagueId),
+      [{ remaining_years: 2 }, { remaining_years: 3 }]
+    );
+    assert.equal(
+      database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM candidate_card_entries AS entry
+        INNER JOIN players AS player ON player.id = entry.player_id
+        WHERE entry.league_id IN (?, ?)
+          AND entry.entry_kind = 'carryover'
+          AND lower(player.full_name) LIKE 'fixture player %'
+      `).get(alpha.leagueId, beta.leagueId).count,
+      0
     );
     assert.equal(
       database.prepare(`
@@ -654,6 +749,7 @@ test(
   "FAD browser fixture repeats stable aliases and facts on a fresh disposable runtime",
   async (t) => {
     const first = await startRuntime(t);
+    seedRealPlayerCatalog(first.runtime.database);
     const firstManifest =
       await createFreeAgentDraftBrowserFixture({
         runtime: first.runtime,
@@ -662,6 +758,7 @@ test(
     await first.close();
 
     const second = await startRuntime(t);
+    seedRealPlayerCatalog(second.runtime.database);
     const secondManifest =
       await createFreeAgentDraftBrowserFixture({
         runtime: second.runtime,
