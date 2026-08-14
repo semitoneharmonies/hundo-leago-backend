@@ -66,6 +66,7 @@ function createS3CompatibleClient({
     const payloadHash = sha256(body);
     const canonicalUri = canonicalObjectPath(bucket, key);
     const headers = {
+      "accept-encoding": "identity",
       host: parsedEndpoint.host,
       "x-amz-content-sha256": payloadHash,
       "x-amz-date": timestamp,

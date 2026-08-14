@@ -77,6 +77,14 @@ test("signs private path-style PUT, HEAD, and GET without exposing the secret", 
   );
   assert.equal(requests[0].url.endsWith("/hundo-staging/staging/database/a%20b.enc"), true);
   assert.match(requests[0].options.headers.authorization, /^AWS4-HMAC-SHA256 /);
+  assert.equal(
+    requests.every(({ options }) => options.headers["accept-encoding"] === "identity"),
+    true
+  );
+  assert.match(
+    requests[0].options.headers.authorization,
+    /SignedHeaders=accept-encoding;/
+  );
   assert.equal(JSON.stringify(requests).includes("do-not-print-secret"), false);
   assert.equal(requests[0].options.headers["x-amz-acl"], undefined);
 });
