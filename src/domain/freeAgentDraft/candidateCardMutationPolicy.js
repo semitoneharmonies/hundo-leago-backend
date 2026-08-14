@@ -4,8 +4,10 @@ const {
   CANONICAL_UUID_PATTERN,
   CANDIDATE_CARD_BENCH_MAXIMUM_AAV_CENTS,
   CANDIDATE_CARD_POLICY_CODES,
+  CANDIDATE_CARD_SLOT_KEYS,
   CandidateCardPolicyError,
   createCandidateCardOfferContract,
+  createCandidateCardPartialOfferContract,
   parseCandidateCardSlotKey,
 } = require("./candidateCardPolicy");
 
@@ -183,6 +185,91 @@ function normalizeCandidateCardMutationAction(
   failInput("action_invalid");
 }
 
+function normalizeCandidateCardWholeSave(
+  input
+) {
+  exactObject(
+    input,
+    ["slots"],
+    "whole_card_fields_invalid"
+  );
+  if (
+    !Array.isArray(input.slots) ||
+    input.slots.length !==
+      CANDIDATE_CARD_SLOT_KEYS.length
+  ) {
+    failInput("whole_card_slots_invalid");
+  }
+  const playerIds = new Set();
+  const slots = input.slots.map(
+    (item, index) => {
+      exactObject(
+        item,
+        ["slotKey", "candidate"],
+        "whole_card_slot_fields_invalid"
+      );
+      const slot = parseCandidateCardSlotKey(
+        item.slotKey
+      );
+      if (
+        slot.slotKey !==
+        CANDIDATE_CARD_SLOT_KEYS[index]
+      ) {
+        failInput(
+          "whole_card_slot_order_invalid"
+        );
+      }
+      if (item.candidate === null) {
+        return Object.freeze({
+          slotKey: slot.slotKey,
+          candidate: null,
+        });
+      }
+      exactObject(
+        item.candidate,
+        [
+          "playerId",
+          "totalValueCents",
+          "termYears",
+        ],
+        "whole_card_candidate_fields_invalid"
+      );
+      const playerId = stableId(
+        item.candidate.playerId,
+        "player_id_invalid"
+      );
+      if (playerIds.has(playerId)) {
+        throw new CandidateCardPolicyError(
+          CANDIDATE_CARD_POLICY_CODES
+            .playerDuplicate,
+          "candidate_player_duplicate"
+        );
+      }
+      playerIds.add(playerId);
+      const contract =
+        createCandidateCardPartialOfferContract({
+          totalValueCents:
+            item.candidate.totalValueCents,
+          termYears:
+            item.candidate.termYears,
+        });
+      assertBenchAav(slot, contract);
+      return Object.freeze({
+        slotKey: slot.slotKey,
+        candidate: Object.freeze({
+          playerId,
+          totalValueCents:
+            contract.totalValueCents,
+          termYears: contract.termYears,
+        }),
+      });
+    }
+  );
+  return Object.freeze({
+    slots: Object.freeze(slots),
+  });
+}
+
 function normalizeCandidateCardExpectedVersion(
   value
 ) {
@@ -225,4 +312,5 @@ module.exports = {
   normalizeCandidateCardExpectedVersion,
   normalizeCandidateCardIdempotencyKey,
   normalizeCandidateCardMutationAction,
+  normalizeCandidateCardWholeSave,
 };

@@ -234,6 +234,12 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
   );
   assert.ok(
     FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
+      "candidate_card_revision_entry_changes_immutable_delete"
+    ),
+    "the reset must suspend immutable whole-card revision evidence"
+  );
+  assert.ok(
+    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
       "idempotency_requests_auction_administration_result_delete"
     ),
     "the reset must suspend the auction-administration idempotency guard"

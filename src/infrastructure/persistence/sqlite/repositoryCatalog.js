@@ -108,6 +108,11 @@ const DEFINITIONS = [
     { versioned: true }
   ),
   repositoryDefinition(
+    "candidate_card_revision_entry_changes",
+    REPOSITORY_SCOPES.requiredLeague,
+    { keyColumn: "entry_id" }
+  ),
+  repositoryDefinition(
     "candidate_card_revisions",
     REPOSITORY_SCOPES.requiredLeague,
     { versioned: true }

@@ -11,6 +11,7 @@ const {
   CANDIDATE_CARD_NORMAL_MINIMUM_AAV_CENTS,
   CANDIDATE_CARD_SLOT_KEYS,
   createCandidateCardOfferContract,
+  createCandidateCardPartialOfferContract,
   evaluateCandidateCard,
   evaluateCandidateCardHelpAuthority,
   parseCandidateCardSlotKey,
@@ -37,6 +38,7 @@ const {
 const {
   normalizeCandidateCardExpectedVersion,
   normalizeCandidateCardIdempotencyKey,
+  normalizeCandidateCardWholeSave,
 } = require(
   "../../../domain/freeAgentDraft/candidateCardMutationPolicy"
 );
@@ -93,6 +95,7 @@ const CANDIDATE_CARD_OPERATIONS =
     edit: "candidate_card.edit",
     move: "candidate_card.move",
     remove: "candidate_card.remove",
+    save: "candidate_card.save",
     help: "candidate_card.help",
   });
 const CANDIDATE_CARD_REVISION_ACTIONS_BY_OPERATION =
@@ -109,6 +112,9 @@ const CANDIDATE_CARD_REVISION_ACTIONS_BY_OPERATION =
     ]),
     "candidate_card.remove": Object.freeze([
       "candidate_removed",
+    ]),
+    "candidate_card.save": Object.freeze([
+      "candidate_card_saved",
     ]),
     "candidate_card.carryover_sync":
       Object.freeze([
@@ -1162,6 +1168,8 @@ function assertStoredRevisionResult(
     CANDIDATE_CARD_REVISION_ACTIONS_BY_OPERATION[
       operation
     ];
+  const wholeSave =
+    operation === "candidate_card.save";
   const expectedChangedEntryId =
     operation === "candidate_card.remove"
       ? null
@@ -1169,14 +1177,34 @@ function assertStoredRevisionResult(
   if (
     !isPlainObject(result) ||
     Object.keys(result).sort().join("|") !==
-      "card|changedEntryId|revisionId" ||
+      (wholeSave
+        ? "card|changedEntryIds|revisionId"
+        : "card|changedEntryId|revisionId") ||
     !expectedActions ||
     !expectedActions.includes(
       revision.action
     ) ||
     result.revisionId !== revision.id ||
-    result.changedEntryId !==
-      expectedChangedEntryId ||
+    (
+      wholeSave
+        ? (
+            !Array.isArray(
+              result.changedEntryIds
+            ) ||
+            result.changedEntryIds.some(
+              (entryId, index, values) =>
+                !UUID_PATTERN.test(
+                  entryId || ""
+                ) ||
+                (
+                  index > 0 &&
+                  values[index - 1] >= entryId
+                )
+            )
+          )
+        : result.changedEntryId !==
+          expectedChangedEntryId
+    ) ||
     !isPlainObject(result.card) ||
     result.card.cardVersion !==
       revision.resulting_card_version ||
@@ -1273,6 +1301,9 @@ function createSqliteCandidateCardRepository({
   let updateCandidateMoveStatement;
   let updateCarryoverMoveStatement;
   let deleteCandidateStatement;
+  let stageWholeCandidateMoveStatement;
+  let updateWholeCandidateStatement;
+  let insertRevisionEntryChangeStatement;
   let playerEligibilityStatement;
   let playerOwnershipStatement;
   let playerContractStatement;
@@ -1992,6 +2023,100 @@ function createSqliteCandidateCardRepository({
           AND id = @entryId
           AND entry_kind = 'candidate'
           AND version = @expectedEntryVersion
+      `);
+    stageWholeCandidateMoveStatement =
+      database.prepare(`
+        UPDATE candidate_card_entries
+        SET placement_state = 'conflict',
+            conflict_code =
+              'CANDIDATE_CARD_SAVE_STAGING',
+            last_acknowledgement_revision_id = NULL,
+            last_edited_by_user_id = @actorUserId,
+            last_edited_by_membership_id =
+              @actorMembershipId,
+            last_edited_by_authority =
+              @actorAuthority,
+            updated_at_ms = @nowMs,
+            version = version + 1
+        WHERE league_id = @leagueId
+          AND season_id = @seasonId
+          AND fad_id = @fadId
+          AND card_id = @cardId
+          AND team_id = @teamId
+          AND id = @entryId
+          AND entry_kind = 'candidate'
+          AND version = @expectedEntryVersion
+      `);
+    updateWholeCandidateStatement =
+      database.prepare(`
+        UPDATE candidate_card_entries
+        SET effective_position_group =
+              @effectivePositionGroup,
+            requested_slot_group = @slotGroup,
+            requested_slot_number = @slotNumber,
+            placement_state = 'placed',
+            conflict_code = NULL,
+            proposed_total_value_cents =
+              @totalValueCents,
+            proposed_term_years = @termYears,
+            proposed_aav_cents = @aavCents,
+            eligibility_status =
+              @eligibilityStatus,
+            validation_code = @validationCode,
+            last_acknowledgement_revision_id = NULL,
+            last_edited_by_user_id = @actorUserId,
+            last_edited_by_membership_id =
+              @actorMembershipId,
+            last_edited_by_authority =
+              @actorAuthority,
+            updated_at_ms = @nowMs,
+            version = version + 1
+        WHERE league_id = @leagueId
+          AND season_id = @seasonId
+          AND fad_id = @fadId
+          AND card_id = @cardId
+          AND team_id = @teamId
+          AND id = @entryId
+          AND entry_kind = 'candidate'
+          AND version = @expectedEntryVersion
+      `);
+    insertRevisionEntryChangeStatement =
+      database.prepare(`
+        INSERT INTO candidate_card_revision_entry_changes (
+          league_id,
+          season_id,
+          fad_id,
+          card_id,
+          team_id,
+          revision_id,
+          entry_id,
+          player_id,
+          change_kind,
+          before_slot_key,
+          after_slot_key,
+          before_total_value_cents,
+          before_term_years,
+          after_total_value_cents,
+          after_term_years,
+          created_at_ms
+        ) VALUES (
+          @leagueId,
+          @seasonId,
+          @fadId,
+          @cardId,
+          @teamId,
+          @revisionId,
+          @entryId,
+          @playerId,
+          @changeKind,
+          @beforeSlotKey,
+          @afterSlotKey,
+          @beforeTotalValueCents,
+          @beforeTermYears,
+          @afterTotalValueCents,
+          @afterTermYears,
+          @nowMs
+        )
       `);
     playerEligibilityStatement =
       database.prepare(`
@@ -2927,6 +3052,69 @@ function createSqliteCandidateCardRepository({
     ) {
       incompatible(
         "Candidate Card projected entry evidence is incomplete.",
+        "CANDIDATE_CARD_ENTRY_EVIDENCE_INVALID"
+      );
+    }
+    return evidenceByEntryId;
+  }
+
+  function projectedWholeSaveEvidence({
+    scope,
+    beforeEntries,
+    simulation,
+    authority,
+  }) {
+    const evidenceByEntryId = new Map(
+      loadPrivateEntryEvidence(
+        scope,
+        beforeEntries
+      )
+    );
+    for (const change of simulation.changes) {
+      if (change.changeKind === "remove") {
+        evidenceByEntryId.delete(
+          change.entryId
+        );
+        continue;
+      }
+      const previous = evidenceByEntryId.get(
+        change.entryId
+      );
+      const playerFullName =
+        simulation.playerFullNamesByEntryId.get(
+          change.entryId
+        ) ?? previous?.playerFullName ?? null;
+      if (
+        typeof playerFullName !== "string" ||
+        playerFullName.length < 1 ||
+        typeof authority.actorDisplayName !==
+          "string" ||
+        authority.actorDisplayName.length < 1
+      ) {
+        incompatible(
+          "Candidate Card whole-save evidence is incomplete.",
+          "CANDIDATE_CARD_ENTRY_EVIDENCE_INVALID"
+        );
+      }
+      evidenceByEntryId.set(
+        change.entryId,
+        Object.freeze({
+          playerFullName,
+          editorDisplayName:
+            authority.actorDisplayName,
+        })
+      );
+    }
+    if (
+      evidenceByEntryId.size !==
+        simulation.entries.length ||
+      simulation.entries.some(
+        ({ entryId }) =>
+          !evidenceByEntryId.has(entryId)
+      )
+    ) {
+      incompatible(
+        "Candidate Card projected whole-save evidence is incomplete.",
         "CANDIDATE_CARD_ENTRY_EVIDENCE_INVALID"
       );
     }
@@ -4291,6 +4479,288 @@ function createSqliteCandidateCardRepository({
     });
   }
 
+  function sameCandidateOffer(entry, candidate) {
+    return (
+      entry.totalValueCents ===
+        candidate.totalValueCents &&
+      entry.termYears === candidate.termYears
+    );
+  }
+
+  function simulateWholeSave(
+    command,
+    currentEntries
+  ) {
+    const carryovers = currentEntries.filter(
+      ({ entryKind }) =>
+        entryKind === "carryover"
+    );
+    const currentCandidates =
+      currentEntries.filter(
+        ({ entryKind }) =>
+          entryKind === "candidate"
+      );
+    const desiredBySlot = new Map(
+      command.slots.map((slot, index) => [
+        slot.slotKey,
+        Object.freeze({
+          ...slot,
+          allocatedEntryId:
+            command.entryIds[index],
+        }),
+      ])
+    );
+    for (const carryover of carryovers) {
+      if (
+        desiredBySlot.get(carryover.slotKey)
+          ?.candidate !== null
+      ) {
+        conflict(
+          "A carryover slot must remain server-owned during a whole-card save.",
+          "CANDIDATE_CARRYOVER_LOCKED"
+        );
+      }
+    }
+
+    const currentByPlayer = new Map(
+      currentCandidates.map((entry) => [
+        entry.playerId,
+        entry,
+      ])
+    );
+    const preservedIds = new Set();
+    const nextCandidates = [];
+    const changes = [];
+    const playerFullNamesByEntryId =
+      new Map();
+
+    for (const desired of command.slots) {
+      if (desired.candidate === null) {
+        continue;
+      }
+      const candidate = desired.candidate;
+      const contract =
+        createCandidateCardPartialOfferContract(
+          {
+            totalValueCents:
+              candidate.totalValueCents,
+            termYears: candidate.termYears,
+          }
+        );
+      const authoritativePlayer =
+        deriveSelectablePlayer(
+          command.scope,
+          candidate.playerId,
+          desired.slotKey
+        );
+      const incomplete =
+        candidate.totalValueCents === null ||
+        candidate.termYears === null;
+      const current = currentByPlayer.get(
+        candidate.playerId
+      );
+      const sameOffer =
+        current !== undefined &&
+        sameCandidateOffer(
+          current,
+          candidate
+        );
+      const preserve =
+        current !== undefined &&
+        current.placementState === "placed" &&
+        (
+          current.slotKey === desired.slotKey ||
+          sameOffer
+        );
+      const allocatedEntryId =
+        desiredBySlot.get(desired.slotKey)
+          .allocatedEntryId;
+      const entryId = preserve
+        ? current.entryId
+        : allocatedEntryId;
+      if (
+        !preserve &&
+        currentEntries.some(
+          (entry) => entry.entryId === entryId
+        )
+      ) {
+        conflict(
+          "A generated Candidate entry identifier already exists.",
+          "CANDIDATE_CARD_PRECONDITION_FAILED"
+        );
+      }
+      const eligibilityStatus = incomplete
+        ? "invalid"
+        : authoritativePlayer
+            .eligibilityStatus;
+      const validationCode = incomplete
+        ? "CANDIDATE_CONTRACT_INCOMPLETE"
+        : authoritativePlayer.validationCode;
+      const moved =
+        preserve &&
+        current.slotKey !== desired.slotKey;
+      const edited =
+        preserve &&
+        !moved &&
+        (
+          !sameOffer ||
+          current.effectivePositionGroup !==
+            authoritativePlayer
+              .effectivePositionGroup ||
+          current.eligibilityStatus !==
+            eligibilityStatus ||
+          current.validationCode !==
+            validationCode
+        );
+      const changed = moved || edited;
+      const entryVersion = preserve
+        ? current.entryVersion +
+          (moved ? 2 : edited ? 1 : 0)
+        : 1;
+      const next = Object.freeze({
+        ...(preserve ? current : {}),
+        entryId,
+        entryVersion,
+        entryKind: "candidate",
+        playerId: candidate.playerId,
+        effectivePositionGroup:
+          authoritativePlayer
+            .effectivePositionGroup,
+        slotKey: desired.slotKey,
+        placementState: "placed",
+        conflictCode: null,
+        ownershipId: null,
+        contractId: null,
+        sourceRosterCategory: null,
+        contractType: "normal",
+        originalTotalValueCents: null,
+        originalTermYears: null,
+        aavCents: contract.aavCents,
+        remainingYears: null,
+        totalValueCents:
+          candidate.totalValueCents,
+        termYears: candidate.termYears,
+        eligibilityStatus,
+        validationCode,
+        createdByUserId: preserve
+          ? current.createdByUserId
+          : command.actor.userId,
+        createdByMembershipId: preserve
+          ? current.createdByMembershipId
+          : command.actor.membershipId,
+        createdByAuthority: preserve
+          ? current.createdByAuthority
+          : command.actor.authority,
+        lastEditedByUserId: changed || !preserve
+          ? command.actor.userId
+          : current.lastEditedByUserId,
+        lastEditedByMembershipId:
+          changed || !preserve
+            ? command.actor.membershipId
+            : current
+                .lastEditedByMembershipId,
+        lastEditedByAuthority:
+          changed || !preserve
+            ? command.actor.authority
+            : current.lastEditedByAuthority,
+        lastAcknowledgementRevisionId: null,
+        createdAtMs: preserve
+          ? current.createdAtMs
+          : command.nowMs,
+        updatedAtMs: changed || !preserve
+          ? command.nowMs
+          : current.updatedAtMs,
+      });
+      nextCandidates.push(next);
+      playerFullNamesByEntryId.set(
+        entryId,
+        authoritativePlayer.playerFullName
+      );
+      if (preserve) {
+        preservedIds.add(current.entryId);
+        if (changed) {
+          changes.push(
+            Object.freeze({
+              changeKind: moved
+                ? "move"
+                : "edit",
+              entryId,
+              playerId: candidate.playerId,
+              beforeSlotKey: current.slotKey,
+              afterSlotKey: desired.slotKey,
+              beforeTotalValueCents:
+                current.totalValueCents,
+              beforeTermYears:
+                current.termYears,
+              afterTotalValueCents:
+                candidate.totalValueCents,
+              afterTermYears:
+                candidate.termYears,
+              currentEntry: current,
+              nextEntry: next,
+            })
+          );
+        }
+      } else {
+        changes.push(
+          Object.freeze({
+            changeKind: "add",
+            entryId,
+            playerId: candidate.playerId,
+            beforeSlotKey: null,
+            afterSlotKey: desired.slotKey,
+            beforeTotalValueCents: null,
+            beforeTermYears: null,
+            afterTotalValueCents:
+              candidate.totalValueCents,
+            afterTermYears:
+              candidate.termYears,
+            currentEntry: null,
+            nextEntry: next,
+          })
+        );
+      }
+    }
+
+    for (const current of currentCandidates) {
+      if (!preservedIds.has(current.entryId)) {
+        changes.push(
+          Object.freeze({
+            changeKind: "remove",
+            entryId: current.entryId,
+            playerId: current.playerId,
+            beforeSlotKey: current.slotKey,
+            afterSlotKey: null,
+            beforeTotalValueCents:
+              current.totalValueCents,
+            beforeTermYears: current.termYears,
+            afterTotalValueCents: null,
+            afterTermYears: null,
+            currentEntry: current,
+            nextEntry: null,
+          })
+        );
+      }
+    }
+    changes.sort((left, right) =>
+      left.entryId.localeCompare(right.entryId)
+    );
+    return Object.freeze({
+      actionName: "candidate_card_saved",
+      affectedEntryId: null,
+      playerId: null,
+      entries: Object.freeze([
+        ...carryovers,
+        ...nextCandidates,
+      ]),
+      changes: Object.freeze(changes),
+      changedEntryIds: Object.freeze(
+        changes.map(({ entryId }) => entryId)
+      ),
+      playerFullNamesByEntryId,
+    });
+  }
+
   function updateCard(
     command,
     evaluation,
@@ -4526,6 +4996,169 @@ function createSqliteCandidateCardRepository({
         "The Candidate Card entry changed during the mutation.",
         "CANDIDATE_CARD_PRECONDITION_FAILED"
       );
+    }
+  }
+
+  function wholeCandidateParameters(
+    command,
+    entry,
+    expectedEntryVersion
+  ) {
+    const slot = parseCandidateCardSlotKey(
+      entry.slotKey
+    );
+    return {
+      ...command.scope,
+      entryId: entry.entryId,
+      playerId: entry.playerId,
+      effectivePositionGroup:
+        entry.effectivePositionGroup,
+      slotGroup: slot.slotGroup,
+      slotNumber: slot.slotNumber,
+      totalValueCents:
+        entry.totalValueCents,
+      termYears: entry.termYears,
+      aavCents: entry.aavCents,
+      eligibilityStatus:
+        entry.eligibilityStatus,
+      validationCode: entry.validationCode,
+      acknowledgementRevisionId: null,
+      actorUserId: command.actor.userId,
+      actorMembershipId:
+        command.actor.membershipId,
+      actorAuthority:
+        command.actor.authority,
+      nowMs: command.nowMs,
+      expectedEntryVersion,
+    };
+  }
+
+  function applyWholeSaveEntries(
+    command,
+    simulation
+  ) {
+    for (const change of simulation.changes) {
+      if (change.changeKind !== "remove") {
+        continue;
+      }
+      if (
+        deleteCandidateStatement.run({
+          ...command.scope,
+          entryId: change.entryId,
+          expectedEntryVersion:
+            change.currentEntry.entryVersion,
+        }).changes !== 1
+      ) {
+        conflict(
+          "A Candidate Card entry changed during the whole-card save.",
+          "CANDIDATE_CARD_PRECONDITION_FAILED"
+        );
+      }
+    }
+    for (const change of simulation.changes) {
+      if (change.changeKind !== "move") {
+        continue;
+      }
+      if (
+        stageWholeCandidateMoveStatement.run({
+          ...command.scope,
+          entryId: change.entryId,
+          expectedEntryVersion:
+            change.currentEntry.entryVersion,
+          actorUserId:
+            command.actor.userId,
+          actorMembershipId:
+            command.actor.membershipId,
+          actorAuthority:
+            command.actor.authority,
+          nowMs: command.nowMs,
+        }).changes !== 1
+      ) {
+        conflict(
+          "A Candidate Card move changed during the whole-card save.",
+          "CANDIDATE_CARD_PRECONDITION_FAILED"
+        );
+      }
+    }
+    for (const change of simulation.changes) {
+      if (
+        change.changeKind !== "edit" &&
+        change.changeKind !== "move"
+      ) {
+        continue;
+      }
+      const expectedEntryVersion =
+        change.currentEntry.entryVersion +
+        (change.changeKind === "move" ? 1 : 0);
+      if (
+        updateWholeCandidateStatement.run(
+          wholeCandidateParameters(
+            command,
+            change.nextEntry,
+            expectedEntryVersion
+          )
+        ).changes !== 1
+      ) {
+        conflict(
+          "A Candidate Card entry changed during the whole-card save.",
+          "CANDIDATE_CARD_PRECONDITION_FAILED"
+        );
+      }
+    }
+    for (const change of simulation.changes) {
+      if (change.changeKind !== "add") {
+        continue;
+      }
+      const parameters =
+        wholeCandidateParameters(
+          command,
+          change.nextEntry,
+          0
+        );
+      if (
+        insertCandidateStatement.run(
+          parameters
+        ).changes !== 1
+      ) {
+        conflict(
+          "A Candidate Card entry could not be added during the whole-card save.",
+          "CANDIDATE_CARD_PRECONDITION_FAILED"
+        );
+      }
+    }
+  }
+
+  function insertWholeSaveChanges(
+    command,
+    simulation
+  ) {
+    for (const change of simulation.changes) {
+      if (
+        insertRevisionEntryChangeStatement.run({
+          ...command.scope,
+          revisionId: command.revisionId,
+          entryId: change.entryId,
+          playerId: change.playerId,
+          changeKind: change.changeKind,
+          beforeSlotKey:
+            change.beforeSlotKey,
+          afterSlotKey: change.afterSlotKey,
+          beforeTotalValueCents:
+            change.beforeTotalValueCents,
+          beforeTermYears:
+            change.beforeTermYears,
+          afterTotalValueCents:
+            change.afterTotalValueCents,
+          afterTermYears:
+            change.afterTermYears,
+          nowMs: command.nowMs,
+        }).changes !== 1
+      ) {
+        conflict(
+          "Candidate Card whole-save provenance could not be recorded.",
+          "CANDIDATE_CARD_PRECONDITION_FAILED"
+        );
+      }
     }
   }
 
@@ -4984,6 +5617,320 @@ function createSqliteCandidateCardRepository({
         context,
         currentAuthority,
         { exactPrivateResult: true }
+      );
+    });
+
+  function normalizeCurrentWholeSaveCommand(
+    rawCommand
+  ) {
+    exactObject(
+      rawCommand,
+      [
+        "leagueId",
+        "fadId",
+        "teamId",
+        "viewer",
+        "expectedCardVersion",
+        "nowMs",
+        "idempotency",
+        "revisionId",
+        "slots",
+        "entryIds",
+      ],
+      "route-scoped Candidate Card whole-save command"
+    );
+    const nowMs = safeTimestamp(
+      rawCommand.nowMs,
+      "route-scoped Candidate Card whole-save timestamp"
+    );
+    const normalized =
+      normalizeCandidateCardWholeSave({
+        slots: rawCommand.slots,
+      });
+    if (
+      !Array.isArray(rawCommand.entryIds) ||
+      rawCommand.entryIds.length !==
+        CANDIDATE_CARD_SLOT_KEYS.length
+    ) {
+      invalid(
+        "Candidate Card whole-save entry identifiers are invalid.",
+        "ENTRY_IDS_INVALID"
+      );
+    }
+    const entryIds = rawCommand.entryIds.map(
+      (entryId, index) => {
+        if (
+          normalized.slots[index].candidate ===
+          null
+        ) {
+          if (entryId !== null) {
+            invalid(
+              "Empty Candidate slots cannot allocate entry identifiers.",
+              "ENTRY_IDS_INVALID"
+            );
+          }
+          return null;
+        }
+        return stableId(
+          entryId,
+          "Candidate entry identifier"
+        );
+      }
+    );
+    if (
+      new Set(
+        entryIds.filter(
+          (entryId) => entryId !== null
+        )
+      ).size !==
+      entryIds.filter(
+        (entryId) => entryId !== null
+      ).length
+    ) {
+      invalid(
+        "Candidate Card entry identifiers must be unique.",
+        "ENTRY_IDS_INVALID"
+      );
+    }
+    return Object.freeze({
+      routeScope: Object.freeze({
+        leagueId: stableId(
+          rawCommand.leagueId,
+          "league identifier"
+        ),
+        fadId: stableId(
+          rawCommand.fadId,
+          "Free Agent Draft identifier"
+        ),
+        teamId: stableId(
+          rawCommand.teamId,
+          "team identifier"
+        ),
+      }),
+      viewer: normalizeViewer(rawCommand.viewer),
+      expectedCardVersion:
+        normalizeCandidateCardExpectedVersion(
+          rawCommand.expectedCardVersion
+        ),
+      nowMs,
+      idempotency: normalizeIdempotency(
+        Object.freeze({
+          ...rawCommand.idempotency,
+          clientKey:
+            normalizeCandidateCardIdempotencyKey(
+              rawCommand.idempotency
+                ?.clientKey
+            ),
+        }),
+        nowMs
+      ),
+      revisionId: stableId(
+        rawCommand.revisionId,
+        "Candidate Card revision identifier"
+      ),
+      slots: normalized.slots,
+      entryIds: Object.freeze(entryIds),
+    });
+  }
+
+  function executeWholeSave(
+    command,
+    currentAuthority
+  ) {
+    const operation =
+      CANDIDATE_CARD_OPERATIONS.save;
+    const requestHash = sha256({
+      scope: command.scope,
+      expectedCardVersion:
+        command.expectedCardVersion,
+      slots: command.slots,
+    });
+    const replay = replayMutationIfPresent({
+      scope: command.scope,
+      actor: command.actor,
+      idempotency: command.idempotency,
+      operation,
+      requestHash,
+    });
+    if (replay) return replay;
+
+    insertStartedIdempotency({
+      scope: command.scope,
+      actor: command.actor,
+      idempotency: command.idempotency,
+      operation,
+      requestHash,
+      nowMs: command.nowMs,
+    });
+    const before = loadAggregate(command.scope);
+    const authority = ensureOpenMutationContext(
+      before?.context ?? null,
+      command,
+      currentAuthority
+    );
+    const simulation = simulateWholeSave(
+      command,
+      before.entries
+    );
+    const evaluation = calculateEvaluation(
+      command.scope,
+      simulation.entries
+    );
+    const warnings = warningCodes(evaluation);
+    const expectedCard =
+      projectionFromEvaluation({
+        context: before.context,
+        evaluation,
+        entries: simulation.entries,
+        cardVersion:
+          command.expectedCardVersion + 1,
+      });
+    const responseCard = exactPrivateProjection({
+      aggregate: Object.freeze({
+        context: before.context,
+        entries: simulation.entries,
+        evaluation,
+      }),
+      authority,
+      nowMs: command.nowMs,
+      evidenceByEntryId:
+        projectedWholeSaveEvidence({
+          scope: command.scope,
+          beforeEntries: before.entries,
+          simulation,
+          authority,
+        }),
+      scope: command.scope,
+      cardVersion:
+        command.expectedCardVersion + 1,
+      commissionerInterventions:
+        projectedInterventionRows({
+          scope: command.scope,
+          command,
+          simulation,
+          authority,
+        }),
+    });
+    const result = deepFreeze({
+      card: responseCard,
+      revisionId: command.revisionId,
+      changedEntryIds:
+        simulation.changedEntryIds,
+    });
+
+    updateCard(command, evaluation);
+    insertRevision({
+      command,
+      simulation,
+      beforeCard: before.card,
+      result,
+      warnings,
+    });
+    applyWholeSaveEntries(command, simulation);
+    insertWholeSaveChanges(command, simulation);
+
+    const after = loadAggregate(command.scope);
+    if (
+      after.context.card_version !==
+        command.expectedCardVersion + 1 ||
+      !isDeepStrictEqual(after.card, expectedCard)
+    ) {
+      incompatible(
+        "Candidate Card whole-save persistence drifted from its approved projection.",
+        "CANDIDATE_CARD_RESULT_DRIFT"
+      );
+    }
+    const actualPrivateCard =
+      exactPrivateProjection({
+        aggregate: after,
+        authority,
+        nowMs: command.nowMs,
+        evidenceByEntryId:
+          loadPrivateEntryEvidence(
+            command.scope,
+            after.entries
+          ),
+        scope: command.scope,
+      });
+    if (
+      !isDeepStrictEqual(
+        actualPrivateCard,
+        responseCard
+      )
+    ) {
+      incompatible(
+        "Candidate Card whole-save private response drifted after persistence.",
+        "CANDIDATE_CARD_RESULT_DRIFT"
+      );
+    }
+    writeMutationSideEffects({
+      kind: "candidate_card_changed",
+      scope: command.scope,
+      actor: command.actor,
+      authority,
+      action: "candidate_card_saved",
+      revisionId: command.revisionId,
+      cardVersion:
+        after.context.card_version,
+      changedAtMs: command.nowMs,
+    });
+    if (beforeCommit) {
+      beforeCommit({
+        kind: "candidate_card_mutation",
+        result,
+      });
+    }
+    completeIdempotency({
+      scope: command.scope,
+      actor: command.actor,
+      idempotency: command.idempotency,
+      operation,
+      requestHash,
+      nowMs: command.nowMs,
+      resultType: IDEMPOTENCY_RESULT_TYPE,
+      resultId: command.revisionId,
+    });
+    return result;
+  }
+
+  const currentWholeSaveTransaction =
+    database.transaction((rawCommand) => {
+      const current =
+        normalizeCurrentWholeSaveCommand(
+          rawCommand
+        );
+      const scope = resolveRouteScope(
+        current.routeScope
+      );
+      if (!scope) return null;
+      const context = loadContext(scope);
+      if (!context) return null;
+      const actor = routeViewerActor(
+        scope,
+        current.viewer
+      );
+      if (!actor) return null;
+      const currentAuthority = privateAuthority({
+        scope,
+        actor,
+        context,
+        nowMs: current.nowMs,
+      });
+      if (!currentAuthority) return null;
+      const command = Object.freeze({
+        scope,
+        actor,
+        expectedCardVersion:
+          current.expectedCardVersion,
+        nowMs: current.nowMs,
+        idempotency: current.idempotency,
+        revisionId: current.revisionId,
+        slots: current.slots,
+        entryIds: current.entryIds,
+      });
+      return executeWholeSave(
+        command,
+        currentAuthority
       );
     });
 
@@ -8230,6 +9177,26 @@ function createSqliteCandidateCardRepository({
         throw mapRepositoryError(error, {
           operation:
             "mutateCurrentCandidateCard",
+          tableName: "candidate_cards",
+        });
+      }
+    },
+
+    saveCurrent(rawCommand) {
+      try {
+        return currentWholeSaveTransaction.immediate(
+          rawCommand
+        );
+      } catch (error) {
+        if (
+          error?.name ===
+          "CandidateCardPolicyError"
+        ) {
+          throw error;
+        }
+        throw mapRepositoryError(error, {
+          operation:
+            "saveCurrentCandidateCard",
           tableName: "candidate_cards",
         });
       }

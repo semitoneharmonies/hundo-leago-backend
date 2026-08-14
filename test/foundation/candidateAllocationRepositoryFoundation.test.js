@@ -3696,6 +3696,178 @@ describe(
     );
 
     test(
+      "never ranks or creates an offer event for an incomplete snapshot row",
+      (t) => {
+        const nowMs = DEADLINE_AT_MS + 1_000;
+        const runtime = createRuntime(t, {
+          nowMs,
+          offers: [
+            {
+              totalValueCents: 600,
+              termYears: 2,
+              eligibilityStatus: "valid",
+              cardAllocationEligibility:
+                "eligible",
+              slotGroup: "D",
+              positionGroup: "D",
+            },
+            {
+              totalValueCents: 900,
+              termYears: 3,
+              eligibilityStatus: "valid",
+              cardAllocationEligibility:
+                "eligible",
+              slotGroup: "D",
+              positionGroup: "D",
+            },
+          ],
+        });
+        const triggers = captureAndDropTriggers(
+          runtime.database
+        );
+        runtime.database.prepare(`
+          UPDATE candidate_card_snapshot_entries
+          SET proposed_term_years = NULL,
+              proposed_aav_cents = NULL,
+              eligibility_status = 'invalid',
+              validation_code =
+                'CANDIDATE_CONTRACT_INCOMPLETE'
+          WHERE id = ?
+        `).run(
+          runtime.identities[1].snapshotEntryId
+        );
+        restoreTriggers(runtime.database, triggers);
+
+        const result =
+          runtime.repository.resolvePending(
+            runtime.command
+          );
+        assert.equal(
+          result.status,
+          "automatic_award"
+        );
+        assert.equal(
+          result.winner.snapshotEntryId,
+          runtime.identities[0].snapshotEntryId
+        );
+        assert.deepEqual(
+          runtime.database.prepare(`
+            SELECT snapshot_entry_id
+            FROM free_agent_draft_allocation_events
+            WHERE event_kind = 'offer_considered'
+            ORDER BY snapshot_entry_id
+          `).all(),
+          [
+            {
+              snapshot_entry_id:
+                runtime.identities[0]
+                  .snapshotEntryId,
+            },
+          ]
+        );
+      }
+    );
+
+    test(
+      "resolves a restricted tie from normalized whole-card save provenance",
+      (t) => {
+        const nowMs =
+          ROLLOVER_ONE_CREATION_CUTOFF_AT_MS -
+          1;
+        const runtime = createRuntime(t, {
+          nowMs,
+          allowImmediateRestrictedActivation:
+            true,
+          offers: [
+            {
+              totalValueCents: 600,
+              termYears: 2,
+              eligibilityStatus: "valid",
+              cardAllocationEligibility:
+                "eligible",
+              slotGroup: "D",
+              positionGroup: "D",
+            },
+            {
+              totalValueCents: 600,
+              termYears: 2,
+              eligibilityStatus: "warning",
+              cardAllocationEligibility:
+                "eligible",
+              slotGroup: "D",
+              positionGroup: "D",
+            },
+          ],
+        });
+        const triggers = captureAndDropTriggers(
+          runtime.database
+        );
+        for (const identity of
+          runtime.identities) {
+          runtime.database.prepare(`
+            UPDATE candidate_card_revisions
+            SET action = 'candidate_card_saved',
+                affected_entry_id = NULL,
+                player_id = NULL
+            WHERE id = ?
+          `).run(identity.candidateRevisionId);
+          insert(
+            runtime.database,
+            "candidate_card_revision_entry_changes",
+            {
+              league_id: IDS.league,
+              season_id: IDS.season,
+              fad_id: IDS.fad,
+              card_id: identity.cardId,
+              team_id: identity.teamId,
+              revision_id:
+                identity.candidateRevisionId,
+              entry_id: identity.entryId,
+              player_id: IDS.player,
+              change_kind: "add",
+              before_slot_key: null,
+              after_slot_key: "D01",
+              before_total_value_cents: null,
+              before_term_years: null,
+              after_total_value_cents: 600,
+              after_term_years: 2,
+              created_at_ms:
+                OPENED_AT_MS + 1,
+            }
+          );
+        }
+        restoreTriggers(runtime.database, triggers);
+
+        const result =
+          runtime.repository.resolvePending(
+            runtime.command
+          );
+        assert.equal(
+          result.status,
+          "restricted_active"
+        );
+        assert.equal(
+          result.restrictedAuction.participants
+            .length,
+          2
+        );
+        assert.equal(
+          runtime.database.prepare(`
+            SELECT COUNT(*) AS count
+            FROM free_agent_draft_auction_participants
+            WHERE originating_candidate_revision_id IN (?, ?)
+          `).get(
+            runtime.identities[0]
+              .candidateRevisionId,
+            runtime.identities[1]
+              .candidateRevisionId
+          ).count,
+          2
+        );
+      }
+    );
+
+    test(
       "validates the immediate-activation capability and rolls an unexpected quarantine failure back completely",
       (t) => {
         const nowMs =

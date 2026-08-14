@@ -26,6 +26,11 @@ const {
 } = require(
   "../../src/domain/freeAgentDraft/candidateEligiblePlayerSearchPolicy"
 );
+const {
+  CANDIDATE_CARD_SLOT_KEYS,
+} = require(
+  "../../src/domain/freeAgentDraft/candidateCardPolicy"
+);
 
 const ROOT_DIRECTORY = path.resolve(
   __dirname,
@@ -1304,6 +1309,46 @@ function currentAddCommand(
     idempotency: command.idempotency,
     revisionId: command.revisionId,
     action: command.action,
+  };
+}
+
+function wholeSaveCommand(
+  runtime,
+  {
+    expectedCardVersion,
+    candidates = {},
+    requestId,
+    clientKey,
+    revisionId,
+    entryIdBase,
+  }
+) {
+  const slots = CANDIDATE_CARD_SLOT_KEYS.map(
+    (slotKey) => ({
+      slotKey,
+      candidate: candidates[slotKey] ?? null,
+    })
+  );
+  let allocated = 0;
+  const entryIds = slots.map(({ candidate }) =>
+    candidate === null
+      ? null
+      : uuid(entryIdBase + allocated++)
+  );
+  return {
+    leagueId: runtime.ids.league,
+    fadId: runtime.ids.fad,
+    teamId: runtime.ids.teamOne,
+    viewer: privateViewer(managerOne(runtime)),
+    expectedCardVersion,
+    nowMs: COMMAND_AT_MS,
+    idempotency: idempotency(
+      requestId,
+      clientKey
+    ),
+    revisionId,
+    slots,
+    entryIds,
   };
 }
 
@@ -8046,3 +8091,342 @@ describe(
     );
   }
 );
+
+test("SQLite whole-card save persists partial rows atomically, preserves safe identities, records normalized changes, and replays exactly", (t) => {
+  const runtime = createRuntime(t);
+  const partialPlayerId = uuid(9_101);
+  const completePlayerId = uuid(9_102);
+  seedSelectablePlayer(runtime, {
+    playerId: partialPlayerId,
+    fullName: "Partial Forward",
+  });
+  seedSelectablePlayer(runtime, {
+    playerId: completePlayerId,
+    fullName: "Complete Forward",
+  });
+  const first = wholeSaveCommand(runtime, {
+    expectedCardVersion: 1,
+    candidates: {
+      F01: {
+        playerId: partialPlayerId,
+        totalValueCents: null,
+        termYears: 3,
+      },
+      F02: {
+        playerId: completePlayerId,
+        totalValueCents: 300,
+        termYears: 1,
+      },
+    },
+    requestId: uuid(9_110),
+    clientKey: "whole-save-one",
+    revisionId: uuid(9_111),
+    entryIdBase: 9_120,
+  });
+  const firstResult =
+    runtime.repository.saveCurrent(first);
+  assert.equal(firstResult.card.cardVersion, 2);
+  assert.deepEqual(firstResult.changedEntryIds, [
+    uuid(9_120),
+    uuid(9_121),
+  ]);
+  const partialSlot = firstResult.card.slots[0];
+  assert.equal(partialSlot.aavCents, null);
+  assert.equal(
+    partialSlot.validation.status,
+    "invalid"
+  );
+  assert.deepEqual(partialSlot.validation.codes, [
+    "CANDIDATE_CONTRACT_INCOMPLETE",
+  ]);
+  assert.equal(
+    firstResult.card.capProjection
+      .proposedCandidateAavCents,
+    300
+  );
+  assert.deepEqual(
+    runtime.database
+      .prepare(`
+        SELECT action, affected_entry_id, player_id
+        FROM candidate_card_revisions
+        WHERE id = ?
+      `)
+      .get(first.revisionId),
+    {
+      action: "candidate_card_saved",
+      affected_entry_id: null,
+      player_id: null,
+    }
+  );
+  assert.deepEqual(
+    runtime.database
+      .prepare(`
+        SELECT entry_id, change_kind
+        FROM candidate_card_revision_entry_changes
+        WHERE revision_id = ?
+        ORDER BY entry_id
+      `)
+      .all(first.revisionId),
+    [
+      {
+        entry_id: uuid(9_120),
+        change_kind: "add",
+      },
+      {
+        entry_id: uuid(9_121),
+        change_kind: "add",
+      },
+    ]
+  );
+
+  const replay = runtime.repository.saveCurrent({
+    ...first,
+    idempotency: idempotency(
+      uuid(9_112),
+      "whole-save-one"
+    ),
+    revisionId: uuid(9_113),
+    entryIds: first.entryIds.map(
+      (entryId, index) =>
+        entryId === null
+          ? null
+          : uuid(9_130 + index)
+    ),
+  });
+  assert.deepEqual(replay, firstResult);
+  assert.equal(
+    count(
+      runtime.database,
+      "candidate_card_revisions",
+      "WHERE action = 'candidate_card_saved'"
+    ),
+    1
+  );
+
+  const beforeStale = databaseBytes(
+    runtime.database
+  );
+  assertRepositoryError(
+    () =>
+      runtime.repository.saveCurrent(
+        wholeSaveCommand(runtime, {
+          expectedCardVersion: 1,
+          candidates: {
+            F01: first.slots[0].candidate,
+            F02: first.slots[1].candidate,
+          },
+          requestId: uuid(9_114),
+          clientKey: "whole-save-stale",
+          revisionId: uuid(9_115),
+          entryIdBase: 9_180,
+        })
+      ),
+    "CANDIDATE_CARD_PRECONDITION_FAILED"
+  );
+  assert.equal(
+    databaseBytes(runtime.database),
+    beforeStale
+  );
+
+  const second = wholeSaveCommand(runtime, {
+    expectedCardVersion: 2,
+    candidates: {
+      F01: {
+        playerId: partialPlayerId,
+        totalValueCents: 300,
+        termYears: 3,
+      },
+      F03: {
+        playerId: completePlayerId,
+        totalValueCents: 300,
+        termYears: 1,
+      },
+    },
+    requestId: uuid(9_140),
+    clientKey: "whole-save-two",
+    revisionId: uuid(9_141),
+    entryIdBase: 9_150,
+  });
+  const secondResult =
+    runtime.repository.saveCurrent(second);
+  assert.deepEqual(secondResult.changedEntryIds, [
+    uuid(9_120),
+    uuid(9_121),
+  ]);
+  assert.deepEqual(
+    runtime.database
+      .prepare(`
+        SELECT id, requested_slot_group, requested_slot_number
+        FROM candidate_card_entries
+        WHERE card_id = ? AND entry_kind = 'candidate'
+        ORDER BY id
+      `)
+      .all(runtime.ids.cardOne),
+    [
+      {
+        id: uuid(9_120),
+        requested_slot_group: "F",
+        requested_slot_number: 1,
+      },
+      {
+        id: uuid(9_121),
+        requested_slot_group: "F",
+        requested_slot_number: 3,
+      },
+    ]
+  );
+  assert.deepEqual(
+    runtime.database
+      .prepare(`
+        SELECT entry_id, change_kind
+        FROM candidate_card_revision_entry_changes
+        WHERE revision_id = ?
+        ORDER BY entry_id
+      `)
+      .all(second.revisionId),
+    [
+      {
+        entry_id: uuid(9_120),
+        change_kind: "edit",
+      },
+      {
+        entry_id: uuid(9_121),
+        change_kind: "move",
+      },
+    ]
+  );
+
+  const third = wholeSaveCommand(runtime, {
+    expectedCardVersion: 3,
+    candidates: {
+      F01: {
+        playerId: partialPlayerId,
+        totalValueCents: 300,
+        termYears: 3,
+      },
+      F03: {
+        playerId: completePlayerId,
+        totalValueCents: 300,
+        termYears: 1,
+      },
+    },
+    requestId: uuid(9_160),
+    clientKey: "whole-save-noop",
+    revisionId: uuid(9_161),
+    entryIdBase: 9_170,
+  });
+  const thirdResult =
+    runtime.repository.saveCurrent(third);
+  assert.equal(thirdResult.card.cardVersion, 4);
+  assert.deepEqual(thirdResult.changedEntryIds, []);
+  assert.equal(
+    count(
+      runtime.database,
+      "candidate_card_revision_entry_changes",
+      "WHERE revision_id = ?",
+      third.revisionId
+    ),
+    0
+  );
+  assert.equal(runtime.mutationSideEffects.length, 3);
+});
+
+test("SQLite whole-card save preserves server-owned carryovers and rejects a client candidate in their slot without writes", (t) => {
+  const runtime = createRuntime(t);
+  const carryover = seedContractedCarryover(
+    runtime,
+    {
+      playerId: uuid(9_201),
+      ownershipId: uuid(9_202),
+      contractId: uuid(9_203),
+      entryId: uuid(9_204),
+    }
+  );
+  runtime.repository.synchronizeCarryovers({
+    scope: scope(runtime),
+    expectedCardVersion: 1,
+    nowMs: COMMAND_AT_MS,
+    revisionId: uuid(9_205),
+    carryovers: [carryover],
+    candidateConflicts: [],
+    candidateReplacements: [],
+  });
+  const preserve = wholeSaveCommand(runtime, {
+    expectedCardVersion: 2,
+    candidates: {},
+    requestId: uuid(9_206),
+    clientKey: "whole-save-carryover",
+    revisionId: uuid(9_207),
+    entryIdBase: 9_210,
+  });
+  const result =
+    runtime.repository.saveCurrent(preserve);
+  assert.equal(result.card.cardVersion, 3);
+  assert.deepEqual(result.changedEntryIds, []);
+  assert.equal(
+    result.card.slots[0].entryId,
+    carryover.entryId
+  );
+
+  const candidatePlayerId = uuid(9_208);
+  seedSelectablePlayer(runtime, {
+    playerId: candidatePlayerId,
+  });
+  const before = databaseBytes(runtime.database);
+  assertRepositoryError(
+    () =>
+      runtime.repository.saveCurrent(
+        wholeSaveCommand(runtime, {
+          expectedCardVersion: 3,
+          candidates: {
+            F01: {
+              playerId: candidatePlayerId,
+              totalValueCents: 100,
+              termYears: 1,
+            },
+          },
+          requestId: uuid(9_209),
+          clientKey:
+            "whole-save-carryover-replace",
+          revisionId: uuid(9_211),
+          entryIdBase: 9_220,
+        })
+      ),
+    "CANDIDATE_CARRYOVER_LOCKED"
+  );
+  assert.equal(databaseBytes(runtime.database), before);
+});
+
+test("SQLite whole-card save rolls back card, entries, revision, provenance, and idempotency at the final transaction seam", (t) => {
+  const runtime = createRuntime(t, {
+    beforeCommit() {
+      throw new Error("synthetic whole-save seam failure");
+    },
+  });
+  const playerId = uuid(9_301);
+  seedSelectablePlayer(runtime, { playerId });
+  const before = databaseBytes(runtime.database);
+  assert.throws(
+    () =>
+      runtime.repository.saveCurrent(
+        wholeSaveCommand(runtime, {
+          expectedCardVersion: 1,
+          candidates: {
+            F01: {
+              playerId,
+              totalValueCents: null,
+              termYears: null,
+            },
+          },
+          requestId: uuid(9_302),
+          clientKey: "whole-save-rollback",
+          revisionId: uuid(9_303),
+          entryIdBase: 9_310,
+        })
+      ),
+    (error) =>
+      error?.cause?.message ===
+      "synthetic whole-save seam failure"
+  );
+  assert.equal(databaseBytes(runtime.database), before);
+});

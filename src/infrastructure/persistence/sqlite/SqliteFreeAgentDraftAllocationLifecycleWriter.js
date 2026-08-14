@@ -611,6 +611,9 @@ function createSqliteFreeAgentDraftAllocationLifecycleWriter({
             AND candidate.season_id = draft.season_id
             AND candidate.fad_id = draft.id
             AND candidate.occupant_kind = 'candidate'
+            AND candidate.proposed_total_value_cents IS NOT NULL
+            AND candidate.proposed_term_years IS NOT NULL
+            AND candidate.proposed_aav_cents IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
               FROM free_agent_draft_allocation_events AS event
@@ -722,6 +725,9 @@ function createSqliteFreeAgentDraftAllocationLifecycleWriter({
         AND candidate.season_id = @seasonId
         AND candidate.fad_id = @fadId
         AND candidate.occupant_kind = 'candidate'
+        AND candidate.proposed_total_value_cents IS NOT NULL
+        AND candidate.proposed_term_years IS NOT NULL
+        AND candidate.proposed_aav_cents IS NOT NULL
       ORDER BY candidate.team_id, candidate.id
     `);
     notificationStatement = database.prepare(`

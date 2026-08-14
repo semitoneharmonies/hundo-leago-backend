@@ -374,6 +374,45 @@ function createCandidateCardOfferContract(
   });
 }
 
+function createCandidateCardPartialOfferContract(
+  input = {}
+) {
+  requireExactObject(input, [
+    "totalValueCents",
+    "termYears",
+  ]);
+  const totalValueCents =
+    input.totalValueCents === null
+      ? null
+      : safePositiveAmount(
+          input.totalValueCents,
+          "total_value_cents_invalid"
+        );
+  const termYears =
+    input.termYears === null
+      ? null
+      : safeTerm(
+          input.termYears,
+          "term_years_invalid"
+        );
+  if (
+    totalValueCents !== null &&
+    termYears !== null
+  ) {
+    return createCandidateCardOfferContract({
+      totalValueCents,
+      termYears,
+    });
+  }
+  return Object.freeze({
+    contractType: "normal",
+    totalValueCents,
+    termYears,
+    aavCents: null,
+    incomplete: true,
+  });
+}
+
 function buildSlotDescriptor(
   slotGroup,
   slotNumber
@@ -673,13 +712,14 @@ function validateCandidateCardCandidate(
     input.conflictCode
   );
   const contract =
-    createCandidateCardOfferContract({
+    createCandidateCardPartialOfferContract({
       totalValueCents:
         input.totalValueCents,
       termYears: input.termYears,
     });
   if (
     slot.slotGroup === "B" &&
+    contract.aavCents !== null &&
     contract.aavCents >
       CANDIDATE_CARD_BENCH_MAXIMUM_AAV_CENTS
   ) {
@@ -701,7 +741,19 @@ function validateCandidateCardCandidate(
       )
   );
   let validationCode = null;
-  if (eligibilityStatus === "valid") {
+  if (contract.incomplete) {
+    if (
+      eligibilityStatus !== "invalid" ||
+      input.validationCode !==
+        "CANDIDATE_CONTRACT_INCOMPLETE"
+    ) {
+      failInput(
+        "incomplete_candidate_validation_invalid"
+      );
+    }
+    validationCode =
+      "CANDIDATE_CONTRACT_INCOMPLETE";
+  } else if (eligibilityStatus === "valid") {
     if (input.validationCode !== null) {
       failInput(
         "valid_candidate_validation_code_present"
@@ -712,6 +764,14 @@ function validateCandidateCardCandidate(
       input.validationCode,
       "validation_code_invalid"
     );
+    if (
+      validationCode ===
+      "CANDIDATE_CONTRACT_INCOMPLETE"
+    ) {
+      failInput(
+        "complete_candidate_incomplete_code_present"
+      );
+    }
   }
   return deepFreeze({
     entryId,
@@ -855,6 +915,9 @@ function candidateParticipates(
   return (
     entry.entryKind === "candidate" &&
     entry.placementState === "placed" &&
+    entry.totalValueCents !== null &&
+    entry.termYears !== null &&
+    entry.aavCents !== null &&
     (
       entry.eligibilityStatus === "valid" ||
       entry.eligibilityStatus ===
@@ -1291,6 +1354,7 @@ module.exports = {
   CandidateCardPolicyError,
   calculateCandidateCardAavCents,
   createCandidateCardOfferContract,
+  createCandidateCardPartialOfferContract,
   createCandidateCardSlotStructure,
   evaluateCandidateCard,
   evaluateCandidateCardHelpAuthority,

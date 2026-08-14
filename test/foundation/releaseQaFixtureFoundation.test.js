@@ -56,6 +56,8 @@ const {
 
 const MIGRATIONS_DIRECTORY = path.resolve(__dirname, "..", "..", "database", "migrations");
 const FIXTURE_PASSWORD = "hundo";
+const REAL_CATALOG_FORWARD_COUNT = 500;
+const REAL_CATALOG_DEFENCE_COUNT = 250;
 const EXPECTED_IDENTITIES = Object.freeze({
   platformAdmin: Object.freeze({ displayName: "Admin", email: "admin@release-qa.example.test" }),
   leagueACommissioner: Object.freeze({ displayName: "Comm A", email: "comm.a@release-qa.example.test" }),
@@ -142,7 +144,7 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
 
   assert.deepEqual(first.manifest, second.manifest);
   assert.deepEqual(first.manifest, verifyReleaseQaFixture({ databasePath: firstPath }));
-  assert.equal(first.manifest.schemaVersion, 49);
+  assert.equal(first.manifest.schemaVersion, 50);
   assert.equal(first.manifest.manifestChecksum, checksumManifest(first.manifest));
   assert.match(first.manifest.manifestChecksum, /^[0-9a-f]{64}$/);
   assert.equal(first.manifest.global.leagueCount, 2);
@@ -531,6 +533,26 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
   const root = temporaryRoot(t);
   const sourceDatabasePath = path.join(root, "provider-catalog.sqlite3");
   const databasePath = path.join(root, "provider-release-qa.sqlite3");
+  const catalog = JSON.parse(
+    fs.readFileSync(
+      path.resolve(__dirname, "..", "..", "players.json"),
+      "utf8"
+    )
+  );
+  const selected = [
+    ...catalog.filter(
+      ({ active, position }) =>
+        active === true && position === "F"
+    ).slice(0, REAL_CATALOG_FORWARD_COUNT),
+    ...catalog.filter(
+      ({ active, position }) =>
+        active === true && position === "D"
+    ).slice(0, REAL_CATALOG_DEFENCE_COUNT),
+  ];
+  assert.equal(
+    selected.length,
+    REAL_CATALOG_FORWARD_COUNT + REAL_CATALOG_DEFENCE_COUNT
+  );
   const connection = openDatabase({
     databasePath: sourceDatabasePath,
     environment: "test",
@@ -558,38 +580,33 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
       nhl_team_abbreviation, active, source_version, source_payload_json,
       effective_at_ms, ended_at_ms, created_at_ms
     ) VALUES (
-      ?, ?, 'sportsdataio-discovery-lab', ?, ?, 'VAN', ?,
+      ?, ?, 'sportsdataio-discovery-lab', ?, ?, ?, ?,
       '2026REG', NULL, ?, NULL, ?
     )
   `);
-  for (let index = 0; index < 280; index += 1) {
-    const position = index < 190 ? "F" : "D";
-    const positionIndex = position === "F" ? index : index - 190;
+  for (const [index, player] of selected.entries()) {
     const playerId = providerUuid(10_000 + index);
-    const firstName = "NHL";
-    const lastName = `${position === "F" ? "Forward" : "Defence"} ${String(
-      index + 1
-    ).padStart(2, "0")}`;
     insertPlayer.run(
       playerId,
-      firstName,
-      lastName,
-      `${firstName} ${lastName}`,
-      positionIndex < 2 ? "2008-01-01" : "1998-01-01",
+      player.firstName,
+      player.lastName,
+      player.fullName,
+      player.birthDate,
       FIXTURE_NOW_MS,
       FIXTURE_NOW_MS
     );
     insertExternal.run(
       providerUuid(20_000 + index),
       playerId,
-      `provider-${index + 1}`,
+      String(player.id),
       FIXTURE_NOW_MS
     );
     insertSource.run(
       providerUuid(30_000 + index),
       playerId,
-      position === "F" ? "C" : "D",
-      position,
+      player.position,
+      player.position,
+      player.teamAbbrev ?? null,
       1,
       FIXTURE_NOW_MS,
       FIXTURE_NOW_MS
@@ -610,9 +627,13 @@ test("release-QA fixture uses and verifies retained provider-backed NHL identiti
     environment: "test",
   });
   const fadPlayers = selectCatalogPlayers(providerFixture.database);
+  const retainedNames = new Set(
+    selected.map(({ fullName }) => fullName)
+  );
   assert.equal(
     Object.values(fadPlayers).every(({ fullName }) =>
-      fullName.startsWith("NHL ") && !fullName.startsWith("Fixture Player ")
+      retainedNames.has(fullName) &&
+      !fullName.toLowerCase().startsWith("fixture player ")
     ),
     true
   );

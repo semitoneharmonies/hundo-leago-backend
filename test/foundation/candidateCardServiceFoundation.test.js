@@ -340,10 +340,11 @@ function runtime({
   eligibleResult = eligiblePage(),
   previewResult = revisionPreview(),
   mutationResult = candidateMutationResult,
+  saveResult = candidateMutationResult,
   helpResult = candidateHelpResult,
   nowMs = 123_456,
   secureIds = Array.from(
-    { length: 20 },
+    { length: 40 },
     (_, index) => uuid(40 + index)
   ),
 } = {}) {
@@ -396,6 +397,15 @@ function runtime({
         "function"
         ? mutationResult(command)
         : mutationResult;
+    },
+    saveCurrent(command) {
+      repositoryCalls.push(command);
+      if (saveResult instanceof Error) {
+        throw saveResult;
+      }
+      return typeof saveResult === "function"
+        ? saveResult(command)
+        : saveResult;
     },
     requestHelpCurrent(command) {
       repositoryCalls.push(command);
@@ -612,6 +622,19 @@ describe(
         );
         repository.mutateCurrent =
           function mutateCurrent() {};
+        assert.throws(
+          () =>
+            createCandidateCardService({
+              leagueAuthorization: {
+                requireActiveMembership() {},
+              },
+              repository,
+              clock: { nowMs() {} },
+            }),
+          /whole-card save repository/u
+        );
+        repository.saveCurrent =
+          function saveCurrent() {};
         assert.throws(
           () =>
             createCandidateCardService({
@@ -2216,3 +2239,86 @@ describe(
     );
   }
 );
+
+test("Candidate Card service sends one exact whole-card command and returns canonical sorted change identifiers", () => {
+  const input = {
+    slots: CANDIDATE_CARD_SLOT_KEYS.map(
+      (slotKey, index) => ({
+        slotKey,
+        candidate: index === 0
+          ? {
+              playerId: uuid(90),
+              totalValueCents: null,
+              termYears: 2,
+            }
+          : null,
+      })
+    ),
+  };
+  const context = runtime({
+    saveResult(command) {
+      return {
+        card: privateCard({
+          cardVersion:
+            command.expectedCardVersion + 1,
+        }),
+        revisionId: command.revisionId,
+        changedEntryIds: [command.entryIds[0]],
+      };
+    },
+  });
+  const result = context.service.saveCard({
+    authenticated: { valid: true },
+    leagueId: IDS.league,
+    fadId: IDS.fad,
+    teamId: IDS.team,
+    input,
+    expectedCardVersion: 1,
+    idempotencyKey: " whole-save ",
+  });
+  assert.equal(result.httpStatus, 200);
+  assert.deepEqual(result.data.changedEntryIds, [
+    uuid(42),
+  ]);
+  assert.deepEqual(context.repositoryCalls, [
+    {
+      leagueId: IDS.league,
+      fadId: IDS.fad,
+      teamId: IDS.team,
+      viewer: {
+        userId: IDS.user,
+        membershipId: IDS.membership,
+      },
+      expectedCardVersion: 1,
+      nowMs: 123_456,
+      idempotency: {
+        requestId: uuid(40),
+        clientKey: "whole-save",
+        expiresAtMs:
+          123_456 +
+          CANDIDATE_CARD_MUTATION_IDEMPOTENCY_LIFETIME_MS,
+      },
+      revisionId: uuid(41),
+      slots: [
+        {
+          slotKey: "F01",
+          candidate: {
+            playerId: uuid(90),
+            totalValueCents: null,
+            termYears: 2,
+          },
+        },
+        ...CANDIDATE_CARD_SLOT_KEYS.slice(1).map(
+          (slotKey) => ({
+            slotKey,
+            candidate: null,
+          })
+        ),
+      ],
+      entryIds: [
+        uuid(42),
+        ...Array(21).fill(null),
+      ],
+    },
+  ]);
+});

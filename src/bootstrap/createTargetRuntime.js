@@ -858,6 +858,11 @@ const TARGET_ENDPOINTS = Object.freeze([
   ],
   [
     "PUT",
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId",
+    "candidateCard",
+  ],
+  [
+    "PUT",
     "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/slots/:slotKey/candidate",
     "candidateCard",
   ],

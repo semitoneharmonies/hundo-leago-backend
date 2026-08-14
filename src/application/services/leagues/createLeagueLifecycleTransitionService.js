@@ -1076,7 +1076,8 @@ function inspectRolloverAttempt({
     ) ||
     !safePositiveInteger(value.targetScheduleVersion) ||
     !safeTimestamp(value.weekOneStartsAtMs) ||
-    value.version !== 1
+    value.version !==
+      (value.status === "started" ? 1 : 2)
   ) {
     failRollover("rollover_attempt_invalid");
   }
@@ -4861,9 +4862,7 @@ function createLeagueLifecycleTransitionService({
         receipt.weekOneMatchupWeekId !==
           binding.weekOneMatchupWeekId
       ) {
-        fail(
-          "SEASON_ROLLOVER_RESULT_UNAVAILABLE"
-        );
+        fail("SEASON_ROLLOVER_RESULT_UNAVAILABLE");
       }
     }
     return rolloverAttemptResult(attempt, true);
@@ -5074,12 +5073,12 @@ function createLeagueLifecycleTransitionService({
           preparation.attempt.attemptId ||
         attempt.status !== "blocked" ||
         attempt.terminalAtMs !== blockedAtMs ||
-        JSON.stringify(attempt.blockers) !==
-          JSON.stringify(blockers)
+        !isDeepStrictEqual(
+          attempt.blockers,
+          blockers
+        )
       ) {
-        fail(
-          "SEASON_ROLLOVER_RESULT_UNAVAILABLE"
-        );
+        fail("SEASON_ROLLOVER_RESULT_UNAVAILABLE");
       }
       const durable = inspectRolloverAttempt({
         value:
@@ -5091,8 +5090,7 @@ function createLeagueLifecycleTransitionService({
         binding,
       });
       if (
-        JSON.stringify(durable) !==
-        JSON.stringify(attempt)
+        !isDeepStrictEqual(durable, attempt)
       ) {
         fail(
           "SEASON_ROLLOVER_RESULT_UNAVAILABLE"
@@ -5246,9 +5244,7 @@ function createLeagueLifecycleTransitionService({
           JSON.stringify(durableReceipt) !==
           JSON.stringify(receipt)
         ) {
-          fail(
-            "SEASON_ROLLOVER_RESULT_UNAVAILABLE"
-          );
+          fail("SEASON_ROLLOVER_RESULT_UNAVAILABLE");
         }
         const attempt = inspectRolloverAttempt({
           value:
@@ -5266,9 +5262,7 @@ function createLeagueLifecycleTransitionService({
             receipt.rolloverId ||
           attempt.terminalAtMs !== nowMs
         ) {
-          fail(
-            "SEASON_ROLLOVER_RESULT_UNAVAILABLE"
-          );
+          fail("SEASON_ROLLOVER_RESULT_UNAVAILABLE");
         }
         if (
           preparation.triggerKind ===

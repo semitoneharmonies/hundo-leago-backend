@@ -339,6 +339,11 @@ const RESET_V1_POST_RESET_TABLE_POLICY = deepFreeze([
     treatment: "require_empty",
   },
   {
+    tableName: "candidate_card_revision_entry_changes",
+    introducedByMigrationId: 50,
+    treatment: "require_empty",
+  },
+  {
     tableName: "candidate_card_revisions",
     introducedByMigrationId: 24,
     treatment: "require_empty",

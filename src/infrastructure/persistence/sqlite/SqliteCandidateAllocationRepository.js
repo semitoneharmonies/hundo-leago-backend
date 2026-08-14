@@ -762,6 +762,9 @@ function createSqliteCandidateAllocationRepository({
         AND offer.fad_id = @fadId
         AND offer.player_id = @playerId
         AND offer.occupant_kind = 'candidate'
+        AND offer.proposed_total_value_cents IS NOT NULL
+        AND offer.proposed_term_years IS NOT NULL
+        AND offer.proposed_aav_cents IS NOT NULL
       ORDER BY offer.id
     `);
     revisionStatement = database.prepare(`
@@ -776,16 +779,87 @@ function createSqliteCandidateAllocationRepository({
         AND revision.fad_id = @fadId
         AND revision.card_id = @cardId
         AND revision.team_id = @teamId
-        AND revision.affected_entry_id =
-          @sourceEntryId
-        AND revision.player_id = @playerId
-        AND revision.action IN (
-          'candidate_added',
-          'candidate_edited',
-          'candidate_moved'
+        AND (
+          (
+            revision.affected_entry_id =
+              @sourceEntryId
+            AND revision.player_id = @playerId
+            AND revision.action IN (
+              'candidate_added',
+              'candidate_edited',
+              'candidate_moved'
+            )
+          )
+          OR (
+            revision.action =
+              'candidate_card_saved'
+            AND EXISTS (
+              SELECT 1
+              FROM candidate_card_revision_entry_changes AS change
+              WHERE change.league_id =
+                  revision.league_id
+                AND change.season_id =
+                  revision.season_id
+                AND change.fad_id = revision.fad_id
+                AND change.card_id = revision.card_id
+                AND change.team_id = revision.team_id
+                AND change.revision_id = revision.id
+                AND change.entry_id = @sourceEntryId
+                AND change.player_id = @playerId
+                AND change.change_kind IN (
+                  'add',
+                  'edit',
+                  'move'
+                )
+            )
+          )
         )
         AND revision.resulting_card_version <=
           @lockedCardVersion
+        AND NOT EXISTS (
+          SELECT 1
+          FROM candidate_card_revisions AS later_revision
+          WHERE later_revision.league_id =
+              revision.league_id
+            AND later_revision.card_id =
+              revision.card_id
+            AND later_revision.resulting_card_version >
+              revision.resulting_card_version
+            AND later_revision.resulting_card_version <=
+              @lockedCardVersion
+            AND (
+              (
+                later_revision.affected_entry_id =
+                  @sourceEntryId
+                AND later_revision.player_id = @playerId
+                AND later_revision.action IN (
+                  'candidate_added',
+                  'candidate_edited',
+                  'candidate_moved'
+                )
+              )
+              OR (
+                later_revision.action =
+                  'candidate_card_saved'
+                AND EXISTS (
+                  SELECT 1
+                  FROM candidate_card_revision_entry_changes AS later_change
+                  WHERE later_change.league_id =
+                      later_revision.league_id
+                    AND later_change.revision_id =
+                      later_revision.id
+                    AND later_change.entry_id =
+                      @sourceEntryId
+                    AND later_change.player_id = @playerId
+                    AND later_change.change_kind IN (
+                      'add',
+                      'edit',
+                      'move'
+                    )
+                )
+              )
+            )
+        )
       ORDER BY
         revision.resulting_card_version DESC,
         revision.occurred_at_ms DESC,

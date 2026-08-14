@@ -219,6 +219,11 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
           treatment: "require_empty",
         },
         {
+          tableName: "candidate_card_revision_entry_changes",
+          introducedByMigrationId: 50,
+          treatment: "require_empty",
+        },
+        {
           tableName: "candidate_card_revisions",
           introducedByMigrationId: 24,
           treatment: "require_empty",
@@ -457,9 +462,9 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
         },
       ]
     );
-    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 49);
-    assert.equal(classifiedTables.length, 131);
-    assert.equal(new Set(classifiedTables).size, 131);
+    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 50);
+    assert.equal(classifiedTables.length, 132);
+    assert.equal(new Set(classifiedTables).size, 132);
     assert.deepEqual(
       [...classifiedTables].sort(),
       [...catalogTables].sort()

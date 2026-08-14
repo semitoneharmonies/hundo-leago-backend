@@ -259,6 +259,7 @@ function createMatchupOccurrenceHandlers({
           input.runId,
           `${effectPrefix}:${matchup.id}`
         ),
+        providers: [provider],
         nowMs: input.observedAtMs,
         occurrenceExecution: input.occurrenceExecution,
       });

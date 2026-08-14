@@ -1283,12 +1283,12 @@ function installedTargetEndpoints(routers) {
 }
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 117 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 117);
+  test("declares 118 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 118);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      117
+      118
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -1405,14 +1405,14 @@ describe("M3-19 exact target endpoint dispatch", () => {
     );
   });
 
-  test("fails closed for all 19 dedicated FAD routes and preflights while preserving shared auction routes", async (t) => {
+  test("fails closed for all 20 dedicated FAD routes and preflights while preserving shared auction routes", async (t) => {
     const fadEndpoints = TARGET_ENDPOINTS.filter(({ routerKey }) =>
       ["candidateCard", "freeAgentDraft"].includes(routerKey)
     );
     const auctionEndpoints = TARGET_ENDPOINTS.filter(
       ({ routerKey }) => routerKey === "auction"
     );
-    assert.equal(fadEndpoints.length, 19);
+    assert.equal(fadEndpoints.length, 20);
     assert.equal(auctionEndpoints.length > 0, true);
 
     const writeGatePaths = [];
@@ -1547,7 +1547,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const options = runtimeOptions(database);
     const runtime = createTargetRuntime(options);
     assert.equal(runtime.migrationState.status, "exact");
-    assert.equal(runtime.migrationState.userVersion, 49);
+    assert.equal(runtime.migrationState.userVersion, 50);
     assert.equal(
       typeof runtime.services.league.auctionResolution.resolveDue,
       "function"
@@ -2031,6 +2031,10 @@ describe("M3-19 exact-schema target dependency composition", () => {
       ],
       [
         "PUT",
+        "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId",
+      ],
+      [
+        "PUT",
         "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/slots/:slotKey/candidate",
       ],
       [
@@ -2478,7 +2482,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 117);
+    assert.equal(TARGET_ENDPOINTS.length, 118);
   });
 
   test("runs FAD readiness through the composed target runtime and opens every Candidate Card atomically", async (t) => {

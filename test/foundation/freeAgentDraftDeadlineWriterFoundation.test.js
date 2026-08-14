@@ -566,6 +566,9 @@ function createSchema(database) {
         SELECT COUNT(DISTINCT player_id)
         FROM candidate_card_snapshot_entries
         WHERE fad_id = NEW.id AND occupant_kind = 'candidate'
+          AND proposed_total_value_cents IS NOT NULL
+          AND proposed_term_years IS NOT NULL
+          AND proposed_aav_cents IS NOT NULL
       ) THEN RAISE(ABORT, 'root requires exact allocations') END;
     END;
   `);
@@ -1398,6 +1401,71 @@ describe("SQLite Free Agent Draft deadline writer foundation", () => {
       assert.equal(payload.related.fadId, IDS.fad);
       assert.equal(Object.keys(payload.related).length, 8);
     }
+  });
+
+  test("snapshots a partial Candidate offer but creates no allocation or allocation job for it", (t) => {
+    const runtime = createRuntime(t, {
+      zeroCandidates: true,
+    });
+    insertEntry(runtime.database, {
+      id: IDS.candidateOne,
+      cardId: IDS.cardOne,
+      teamId: IDS.teamOne,
+      entryKind: "candidate",
+      playerId: IDS.playerA,
+      position: "F",
+      slotGroup: "F",
+      slotNumber: 1,
+      placementState: "placed",
+      proposedTotal: 900,
+      proposedTerm: null,
+      proposedAav: null,
+      eligibilityStatus: "invalid",
+      validationCode:
+        "CANDIDATE_CONTRACT_INCOMPLETE",
+    });
+    const result = runtime.writer.executeClaimed(
+      command(),
+      runtime.lifecycleRepository
+    );
+    assert.equal(result.cardCount, 1);
+    assert.equal(result.allocationCount, 0);
+    assert.deepEqual(
+      runtime.database.prepare(`
+        SELECT occupant_kind,
+               proposed_total_value_cents,
+               proposed_term_years,
+               proposed_aav_cents,
+               eligibility_status,
+               validation_code
+        FROM candidate_card_snapshot_entries
+        WHERE source_entry_id = ?
+      `).get(IDS.candidateOne),
+      {
+        occupant_kind: "candidate",
+        proposed_total_value_cents: 900,
+        proposed_term_years: null,
+        proposed_aav_cents: null,
+        eligibility_status: "invalid",
+        validation_code:
+          "CANDIDATE_CONTRACT_INCOMPLETE",
+      }
+    );
+    assert.equal(
+      runtime.database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM free_agent_draft_player_allocations
+      `).get().count,
+      0
+    );
+    assert.equal(
+      runtime.database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM job_runs
+        WHERE job_type = 'fad_allocation'
+      `).get().count,
+      0
+    );
   });
 
   test("replays the durable terminal result without re-running deadline work", (t) => {

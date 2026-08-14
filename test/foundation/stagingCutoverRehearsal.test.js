@@ -371,7 +371,7 @@ describe("M2-14 staging cutover and rollback rehearsal", () => {
     );
   });
 
-  test("reconciles the schema-49 activation and rollback copies", async (t) => {
+  test("reconciles the schema-50 activation and rollback copies", async (t) => {
     const attempt = createImportedAttempt(t);
     const source = databaseReconciliation(
       attempt.databasePath
@@ -388,7 +388,7 @@ describe("M2-14 staging cutover and rollback rehearsal", () => {
     const expectedLedger = discoverMigrations({
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     })
-      .filter(({ id }) => id <= 49)
+      .filter(({ id }) => id <= 50)
       .map(({ id, fileName, checksum }) => ({
         id,
         fileName,
@@ -401,14 +401,14 @@ describe("M2-14 staging cutover and rollback rehearsal", () => {
       "schema_migrations",
     ].sort();
 
-    assert.equal(REPOSITORY_CATALOG.length, 131);
+    assert.equal(REPOSITORY_CATALOG.length, 132);
     assert.deepEqual(
       expectedLedger.map(({ id }) => id),
-      Array.from({ length: 49 }, (_, index) => index + 1)
+      Array.from({ length: 50 }, (_, index) => index + 1)
     );
     assert.equal(
       expectedLedger.at(-1).fileName,
-      "0049_require_canonical_fad_setup_exemption_publications.sql"
+      "0050_allow_partial_candidate_card_whole_save.sql"
     );
     for (const candidate of [source, activation, rollback]) {
       assert.equal(candidate.inspection.integrity, "ok");
@@ -416,20 +416,20 @@ describe("M2-14 staging cutover and rollback rehearsal", () => {
         candidate.inspection.foreignKeyViolationCount,
         0
       );
-      assert.equal(candidate.inspection.userVersion, 49);
-      assert.equal(candidate.dataModelVersion, "49");
+      assert.equal(candidate.inspection.userVersion, 50);
+      assert.equal(candidate.dataModelVersion, "50");
       assert.deepEqual(
         candidate.inspection.migrations,
         expectedLedger
       );
-      assert.equal(candidate.tableInventory.length, 132);
+      assert.equal(candidate.tableInventory.length, 133);
       assert.deepEqual(
         candidate.tableInventory,
         expectedTables
       );
       assert.equal(
         candidate.tableState.schema_migrations.rowCount,
-        49
+        50
       );
       for (const tableName of FAD_STATE_TABLES) {
         assert.equal(

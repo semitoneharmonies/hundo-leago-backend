@@ -1006,8 +1006,17 @@ function createHarness({
       );
       assert.equal(attempt.status, "started");
       attempt.status = "blocked";
-      attempt.blockers = clone(command.blockers);
+      attempt.blockers = command.blockers.map(
+        ({ code, field, message, resourceId, resourceType }) => ({
+          code,
+          field,
+          message,
+          resourceId,
+          resourceType,
+        })
+      );
       attempt.terminalAtMs = command.blockedAtMs;
+      attempt.version += 1;
       state.binding.status = "blocked";
       state.binding.version += 1;
       return clone(attempt);
@@ -1139,6 +1148,7 @@ function createHarness({
       attempt.status = "succeeded";
       attempt.rolloverId = plan.rolloverId;
       attempt.terminalAtMs = plan.completedAtMs;
+      attempt.version += 1;
       const receipt = receiptFromPlan(plan);
       state.receipts[plan.rolloverId] = receipt;
       state.ownershipReceipts[plan.rolloverId] =
@@ -1537,6 +1547,7 @@ describe(
       const state = harness.state();
 
       assert.equal(result.status, "succeeded");
+      assert.equal(result.version, 2);
       assert.equal(result.triggerKind, "scheduled_job");
       assert.equal(result.attemptNumber, 1);
       assert.equal(result.bindingId, IDS.binding);
@@ -1748,6 +1759,7 @@ describe(
       const state = harness.state();
 
       assert.equal(result.status, "blocked");
+      assert.equal(result.version, 2);
       assert.deepEqual(
         result.blockers,
         canonicalBlockers()

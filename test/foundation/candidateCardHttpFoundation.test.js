@@ -171,6 +171,10 @@ function boundary({
       httpStatus: 201,
       data: { projection: "help-created" },
     },
+    saveCard: {
+      httpStatus: 200,
+      data: { projection: "whole-card-saved" },
+    },
   };
 
   function invoke(name, input) {
@@ -213,6 +217,9 @@ function boundary({
     },
     requestHelp(input) {
       return invoke("requestHelp", input);
+    },
+    saveCard(input) {
+      return invoke("saveCard", input);
     },
     ...serviceOverrides,
   };
@@ -291,7 +298,7 @@ function jsonOptions(
 }
 
 describe("FAD-09 T-130 and T-133 through T-139 internal HTTP boundary", () => {
-  test("registers exactly all eight approved Candidate Card routes", () => {
+  test("registers exactly all nine approved Candidate Card routes", () => {
     const { router } = boundary();
     assert.deepEqual(
       router.stack
@@ -321,6 +328,11 @@ describe("FAD-09 T-130 and T-133 through T-139 internal HTTP boundary", () => {
         {
           method: "PUT",
           path:
+            "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId",
+        },
+        {
+          method: "PUT",
+          path:
             "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/slots/:slotKey/candidate",
         },
         {
@@ -344,6 +356,65 @@ describe("FAD-09 T-130 and T-133 through T-139 internal HTTP boundary", () => {
             "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/help-requests",
         },
       ]
+    );
+  });
+
+  test("routes the whole-card PUT on the exact base path with write preconditions", async (t) => {
+    const context = boundary();
+    const origin = await start(t, context.router);
+    const slotKeys = [
+      ...Array.from(
+        { length: 12 },
+        (_, index) =>
+          `F${String(index + 1).padStart(2, "0")}`
+      ),
+      ...Array.from(
+        { length: 6 },
+        (_, index) =>
+          `D${String(index + 1).padStart(2, "0")}`
+      ),
+      ...Array.from(
+        { length: 4 },
+        (_, index) =>
+          `B${String(index + 1).padStart(2, "0")}`
+      ),
+    ];
+    const body = {
+      slots: slotKeys.map((slotKey) => ({
+        slotKey,
+        candidate: null,
+      })),
+    };
+    const response = await requestJson(
+      origin,
+      BASE_PATH,
+      jsonOptions("PUT", body, {
+        "If-Match": '"9"',
+        "Idempotency-Key": "whole-card-save",
+      })
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.data, {
+      projection: "whole-card-saved",
+    });
+    assert.deepEqual(context.calls, [
+      [
+        "saveCard",
+        {
+          leagueId: LEAGUE_ID,
+          fadId: FAD_ID,
+          teamId: TEAM_ID,
+          input: body,
+          expectedCardVersion: 9,
+          idempotencyKey: "whole-card-save",
+          authenticated: AUTHENTICATED,
+        },
+      ],
+    ]);
+    assert.equal(context.rateCalls.length, 2);
+    assert.deepEqual(
+      context.securityCalls.map((call) => call[0]),
+      ["authenticateUnsafe"]
     );
   });
 

@@ -108,6 +108,11 @@ const FINAL_MIGRATION_0049 = Object.freeze({
   sha256:
     "5109baabaeed39e06498c7c26274a41a48edfbbdee958e7dd6b278021a29ebc6",
 });
+const FINAL_MIGRATION_0050 = Object.freeze({
+  byteLength: 157_780,
+  sha256:
+    "95635dbac1752647e5d8ca39b931a9f8ddb71efb5a19db797fda9b76e392316a",
+});
 const FROZEN_MIGRATIONS_0023_THROUGH_0029 = Object.freeze([
   Object.freeze({
     id: 23,
@@ -181,6 +186,7 @@ const EXPECTED_TABLES = [
   "candidate_card_entries",
   "candidate_card_help_command_results",
   "candidate_card_help_requests",
+  "candidate_card_revision_entry_changes",
   "candidate_card_revisions",
   "candidate_card_snapshot_entries",
   "candidate_card_snapshots",
@@ -700,7 +706,7 @@ describe("M2-04 initial relational schema", () => {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     });
 
-    assert.equal(migrations.length, 49);
+    assert.equal(migrations.length, 50);
     assert.equal(migrations[0].id, 1);
     assert.equal(migrations[0].fileName, "0001_initial.sql");
     assert.equal(migrations[1].id, 2);
@@ -1087,6 +1093,19 @@ describe("M2-04 initial relational schema", () => {
       migrations[48].checksum,
       FINAL_MIGRATION_0049.sha256
     );
+    assert.equal(migrations[49].id, 50);
+    assert.equal(
+      migrations[49].fileName,
+      "0050_allow_partial_candidate_card_whole_save.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[49].filePath).size,
+      FINAL_MIGRATION_0050.byteLength
+    );
+    assert.equal(
+      migrations[49].checksum,
+      FINAL_MIGRATION_0050.sha256
+    );
     for (const expected of FROZEN_MIGRATIONS_0023_THROUGH_0029) {
       const migration = migrations[expected.id - 1];
       assert.equal(migration.id, expected.id);
@@ -1098,12 +1117,12 @@ describe("M2-04 initial relational schema", () => {
       assert.equal(migration.checksum, expected.sha256);
     }
     assert.equal(migrationResult.status, "exact");
-    assert.equal(database.pragma("user_version", { simple: true }), 49);
+    assert.equal(database.pragma("user_version", { simple: true }), 50);
 
     const ledgerBefore = database
       .prepare("SELECT * FROM schema_migrations")
       .all();
-    assert.equal(ledgerBefore.length, 49);
+    assert.equal(ledgerBefore.length, 50);
     assert.equal(ledgerBefore[0].checksum, migrations[0].checksum);
     assert.equal(ledgerBefore[1].checksum, migrations[1].checksum);
     assert.equal(ledgerBefore[2].checksum, migrations[2].checksum);
@@ -1143,6 +1162,7 @@ describe("M2-04 initial relational schema", () => {
     assert.equal(ledgerBefore[46].checksum, migrations[46].checksum);
     assert.equal(ledgerBefore[47].checksum, migrations[47].checksum);
     assert.equal(ledgerBefore[48].checksum, migrations[48].checksum);
+    assert.equal(ledgerBefore[49].checksum, migrations[49].checksum);
     assert.equal(ledgerBefore[39].migration_id, 40);
     assert.equal(
       ledgerBefore[39].file_name,
@@ -1233,6 +1253,15 @@ describe("M2-04 initial relational schema", () => {
       ledgerBefore[48].checksum,
       FINAL_MIGRATION_0049.sha256
     );
+    assert.equal(ledgerBefore[49].migration_id, 50);
+    assert.equal(
+      ledgerBefore[49].file_name,
+      "0050_allow_partial_candidate_card_whole_save.sql"
+    );
+    assert.equal(
+      ledgerBefore[49].checksum,
+      FINAL_MIGRATION_0050.sha256
+    );
 
     const rerun = migrateDatabase({
       database,
@@ -1252,13 +1281,13 @@ describe("M2-04 initial relational schema", () => {
       )
       .all("table", "sqlite_%")
       .map(({ name }) => name);
-    assert.equal(EXPECTED_TABLES.length, 132);
+    assert.equal(EXPECTED_TABLES.length, 133);
     assert.equal(
       EXPECTED_TABLES.filter(
         (tableName) =>
           tableName !== "schema_migrations"
       ).length,
-      131
+      132
     );
     assert.deepEqual(tables, EXPECTED_TABLES);
 
@@ -1271,7 +1300,7 @@ describe("M2-04 initial relational schema", () => {
         ORDER BY name
       `)
       .all();
-    assert.equal(immutableDeleteGuards.length, 76);
+    assert.equal(immutableDeleteGuards.length, 77);
     assert.ok(
       immutableDeleteGuards.some(
         ({ name }) =>
@@ -1341,7 +1370,7 @@ describe("M2-04 initial relational schema", () => {
         },
       {
         metadata_key: "data_model_version",
-        metadata_value: "49",
+        metadata_value: "50",
       },
       ]
     );

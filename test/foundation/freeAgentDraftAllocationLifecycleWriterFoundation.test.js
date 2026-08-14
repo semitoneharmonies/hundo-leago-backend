@@ -1767,4 +1767,77 @@ describe("SQLite FAD allocation lifecycle writer", () => {
       0
     );
   });
+
+  test("ignores an incomplete snapshot row for allocation-completion evidence and publishes zero results", () => {
+    const partial = scopeIds(60_000);
+    const triggers = captureAndDropTriggers(database);
+    database.pragma("foreign_keys = OFF");
+    seedRootFoundation(
+      database,
+      partial,
+      "Partial Candidate"
+    );
+    seedCard(database, partial, {
+      candidate: true,
+    });
+    database.prepare(`
+      UPDATE candidate_card_snapshot_entries
+      SET proposed_term_years = NULL,
+          proposed_aav_cents = NULL,
+          eligibility_status = 'invalid',
+          validation_code =
+            'CANDIDATE_CONTRACT_INCOMPLETE'
+      WHERE league_id = @leagueId
+        AND fad_id = @fadId
+        AND occupant_kind = 'candidate'
+    `).run({
+      leagueId: partial.league,
+      fadId: partial.fad,
+    });
+    database.prepare(`
+      DELETE FROM job_runs
+      WHERE league_id = @leagueId
+        AND job_type = 'fad_allocation'
+    `).run({ leagueId: partial.league });
+    database.prepare(`
+      DELETE FROM free_agent_draft_player_allocations
+      WHERE league_id = @leagueId
+    `).run({ leagueId: partial.league });
+    restoreTriggers(database, triggers);
+    database.pragma("foreign_keys = ON");
+
+    const scanned = writer
+      .listCandidates({ nowMs: NOW_MS, limit: 20 })
+      .find(({ fadId }) => fadId === partial.fad);
+    assert.equal(scanned.allocationCount, 0);
+    const completed =
+      lifecycle.service.coordinateRoot(scanned);
+    assert.equal(completed.toStatus, "rapid");
+    assert.equal(completed.outcome, "transitioned");
+    assert.deepEqual(
+      JSON.parse(
+        database.prepare(`
+          SELECT message_data_json
+          FROM notifications
+          WHERE league_id = ?
+            AND event_type = 'fad_automatic_result'
+        `).get(partial.league).message_data_json
+      ),
+      {
+        leagueId: partial.league,
+        seasonId: partial.season,
+        fadId: partial.fad,
+        teamId: partial.team,
+        automaticWins: 0,
+        losses: 0,
+        restrictedPending: 0,
+        invalidOffers: 0,
+        destination: {
+          kind: "fad_results",
+          leagueId: partial.league,
+          fadId: partial.fad,
+        },
+      }
+    );
+  });
 });

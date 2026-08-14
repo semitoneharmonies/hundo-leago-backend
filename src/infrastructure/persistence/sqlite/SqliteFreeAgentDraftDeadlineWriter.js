@@ -921,7 +921,11 @@ function createSqliteFreeAgentDraftDeadlineWriter({
             AND season_id = @seasonId
             AND fad_id = @fadId
             AND occupant_kind = 'candidate'
-            AND player_id IS NOT NULL) AS candidate_player_count,
+            AND player_id IS NOT NULL
+            AND proposed_total_value_cents IS NOT NULL
+            AND proposed_term_years IS NOT NULL
+            AND proposed_aav_cents IS NOT NULL
+        ) AS candidate_player_count,
         (SELECT COUNT(*)
            FROM free_agent_draft_player_allocations
           WHERE league_id = @leagueId
@@ -1896,7 +1900,12 @@ function createSqliteFreeAgentDraftDeadlineWriter({
             source,
           })
         );
-        if (source?.entry_kind === "candidate") {
+        if (
+          source?.entry_kind === "candidate" &&
+          source.proposed_total_value_cents !== null &&
+          source.proposed_term_years !== null &&
+          source.proposed_aav_cents !== null
+        ) {
           snapshotCandidatePlayerIds.add(
             source.player_id
           );
@@ -1925,7 +1934,12 @@ function createSqliteFreeAgentDraftDeadlineWriter({
             source,
           })
         );
-        if (source.entry_kind === "candidate") {
+        if (
+          source.entry_kind === "candidate" &&
+          source.proposed_total_value_cents !== null &&
+          source.proposed_term_years !== null &&
+          source.proposed_aav_cents !== null
+        ) {
           snapshotCandidatePlayerIds.add(
             source.player_id
           );

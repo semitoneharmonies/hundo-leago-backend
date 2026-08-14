@@ -50,6 +50,7 @@ const FIXTURE_RESET_PROTECTED_TRIGGER_NAMES = Object.freeze([
   "candidate_card_entries_valid_carryover_delete",
   "candidate_card_help_command_results_immutable_delete",
   "candidate_card_help_requests_immutable_delete",
+  "candidate_card_revision_entry_changes_immutable_delete",
   "candidate_card_revisions_immutable_delete",
   "candidate_card_snapshot_entries_immutable_delete",
   "candidate_card_snapshots_immutable_delete",

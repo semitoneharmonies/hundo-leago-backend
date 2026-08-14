@@ -282,6 +282,7 @@ function createCandidateCardRouter({
     "moveEntry",
     "removeCandidate",
     "requestHelp",
+    "saveCard",
   ]) {
     assertMethod(
       candidateCardService,
@@ -748,6 +749,18 @@ function createCandidateCardRouter({
     requestSecurity.requireJson,
     jsonBody,
     handlePreview
+  );
+  router.put(
+    "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId",
+    requestSecurity.authenticateUnsafe,
+    requestSecurity.requireJson,
+    jsonBody,
+    (request, response) =>
+      handleMutation(
+        request,
+        response,
+        "saveCard"
+      )
   );
   router.put(
     "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/candidate-cards/:teamId/slots/:slotKey/candidate",

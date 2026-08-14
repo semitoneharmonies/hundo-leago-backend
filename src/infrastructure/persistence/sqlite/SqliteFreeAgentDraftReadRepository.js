@@ -1473,7 +1473,15 @@ function createSqliteFreeAgentDraftReadRepository({
       ORDER BY effect_kind, entity_id, id
     `);
     openingEntryDraftStatement = database.prepare(`
-      SELECT id AS entry_draft_id, status,
+      SELECT id AS entry_draft_id,
+             CASE status
+               WHEN 'setup' THEN 'Setup'
+               WHEN 'lottery_ready' THEN 'Setup'
+               WHEN 'ready' THEN 'Scheduled'
+               WHEN 'active' THEN 'Live'
+               WHEN 'completed' THEN 'Complete'
+               WHEN 'cancelled' THEN 'Cancelled'
+             END AS status,
              completed_at_ms, version
       FROM entry_drafts
       WHERE league_id = @leagueId
@@ -2366,6 +2374,9 @@ function createSqliteFreeAgentDraftReadRepository({
           AND offer.fad_id = @fadId
           AND offer.player_id = @playerId
           AND offer.occupant_kind = 'candidate'
+          AND offer.proposed_total_value_cents IS NOT NULL
+          AND offer.proposed_term_years IS NOT NULL
+          AND offer.proposed_aav_cents IS NOT NULL
         ORDER BY
           CASE
             WHEN event.rank_position IS NULL THEN 1
@@ -3946,6 +3957,26 @@ function createSqliteFreeAgentDraftReadRepository({
     if (row.occupant_kind !== "candidate") {
       return null;
     }
+    if (
+      row.proposed_total_value_cents === null ||
+      row.proposed_term_years === null ||
+      row.proposed_aav_cents === null
+    ) {
+      if (
+        row.eligibility_status !== "invalid" ||
+        row.validation_code !==
+          "CANDIDATE_CONTRACT_INCOMPLETE"
+      ) {
+        incompatible(
+          "A partial published Candidate offer is noncanonical."
+        );
+      }
+      return freeze({
+        code: "invalid_offer",
+        allocationId: null,
+        auctionId: null,
+      });
+    }
     const allocation = unique(
       allocationByPlayerStatement,
       {
@@ -4520,6 +4551,9 @@ function createSqliteFreeAgentDraftReadRepository({
       ["valid", "warning"].includes(
         row.eligibility_status
       ) &&
+      row.proposed_total_value_cents !== null &&
+      row.proposed_term_years !== null &&
+      row.proposed_aav_cents !== null &&
       row.allocation_eligibility === "eligible";
     const rawOutcome = pending
       ? "pending"

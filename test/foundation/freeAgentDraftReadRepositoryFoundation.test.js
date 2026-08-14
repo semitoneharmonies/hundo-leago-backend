@@ -5458,6 +5458,83 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
     assertNoWrites(runtime.database, before);
   });
 
+  test("publishes an incomplete Candidate snapshot row as invalid_offer without requiring an allocation", (t) => {
+    const runtime = createRuntime(t);
+    const fixture = seedPublishedPendingResults(
+      runtime.database
+    );
+    const offer = fixture.offers.find(
+      ({ teamId }) =>
+        teamId === PRIMARY.teamTwoId
+    );
+    dropTableTriggers(
+      runtime.database,
+      "candidate_card_snapshot_entries"
+    );
+    dropTableTriggers(
+      runtime.database,
+      "candidate_card_entries"
+    );
+    dropTableTriggers(
+      runtime.database,
+      "free_agent_draft_player_allocations"
+    );
+    runtime.database.prepare(`
+      UPDATE candidate_card_entries
+      SET proposed_term_years = NULL,
+          proposed_aav_cents = NULL,
+          eligibility_status = 'invalid',
+          validation_code =
+            'CANDIDATE_CONTRACT_INCOMPLETE'
+      WHERE id = ?
+    `).run(offer.entryId);
+    runtime.database.prepare(`
+      UPDATE candidate_card_snapshot_entries
+      SET proposed_term_years = NULL,
+          proposed_aav_cents = NULL,
+          eligibility_status = 'invalid',
+          validation_code =
+            'CANDIDATE_CONTRACT_INCOMPLETE'
+      WHERE id = ?
+    `).run(offer.snapshotEntryId);
+    runtime.database.prepare(`
+      DELETE FROM free_agent_draft_player_allocations
+      WHERE id = ?
+    `).run(fixture.players.amy.allocationId);
+    const before = noWriteSnapshot(runtime.database);
+
+    const history =
+      runtime.readRepository.readPublishedCardHistory(
+        publishedHistoryInput({
+          teamId: PRIMARY.teamTwoId,
+        })
+      );
+    const partial = history.slots.find(
+      ({ entryId }) => entryId === offer.entryId
+    );
+    assert.deepEqual(partial.outcome, {
+      code: "invalid_offer",
+      allocationId: null,
+      auctionId: null,
+    });
+    assert.deepEqual(
+      partial.validation,
+      {
+        status: "invalid",
+        codes: [
+          "CANDIDATE_CONTRACT_INCOMPLETE",
+        ],
+      }
+    );
+    assert.equal(
+      partial.totalValueCents,
+      400
+    );
+    assert.equal(partial.termYears, null);
+    assert.equal(partial.aavCents, null);
+    assertNoWrites(runtime.database, before);
+  });
+
   test("reads pending T-140 allocations immediately with snapshot evidence, bound cursors, and no writes", (t) => {
     const runtime = createRuntime(t);
     const fixture = seedPublishedPendingResults(
@@ -6158,6 +6235,49 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
     assert.equal(Object.isFrozen(context), true);
     assert.equal(Object.isFrozen(context.participatingTeams), true);
     assertNoWrites(runtime.database, before);
+  });
+
+  test("maps persisted Entry Draft lifecycle statuses to canonical opening-readiness domain values without writes", (t) => {
+    for (const fixture of [
+      {
+        status: "completed",
+        expected: "Complete",
+        completedAtMs: 2,
+      },
+      {
+        status: "active",
+        expected: "Live",
+        completedAtMs: null,
+      },
+    ]) {
+      const runtime = createRuntime(t);
+      insert(runtime.database, "entry_drafts", {
+        id: uuid(fixture.status === "completed" ? 9_801 : 9_802),
+        league_id: PRIMARY.leagueId,
+        season_id: PRIMARY.seasonId,
+        status: fixture.status,
+        rounds: 4,
+        pick_clock_seconds: 300,
+        starts_at_ms: 1,
+        completed_at_ms: fixture.completedAtMs,
+        created_by_user_id: PRIMARY.commissionerUserId,
+        created_at_ms: 1,
+        updated_at_ms: fixture.completedAtMs ?? 1,
+        version: 1,
+      });
+      const before = noWriteSnapshot(runtime.database);
+      const context =
+        runtime.readRepository.readOpeningPreflightContext({
+          leagueId: PRIMARY.leagueId,
+          seasonId: PRIMARY.seasonId,
+        });
+      assert.equal(context.entryDraft.status, fixture.expected);
+      assert.equal(
+        context.entryDraft.status === "Complete",
+        fixture.status === "completed"
+      );
+      assertNoWrites(runtime.database, before);
+    }
   });
 
   test("keeps internal preflight isolated by league and fails closed on a split readiness pair", (t) => {

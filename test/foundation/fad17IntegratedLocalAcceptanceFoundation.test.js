@@ -59,6 +59,8 @@ const MIGRATIONS_DIRECTORY = path.join(
   "migrations"
 );
 const FRONTEND_ORIGIN = "http://127.0.0.1:5173";
+const REAL_CATALOG_FORWARD_COUNT = 500;
+const REAL_CATALOG_DEFENCE_COUNT = 250;
 
 function seedRealPlayerCatalog(database) {
   const catalog = JSON.parse(
@@ -71,12 +73,22 @@ function seedRealPlayerCatalog(database) {
     ...catalog.filter(
       ({ active, position }) =>
         active === true && position === "F"
-    ).slice(0, 72),
+    ).slice(0, REAL_CATALOG_FORWARD_COUNT),
     ...catalog.filter(
       ({ active, position }) =>
         active === true && position === "D"
-    ).slice(0, 32),
+    ).slice(0, REAL_CATALOG_DEFENCE_COUNT),
   ];
+  assert.equal(
+    selected.length,
+    REAL_CATALOG_FORWARD_COUNT + REAL_CATALOG_DEFENCE_COUNT
+  );
+  assert.equal(
+    selected.some(({ fullName }) =>
+      fullName.toLowerCase().startsWith("fixture player ")
+    ),
+    false
+  );
   let idCounter = 0;
   const repository = createSqlitePlayerCatalogRepository({
     database,
@@ -290,7 +302,7 @@ function addRapidAuctionPlayers({
 }
 
 test(
-  "FAD-17 rehearses exact schema 22 through 49 with fresh schema and repository-catalog agreement",
+  "FAD-17 rehearses exact schema 22 through 50 with fresh schema and repository-catalog agreement",
   (t) => {
     const upgraded = createMigrationRuntime(
       t,
@@ -315,25 +327,25 @@ test(
     copyMigrationRange(
       upgraded.migrationsDirectory,
       23,
-      49
+      50
     );
     assert.equal(
-      migrate(upgraded, "fad17-schema49-upgrade")
+      migrate(upgraded, "fad17-schema50-upgrade")
         .status,
       "exact"
     );
 
     const fresh = createMigrationRuntime(
       t,
-      "hundo-fad17-schema49-fresh-"
+      "hundo-fad17-schema50-fresh-"
     );
     copyMigrationRange(
       fresh.migrationsDirectory,
       1,
-      49
+      50
     );
     assert.equal(
-      migrate(fresh, "fad17-schema49-fresh").status,
+      migrate(fresh, "fad17-schema50-fresh").status,
       "exact"
     );
 
@@ -342,7 +354,7 @@ test(
         runtime.database.pragma("user_version", {
           simple: true,
         }),
-        49
+        50
       );
       assert.deepEqual(
         runtime.database.pragma("foreign_key_check"),
@@ -370,7 +382,7 @@ test(
     );
     assert.equal(
       migrationLedger(upgraded.database).length,
-      49
+      50
     );
   }
 );
@@ -396,7 +408,7 @@ test(
       Object.values(manifest.leagues).map(
         ({ phase }) => phase
       ),
-      ["cards_open", "cards_open"]
+      ["cards_open", "cards_open", "completed"]
     );
 
     const endpointInventory = TARGET_ENDPOINTS.map(
@@ -482,7 +494,7 @@ test(
 
     const deadline = await runtime.services.league
       .freeAgentDraftDeadlineJob.run();
-    assert.equal(deadline.succeeded, 1);
+    assert.equal(deadline.succeeded, 2);
     const allocation = await runtime.services.league
       .freeAgentDraftAllocationCycleJob.run();
     assert.equal(allocation.status, "succeeded");
@@ -503,7 +515,7 @@ test(
             playerId,
             teamId: team.teamId,
             totalValueCents:
-              index < 2 ? 5_000 : 100,
+              index < 2 ? 6_000 : 100,
             termYears: 1,
             bindingIllegalityConfirmed: true,
           },
@@ -707,7 +719,7 @@ test(
       .freeAgentDraftRolloverJob.run();
     assert.equal(
       rollover.succeeded,
-      1,
+      2,
       JSON.stringify({ rollover, runtimeLogs })
     );
     currentNowMs += 1;

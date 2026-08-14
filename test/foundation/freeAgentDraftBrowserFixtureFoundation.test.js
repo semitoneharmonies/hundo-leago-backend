@@ -21,6 +21,8 @@ const {
 );
 const {
   EXPECTED_LEAGUE_IDS,
+  LEGACY_FIXTURE_LEAGUES,
+  assertFixtureIdentitiesDistinct,
   assertNoPriorFixture,
   assertStagingScope,
 } = require(
@@ -62,10 +64,10 @@ function seedRealPlayerCatalog(database) {
   const selected = [
     ...catalog.filter(
       ({ active, position }) => active === true && position === "F"
-    ).slice(0, 72),
+    ).slice(0, 500),
     ...catalog.filter(
       ({ active, position }) => active === true && position === "D"
-    ).slice(0, 32),
+    ).slice(0, 300),
   ];
   let idCounter = 0;
   const repository = createSqlitePlayerCatalogRepository({
@@ -133,7 +135,9 @@ function repeatableSentinelFacts(value) {
             "cardId",
             "entryId",
             "helpRequestId",
+            "matchupId",
             "notificationId",
+            "weekId",
           ].includes(key)
       )
       .map(([key, child]) => [
@@ -243,6 +247,16 @@ test(
       scheduledJobsEnabled: false,
     };
     assert.doesNotThrow(() => assertStagingScope(valid));
+    assert.doesNotThrow(() => assertFixtureIdentitiesDistinct());
+    assert.equal(EXPECTED_LEAGUE_IDS.length, 3);
+    assert.equal(LEGACY_FIXTURE_LEAGUES.length, 4);
+    assert.equal(
+      new Set([
+        ...EXPECTED_LEAGUE_IDS,
+        ...LEGACY_FIXTURE_LEAGUES.map(({ id }) => id),
+      ]).size,
+      7
+    );
     for (const overrides of [
       { appEnv: "production" },
       { environmentId: "production" },
@@ -292,13 +306,17 @@ test(
     assert.equal(
       schedules.beta.firstWeekStartsAtMs -
         schedules.alpha.firstWeekStartsAtMs,
-      7 * 24 * 60 * 60 * 1_000
+      0
+    );
+    assert.equal(
+      schedules.gamma.firstWeekStartsAtMs,
+      Date.parse("2026-08-03T07:00:00.000Z")
     );
   }
 );
 
 test(
-  "FAD browser fixture rejects anything except an open schema-49 release-QA runtime",
+  "FAD browser fixture rejects anything except an open schema-50 release-QA runtime",
   async () => {
     const source = fs.readFileSync(
       path.join(
@@ -310,9 +328,20 @@ test(
       ),
       "utf8"
     );
-    assert.doesNotMatch(
-      source,
-      /\b(?:INSERT|UPDATE|DELETE|REPLACE)\s+(?:INTO|FROM|OR)\b/iu
+    assert.match(source, /fad-browser-v4:/u);
+    assert.match(source, /week_1_completed_fad/u);
+    assert.deepEqual(
+      [...source.matchAll(
+        /\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM|REPLACE\s+INTO)\s+([a-z_]+)/giu
+      )].map((match) => `${match[1].toUpperCase()} ${match[2]}`),
+      [
+        "INSERT INTO job_runs",
+        "INSERT INTO matchup_schedule_job_bindings",
+        "INSERT INTO job_runs",
+        "UPDATE draft_picks",
+        "UPDATE entry_draft_pick_clocks",
+        "UPDATE entry_drafts",
+      ]
     );
     await assert.rejects(
       createFreeAgentDraftBrowserFixture({}),
@@ -362,14 +391,26 @@ test(
     assert.deepEqual(Object.keys(manifest.leagues), [
       "alpha",
       "beta",
+      "gamma",
     ]);
     for (const [leagueAlias, league] of
       Object.entries(manifest.leagues)) {
-      const expectedTeamCount = leagueAlias === "alpha" ? 6 : 10;
+      const expectedTeamCount = {
+        alpha: 8,
+        beta: 6,
+        gamma: 14,
+      }[leagueAlias];
       assert.equal(UUID_PATTERN.test(league.leagueId), true);
       assert.equal(UUID_PATTERN.test(league.seasonId), true);
       assert.equal(UUID_PATTERN.test(league.fadId), true);
-      assert.equal(league.phase, "cards_open");
+      assert.equal(
+        league.phase,
+        leagueAlias === "gamma" ? "completed" : "cards_open"
+      );
+      assert.equal(
+        league.candidateCardsEditable,
+        leagueAlias !== "gamma"
+      );
       assert.equal(league.teams.length, expectedTeamCount);
       assert.equal(
         new Set(league.teams.map(({ teamId }) => teamId))
@@ -386,22 +427,30 @@ test(
           league.openedAtMs,
         true
       );
+      if (leagueAlias !== "gamma") {
+        assert.equal(league.openedAtMs <= manifest.fixedNowMs, true);
+        assert.equal(
+          manifest.fixedNowMs < league.candidateDeadlineAtMs,
+          true
+        );
+      }
     }
 
     const alpha = manifest.leagues.alpha;
     const beta = manifest.leagues.beta;
+    const gamma = manifest.leagues.gamma;
     assert.equal(
-      alpha.helpOpensAtMs > alpha.openedAtMs,
+      alpha.helpOpensAtMs >= alpha.openedAtMs,
       true
     );
     assert.equal(
-      beta.helpOpensAtMs > beta.openedAtMs,
+      beta.helpOpensAtMs >= beta.openedAtMs,
       true
     );
     assert.equal(
       beta.firstWeekStartsAtMs -
         alpha.firstWeekStartsAtMs,
-      7 * 24 * 60 * 60 * 1_000
+      0
     );
     assert.deepEqual(
       alpha.teams.slice(0, 2).map(
@@ -410,63 +459,22 @@ test(
       ),
       [
         "alphaMultiTeamManager",
-        "alphaMultiTeamManager",
+        "alphaOtherManager",
       ]
     );
-    assert.equal(
-      alpha.sentinels.lockedCarryover.teamAlias,
-      "alphaTeam1"
-    );
-    assert.equal(
-      alpha.sentinels.lockedCarryover.slotKey,
-      "F01"
-    );
-    assert.match(
-      alpha.sentinels.lockedCarryover.entryId,
-      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-    );
-    assert.equal(
-      alpha.sentinels.privateCandidates.length,
-      3
-    );
-    assert.deepEqual(
-      alpha.sentinels.privateCandidates.map(
-        ({ alias, teamAlias, slotKey }) => ({
-          alias,
-          teamAlias,
-          slotKey,
-        })
-      ),
-      [
-        {
-          alias: "managedTeamCandidate",
-          teamAlias: "alphaTeam1",
-          slotKey: "F04",
-        },
-        {
-          alias: "commissionerHelpCandidate",
-          teamAlias: "alphaTeam3",
-          slotKey: "D02",
-        },
-        {
-          alias: "commissionerDeniedCandidate",
-          teamAlias: "alphaTeam4",
-          slotKey: "F04",
-        },
-      ]
-    );
+    assert.equal(alpha.sentinels.emptyInauguralCards, true);
+    assert.equal(alpha.sentinels.carryoverCount, 0);
     assert.equal(
       alpha.sentinels.exactCommissionerHelp.teamAlias,
       "alphaTeam3"
     );
     assert.equal(
       alpha.sentinels.exactCommissionerHelp.status,
-      "not_open"
+      "active"
     );
     assert.equal(
-      alpha.sentinels.exactCommissionerHelp.helpOpensAtMs >
-        manifest.fixedNowMs,
-      true
+      alpha.sentinels.exactCommissionerHelp.requestingAccountAlias,
+      "alphaMultiTeamManager"
     );
     assert.equal(
       alpha.sentinels.cardReadyNotification.eventType,
@@ -478,7 +486,48 @@ test(
     );
     assert.equal(
       beta.sentinels.privateCandidates[0].slotKey,
-      "D02"
+      "D03"
+    );
+    assert.equal(gamma.competitionPhase, "week_1");
+    assert.equal(gamma.firstWeekStartsAtMs <= manifest.fixedNowMs, true);
+    assert.equal(
+      manifest.fixedNowMs < gamma.firstWeekStartsAtMs + 7 * 24 * 60 * 60 * 1_000,
+      true
+    );
+    assert.equal(gamma.sentinels.publishedHistoryReadOnly, true);
+    assert.equal(gamma.sentinels.rosterPlayersPerTeam, 22);
+    assert.deepEqual(
+      gamma.sentinels.thirtyDollarThreeYearWinner,
+      {
+        ...gamma.sentinels.thirtyDollarThreeYearWinner,
+        totalValueCents: 3_000,
+        termYears: 3,
+        aavCents: 1_000,
+      }
+    );
+    assert.equal(
+      gamma.sentinels.capRangeCents.minimum >= 7_000,
+      true
+    );
+    assert.equal(
+      gamma.sentinels.capRangeCents.maximum <= 10_000,
+      true
+    );
+    assert.deepEqual(
+      gamma.sentinels.weekOneMatchups,
+      {
+        ...gamma.sentinels.weekOneMatchups,
+        matchupCount: 7,
+        scheduledTeamCount: 14,
+        activeRosterPlayerCount: 252,
+        scoringPlayerCount: 252,
+        scoringSignalCount: 14,
+      }
+    );
+    assert.equal(
+      gamma.sentinels.weekOneMatchups.maximumPlayerPointsHundredths >
+        gamma.sentinels.weekOneMatchups.minimumPlayerPointsHundredths,
+      true
     );
     assert.equal(
       manifest.privacyChecks.commissionerDeniedTeamAlias,
@@ -488,7 +537,7 @@ test(
       manifest.privacyChecks.commissionerHelpTeamAlias,
       "alphaTeam3"
     );
-    assert.equal(manifest.privacyChecks.privateMarkers.length, 5);
+    assert.equal(manifest.privacyChecks.privateMarkers.length, 3);
     assert.equal(
       manifest.privacyChecks.privateMarkers.every(
         (name) => typeof name === "string" && !name.includes("Sentinel")
@@ -501,68 +550,116 @@ test(
       database.prepare(`
         SELECT status, COUNT(*) AS count
         FROM free_agent_draft_readiness_operations
-        WHERE league_id IN (?, ?)
+        WHERE (league_id = ? AND season_id = ?)
+           OR (league_id = ? AND season_id = ?)
         GROUP BY status
-      `).all(alpha.leagueId, beta.leagueId),
+      `).all(
+        alpha.leagueId,
+        alpha.seasonId,
+        beta.leagueId,
+        beta.seasonId
+      ),
       [{ status: "succeeded", count: 2 }]
     );
     assert.deepEqual(
       database.prepare(`
-        SELECT trigger_kind, COUNT(*) AS count
+        SELECT trigger_kind, entry_draft_id, setup_exemption_id,
+               COUNT(*) AS count
         FROM free_agent_draft_readiness_operations
-        WHERE league_id IN (?, ?)
-        GROUP BY trigger_kind
-      `).all(alpha.leagueId, beta.leagueId),
-      [{ trigger_kind: "no_draft_inaugural", count: 2 }]
+        WHERE (league_id = ? AND season_id = ?)
+           OR (league_id = ? AND season_id = ?)
+        GROUP BY trigger_kind, entry_draft_id, setup_exemption_id
+        ORDER BY trigger_kind
+      `).all(
+        alpha.leagueId,
+        alpha.seasonId,
+        beta.leagueId,
+        beta.seasonId
+      ).map((row) => ({
+        trigger_kind: row.trigger_kind,
+        has_entry_draft: row.entry_draft_id !== null,
+        has_setup_exemption: row.setup_exemption_id !== null,
+        count: row.count,
+      })),
+      [
+        {
+          trigger_kind: "entry_draft_completed",
+          has_entry_draft: true,
+          has_setup_exemption: false,
+          count: 1,
+        },
+        {
+          trigger_kind: "no_draft_inaugural",
+          has_entry_draft: false,
+          has_setup_exemption: false,
+          count: 1,
+        },
+      ]
+    );
+    assert.deepEqual(
+      database.prepare(`
+        SELECT from_season_id, to_season_id, status,
+               target_season_reused
+        FROM season_rollovers
+        WHERE league_id = ?
+      `).all(beta.leagueId),
+      [{
+        from_season_id: manifest.leagues.beta.priorSeasonId,
+        to_season_id: beta.seasonId,
+        status: "succeeded",
+        target_season_reused: 1,
+      }]
     );
     assert.deepEqual(
       database.prepare(`
         SELECT
           (SELECT COUNT(*) FROM free_agent_drafts
-           WHERE league_id IN (@alpha, @beta)) AS fads,
+           WHERE id IN (@alphaFad, @betaFad)) AS fads,
           (SELECT COUNT(*) FROM candidate_cards
-           WHERE league_id IN (@alpha, @beta)) AS cards,
+           WHERE fad_id IN (@alphaFad, @betaFad)) AS cards,
           (SELECT COUNT(*) FROM candidate_card_help_requests
-           WHERE league_id IN (@alpha, @beta)) AS help_requests,
+           WHERE fad_id IN (@alphaFad, @betaFad)) AS help_requests,
           (SELECT COUNT(*) FROM notifications
-           WHERE league_id IN (@alpha, @beta)
+           WHERE related_record_id IN (@alphaFad, @betaFad)
              AND event_type = 'fad_cards_opened') AS card_ready
       `).get({
-        alpha: alpha.leagueId,
-        beta: beta.leagueId,
+        alphaFad: alpha.fadId,
+        betaFad: beta.fadId,
       }),
       {
         fads: 2,
-        cards: 16,
-        help_requests: 0,
-        card_ready: 16,
+        cards: 14,
+        help_requests: 1,
+        card_ready: 14,
       }
     );
     const carryoverCounts = database.prepare(`
       SELECT team_id, COUNT(*) AS count
       FROM candidate_card_entries
-      WHERE league_id IN (?, ?)
+      WHERE fad_id IN (?, ?)
         AND entry_kind = 'carryover'
       GROUP BY team_id
       ORDER BY team_id ASC
-    `).all(alpha.leagueId, beta.leagueId);
-    assert.equal(carryoverCounts.length, 16);
+    `).all(alpha.fadId, beta.fadId);
+    assert.equal(carryoverCounts.length, 6);
     assert.deepEqual(
       [...new Set(carryoverCounts.map(({ count }) => count))],
-      [4]
+      [6]
     );
     assert.deepEqual(
       database.prepare(`
         SELECT DISTINCT carryover_aav_cents AS aav_cents
         FROM candidate_card_entries
-        WHERE league_id IN (?, ?)
+        WHERE fad_id IN (?, ?)
           AND entry_kind = 'carryover'
         ORDER BY carryover_aav_cents ASC
-      `).all(alpha.leagueId, beta.leagueId),
+      `).all(alpha.fadId, beta.fadId),
       [
         { aav_cents: 100 },
-        { aav_cents: 300 },
+        { aav_cents: 200 },
+        { aav_cents: 400 },
         { aav_cents: 700 },
+        { aav_cents: 1_000 },
         { aav_cents: 1_500 },
       ]
     );
@@ -570,11 +667,11 @@ test(
       database.prepare(`
         SELECT DISTINCT remaining_years
         FROM candidate_card_entries
-        WHERE league_id IN (?, ?)
+        WHERE fad_id IN (?, ?)
           AND entry_kind = 'carryover'
         ORDER BY remaining_years ASC
-      `).all(alpha.leagueId, beta.leagueId),
-      [{ remaining_years: 2 }, { remaining_years: 3 }]
+      `).all(alpha.fadId, beta.fadId),
+      [{ remaining_years: 1 }, { remaining_years: 2 }]
     );
     for (const league of [alpha, beta]) {
       assert.deepEqual(
@@ -595,10 +692,10 @@ test(
         SELECT COUNT(*) AS count
         FROM candidate_card_entries AS entry
         INNER JOIN players AS player ON player.id = entry.player_id
-        WHERE entry.league_id IN (?, ?)
+        WHERE entry.league_id IN (?, ?, ?)
           AND entry.entry_kind = 'carryover'
           AND lower(player.full_name) LIKE 'fixture player %'
-      `).get(alpha.leagueId, beta.leagueId).count,
+      `).get(alpha.leagueId, beta.leagueId, gamma.leagueId).count,
       0
     );
     assert.equal(
@@ -619,7 +716,7 @@ test(
     );
     for (const teamAlias of [
       "alphaTeam1",
-      "alphaTeam2",
+      "alphaTeam3",
     ]) {
       const team = alpha.teams.find(
         ({ alias }) => alias === teamAlias
@@ -630,20 +727,15 @@ test(
           leagueId: alpha.leagueId,
           fadId: alpha.fadId,
           teamId: team.teamId,
-        });
+      });
       assert.equal(card.accessReason, "team_manager");
-      if (teamAlias === "alphaTeam1") {
-        const carryover = card.slots.find(
-          (slot) =>
-            slot.entryId ===
-            alpha.sentinels.lockedCarryover.entryId
-        );
-        assert.equal(carryover.occupantKind, "carryover");
-        assert.equal(carryover.locked, true);
-      }
+      assert.equal(
+        card.slots.every((slot) => slot.occupantKind === "empty"),
+        true
+      );
     }
     const deniedAlphaTeam = alpha.teams.find(
-      ({ alias }) => alias === "alphaTeam3"
+      ({ alias }) => alias === "alphaTeam2"
     );
     assert.throws(
       () =>
@@ -658,13 +750,6 @@ test(
         assert.equal(
           error.code,
           "CANDIDATE_CARD_NOT_FOUND"
-        );
-        assert.equal(
-          String(error.message).includes(
-            alpha.sentinels.exactCommissionerHelp
-              .privatePlayerFullName
-          ),
-          false
         );
         return true;
       }
@@ -729,16 +814,365 @@ test(
           error.code,
           "CANDIDATE_CARD_NOT_FOUND"
         );
-        assert.equal(
-          String(error.message).includes(
-            alpha.sentinels.privateCandidates.find(
-              ({ alias }) => alias === "commissionerDeniedCandidate"
-            ).playerFullName
-          ),
-          false
-        );
         return true;
       }
+    );
+
+    assert.deepEqual(
+      database.prepare(`
+        SELECT status, COUNT(*) AS count
+        FROM candidate_cards
+        WHERE league_id = ? AND fad_id = ?
+        GROUP BY status
+      `).all(gamma.leagueId, gamma.fadId),
+      [{ status: "locked_complete", count: 14 }]
+    );
+    assert.equal(
+      database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM candidate_card_snapshots
+        WHERE league_id = ? AND fad_id = ?
+      `).get(gamma.leagueId, gamma.fadId).count,
+      14
+    );
+    assert.deepEqual(
+      database.prepare(`
+        SELECT ownership.team_id, COUNT(*) AS player_count,
+               SUM(contract.aav_cents) AS cap_cents
+        FROM player_ownerships AS ownership
+        JOIN contracts AS contract
+          ON contract.league_id = ownership.league_id
+         AND contract.player_id = ownership.player_id
+         AND contract.current_team_id = ownership.team_id
+         AND contract.status = 'active'
+        WHERE ownership.league_id = ? AND ownership.season_id = ?
+          AND ownership.ownership_kind = 'Rostered'
+        GROUP BY ownership.team_id
+        ORDER BY ownership.team_id
+      `).all(gamma.leagueId, gamma.seasonId).map((row) => ({
+        player_count: row.player_count,
+        cap_valid: row.cap_cents >= 7_000 && row.cap_cents <= 10_000,
+      })),
+      Array.from({ length: 14 }, () => ({
+        player_count: 22,
+        cap_valid: true,
+      }))
+    );
+    assert.equal(
+      Object.keys(gamma.sentinels.offerOutcomes).includes("winner"),
+      true
+    );
+    assert.equal(
+      Object.keys(gamma.sentinels.offerOutcomes).some((code) =>
+        code.startsWith("lost_")
+      ),
+      true
+    );
+    const immutableAwardEvidence = database.prepare(`
+      SELECT event.evidence_json AS decision_json,
+             outbox.payload_json AS outbox_json,
+             json_extract(
+               event.evidence_json,
+               '$.sideEffects.fadVersion'
+             ) AS decision_fad_version,
+             json_extract(outbox.payload_json, '$.version')
+               AS outbox_fad_version
+      FROM free_agent_draft_player_allocations AS allocation
+      JOIN free_agent_draft_allocation_events AS event
+        ON event.league_id = allocation.league_id
+       AND event.season_id = allocation.season_id
+       AND event.fad_id = allocation.fad_id
+       AND event.allocation_id = allocation.id
+       AND event.allocation_version = allocation.version
+       AND event.event_kind = 'decision_recorded'
+      JOIN outbox_events AS outbox
+        ON outbox.league_id = event.league_id
+       AND outbox.id = json_extract(
+         event.evidence_json,
+         '$.sideEffects.outboxEventId'
+       )
+      WHERE allocation.league_id = ? AND allocation.fad_id = ?
+        AND allocation.status = 'automatic_award'
+      ORDER BY allocation.id LIMIT 1
+    `).get(gamma.leagueId, gamma.fadId);
+    assert.equal(
+      immutableAwardEvidence.decision_fad_version,
+      immutableAwardEvidence.outbox_fad_version
+    );
+    const immutableAwardBytes = {
+      decision_json: immutableAwardEvidence.decision_json,
+      outbox_json: immutableAwardEvidence.outbox_json,
+    };
+    const completionPublication = database.prepare(`
+      SELECT json_extract(payload_json, '$.version') AS version,
+             json_extract(payload_json, '$.reasonCode') AS reason_code
+      FROM outbox_events
+      WHERE league_id = ?
+        AND aggregate_type = 'free_agent_draft'
+        AND aggregate_id = ?
+        AND event_type = 'free_agent_draft.changed'
+        AND json_extract(payload_json, '$.reasonCode') = 'completed'
+    `).get(gamma.leagueId, gamma.fadId);
+    assert.deepEqual(completionPublication, {
+      version: database.prepare(`
+        SELECT version FROM free_agent_drafts WHERE id = ?
+      `).get(gamma.fadId).version,
+      reason_code: "completed",
+    });
+    assert.deepEqual(
+      database.prepare(`
+        SELECT
+          (SELECT COUNT(*) FROM matchups
+           WHERE league_id = @leagueId
+             AND matchup_week_id = @weekId) AS matchups,
+          (SELECT COUNT(*) FROM matchup_roster_locks
+           WHERE league_id = @leagueId
+             AND matchup_week_id = @weekId) AS locks,
+          (SELECT COUNT(*) FROM matchup_roster_players
+           WHERE league_id = @leagueId) AS roster_players,
+          (SELECT COUNT(*) FROM league_activity
+           WHERE league_id = @leagueId
+             AND event_type = 'matchup_fixture_scoring_play') AS plays
+      `).get({
+        leagueId: gamma.leagueId,
+        weekId: gamma.sentinels.weekOneMatchups.weekId,
+      }),
+      { matchups: 7, locks: 14, roster_players: 252, plays: 14 }
+    );
+
+    const gammaMember = authenticate(
+      started.runtime,
+      manifest.accounts.gammaManagerOne.userId
+    );
+    const histories = gamma.teams.map((team) =>
+      started.runtime.services.league.freeAgentDraftRead
+        .publishedCardHistory({
+          authenticated: gammaMember,
+          leagueId: gamma.leagueId,
+          fadId: gamma.fadId,
+          teamId: team.teamId,
+        })
+    );
+    for (const history of histories) {
+      assert.equal(history.visibilityMode, "published_history");
+      assert.equal(history.slots.length, 22);
+      const outcomeCodes = history.slots
+        .map(({ outcome }) => outcome?.code ?? null)
+        .filter(Boolean);
+      assert.equal(
+        outcomeCodes.some((code) => code.endsWith("_win")),
+        true
+      );
+      assert.equal(
+        outcomeCodes.some((code) => code.endsWith("_loss")),
+        true
+      );
+      assert.deepEqual(history.capabilities.editCard, {
+        allowed: false,
+        reasonCode: "PHASE_CLOSED",
+      });
+    }
+    const winningHistory = histories.find(
+      ({ teamId }) =>
+        teamId ===
+        gamma.sentinels.thirtyDollarThreeYearWinner.teamId
+    );
+    const thirtyDollarSlot = winningHistory.slots.find(
+      ({ player }) =>
+        player?.playerId ===
+        gamma.sentinels.thirtyDollarThreeYearWinner.playerId
+    );
+    assert.deepEqual(
+      {
+        totalValueCents: thirtyDollarSlot.totalValueCents,
+        termYears: thirtyDollarSlot.termYears,
+        aavCents: thirtyDollarSlot.aavCents,
+        outcomeCode: thirtyDollarSlot.outcome.code,
+      },
+      {
+        totalValueCents: 3_000,
+        termYears: 3,
+        aavCents: 1_000,
+        outcomeCode: "automatic_win",
+      }
+    );
+
+    const firstHistory = histories[0];
+    const firstCandidate = firstHistory.slots.find(
+      ({ occupantKind }) => occupantKind === "candidate"
+    );
+    const firstEmpty = firstHistory.slots.find(
+      ({ occupantKind }) => occupantKind === "empty"
+    );
+    const unusedPlayer = database.prepare(`
+      SELECT player.id
+      FROM players AS player
+      JOIN player_source_state AS source
+        ON source.player_id = player.id
+       AND source.ended_at_ms IS NULL
+       AND source.active = 1
+       AND source.normalized_position = ?
+      WHERE player.status = 'active'
+        AND NOT EXISTS (
+          SELECT 1 FROM candidate_card_snapshot_entries AS entry
+          WHERE entry.league_id = ? AND entry.fad_id = ?
+            AND entry.player_id = player.id
+        )
+      ORDER BY lower(player.full_name), player.id
+      LIMIT 1
+    `).get(firstEmpty.slotGroup === "D" ? "D" : "F", gamma.leagueId, gamma.fadId);
+    const mutationRevisionCount = database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM candidate_card_revisions
+      WHERE league_id = ? AND fad_id = ?
+    `).get(gamma.leagueId, gamma.fadId).count;
+    const mutationCommands = [
+      ["add", () => started.runtime.services.league.candidateCards.addCandidate({
+        authenticated: gammaMember,
+        leagueId: gamma.leagueId,
+        fadId: gamma.fadId,
+        teamId: firstHistory.teamId,
+        slotKey: firstEmpty.slotKey,
+        input: {
+          playerId: unusedPlayer.id,
+          totalValueCents: 100,
+          termYears: 1,
+        },
+        expectedCardVersion: firstHistory.cardVersion,
+        idempotencyKey: "gamma-completed-add-denied",
+      })],
+      ["edit", () => started.runtime.services.league.candidateCards.editCandidate({
+        authenticated: gammaMember,
+        leagueId: gamma.leagueId,
+        fadId: gamma.fadId,
+        teamId: firstHistory.teamId,
+        entryId: firstCandidate.entryId,
+        input: { totalValueCents: 200, termYears: 2 },
+        expectedCardVersion: firstHistory.cardVersion,
+        idempotencyKey: "gamma-completed-edit-denied",
+      })],
+      ["move", () => started.runtime.services.league.candidateCards.moveEntry({
+        authenticated: gammaMember,
+        leagueId: gamma.leagueId,
+        fadId: gamma.fadId,
+        teamId: firstHistory.teamId,
+        entryId: firstCandidate.entryId,
+        input: { slotKey: firstEmpty.slotKey },
+        expectedCardVersion: firstHistory.cardVersion,
+        idempotencyKey: "gamma-completed-move-denied",
+      })],
+      ["remove", () => started.runtime.services.league.candidateCards.removeCandidate({
+        authenticated: gammaMember,
+        leagueId: gamma.leagueId,
+        fadId: gamma.fadId,
+        teamId: firstHistory.teamId,
+        entryId: firstCandidate.entryId,
+        expectedCardVersion: firstHistory.cardVersion,
+        idempotencyKey: "gamma-completed-remove-denied",
+      })],
+      ["save", () => started.runtime.services.league.candidateCards.saveCard({
+        authenticated: gammaMember,
+        leagueId: gamma.leagueId,
+        fadId: gamma.fadId,
+        teamId: firstHistory.teamId,
+        input: {
+          slots: firstHistory.slots.map((slot) => ({
+            slotKey: slot.slotKey,
+            candidate: slot.occupantKind === "candidate"
+              ? {
+                  playerId: slot.player.playerId,
+                  totalValueCents: slot.totalValueCents,
+                  termYears: slot.termYears,
+                }
+              : null,
+          })),
+        },
+        expectedCardVersion: firstHistory.cardVersion,
+        idempotencyKey: "gamma-completed-save-denied",
+      })],
+    ];
+    for (const [name, command] of mutationCommands) {
+      assert.throws(command, (error) => {
+        const chain = [];
+        for (let current = error; current; current = current.cause) {
+          chain.push(current.code, current.details?.reasonCode);
+        }
+        assert.equal(
+          chain.some((code) => [
+            "FAD_PHASE_CONFLICT",
+            "CANDIDATE_CARD_SUMMARY_DRIFT",
+          ].includes(code)),
+          true,
+          `${name}: ${JSON.stringify(chain)}`
+        );
+        return true;
+      });
+    }
+    assert.equal(
+      database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM candidate_card_revisions
+        WHERE league_id = ? AND fad_id = ?
+      `).get(gamma.leagueId, gamma.fadId).count,
+      mutationRevisionCount
+    );
+    assert.deepEqual(
+      database.prepare(`
+        SELECT event.evidence_json AS decision_json,
+               outbox.payload_json AS outbox_json
+        FROM free_agent_draft_player_allocations AS allocation
+        JOIN free_agent_draft_allocation_events AS event
+          ON event.league_id = allocation.league_id
+         AND event.season_id = allocation.season_id
+         AND event.fad_id = allocation.fad_id
+         AND event.allocation_id = allocation.id
+         AND event.allocation_version = allocation.version
+         AND event.event_kind = 'decision_recorded'
+        JOIN outbox_events AS outbox
+          ON outbox.league_id = event.league_id
+         AND outbox.id = json_extract(
+           event.evidence_json,
+           '$.sideEffects.outboxEventId'
+         )
+        WHERE allocation.league_id = ? AND allocation.fad_id = ?
+          AND allocation.status = 'automatic_award'
+        ORDER BY allocation.id LIMIT 1
+      `).get(gamma.leagueId, gamma.fadId),
+      immutableAwardBytes
+    );
+
+    const provider = database.prepare(`
+      SELECT provider FROM stat_sources
+      WHERE status = 'active'
+      ORDER BY provider, id LIMIT 1
+    `).get().provider;
+    const scoreReads = gamma.sentinels.weekOneMatchups
+      .scoreReadableMatchups.map(({ matchupId }) =>
+        started.runtime.services.league.matchupScoring.readLive({
+          leagueId: gamma.leagueId,
+          seasonId: gamma.seasonId,
+          weekId: gamma.sentinels.weekOneMatchups.weekId,
+          matchupId,
+          providers: [provider],
+          nowMs: manifest.fixedNowMs,
+        })
+      );
+    assert.equal(scoreReads.length, 7);
+    assert.equal(
+      scoreReads.every(
+        ({ status, home, away }) =>
+          status === "live" &&
+          home.scoreHundredths > 0 &&
+          away.scoreHundredths > 0
+      ),
+      true
+    );
+    assert.equal(
+      new Set(scoreReads.flatMap(({ home, away }) => [
+        home.scoreHundredths,
+        away.scoreHundredths,
+      ])).size > 1,
+      true
     );
 
     assert.deepEqual(database.pragma("foreign_key_check"), []);

@@ -3454,6 +3454,9 @@ function createSqliteFreeAgentDraftRepository({
               AND fad_id = draft.id
               AND occupant_kind = 'candidate'
               AND player_id IS NOT NULL
+              AND proposed_total_value_cents IS NOT NULL
+              AND proposed_term_years IS NOT NULL
+              AND proposed_aav_cents IS NOT NULL
           ) AS candidate_player_count,
           (
             SELECT COUNT(*)

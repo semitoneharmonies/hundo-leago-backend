@@ -357,6 +357,9 @@ function createSqliteFreeAgentDraftCorrectionPreviewRepository({
         AND offer.fad_id = @fadId
         AND offer.player_id = @playerId
         AND offer.occupant_kind = 'candidate'
+        AND offer.proposed_total_value_cents IS NOT NULL
+        AND offer.proposed_term_years IS NOT NULL
+        AND offer.proposed_aav_cents IS NOT NULL
       ORDER BY offer.id
     `);
     recoveriesStatement = database.prepare(`

@@ -25,6 +25,7 @@ const {
   normalizeCandidateCardExpectedVersion,
   normalizeCandidateCardIdempotencyKey,
   normalizeCandidateCardMutationAction,
+  normalizeCandidateCardWholeSave,
 } = require(
   "../../../domain/freeAgentDraft/candidateCardMutationPolicy"
 );
@@ -351,6 +352,22 @@ function nullableMoney(value) {
   return value === null || nonnegativeInteger(value);
 }
 
+function nullablePositiveMoney(value) {
+  return (
+    value === null ||
+    (Number.isSafeInteger(value) && value > 0)
+  );
+}
+
+function nullableCandidateTerm(value) {
+  return (
+    value === null ||
+    (Number.isSafeInteger(value) &&
+      value >= 1 &&
+      value <= 3)
+  );
+}
+
 function safePrivateSlot(slot, index) {
   if (
     !exactKeys(slot, PRIVATE_SLOT_KEYS) ||
@@ -421,12 +438,37 @@ function safePrivateSlot(slot, index) {
       slot.remainingYears >= 1
     );
   }
+  const incomplete =
+    slot.totalValueCents === null ||
+    slot.termYears === null;
   return (
     slot.authoritativeRosterCategory === null &&
     slot.locked === false &&
-    Number.isSafeInteger(slot.termYears) &&
-    slot.termYears >= 1 &&
-    slot.remainingYears === null
+    nullablePositiveMoney(
+      slot.totalValueCents
+    ) &&
+    nullableCandidateTerm(slot.termYears) &&
+    slot.remainingYears === null &&
+    (
+      incomplete
+        ? (
+            slot.aavCents === null &&
+            slot.validation.status ===
+              "invalid" &&
+            slot.validation.codes.length === 1 &&
+            slot.validation.codes[0] ===
+              "CANDIDATE_CONTRACT_INCOMPLETE"
+          )
+        : (
+            Number.isSafeInteger(
+              slot.aavCents
+            ) &&
+            slot.aavCents > 0 &&
+            !slot.validation.codes.includes(
+              "CANDIDATE_CONTRACT_INCOMPLETE"
+            )
+          )
+    )
   );
 }
 
@@ -1111,6 +1153,64 @@ function canonicalMutationResult(
   });
 }
 
+function canonicalWholeSaveResult(
+  result,
+  {
+    leagueId,
+    fadId,
+    teamId,
+    expectedCardVersion,
+  }
+) {
+  if (
+    !exactKeys(result, [
+      "card",
+      "revisionId",
+      "changedEntryIds",
+    ]) ||
+    !CANONICAL_UUID_PATTERN.test(
+      result.revisionId || ""
+    ) ||
+    !Array.isArray(result.changedEntryIds) ||
+    result.changedEntryIds.some(
+      (entryId) =>
+        !CANONICAL_UUID_PATTERN.test(
+          entryId || ""
+        )
+    ) ||
+    new Set(result.changedEntryIds).size !==
+      result.changedEntryIds.length ||
+    result.changedEntryIds.some(
+      (entryId, index, values) =>
+        index > 0 &&
+        values[index - 1] >= entryId
+    )
+  ) {
+    throw new TypeError(
+      "The canonical whole-card save result is unavailable."
+    );
+  }
+  const card = canonicalPrivateCard(
+    result.card,
+    { leagueId, fadId, teamId }
+  );
+  if (
+    card.cardVersion !==
+      expectedCardVersion + 1
+  ) {
+    throw new TypeError(
+      "The canonical whole-card save result is unavailable."
+    );
+  }
+  return Object.freeze({
+    card,
+    revisionId: result.revisionId,
+    changedEntryIds: Object.freeze([
+      ...result.changedEntryIds,
+    ]),
+  });
+}
+
 function canonicalHelpCommandResult(
   result,
   {
@@ -1409,6 +1509,11 @@ function createCandidateCardService({
   );
   assertMethod(
     repository,
+    "saveCurrent",
+    "the canonical whole-card save repository"
+  );
+  assertMethod(
+    repository,
     "requestHelpCurrent",
     "the canonical Candidate Card help repository"
   );
@@ -1645,6 +1750,92 @@ function createCandidateCardService({
     });
   }
 
+  function saveCard(input = {}) {
+    const command = exactMutationInput(
+      input,
+      [
+        "authenticated",
+        "leagueId",
+        "fadId",
+        "teamId",
+        "input",
+        "expectedCardVersion",
+        "idempotencyKey",
+      ],
+      "whole-card save"
+    );
+    const leagueId = stableId(command.leagueId);
+    const fadId = stableId(command.fadId);
+    const teamId = stableId(command.teamId);
+    const desired =
+      normalizeCandidateCardWholeSave(
+        command.input
+      );
+    const expectedCardVersion =
+      normalizeCandidateCardExpectedVersion(
+        command.expectedCardVersion
+      );
+    const idempotencyKey =
+      normalizeCandidateCardIdempotencyKey(
+        command.idempotencyKey
+      );
+    const authority = viewer(
+      leagueAuthorization.requireActiveMembership(
+        command.authenticated,
+        leagueId
+      )
+    );
+    const timing = safeMutationTiming(clock);
+    const allocatedIds = new Set();
+    const requestId = secureId(
+      secureRandom,
+      allocatedIds
+    );
+    const revisionId = secureId(
+      secureRandom,
+      allocatedIds
+    );
+    const entryIds = desired.slots.map((slot) =>
+      slot.candidate === null
+        ? null
+        : secureId(
+            secureRandom,
+            allocatedIds
+          )
+    );
+    const result = repository.saveCurrent({
+      leagueId,
+      fadId,
+      teamId,
+      viewer: authority,
+      expectedCardVersion,
+      nowMs: timing.nowMs,
+      idempotency: Object.freeze({
+        requestId,
+        clientKey: idempotencyKey,
+        expiresAtMs: timing.expiresAtMs,
+      }),
+      revisionId,
+      slots: desired.slots,
+      entryIds: Object.freeze(entryIds),
+    });
+    if (result === null) {
+      throw new CandidateCardNotFoundError();
+    }
+    return Object.freeze({
+      httpStatus: 200,
+      data: canonicalWholeSaveResult(
+        result,
+        {
+          leagueId,
+          fadId,
+          teamId,
+          expectedCardVersion,
+        }
+      ),
+    });
+  }
+
   function editCandidate(input = {}) {
     const command = exactMutationInput(
       input,
@@ -1855,6 +2046,7 @@ function createCandidateCardService({
     previewRevision,
     removeCandidate,
     requestHelp,
+    saveCard,
   });
 }
 
