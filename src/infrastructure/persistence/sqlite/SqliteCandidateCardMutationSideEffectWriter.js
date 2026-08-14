@@ -75,6 +75,7 @@ const EDITOR_AUTHORITIES = new Set([
   "platform_administrator_as_commissioner",
 ]);
 const ACTIONS = new Set([
+  "candidate_card_saved",
   "candidate_added",
   "candidate_edited",
   "candidate_moved",

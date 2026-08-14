@@ -611,6 +611,26 @@ function audienceProjection(database, eventId) {
 }
 
 describe("FAD-09 Candidate Card mutation side-effect writer", () => {
+  test("accepts the canonical whole-card save action", (t) => {
+    const runtime = createRuntime(t);
+    const result = runtime.write(
+      managerInput({ action: "candidate_card_saved" })
+    );
+
+    assert.equal(result.event.event_type, "candidate_card.changed");
+    assert.equal(result.event.aggregate_id, IDS.card);
+    assert.deepEqual(
+      audienceProjection(runtime.database, IDS.revision),
+      [
+        {
+          audience_kind: "team",
+          team_id: IDS.team,
+          user_id: null,
+        },
+      ]
+    );
+  });
+
   test("writes one metadata-only team-scoped Candidate invalidation without activity or notification", (t) => {
     const runtime = createRuntime(t);
     const result = runtime.write(managerInput());
