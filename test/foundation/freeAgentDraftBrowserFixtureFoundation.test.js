@@ -359,6 +359,25 @@ test(
   async (t) => {
     const started = await startRuntime(t);
     seedRealPlayerCatalog(started.runtime.database);
+    const fixtureAccountEmails = [
+      "admin@release-qa.example.test",
+      "comm.a@release-qa.example.test",
+      "comm.b@release-qa.example.test",
+      "man.a.leag.a@release-qa.example.test",
+      "man.b.leag.a@release-qa.example.test",
+      "man.a.leag.b@release-qa.example.test",
+    ];
+    for (const email of fixtureAccountEmails) {
+      const account = started.runtime.database.prepare(`
+        SELECT id
+        FROM users
+        WHERE email_normalized = ?
+      `).get(email);
+      assert.ok(account);
+      started.runtime.services.sessionService.issueForUser({
+        userId: account.id,
+      });
+    }
     const triggerBaseline =
       started.runtime.database.prepare(`
         SELECT name, sql

@@ -903,6 +903,15 @@ function revokeActiveFixtureSession(runtime, userId) {
   });
 }
 
+function revokeActiveFixtureSessions(runtime, accounts) {
+  const userIds = new Set(
+    Object.values(accounts).map(({ userId }) => userId)
+  );
+  for (const userId of userIds) {
+    revokeActiveFixtureSession(runtime, userId);
+  }
+}
+
 function startAndScheduleLeague({
   runtime,
   accounts,
@@ -3071,6 +3080,10 @@ async function createFreeAgentDraftBrowserFixture({
       accounts,
       nowMs
     );
+    revokeActiveFixtureSessions(
+      targetRuntime,
+      accounts
+    );
     const schedules = schedulesFor(nowMs);
     const gammaResult = await completeGammaFixture({
       runtime: targetRuntime,
@@ -3080,9 +3093,9 @@ async function createFreeAgentDraftBrowserFixture({
       players: foundations.players,
       fixtureNowMs: nowMs,
     });
-    revokeActiveFixtureSession(
+    revokeActiveFixtureSessions(
       targetRuntime,
-      accounts.alphaCommissioner.userId
+      accounts
     );
     const betaSource = await completeBetaSourceFad({
       runtime: targetRuntime,
