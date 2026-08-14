@@ -231,6 +231,27 @@ function safeAccountManifest(manifest) {
   for (const [leagueAlias, league] of Object.entries(
     manifest.leagues
   )) {
+    for (const memberAccountAlias of
+      league.memberAccountAliases || []) {
+      const member = manifest.accounts[memberAccountAlias];
+      const memberAccount = member
+        ? byUserId.get(member.userId)
+        : null;
+      if (!memberAccount) {
+        fail(
+          "STAGING_FAD_TEST_MANIFEST_INVALID",
+          "A FAD test member account is unavailable."
+        );
+      }
+      if (!memberAccount.leagueAccess.has(leagueAlias)) {
+        memberAccount.leagueAccess.set(leagueAlias, {
+          leagueAlias,
+          leagueName: league.name,
+          commissioner: false,
+          managedTeamAliases: [],
+        });
+      }
+    }
     const platformAdministrator =
       manifest.accounts.platformAdmin;
     const platformAdministratorAccount =

@@ -214,9 +214,10 @@ const LEAGUE_BLUEPRINTS = Object.freeze({
   beta: Object.freeze({
     name: "Beta League",
     scenario: "second_season_fad",
-    commissionerAccountAlias: "betaCommissioner",
+    commissionerAccountAlias: "alphaCommissioner",
     memberAccountAliases: Object.freeze([
       "platformAdmin",
+      "alphaCommissioner",
       "betaCommissioner",
       "betaManager",
       "betaOtherManager",
@@ -881,6 +882,25 @@ function authenticate(runtime, userId) {
     );
   }
   return authenticated;
+}
+
+function revokeActiveFixtureSession(runtime, userId) {
+  const activeSessions = runtime.database.prepare(
+    "SELECT id, version FROM sessions " +
+      "WHERE user_id = ? AND status = 'active'"
+  ).all(userId);
+  if (activeSessions.length > 1) {
+    fail(
+      "FREE_AGENT_DRAFT_BROWSER_FIXTURE_AUTHENTICATION_FAILED",
+      "The local FAD browser fixture found ambiguous active-session authority."
+    );
+  }
+  if (activeSessions.length === 0) return null;
+  return runtime.services.sessionService.revoke({
+    sessionId: activeSessions[0].id,
+    expectedVersion: activeSessions[0].version,
+    reason: "platform_security_action",
+  });
 }
 
 function startAndScheduleLeague({
@@ -3018,6 +3038,10 @@ function manifestLeague({
       scope.fad.first_matchup_starts_at_ms,
     commissionerAccountAlias:
       league.commissionerAccountAlias,
+    memberAccountAliases: [
+      ...LEAGUE_BLUEPRINTS[league.alias]
+        .memberAccountAliases,
+    ],
     candidateCardsEditable:
       scope.fad.status === "cards_open",
     competitionPhase:
@@ -3056,6 +3080,10 @@ async function createFreeAgentDraftBrowserFixture({
       players: foundations.players,
       fixtureNowMs: nowMs,
     });
+    revokeActiveFixtureSession(
+      targetRuntime,
+      accounts.alphaCommissioner.userId
+    );
     const betaSource = await completeBetaSourceFad({
       runtime: targetRuntime,
       accounts,
@@ -3088,7 +3116,10 @@ async function createFreeAgentDraftBrowserFixture({
       betaFinalization.finalizedAtMs + DAY_MS;
     const betaAuthenticated = authenticate(
       betaSource.clocked,
-      accounts.betaCommissioner.userId
+      accounts[
+        foundations.leagues.beta
+          .commissionerAccountAlias
+      ].userId
     );
     const betaEntryDraft = betaSource.clocked.services.league
       .entryDraftSchedule.schedule({

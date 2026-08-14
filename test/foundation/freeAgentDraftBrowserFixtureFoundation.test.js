@@ -439,6 +439,26 @@ test(
     const alpha = manifest.leagues.alpha;
     const beta = manifest.leagues.beta;
     const gamma = manifest.leagues.gamma;
+    const commissionerAccounts = [alpha, beta, gamma]
+      .map(({ commissionerAccountAlias }) =>
+        manifest.accounts[commissionerAccountAlias]
+      );
+    assert.equal(
+      new Set(
+        commissionerAccounts.map(({ userId }) => userId)
+      ).size,
+      1
+    );
+    assert.deepEqual(
+      commissionerAccounts.map(({ email }) => email),
+      Array(3).fill("comm.a@release-qa.example.test")
+    );
+    assert.equal(
+      beta.memberAccountAliases.includes(
+        "betaCommissioner"
+      ),
+      true
+    );
     assert.equal(
       alpha.helpOpensAtMs >= alpha.openedAtMs,
       true
