@@ -1626,6 +1626,7 @@ function seedAuthoritativeCandidateConflict(database) {
       playerId: candidatePlayerId,
       slotKey: "F01",
       totalValueCents: 600,
+      aavCents: 300,
       termYears: 2,
     },
   });
@@ -2107,6 +2108,7 @@ function seedRestrictedActionWithoutImprovement(database) {
         playerId: restrictedPlayerId,
         slotKey: "F01",
         totalValueCents: 600,
+        aavCents: 300,
         termYears: 2,
       },
       })
@@ -2747,6 +2749,8 @@ function seedPublishedPendingResults(database) {
         playerId: offer.player.playerId,
         slotKey: offer.slotKey,
         totalValueCents: offer.totalValueCents,
+        aavCents:
+          offer.totalValueCents / offer.termYears,
         termYears: offer.termYears,
       },
     });
