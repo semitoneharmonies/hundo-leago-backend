@@ -75,7 +75,7 @@ function normalizeOffer(action, fields) {
     "action_fields_invalid"
   );
   return createCandidateCardOfferContract({
-    totalValueCents: action.totalValueCents,
+    aavCents: action.aavCents,
     termYears: action.termYears,
   });
 }
@@ -110,7 +110,7 @@ function normalizeCandidateCardMutationAction(
       "type",
       "slotKey",
       "playerId",
-      "totalValueCents",
+      "aavCents",
       "termYears",
     ]);
     const slot = parseCandidateCardSlotKey(
@@ -126,6 +126,7 @@ function normalizeCandidateCardMutationAction(
       ),
       totalValueCents:
         contract.totalValueCents,
+      aavCents: contract.aavCents,
       termYears: contract.termYears,
     });
   }
@@ -134,7 +135,7 @@ function normalizeCandidateCardMutationAction(
     const contract = normalizeOffer(action, [
       "type",
       "entryId",
-      "totalValueCents",
+      "aavCents",
       "termYears",
     ]);
     return Object.freeze({
@@ -145,6 +146,7 @@ function normalizeCandidateCardMutationAction(
       ),
       totalValueCents:
         contract.totalValueCents,
+      aavCents: contract.aavCents,
       termYears: contract.termYears,
     });
   }
@@ -229,7 +231,7 @@ function normalizeCandidateCardWholeSave(
         item.candidate,
         [
           "playerId",
-          "totalValueCents",
+          "aavCents",
           "termYears",
         ],
         "whole_card_candidate_fields_invalid"
@@ -248,8 +250,8 @@ function normalizeCandidateCardWholeSave(
       playerIds.add(playerId);
       const contract =
         createCandidateCardPartialOfferContract({
-          totalValueCents:
-            item.candidate.totalValueCents,
+          aavCents:
+            item.candidate.aavCents,
           termYears:
             item.candidate.termYears,
         });
@@ -258,8 +260,7 @@ function normalizeCandidateCardWholeSave(
         slotKey: slot.slotKey,
         candidate: Object.freeze({
           playerId,
-          totalValueCents:
-            contract.totalValueCents,
+          aavCents: contract.aavCents,
           termYears: contract.termYears,
         }),
       });

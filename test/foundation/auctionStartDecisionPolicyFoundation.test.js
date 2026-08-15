@@ -36,7 +36,7 @@ function body(overrides = {}) {
   return {
     playerId: IDS.player,
     teamId: IDS.team,
-    totalValueCents: 600,
+    aavCents: 300,
     termYears: 2,
     bindingIllegalityConfirmed: true,
     ...overrides,
@@ -124,7 +124,7 @@ describe("FAD-13 server-derived auction-start body policy", () => {
     const ordinaryInput = {
       playerId: IDS.player,
       teamId: IDS.team,
-      totalValueCents: 600,
+      aavCents: 300,
       termYears: 2,
     };
     const ordinary = validateAuctionStartBody(ordinaryInput, {
@@ -134,19 +134,27 @@ describe("FAD-13 server-derived auction-start body policy", () => {
       sourceKind: "fad_open_rapid",
     });
 
-    assert.deepEqual(ordinary, ordinaryInput);
+    assert.deepEqual(ordinary, {
+      ...ordinaryInput,
+      totalValueCents: 600,
+    });
     assert.deepEqual(Object.keys(ordinary), [
       "playerId",
       "teamId",
       "totalValueCents",
+      "aavCents",
       "termYears",
     ]);
-    assert.equal(
-      JSON.stringify(ordinary),
-      JSON.stringify(ordinaryInput)
-    );
+    assert.equal(JSON.stringify(ordinary), JSON.stringify({
+      playerId: IDS.player,
+      teamId: IDS.team,
+      totalValueCents: 600,
+      aavCents: 300,
+      termYears: 2,
+    }));
     assert.deepEqual(fad, {
       ...ordinaryInput,
+      totalValueCents: 600,
       bindingIllegalityConfirmed: true,
     });
     assert.ok(Object.isFrozen(ordinary));
@@ -231,13 +239,13 @@ describe("FAD-13 server-derived auction-start body policy", () => {
     );
   });
 
-  test("inherits the existing stable-ID, starter minimum, term, precision, and rounded-offer validation", () => {
+  test("inherits stable-ID, minimum AAV, term, and quarter-AAV validation", () => {
     for (const [overrides, reasonCode] of [
       [{ playerId: "not-an-id" }, AUCTION_CREATION_CODES.stableIdInvalid],
       [{ teamId: "not-an-id" }, AUCTION_CREATION_CODES.stableIdInvalid],
-      [{ totalValueCents: 199, termYears: 2 }, AUCTION_CREATION_CODES.valueInvalid],
-      [{ totalValueCents: 250, termYears: 2 }, AUCTION_CREATION_CODES.valueInvalid],
-      [{ totalValueCents: 400, termYears: 4 }, AUCTION_CREATION_CODES.termInvalid],
+      [{ aavCents: 75, termYears: 2 }, AUCTION_CREATION_CODES.valueInvalid],
+      [{ aavCents: 110, termYears: 2 }, AUCTION_CREATION_CODES.valueInvalid],
+      [{ aavCents: 400, termYears: 4 }, AUCTION_CREATION_CODES.termInvalid],
     ]) {
       assertPolicyError(
         () =>

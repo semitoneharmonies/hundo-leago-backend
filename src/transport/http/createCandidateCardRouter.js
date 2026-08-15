@@ -13,6 +13,8 @@ const HELP_WRITE_ACTION = "fad_help_write";
 const SAFE_MESSAGES = Object.freeze({
   CANDIDATE_BENCH_AAV_EXCEEDED:
     "The proposed Bench contract exceeds the maximum allowed AAV.",
+  CANDIDATE_CARD_CAP_EXCEEDED:
+    "The Candidate Card cannot be saved because its Active-player AAV exceeds the salary cap.",
   CANDIDATE_CARD_ENTRY_NOT_FOUND:
     "The Candidate Card entry was not found.",
   CANDIDATE_CARD_NOT_FOUND:
@@ -84,6 +86,7 @@ const CONFLICT_CODES = new Set([
 ]);
 const VALIDATION_CODES = new Set([
   "CANDIDATE_BENCH_AAV_EXCEEDED",
+  "CANDIDATE_CARD_CAP_EXCEEDED",
   "CANDIDATE_CONTRACT_INVALID",
   "CANDIDATE_PLAYER_INELIGIBLE",
   "CANDIDATE_SLOT_INVALID",

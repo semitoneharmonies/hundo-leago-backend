@@ -15,7 +15,7 @@ const MAXIMUM_TIMESTAMP_MS = 8_640_000_000_000_000;
 const ORDINARY_START_BODY_FIELDS = Object.freeze([
   "playerId",
   "teamId",
-  "totalValueCents",
+  "aavCents",
   "termYears",
 ]);
 const FAD_START_BODY_FIELDS = Object.freeze([
@@ -140,13 +140,14 @@ function validateAuctionStartBody(input, options) {
   }
 
   const offer = validateOpeningBid(
-    input.totalValueCents,
+    input.aavCents,
     input.termYears
   );
   const body = {
     playerId: stableId(input.playerId),
     teamId: stableId(input.teamId),
     totalValueCents: offer.totalValueCents,
+    aavCents: offer.aavCents,
     termYears: offer.termYears,
   };
   if (sourceKind === "fad_open_rapid") {

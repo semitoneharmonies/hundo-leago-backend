@@ -32,7 +32,7 @@ describe("Candidate Card revision-preview policy", () => {
         type: "add",
         slotKey: "F01",
         playerId: uuid(1),
-        totalValueCents: 900,
+        aavCents: 300,
         termYears: 3,
       }),
       {
@@ -40,6 +40,7 @@ describe("Candidate Card revision-preview policy", () => {
         slotKey: "F01",
         playerId: uuid(1),
         totalValueCents: 900,
+        aavCents: 300,
         termYears: 3,
       }
     );
@@ -47,13 +48,14 @@ describe("Candidate Card revision-preview policy", () => {
       normalizeCandidateCardRevisionPreviewAction({
         type: "edit",
         entryId: uuid(2),
-        totalValueCents: 400,
+        aavCents: 200,
         termYears: 2,
       }),
       {
         type: "edit",
         entryId: uuid(2),
         totalValueCents: 400,
+        aavCents: 200,
         termYears: 2,
       }
     );
@@ -107,7 +109,7 @@ describe("Candidate Card revision-preview policy", () => {
           entryId: uuid(3),
           slotKey: "F01",
           playerId: uuid(1),
-          totalValueCents: 900,
+          aavCents: 300,
           termYears: 3,
         },
         "action_fields_invalid",
@@ -140,7 +142,7 @@ describe("Candidate Card revision-preview policy", () => {
         {
           type: "edit",
           entryId: "not-a-uuid",
-          totalValueCents: 300,
+          aavCents: 300,
           termYears: 1,
         },
         "CANDIDATE_CARD_INPUT_INVALID",
@@ -150,7 +152,7 @@ describe("Candidate Card revision-preview policy", () => {
         {
           type: "edit",
           entryId: uuid(2),
-          totalValueCents: 199,
+          aavCents: 99,
           termYears: 2,
         },
         "CANDIDATE_CONTRACT_INVALID",
@@ -161,7 +163,7 @@ describe("Candidate Card revision-preview policy", () => {
           type: "add",
           slotKey: "B01",
           playerId: uuid(1),
-          totalValueCents: 401,
+          aavCents: 425,
           termYears: 1,
         },
         "CANDIDATE_BENCH_AAV_EXCEEDED",
@@ -188,7 +190,7 @@ describe("Candidate Card revision-preview policy", () => {
         type: "add",
         slotKey: "D03",
         playerId: uuid(11),
-        totalValueCents: 600,
+        aavCents: 300,
         termYears: 2,
       },
       existingEntryIds: [uuid(12)],
@@ -221,7 +223,7 @@ describe("Candidate Card revision-preview policy", () => {
       type: "add",
       slotKey: "F01",
       playerId: uuid(1),
-      totalValueCents: 300,
+      aavCents: 300,
       termYears: 1,
     };
     const cases = [

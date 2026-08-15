@@ -2,7 +2,6 @@ const {
   AUCTION_RESOLUTION_CODES,
   AuctionResolutionPolicyError,
   calculateAavCents,
-  smallestValidTotalCents,
   validateSubmittedValue,
 } = require("../auctions/auctionResolutionPolicy");
 const {
@@ -590,6 +589,7 @@ function inspectBid(
         "totalValueCents",
         "termYears",
         "lowestOfferedAavCents",
+        "lowestOfferedTotalValueCents",
         "firstSubmittedAtMs",
         "isStartingBid",
         "authorityValid",
@@ -682,6 +682,19 @@ function inspectBid(
     }
     if (
       !Number.isSafeInteger(
+        value.lowestOfferedTotalValueCents
+      ) ||
+      value.lowestOfferedTotalValueCents < 1 ||
+      value.lowestOfferedTotalValueCents >
+        offer.totalValueCents
+    ) {
+      fail(
+        AUCTION_RESOLUTION_CODES.lowestTotalInvalid,
+        AUCTION_RESOLUTION_CODES.lowestTotalInvalid
+      );
+    }
+    if (
+      !Number.isSafeInteger(
         value.lowestOfferedAavCents
       ) ||
       value.lowestOfferedAavCents < 1 ||
@@ -703,6 +716,8 @@ function inspectBid(
         aavCents: offer.aavCents,
         lowestOfferedAavCents:
           value.lowestOfferedAavCents,
+        lowestOfferedTotalValueCents:
+          value.lowestOfferedTotalValueCents,
         firstSubmittedAtMs: safeTimestamp(
           value.firstSubmittedAtMs,
           AUCTION_RESOLUTION_CODES.bidInvalid,
@@ -797,8 +812,8 @@ function fallbackFloorReason(bid, floor) {
 
 function rankBids(left, right) {
   return (
+    right.totalValueCents - left.totalValueCents ||
     right.aavCents - left.aavCents ||
-    left.termYears - right.termYears ||
     left.id.localeCompare(right.id)
   );
 }
@@ -813,6 +828,8 @@ function safeRankedBid(bid, rank) {
     aavCents: bid.aavCents,
     lowestOfferedAavCents:
       bid.lowestOfferedAavCents,
+    lowestOfferedTotalValueCents:
+      bid.lowestOfferedTotalValueCents,
     firstSubmittedAtMs: bid.firstSubmittedAtMs,
   });
 }
@@ -824,8 +841,9 @@ function rankedProjection(eligible) {
     eligible.map((bid, index) => {
       if (
         !previous ||
-        previous.aavCents !== bid.aavCents ||
-        previous.termYears !== bid.termYears
+        previous.totalValueCents !==
+          bid.totalValueCents ||
+        previous.aavCents !== bid.aavCents
       ) {
         rank = index + 1;
       }
@@ -935,32 +953,28 @@ function selectedReveal(
   }
 }
 
-function nextTermValidTotalAtLeast(
-  totalValueCents,
-  termYears
-) {
-  if (termYears === 1) return totalValueCents;
-  return Math.ceil(totalValueCents / 100) * 100;
-}
-
 function restrictedFloorPrice(
   normalTotalValueCents,
   termYears,
   floor
 ) {
-  let totalValueCents = Math.max(
+  const requiredTotalValueCents = Math.max(
     normalTotalValueCents,
-    nextTermValidTotalAtLeast(
-      floor.totalValueCents,
-      termYears
-    )
+    floor.totalValueCents
   );
+  let aavCents = Math.max(
+    100,
+    Math.ceil(
+      requiredTotalValueCents / termYears / 25
+    ) * 25
+  );
+  let totalValueCents = aavCents * termYears;
   if (
     totalValueCents === floor.totalValueCents &&
-    calculateAavCents(totalValueCents, termYears) <
-      floor.aavCents
+    aavCents < floor.aavCents
   ) {
-    totalValueCents += termYears === 1 ? 1 : 100;
+    aavCents += 25;
+    totalValueCents = aavCents * termYears;
   }
   return totalValueCents;
 }
@@ -973,24 +987,44 @@ function winnerProjection({
 }) {
   const highestCompetingAavCents =
     competitor?.aavCents ?? null;
-  const requiredWinningAavCents = competitor
+  const highestCompetingTotalValueCents =
+    competitor?.totalValueCents ?? null;
+  const requiredWinningTotalValueCents = competitor
     ? Math.max(
-        winner.lowestOfferedAavCents,
-        competitor.aavCents
-      )
-    : winner.aavCents;
-  let finalTotalValueCents = competitor
-    ? smallestValidTotalCents(
-        requiredWinningAavCents,
-        winner.termYears
+        winner.lowestOfferedTotalValueCents,
+        competitor.totalValueCents
       )
     : winner.totalValueCents;
+  const legacySubmittedPrice =
+    requiredWinningTotalValueCents ===
+      winner.totalValueCents &&
+    (
+      winner.totalValueCents % winner.termYears !== 0 ||
+      (
+        winner.totalValueCents / winner.termYears
+      ) % 25 !== 0
+    );
+  let requiredWinningAavCents = legacySubmittedPrice
+    ? winner.aavCents
+    : Math.max(
+        100,
+        Math.ceil(
+          requiredWinningTotalValueCents /
+            winner.termYears /
+            25
+        ) * 25
+      );
+  let finalTotalValueCents = legacySubmittedPrice
+    ? winner.totalValueCents
+    : requiredWinningAavCents * winner.termYears;
   if (context.kind === "restricted") {
     finalTotalValueCents = restrictedFloorPrice(
       finalTotalValueCents,
       winner.termYears,
       floor
     );
+    requiredWinningAavCents =
+      finalTotalValueCents / winner.termYears;
   }
   if (
     !Number.isSafeInteger(finalTotalValueCents) ||
@@ -1013,9 +1047,13 @@ function winnerProjection({
     submittedAavCents: winner.aavCents,
     lowestOfferedAavCents:
       winner.lowestOfferedAavCents,
+    lowestOfferedTotalValueCents:
+      winner.lowestOfferedTotalValueCents,
     highestCompetingAavCents,
+    highestCompetingTotalValueCents,
     persistedSecondPriceInputCents:
-      highestCompetingAavCents ?? 0,
+      highestCompetingTotalValueCents ?? 0,
+    requiredWinningTotalValueCents,
     requiredWinningAavCents,
     finalTotalValueCents,
     finalAavCents: calculateAavCents(
@@ -1185,8 +1223,9 @@ function evaluateFreeAgentDraftAuctionResolution(
   const top = eligible[0];
   const tiedTop = eligible.filter(
     (bid) =>
-      bid.aavCents === top.aavCents &&
-      bid.termYears === top.termYears
+      bid.totalValueCents ===
+        top.totalValueCents &&
+      bid.aavCents === top.aavCents
   );
   let winner = top;
   let drawReveal;

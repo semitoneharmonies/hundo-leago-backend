@@ -1547,7 +1547,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const options = runtimeOptions(database);
     const runtime = createTargetRuntime(options);
     assert.equal(runtime.migrationState.status, "exact");
-    assert.equal(runtime.migrationState.userVersion, 50);
+    assert.equal(runtime.migrationState.userVersion, 51);
     assert.equal(
       typeof runtime.services.league.auctionResolution.resolveDue,
       "function"
@@ -3360,7 +3360,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
       slotKey: "F01",
       input: {
         playerId,
-        totalValueCents: 600,
+        aavCents: 300,
         termYears: 2,
       },
       expectedCardVersion: 1,

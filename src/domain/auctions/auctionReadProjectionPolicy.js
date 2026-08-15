@@ -415,22 +415,26 @@ function validateOffer(
   if (!hasExactDataFields(value, fields)) {
     fail(reasonCode);
   }
-  if (
+  const commonValid =
     !Number.isSafeInteger(value.termYears) ||
-    value.termYears < 1 ||
-    value.termYears > 3 ||
-    !Number.isSafeInteger(value.totalValueCents) ||
-    value.totalValueCents <
-      (enforceBidMinimum ? value.termYears * 100 : 1) ||
-    (enforceBidMinimum &&
-      value.termYears > 1 &&
-      value.totalValueCents % 100 !== 0) ||
-    !Number.isSafeInteger(value.aavCents) ||
-    value.aavCents !== roundedAavCents(
+    value.termYears < 1 || value.termYears > 3 ||
+    !Number.isSafeInteger(value.totalValueCents) || value.totalValueCents < 1 ||
+    !Number.isSafeInteger(value.aavCents) || value.aavCents < 100;
+  if (commonValid) {
+    fail(reasonCode);
+  }
+  const aavFirstContract =
+    value.aavCents % 25 === 0 &&
+    value.totalValueCents === value.aavCents * value.termYears;
+  const legacyContract =
+    value.totalValueCents >= value.termYears * 100 &&
+    (value.termYears === 1 || value.totalValueCents % 100 === 0) &&
+    value.aavCents === roundedAavCents(
       value.totalValueCents,
       value.termYears
-    )
-  ) {
+    );
+  if ((!aavFirstContract && !legacyContract) ||
+      (enforceBidMinimum && value.totalValueCents < value.termYears * 100)) {
     fail(reasonCode);
   }
 }

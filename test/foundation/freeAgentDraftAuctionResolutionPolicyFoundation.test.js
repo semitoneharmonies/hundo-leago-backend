@@ -92,6 +92,7 @@ function bid({
     totalValueCents,
     termYears
   ),
+  lowestOfferedTotalValueCents = totalValueCents,
   firstSubmittedAtMs = ROLLOVER_AT_MS - 1_000,
   status = "active",
   teamStatus = "active",
@@ -108,6 +109,7 @@ function bid({
     totalValueCents,
     termYears,
     lowestOfferedAavCents,
+    lowestOfferedTotalValueCents,
     firstSubmittedAtMs,
     isStartingBid,
     authorityValid,
@@ -342,7 +344,7 @@ describe(
     );
 
     test(
-      "uses AAV then shorter term and applies anti-bluff pricing without crossing the original Candidate total-first floor",
+      "uses total value then AAV and applies total-first anti-bluff pricing without crossing the Candidate floor",
       () => {
         const floor = contract(500, 1);
         const winner = bid({
@@ -387,7 +389,7 @@ describe(
         );
         assert.equal(
           result.winner.requiredWinningAavCents,
-          200
+          300
         );
         assert.equal(
           result.winner.finalTotalValueCents,
@@ -598,6 +600,7 @@ describe(
                   totalValueCents: 900,
                   termYears: 3,
                   lowestOfferedAavCents: 200,
+                  lowestOfferedTotalValueCents: 600,
                 }),
                 bid({
                   id: IDS.bid2,
@@ -617,7 +620,7 @@ describe(
         );
         assert.equal(
           result.winner.persistedSecondPriceInputCents,
-          200
+          600
         );
         assert.equal(
           result.winner.finalTotalValueCents,
@@ -707,6 +710,7 @@ describe(
                   totalValueCents: 900,
                   termYears: 3,
                   lowestOfferedAavCents: 200,
+                  lowestOfferedTotalValueCents: 600,
                   isStartingBid: true,
                 }),
                 bid({
@@ -729,7 +733,7 @@ describe(
         );
         assert.equal(
           result.winner.persistedSecondPriceInputCents,
-          200
+          600
         );
         assert.equal(
           result.winner.finalTotalValueCents,

@@ -439,20 +439,22 @@ function safePrivateSlot(slot, index) {
     );
   }
   const incomplete =
-    slot.totalValueCents === null ||
+    slot.aavCents === null ||
     slot.termYears === null;
   return (
     slot.authoritativeRosterCategory === null &&
     slot.locked === false &&
-    nullablePositiveMoney(
-      slot.totalValueCents
-    ) &&
+    nullablePositiveMoney(slot.totalValueCents) &&
+    nullablePositiveMoney(slot.aavCents) &&
     nullableCandidateTerm(slot.termYears) &&
     slot.remainingYears === null &&
     (
       incomplete
         ? (
-            slot.aavCents === null &&
+            (
+              slot.aavCents === null ||
+              slot.totalValueCents === null
+            ) &&
             slot.validation.status ===
               "invalid" &&
             slot.validation.codes.length === 1 &&
@@ -460,9 +462,9 @@ function safePrivateSlot(slot, index) {
               "CANDIDATE_CONTRACT_INCOMPLETE"
           )
         : (
-            Number.isSafeInteger(
-              slot.aavCents
-            ) &&
+            Number.isSafeInteger(slot.totalValueCents) &&
+            slot.totalValueCents > 0 &&
+            Number.isSafeInteger(slot.aavCents) &&
             slot.aavCents > 0 &&
             !slot.validation.codes.includes(
               "CANDIDATE_CONTRACT_INCOMPLETE"
@@ -1718,7 +1720,7 @@ function createCandidateCardService({
       command.input,
       [
         "playerId",
-        "totalValueCents",
+        "aavCents",
         "termYears",
       ],
       "add-candidate"
@@ -1728,8 +1730,7 @@ function createCandidateCardService({
         type: "add",
         slotKey: command.slotKey,
         playerId: body.playerId,
-        totalValueCents:
-          body.totalValueCents,
+        aavCents: body.aavCents,
         termYears: body.termYears,
       });
     return mutateCandidateCard({
@@ -1856,15 +1857,14 @@ function createCandidateCardService({
     const teamId = stableId(command.teamId);
     const body = exactMutationBody(
       command.input,
-      ["totalValueCents", "termYears"],
+      ["aavCents", "termYears"],
       "edit-candidate"
     );
     const action =
       normalizeCandidateCardMutationAction({
         type: "edit",
         entryId: command.entryId,
-        totalValueCents:
-          body.totalValueCents,
+        aavCents: body.aavCents,
         termYears: body.termYears,
       });
     return mutateCandidateCard({

@@ -30,7 +30,7 @@ function createResetMigrationReportFixture({
   completedAtMs,
   createdAtMs,
   bundleCharacter = "a",
-  databaseSchemaVersion = 50,
+  databaseSchemaVersion = 51,
 } = {}) {
   const sourceBundleId =
     `source-bundle-v1-${bundleCharacter.repeat(64)}`;

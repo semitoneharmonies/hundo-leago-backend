@@ -94,7 +94,7 @@ function auction(overrides = {}) {
 }
 
 function bid(overrides = {}) {
-  return {
+  const value = {
     id: IDS.bidA,
     leagueId: IDS.league,
     auctionId: IDS.auction,
@@ -108,6 +108,12 @@ function bid(overrides = {}) {
     isStartingBid: true,
     authorityValid: true,
     ...overrides,
+  };
+  return {
+    ...value,
+    lowestOfferedTotalValueCents:
+      overrides.lowestOfferedTotalValueCents ??
+      value.lowestOfferedAavCents * value.termYears,
   };
 }
 
@@ -314,7 +320,7 @@ function createPersistenceRuntime(t) {
     actorUserId: IDS.managerA,
     actorMembershipId: IDS.membershipA,
     actorAuthority: "manager",
-    totalValueCents: 1_000,
+    aavCents: 350,
     termYears: 3,
     idempotencyKey: "m5-03-open",
     occurredAtMs: OPEN_MS,
@@ -330,7 +336,7 @@ function createPersistenceRuntime(t) {
     actorUserId: IDS.managerB,
     actorMembershipId: IDS.membershipB,
     actorAuthority: "manager",
-    totalValueCents: 500,
+    aavCents: 250,
     termYears: 2,
     expectedBidVersion: null,
     idempotencyKey: "m5-03-join",
@@ -369,7 +375,7 @@ describe("M5-03 deterministic auction resolution policy", () => {
     assert.equal(smallestValidTotalCents(175, 1), 175);
   });
 
-  test("ranks by AAV, shorter term, first time, then stable bid ID", () => {
+  test("ranks by total value, AAV, first time, then stable bid ID", () => {
     const result = evaluateAuctionResolution({
       auction: auction(),
       bids: [
@@ -401,10 +407,10 @@ describe("M5-03 deterministic auction resolution policy", () => {
     assert.equal(result.outcome, "winner");
     assert.deepEqual(
       result.rankedBids.map(({ bidId }) => bidId),
-      [IDS.bidA, IDS.bidC, IDS.bidB]
+      [IDS.bidB, IDS.bidA, IDS.bidC]
     );
     assert.equal(result.winner.requiredWinningAavCents, 200);
-    assert.equal(result.winner.finalTotalValueCents, 200);
+    assert.equal(result.winner.finalTotalValueCents, 400);
   });
 
   test("uses the current offer for one bidder and anti-bluff pricing for competition", () => {
@@ -429,9 +435,13 @@ describe("M5-03 deterministic auction resolution policy", () => {
       ],
     });
     assert.equal(competing.winner.highestCompetingAavCents, 250);
-    assert.equal(competing.winner.requiredWinningAavCents, 250);
-    assert.equal(competing.winner.finalTotalValueCents, 800);
-    assert.equal(competing.winner.finalAavCents, 267);
+    assert.equal(
+      competing.winner.highestCompetingTotalValueCents,
+      500
+    );
+    assert.equal(competing.winner.requiredWinningAavCents, 175);
+    assert.equal(competing.winner.finalTotalValueCents, 525);
+    assert.equal(competing.winner.finalAavCents, 175);
   });
 
   test("returns explicit before-deadline, playoff, ownership, and no-winner outcomes", () => {
@@ -594,7 +604,7 @@ describe("M5-03 read-only SQLite auction resolution candidates", () => {
     assert.equal(result.seasonId, IDS.season);
     assert.equal(result.decision.outcome, "winner");
     assert.equal(result.decision.winner.bidId, IDS.bidA);
-    assert.equal(result.decision.winner.finalTotalValueCents, 1_000);
+    assert.equal(result.decision.winner.finalTotalValueCents, 1_050);
     assert.equal(
       repository.loadCandidate({
         leagueId: uuid(99),
@@ -669,7 +679,7 @@ describe("M5-03 read-only SQLite auction resolution candidates", () => {
     }).decision;
     assert.equal(decision.outcome, "winner");
     assert.equal(decision.winner.bidId, IDS.bidA);
-    assert.equal(decision.winner.finalTotalValueCents, 1_000);
+    assert.equal(decision.winner.finalTotalValueCents, 1_050);
     assert.deepEqual(decision.skippedBids, [
       {
         bidId: IDS.bidB,

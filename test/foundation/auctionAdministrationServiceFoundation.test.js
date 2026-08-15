@@ -76,7 +76,7 @@ function bodyFor(action) {
   if (action === "edit_bid") {
     return {
       teamId: IDS.team,
-      totalValueCents: 600,
+      aavCents: 300,
       termYears: 2,
     };
   }
@@ -533,7 +533,13 @@ describe(
                   ? IDS.bid
                   : null,
               action,
-              body: bodyFor(action),
+              body:
+                action === "edit_bid"
+                  ? {
+                      ...bodyFor(action),
+                      totalValueCents: 600,
+                    }
+                  : bodyFor(action),
               preconditionVersion:
                 index + 7,
               actorUserId:

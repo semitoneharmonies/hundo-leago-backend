@@ -1070,7 +1070,7 @@ before(() => {
   suiteRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "hundo-fad-t143-")
   );
-  templatePath = path.join(suiteRoot, "schema50.sqlite3");
+  templatePath = path.join(suiteRoot, "schema51.sqlite3");
   const connection = openDatabase({
     databasePath: templatePath,
     environment: "test",
@@ -1085,7 +1085,7 @@ before(() => {
     connection.database.pragma("user_version", {
       simple: true,
     }),
-    50
+    51
   );
   connection.database.pragma("wal_checkpoint(TRUNCATE)");
   connection.database.close();

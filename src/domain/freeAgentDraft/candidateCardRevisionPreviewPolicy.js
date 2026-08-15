@@ -58,7 +58,7 @@ function stableId(value, reasonCode) {
 function normalizeOffer(action, fields) {
   exactObject(action, fields, "action_fields_invalid");
   const contract = createCandidateCardOfferContract({
-    totalValueCents: action.totalValueCents,
+    aavCents: action.aavCents,
     termYears: action.termYears,
   });
   return contract;
@@ -93,7 +93,7 @@ function normalizeCandidateCardRevisionPreviewAction(
       "type",
       "slotKey",
       "playerId",
-      "totalValueCents",
+      "aavCents",
       "termYears",
     ]);
     const slot = parseCandidateCardSlotKey(
@@ -109,6 +109,7 @@ function normalizeCandidateCardRevisionPreviewAction(
       ),
       totalValueCents:
         contract.totalValueCents,
+      aavCents: contract.aavCents,
       termYears: contract.termYears,
     });
   }
@@ -116,7 +117,7 @@ function normalizeCandidateCardRevisionPreviewAction(
     const contract = normalizeOffer(action, [
       "type",
       "entryId",
-      "totalValueCents",
+      "aavCents",
       "termYears",
     ]);
     return Object.freeze({
@@ -127,6 +128,7 @@ function normalizeCandidateCardRevisionPreviewAction(
       ),
       totalValueCents:
         contract.totalValueCents,
+      aavCents: contract.aavCents,
       termYears: contract.termYears,
     });
   }

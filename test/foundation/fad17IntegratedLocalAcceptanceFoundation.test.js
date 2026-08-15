@@ -302,7 +302,7 @@ function addRapidAuctionPlayers({
 }
 
 test(
-  "FAD-17 rehearses exact schema 22 through 50 with fresh schema and repository-catalog agreement",
+  "FAD-17 rehearses exact schema 22 through 51 with fresh schema and repository-catalog agreement",
   (t) => {
     const upgraded = createMigrationRuntime(
       t,
@@ -327,25 +327,25 @@ test(
     copyMigrationRange(
       upgraded.migrationsDirectory,
       23,
-      50
+      51
     );
     assert.equal(
-      migrate(upgraded, "fad17-schema50-upgrade")
+      migrate(upgraded, "fad17-schema51-upgrade")
         .status,
       "exact"
     );
 
     const fresh = createMigrationRuntime(
       t,
-      "hundo-fad17-schema50-fresh-"
+      "hundo-fad17-schema51-fresh-"
     );
     copyMigrationRange(
       fresh.migrationsDirectory,
       1,
-      50
+      51
     );
     assert.equal(
-      migrate(fresh, "fad17-schema50-fresh").status,
+      migrate(fresh, "fad17-schema51-fresh").status,
       "exact"
     );
 
@@ -354,7 +354,7 @@ test(
         runtime.database.pragma("user_version", {
           simple: true,
         }),
-        50
+        51
       );
       assert.deepEqual(
         runtime.database.pragma("foreign_key_check"),
@@ -382,7 +382,7 @@ test(
     );
     assert.equal(
       migrationLedger(upgraded.database).length,
-      50
+      51
     );
   }
 );
@@ -514,7 +514,7 @@ test(
           input: {
             playerId,
             teamId: team.teamId,
-            totalValueCents:
+            aavCents:
               index < 2 ? 6_000 : 100,
             termYears: 1,
             bindingIllegalityConfirmed: true,
@@ -729,7 +729,7 @@ test(
         input: {
           playerId: players[2].playerId,
           teamId: team.teamId,
-          totalValueCents: 100,
+          aavCents: 100,
           termYears: 1,
           bindingIllegalityConfirmed: true,
         },

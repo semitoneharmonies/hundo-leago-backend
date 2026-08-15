@@ -113,6 +113,11 @@ const FINAL_MIGRATION_0050 = Object.freeze({
   sha256:
     "95635dbac1752647e5d8ca39b931a9f8ddb71efb5a19db797fda9b76e392316a",
 });
+const FINAL_MIGRATION_0051 = Object.freeze({
+  byteLength: 128_538,
+  sha256:
+    "fae29fe918fff9a0a8c58f947140e701ebbe0ac35d813bcda4fa28aaaa3cf2b2",
+});
 const FROZEN_MIGRATIONS_0023_THROUGH_0029 = Object.freeze([
   Object.freeze({
     id: 23,
@@ -706,7 +711,7 @@ describe("M2-04 initial relational schema", () => {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     });
 
-    assert.equal(migrations.length, 50);
+    assert.equal(migrations.length, 51);
     assert.equal(migrations[0].id, 1);
     assert.equal(migrations[0].fileName, "0001_initial.sql");
     assert.equal(migrations[1].id, 2);
@@ -1106,6 +1111,19 @@ describe("M2-04 initial relational schema", () => {
       migrations[49].checksum,
       FINAL_MIGRATION_0050.sha256
     );
+    assert.equal(migrations[50].id, 51);
+    assert.equal(
+      migrations[50].fileName,
+      "0051_use_aav_first_candidate_cards_and_auctions.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[50].filePath).size,
+      FINAL_MIGRATION_0051.byteLength
+    );
+    assert.equal(
+      migrations[50].checksum,
+      FINAL_MIGRATION_0051.sha256
+    );
     for (const expected of FROZEN_MIGRATIONS_0023_THROUGH_0029) {
       const migration = migrations[expected.id - 1];
       assert.equal(migration.id, expected.id);
@@ -1117,12 +1135,12 @@ describe("M2-04 initial relational schema", () => {
       assert.equal(migration.checksum, expected.sha256);
     }
     assert.equal(migrationResult.status, "exact");
-    assert.equal(database.pragma("user_version", { simple: true }), 50);
+    assert.equal(database.pragma("user_version", { simple: true }), 51);
 
     const ledgerBefore = database
       .prepare("SELECT * FROM schema_migrations")
       .all();
-    assert.equal(ledgerBefore.length, 50);
+    assert.equal(ledgerBefore.length, 51);
     assert.equal(ledgerBefore[0].checksum, migrations[0].checksum);
     assert.equal(ledgerBefore[1].checksum, migrations[1].checksum);
     assert.equal(ledgerBefore[2].checksum, migrations[2].checksum);
@@ -1262,6 +1280,15 @@ describe("M2-04 initial relational schema", () => {
       ledgerBefore[49].checksum,
       FINAL_MIGRATION_0050.sha256
     );
+    assert.equal(ledgerBefore[50].migration_id, 51);
+    assert.equal(
+      ledgerBefore[50].file_name,
+      "0051_use_aav_first_candidate_cards_and_auctions.sql"
+    );
+    assert.equal(
+      ledgerBefore[50].checksum,
+      FINAL_MIGRATION_0051.sha256
+    );
 
     const rerun = migrateDatabase({
       database,
@@ -1370,7 +1397,7 @@ describe("M2-04 initial relational schema", () => {
         },
       {
         metadata_key: "data_model_version",
-        metadata_value: "50",
+        metadata_value: "51",
       },
       ]
     );
@@ -2045,6 +2072,7 @@ describe("M2-04 initial relational schema", () => {
       total_value_cents: 3_000,
       term_years: 3,
       lowest_offered_aav_cents: 1_000,
+      lowest_offered_total_value_cents: 3_000,
       first_submitted_at_ms: 1_100,
       last_edited_at_ms: 1_100,
       edit_count: 0,

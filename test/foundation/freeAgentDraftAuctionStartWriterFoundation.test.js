@@ -519,7 +519,7 @@ function command(ids, nowMs, key, overrides = {}) {
     body: {
       playerId: ids.player,
       teamId: ids.team,
-      totalValueCents: 600,
+      aavCents: 300,
       termYears: 2,
       bindingIllegalityConfirmed: true,
       ...(overrides.body || {}),
@@ -738,7 +738,7 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
       PRIMARY,
       DIRECT_AT_MS + 2,
       "ordinary-replay",
-      { body: { totalValueCents: 900 } }
+      { body: { aavCents: 450 } }
     );
     delete input.body.bindingIllegalityConfirmed;
     assert.equal(
@@ -967,7 +967,7 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
         PRIMARY,
         DIRECT_AT_MS,
         "direct-start",
-        { body: { totalValueCents: 800 } }
+        { body: { aavCents: 400 } }
       )),
       "IDEMPOTENCY_KEY_REUSED"
     );

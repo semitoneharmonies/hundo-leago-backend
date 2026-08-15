@@ -318,11 +318,11 @@ function assertRuntime(runtime) {
     !runtime ||
     !runtime.database ||
     runtime.database.open !== true ||
-    runtime.database.pragma("user_version", { simple: true }) !== 50
+    runtime.database.pragma("user_version", { simple: true }) !== 51
   ) {
     fail(
       "FREE_AGENT_DRAFT_BROWSER_FIXTURE_RUNTIME_INVALID",
-      "The local FAD browser fixture requires an open schema-50 release-QA runtime."
+      "The local FAD browser fixture requires an open schema-51 release-QA runtime."
     );
   }
   requireMethod(
@@ -1526,8 +1526,7 @@ function addGammaCandidates({
         slotKey: offer.slotKey,
         input: {
           playerId: offer.playerId,
-          totalValueCents:
-            offer.aavCents * offer.termYears,
+          aavCents: offer.aavCents,
           termYears: offer.termYears,
         },
         expectedCardVersion: versions.get(team.teamId),
@@ -2757,7 +2756,7 @@ function candidateCommand({
   managerAccountAlias,
   player,
   slotKey,
-  totalValueCents,
+  aavCents,
   termYears,
 }) {
   const team = league.teams[teamIndex];
@@ -2775,7 +2774,7 @@ function candidateCommand({
       slotKey,
       input: {
         playerId: player.playerId,
-        totalValueCents,
+        aavCents,
         termYears,
       },
       expectedCardVersion: card.version,
@@ -2974,7 +2973,7 @@ function betaSentinels({
     managerAccountAlias: "betaManager",
     player: players.betaPrivateCandidate,
     slotKey: "D03",
-    totalValueCents: 900,
+    aavCents: 300,
     termYears: 3,
   });
   const slot = candidate.data.card.slots.find(

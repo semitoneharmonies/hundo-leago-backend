@@ -62,7 +62,7 @@ const EXPECTED_VERSION = 7;
 const CREATED_AT_MS = 3_000;
 const REQUEST_SHA256 = Object.freeze({
   edit_bid:
-    "f3650d1a7aacb002dc26892db9a4fe1f5e4869db59d60b18c4d61f7d22d088be",
+    "5d0fc318a0247bf454fbd8c79b0e1565230fb8937ea229c09d2b039f501bfad8",
   remove_bid:
     "6aed369fdb4659768638b217eb5dd8220d93ca758c97643419c90f660869736e",
   cancel_auction:
@@ -72,7 +72,7 @@ const REQUEST_SHA256 = Object.freeze({
 });
 const REQUEST_CANONICAL_JSON = Object.freeze({
   edit_bid:
-    '{"action":"edit_bid","auctionId":"22222222-2222-4222-8222-222222222222","bidId":"33333333-3333-4333-8333-333333333333","body":{"teamId":"44444444-4444-4444-8444-444444444444","termYears":2,"totalValueCents":600},"domain":"hundo-leago.auction-administration-request","leagueId":"11111111-1111-4111-8111-111111111111","preconditionKind":"bid","preconditionVersion":7,"schemaVersion":1}',
+    '{"action":"edit_bid","auctionId":"22222222-2222-4222-8222-222222222222","bidId":"33333333-3333-4333-8333-333333333333","body":{"aavCents":300,"teamId":"44444444-4444-4444-8444-444444444444","termYears":2,"totalValueCents":600},"domain":"hundo-leago.auction-administration-request","leagueId":"11111111-1111-4111-8111-111111111111","preconditionKind":"bid","preconditionVersion":7,"schemaVersion":1}',
   remove_bid:
     '{"action":"remove_bid","auctionId":"22222222-2222-4222-8222-222222222222","bidId":"33333333-3333-4333-8333-333333333333","body":{"confirmation":"REMOVE AUCTION BID"},"domain":"hundo-leago.auction-administration-request","leagueId":"11111111-1111-4111-8111-111111111111","preconditionKind":"bid","preconditionVersion":7,"schemaVersion":1}',
   cancel_auction:
@@ -116,7 +116,7 @@ function bodyFor(action) {
   if (action === "edit_bid") {
     return {
       teamId: TEAM_ID,
-      totalValueCents: 600,
+      aavCents: 300,
       termYears: 2,
     };
   }
@@ -482,6 +482,7 @@ describe(
         body: {
           teamId: TEAM_ID,
           totalValueCents: 600,
+          aavCents: 300,
           termYears: 2,
         },
       });
@@ -512,7 +513,7 @@ describe(
           requestFor("edit_bid", {
             body: {
               teamId: TEAM_ID,
-              totalValueCents: 700,
+              aavCents: 350,
               termYears: 2,
             },
           })
@@ -657,7 +658,7 @@ describe(
             requestFor("edit_bid", {
               body: {
                 teamId: TEAM_ID,
-                totalValueCents: 550,
+                aavCents: 310,
                 termYears: 2,
               },
             })

@@ -336,7 +336,7 @@ function command(overrides = {}) {
     actorUserId: IDS.manager,
     actorMembershipId: IDS.managerMembership,
     actorAuthority: "manager",
-    totalValueCents: 1000,
+    aavCents: 350,
     termYears: 3,
     idempotencyKey: "m5-01-start-one",
     occurredAtMs: NOW_MS,
@@ -529,23 +529,23 @@ describe("M5-01 auction creation policy", () => {
     assert.equal(dstWeek.bidClosesAtMs, Date.parse("2026-03-15T23:00:00.000Z"));
   });
 
-  test("enforces starting minimums, precision, terms, and rounded AAV", () => {
+  test("enforces starting minimums, quarter-AAV precision, and terms", () => {
     assert.deepEqual(validateOpeningBid(100, 1), {
       totalValueCents: 100,
       termYears: 1,
       aavCents: 100,
     });
-    assert.deepEqual(validateOpeningBid(1000, 3), {
-      totalValueCents: 1000,
+    assert.deepEqual(validateOpeningBid(350, 3), {
+      totalValueCents: 1050,
       termYears: 3,
-      aavCents: 333,
+      aavCents: 350,
     });
     assertPolicyError(
-      () => validateOpeningBid(100, 2),
+      () => validateOpeningBid(75, 2),
       AUCTION_CREATION_CODES.valueInvalid
     );
     assertPolicyError(
-      () => validateOpeningBid(250, 2),
+      () => validateOpeningBid(110, 2),
       AUCTION_CREATION_CODES.valueInvalid
     );
     assertPolicyError(
@@ -632,7 +632,7 @@ describe("M5-01 auction persistence foundation", () => {
       openedByUserId: IDS.manager,
       version: 1,
     });
-    assert.equal(result.openingBid.aavCents, 333);
+    assert.equal(result.openingBid.aavCents, 350);
     assert.equal(result.openingBid.editCount, 0);
     assert.equal(result.event.type, "auction_started");
     assert.equal(
@@ -684,7 +684,7 @@ describe("M5-01 auction persistence foundation", () => {
     assert.equal(replayed.auction.id, created.auction.id);
     assert.equal(runtime.database.prepare("SELECT COUNT(*) AS count FROM auctions").get().count, 1);
     assertPolicyError(
-      () => runtime.repository.startAuction(command({ totalValueCents: 1200 })),
+      () => runtime.repository.startAuction(command({ aavCents: 400 })),
       AUCTION_CREATION_CODES.idempotencyConflict
     );
   });

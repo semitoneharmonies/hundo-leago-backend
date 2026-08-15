@@ -95,7 +95,7 @@ function createRequestHash(command, auction) {
     actorUserId: command.actorUserId,
     actorMembershipId: command.actorMembershipId,
     actorAuthority: command.actorAuthority,
-    totalValueCents: command.totalValueCents,
+    aavCents: command.aavCents,
     termYears: command.termYears,
     expectedBidVersion: command.expectedBidVersion,
   };
@@ -506,12 +506,14 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         id, league_id, season_id, auction_id, team_id,
         submitted_by_user_id, total_value_cents, term_years,
         lowest_offered_aav_cents,
+        lowest_offered_total_value_cents,
         first_submitted_at_ms, last_edited_at_ms, edit_count,
         status, idempotency_request_id, version
       ) VALUES (
         @effectiveBidId, @leagueId, @seasonId, @auctionId, @teamId,
         @actorUserId, @totalValueCents, @termYears,
         @lowestOfferedAavCents,
+        @lowestOfferedTotalValueCents,
         @firstSubmittedAtMs, @lastEditedAtMs, @editCount,
         'active', @idempotencyRequestId, @nextVersion
       )
@@ -521,6 +523,8 @@ function createSqliteAuctionBidRepository({ database } = {}) {
       SET total_value_cents = @totalValueCents,
         term_years = @termYears,
         lowest_offered_aav_cents = @lowestOfferedAavCents,
+        lowest_offered_total_value_cents =
+          @lowestOfferedTotalValueCents,
         last_edited_at_ms = @lastEditedAtMs,
         edit_count = @editCount,
         idempotency_request_id = @idempotencyRequestId,
@@ -762,6 +766,8 @@ function createSqliteAuctionBidRepository({ database } = {}) {
               totalValueCents: existingBid.total_value_cents,
               termYears: existingBid.term_years,
               lowestOfferedAavCents: existingBid.lowest_offered_aav_cents,
+              lowestOfferedTotalValueCents:
+                existingBid.lowest_offered_total_value_cents,
               editCount: existingBid.edit_count,
               version: existingBid.version,
             }
@@ -771,6 +777,8 @@ function createSqliteAuctionBidRepository({ database } = {}) {
           termYears: state.termYears,
           aavCents: state.aavCents,
           lowestOfferedAavCents: state.lowestOfferedAavCents,
+          lowestOfferedTotalValueCents:
+            state.lowestOfferedTotalValueCents,
           editCount: state.editCount,
           version: state.nextVersion,
         },

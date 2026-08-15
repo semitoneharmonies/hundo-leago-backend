@@ -27,7 +27,7 @@ function createAuctionRequestHash(command) {
         actorUserId: command.actorUserId,
         actorMembershipId: command.actorMembershipId,
         actorAuthority: command.actorAuthority,
-        totalValueCents: command.totalValueCents,
+        aavCents: command.aavCents,
         termYears: command.termYears,
       }),
       "utf8"
@@ -278,12 +278,13 @@ function createSqliteAuctionRepository({ database } = {}) {
         id, league_id, season_id, auction_id, team_id,
         submitted_by_user_id, total_value_cents, term_years,
         lowest_offered_aav_cents,
+        lowest_offered_total_value_cents,
         first_submitted_at_ms, last_edited_at_ms, edit_count,
         status, idempotency_request_id, version
       ) VALUES (
         @bidId, @leagueId, @seasonId, @auctionId, @teamId,
         @actorUserId, @totalValueCents, @termYears,
-        @aavCents,
+        @aavCents, @totalValueCents,
         @occurredAtMs, @occurredAtMs, 0,
         'active', @idempotencyRequestId, 1
       )

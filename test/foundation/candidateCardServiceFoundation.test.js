@@ -224,6 +224,7 @@ function revisionPreview(overrides = {}) {
     slotKey: "F01",
     playerId: uuid(20),
     totalValueCents: 600,
+    aavCents: 300,
     termYears: 2,
   };
   const slots = CANDIDATE_CARD_SLOT_KEYS.map(
@@ -484,7 +485,7 @@ function previewCommand(overrides = {}) {
       type: "add",
       slotKey: "F01",
       playerId: uuid(20),
-      totalValueCents: 600,
+      aavCents: 300,
       termYears: 2,
     },
     ...overrides,
@@ -497,7 +498,7 @@ function addCandidateCommand(overrides = {}) {
     slotKey: "F01",
     input: {
       playerId: uuid(20),
-      totalValueCents: 600,
+      aavCents: 300,
       termYears: 2,
     },
     expectedCardVersion: 1,
@@ -513,7 +514,7 @@ function editCandidateCommand(
     ...command(),
     entryId: uuid(30),
     input: {
-      totalValueCents: 900,
+      aavCents: 300,
       termYears: 3,
     },
     expectedCardVersion: 1,
@@ -1137,7 +1138,7 @@ describe(
               entryId: uuid(30),
               slotKey: "F01",
               playerId: uuid(20),
-              totalValueCents: 600,
+              aavCents: 300,
               termYears: 2,
             },
           }),
@@ -1148,7 +1149,7 @@ describe(
             action: {
               type: "edit",
               entryId: uuid(30),
-              totalValueCents: 199,
+              aavCents: 110,
               termYears: 2,
             },
           }),
@@ -1220,7 +1221,7 @@ describe(
                   IDS.membership,
               },
               nowMs: 456_789,
-              action: request.action,
+              action: projection.action,
             },
           ]
         );
@@ -1312,7 +1313,7 @@ describe(
         const actionMismatch = revisionPreview({
           action: {
             ...revisionPreview().action,
-            totalValueCents: 900,
+            aavCents: 450,
           },
         });
         const warningMissing = revisionPreview();
@@ -1418,7 +1419,7 @@ describe(
             addCandidateCommand({
               input: {
                 playerId: uuid(20),
-                totalValueCents: 600,
+                aavCents: 300,
                 termYears: 2,
                 hidden: true,
               },
@@ -1428,7 +1429,7 @@ describe(
             "editCandidate",
             editCandidateCommand({
               input: {
-                totalValueCents: 900,
+                aavCents: 300,
               },
             }),
           ],
@@ -1481,7 +1482,7 @@ describe(
                 slotKey: "B01",
                 input: {
                   playerId: uuid(20),
-                  totalValueCents: 401,
+                  aavCents: 425,
                   termYears: 1,
                 },
               })
@@ -1532,6 +1533,7 @@ describe(
               slotKey: "F01",
               playerId: uuid(20),
               totalValueCents: 600,
+              aavCents: 300,
               termYears: 2,
               entryId: uuid(42),
             },
@@ -1554,6 +1556,7 @@ describe(
               type: "edit",
               entryId: uuid(30),
               totalValueCents: 900,
+              aavCents: 300,
               termYears: 3,
             },
             generatedIds: [
@@ -2248,7 +2251,7 @@ test("Candidate Card service sends one exact whole-card command and returns cano
         candidate: index === 0
           ? {
               playerId: uuid(90),
-              totalValueCents: null,
+              aavCents: null,
               termYears: 2,
             }
           : null,
@@ -2304,7 +2307,7 @@ test("Candidate Card service sends one exact whole-card command and returns cano
           slotKey: "F01",
           candidate: {
             playerId: uuid(90),
-            totalValueCents: null,
+            aavCents: null,
             termYears: 2,
           },
         },

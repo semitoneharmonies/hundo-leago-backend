@@ -522,7 +522,7 @@ function createRuntime(
     actorUserId: IDS.managerUser,
     actorMembershipId: IDS.managerMembership,
     actorAuthority: "manager",
-    totalValueCents: 600,
+    aavCents: 200,
     termYears: 3,
     idempotencyKey: "open-auction",
     occurredAtMs: NOW_MS,
@@ -2046,7 +2046,7 @@ function bodyFor(action, overrides = {}) {
   if (action === "edit_bid") {
     return {
       teamId: IDS.team,
-      totalValueCents: 900,
+      aavCents: 300,
       termYears: 3,
       ...overrides,
     };
@@ -2721,7 +2721,7 @@ describe(
           ...command,
           body: {
             ...command.body,
-            totalValueCents: 1_500,
+            aavCents: 1_500,
           },
         };
         assertRepositoryError(
@@ -3571,7 +3571,7 @@ describe(
             rejected.repository.administer(
               commandFor(rejected, "edit_bid", {
                 body: bodyFor("edit_bid", {
-                  totalValueCents: 500,
+                  aavCents: 250,
                   termYears: 2,
                 }),
                 idempotencyKey:

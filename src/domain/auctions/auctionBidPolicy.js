@@ -96,7 +96,7 @@ function calculateAavCents(totalValueCents, termYears) {
   return whole + (remainder * 2 >= termYears ? 1 : 0);
 }
 
-function validateBidOffer(totalValueCents, termYears, { joining = false } = {}) {
+function validateBidOffer(aavCents, termYears, { joining = false } = {}) {
   if (!Number.isSafeInteger(termYears) || termYears < 1 || termYears > 3) {
     fail(AUCTION_BID_CODES.termInvalid);
   }
@@ -104,16 +104,23 @@ function validateBidOffer(totalValueCents, termYears, { joining = false } = {}) 
     ? JOINING_MINIMUM_TOTALS[termYears]
     : termYears * 100;
   if (
+    !Number.isSafeInteger(aavCents) ||
+    aavCents < 100 ||
+    aavCents % 25 !== 0
+  ) {
+    fail(AUCTION_BID_CODES.valueInvalid);
+  }
+  const totalValueCents = aavCents * termYears;
+  if (
     !Number.isSafeInteger(totalValueCents) ||
-    totalValueCents < minimum ||
-    (termYears > 1 && totalValueCents % 100 !== 0)
+    totalValueCents < minimum
   ) {
     fail(AUCTION_BID_CODES.valueInvalid);
   }
   return Object.freeze({
     totalValueCents,
     termYears,
-    aavCents: calculateAavCents(totalValueCents, termYears),
+    aavCents,
   });
 }
 
@@ -128,7 +135,7 @@ function validateAuctionBidCommand(input) {
     "actorUserId",
     "actorMembershipId",
     "actorAuthority",
-    "totalValueCents",
+    "aavCents",
     "termYears",
     "expectedBidVersion",
     "idempotencyKey",
@@ -150,7 +157,7 @@ function validateAuctionBidCommand(input) {
   if (idempotencyExpiresAtMs <= occurredAtMs) {
     fail(AUCTION_BID_CODES.timestampInvalid);
   }
-  const offer = validateBidOffer(input.totalValueCents, input.termYears);
+  const offer = validateBidOffer(input.aavCents, input.termYears);
   const command = {
     auctionId: stableId(input.auctionId),
     bidId: stableId(input.bidId),
@@ -402,7 +409,7 @@ function assertAuctionBidState({
       fail(AUCTION_BID_CODES.versionConflict);
     }
     const offer = validateBidOffer(
-      command.totalValueCents,
+      command.aavCents,
       command.termYears,
       { joining: true }
     );
@@ -411,6 +418,8 @@ function assertAuctionBidState({
       action: "submitted",
       ...offer,
       lowestOfferedAavCents: offer.aavCents,
+      lowestOfferedTotalValueCents:
+        offer.totalValueCents,
       firstSubmittedAtMs: command.occurredAtMs,
       lastEditedAtMs: command.occurredAtMs,
       editCount: 0,
@@ -433,7 +442,7 @@ function assertAuctionBidState({
   }
 
   const offer = validateBidOffer(
-    command.totalValueCents,
+    command.aavCents,
     command.termYears,
     { joining: context.kind === "restricted" }
   );
@@ -459,6 +468,11 @@ function assertAuctionBidState({
     lowestOfferedAavCents: Math.min(
       existingBid.lowest_offered_aav_cents,
       offer.aavCents
+    ),
+    lowestOfferedTotalValueCents: Math.min(
+      existingBid.lowest_offered_total_value_cents ??
+        existingBid.total_value_cents,
+      offer.totalValueCents
     ),
     firstSubmittedAtMs: existingBid.first_submitted_at_ms,
     lastEditedAtMs: command.occurredAtMs,

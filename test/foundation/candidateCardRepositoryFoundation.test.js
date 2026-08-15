@@ -1252,7 +1252,7 @@ function addCommand(
     entryId = uuid(5_001),
     playerId = uuid(5_002),
     slotKey = "F01",
-    totalValueCents = 600,
+    aavCents = 300,
     termYears = 2,
     expectedCardVersion = 1,
     actor = managerOne(runtime),
@@ -1277,7 +1277,8 @@ function addCommand(
       entryId,
       playerId,
       slotKey,
-      totalValueCents,
+      totalValueCents: aavCents * termYears,
+      aavCents,
       termYears,
     },
   };
@@ -1431,6 +1432,7 @@ function assertCurrentPrivatePathsHidden(
         type: "edit",
         entryId: uuid(5_242),
         totalValueCents: 900,
+        aavCents: 300,
         termYears: 3,
       },
     }),
@@ -2622,6 +2624,7 @@ describe(
               type: "edit",
               entryId,
               totalValueCents: 900,
+              aavCents: 300,
               termYears: 3,
             },
           });
@@ -3586,7 +3589,7 @@ describe(
           type: "add",
           slotKey: "F01",
           playerId,
-          totalValueCents: 600,
+          aavCents: 300,
           termYears: 2,
         };
         const beforeBytes = databaseBytes(
@@ -3736,7 +3739,7 @@ describe(
           action: {
             type: "edit",
             entryId,
-            totalValueCents: 1_200,
+            aavCents: 400,
             termYears: 3,
           },
           nowMs: COMMAND_AT_MS + 1,
@@ -4016,7 +4019,7 @@ describe(
           type: "add",
           slotKey: "F01",
           playerId,
-          totalValueCents: 300,
+          aavCents: 300,
           termYears: 1,
         };
         let before = databaseBytes(
@@ -4186,7 +4189,7 @@ describe(
             type: "add",
             slotKey: "F02",
             playerId,
-            totalValueCents: 100,
+            aavCents: 100,
             termYears: 1,
           },
           nowMs: COMMAND_AT_MS + 1,
@@ -4287,6 +4290,7 @@ describe(
               entryId:
                 add.action.entryId,
               totalValueCents: 900,
+              aavCents: 300,
               termYears: 3,
             },
           });
@@ -4346,7 +4350,7 @@ describe(
             runtime.repository.mutate(
               addCommand(runtime, {
                 playerId,
-                totalValueCents: 700,
+                aavCents: 350,
                 clientKey:
                   "candidate-add",
                 requestId: uuid(5_020),
@@ -4868,6 +4872,7 @@ describe(
               playerId,
               slotKey: "F01",
               totalValueCents: 600,
+              aavCents: 300,
               termYears: 2,
             },
           });
@@ -4897,6 +4902,7 @@ describe(
               type: "edit",
               entryId,
               totalValueCents: 900,
+              aavCents: 300,
               termYears: 3,
             },
           });
@@ -5084,6 +5090,7 @@ describe(
                 entryId:
                   add.action.entryId,
                 totalValueCents: 900,
+                aavCents: 300,
                 termYears: 3,
               },
             }),
@@ -5162,6 +5169,7 @@ describe(
               entryId:
                 add.action.entryId,
               totalValueCents: 900,
+              aavCents: 300,
               termYears: 3,
             },
           });
@@ -5365,6 +5373,7 @@ describe(
             type: "edit",
             entryId: uuid(5_227),
             totalValueCents: 600,
+            aavCents: 300,
             termYears: 2,
             validationCode:
               "PLAYER_DECLARED_VALID",
@@ -5416,7 +5425,7 @@ describe(
     );
 
     test(
-      "saves an advisory whole-card cap warning without an acknowledgement control and enforces the Bench AAV boundary without partial writes",
+      "blocks over-cap and Bench-over-limit Candidate Card writes without partial persistence",
       (t) => {
         const runtime = createRuntime(t);
         runtime.database
@@ -5433,7 +5442,7 @@ describe(
         });
         const command = addCommand(runtime, {
             playerId,
-            totalValueCents: 300,
+            aavCents: 300,
             termYears: 1,
             requestId: uuid(5_201),
             revisionId: uuid(5_202),
@@ -5458,42 +5467,17 @@ describe(
           databaseBytes(runtime.database),
           before
         );
-        const accepted =
-          runtime.repository.mutate(command);
-        assert.equal(
-          accepted.card.capStatus,
-          "over_cap"
+        assert.throws(
+          () => runtime.repository.mutate(command),
+          (error) =>
+            error?.code ===
+              "CANDIDATE_CARD_CAP_EXCEEDED" &&
+            error?.reasonCode ===
+              "active_aav_cap_exceeded"
         );
         assert.equal(
-          accepted.card
-            .allocationEligibility,
-          "excluded_over_cap"
-        );
-        assert.equal(
-          accepted.card.entries[0]
-            .lastAcknowledgementRevisionId,
-          null
-        );
-        assert.deepEqual(
-          runtime.database
-            .prepare(`
-              SELECT
-                potential_illegality_acknowledged,
-                warning_codes_json
-              FROM candidate_card_revisions
-              WHERE league_id = ?
-                AND id = ?
-            `)
-            .get(
-              runtime.ids.league,
-              uuid(5_202)
-            ),
-          {
-            potential_illegality_acknowledged:
-              0,
-            warning_codes_json:
-              '["CANDIDATE_CARD_OVER_CAP"]',
-          }
+          databaseBytes(runtime.database),
+          before
         );
 
         const bench = createRuntime(t);
@@ -5510,7 +5494,7 @@ describe(
               addCommand(bench, {
                 playerId: benchPlayer,
                 slotKey: "B01",
-                totalValueCents: 401,
+                aavCents: 425,
                 termYears: 1,
                 requestId: uuid(5_211),
                 revisionId: uuid(5_212),
@@ -6554,6 +6538,7 @@ describe(
               entryId:
                 carryover.entryId,
               totalValueCents: 900,
+              aavCents: 300,
               termYears: 3,
             },
             "CANDIDATE_CARRYOVER_LOCKED",
@@ -8109,12 +8094,12 @@ test("SQLite whole-card save persists partial rows atomically, preserves safe id
     candidates: {
       F01: {
         playerId: partialPlayerId,
-        totalValueCents: null,
+        aavCents: null,
         termYears: 3,
       },
       F02: {
         playerId: completePlayerId,
-        totalValueCents: 300,
+        aavCents: 300,
         termYears: 1,
       },
     },
@@ -8233,12 +8218,12 @@ test("SQLite whole-card save persists partial rows atomically, preserves safe id
     candidates: {
       F01: {
         playerId: partialPlayerId,
-        totalValueCents: 300,
+        aavCents: 100,
         termYears: 3,
       },
       F03: {
         playerId: completePlayerId,
-        totalValueCents: 300,
+        aavCents: 300,
         termYears: 1,
       },
     },
@@ -8301,12 +8286,12 @@ test("SQLite whole-card save persists partial rows atomically, preserves safe id
     candidates: {
       F01: {
         playerId: partialPlayerId,
-        totalValueCents: 300,
+        aavCents: 100,
         termYears: 3,
       },
       F03: {
         playerId: completePlayerId,
-        totalValueCents: 300,
+        aavCents: 300,
         termYears: 1,
       },
     },
@@ -8381,7 +8366,7 @@ test("SQLite whole-card save preserves server-owned carryovers and rejects a cli
           candidates: {
             F01: {
               playerId: candidatePlayerId,
-              totalValueCents: 100,
+              aavCents: 100,
               termYears: 1,
             },
           },
@@ -8414,7 +8399,7 @@ test("SQLite whole-card save rolls back card, entries, revision, provenance, and
           candidates: {
             F01: {
               playerId,
-              totalValueCents: null,
+              aavCents: null,
               termYears: null,
             },
           },

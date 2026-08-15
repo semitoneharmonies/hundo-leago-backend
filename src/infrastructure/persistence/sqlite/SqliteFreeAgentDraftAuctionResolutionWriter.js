@@ -1052,6 +1052,7 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
         bid.total_value_cents,
         bid.term_years,
         bid.lowest_offered_aav_cents,
+        bid.lowest_offered_total_value_cents,
         bid.first_submitted_at_ms,
         bid.status AS bid_status,
         team.status AS team_status,
@@ -1130,6 +1131,7 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
         draw.revealed_at_ms,
         draw.version AS draw_version,
         bid.lowest_offered_aav_cents,
+        bid.lowest_offered_total_value_cents,
         job.id AS job_run_id,
         job.status AS job_status,
         job.version AS job_version,
@@ -2457,6 +2459,8 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
         totalValueCents: bid.total_value_cents,
         termYears: bid.term_years,
         lowestOfferedAavCents: bid.lowest_offered_aav_cents,
+        lowestOfferedTotalValueCents:
+          bid.lowest_offered_total_value_cents,
         firstSubmittedAtMs: bid.first_submitted_at_ms,
         isStartingBid:
           bid.submission_event_type === "auction_started",
@@ -3034,23 +3038,65 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
       },
     };
     if (row.outcome_code === "winner") {
-      result.winner = {
-        bidId: row.winning_bid_id,
-        teamId: row.winning_team_id,
-        submittedTotalValueCents: row.highest_bid_cents,
-        submittedTermYears: row.winning_term_years,
-        lowestOfferedAavCents: row.lowest_offered_aav_cents,
-        highestCompetingAavCents:
-          row.second_price_input_cents === 0
-            ? null
-            : row.second_price_input_cents,
-        persistedSecondPriceInputCents:
-          row.second_price_input_cents,
-        finalTotalValueCents: row.final_contract_value_cents,
-        finalAavCents: row.final_aav_cents,
-        contractId: row.contract_id,
-        ownershipId: row.ownership_id,
-      };
+      const winnerEvidence = terminalMetadata?.winner;
+      const totalFirstEvidence =
+        isPlainObject(winnerEvidence) &&
+        Object.prototype.hasOwnProperty.call(
+          winnerEvidence,
+          "highestCompetingTotalValueCents"
+        );
+      if (
+        totalFirstEvidence &&
+        (
+          winnerEvidence.bidId !== row.winning_bid_id ||
+          winnerEvidence.teamId !== row.winning_team_id ||
+          winnerEvidence.submittedTotalValueCents !==
+            row.highest_bid_cents ||
+          winnerEvidence.submittedTermYears !==
+            row.winning_term_years ||
+          winnerEvidence.lowestOfferedAavCents !==
+            row.lowest_offered_aav_cents ||
+          winnerEvidence.lowestOfferedTotalValueCents !==
+            row.lowest_offered_total_value_cents ||
+          (winnerEvidence.highestCompetingTotalValueCents ?? 0) !==
+            row.second_price_input_cents ||
+          winnerEvidence.persistedSecondPriceInputCents !==
+            row.second_price_input_cents ||
+          winnerEvidence.finalTotalValueCents !==
+            row.final_contract_value_cents ||
+          winnerEvidence.finalAavCents !== row.final_aav_cents
+        )
+      ) {
+        incompatible(
+          "The persisted total-first FAD auction winner evidence is not exact.",
+          "RESOLUTION_WINNER_EVIDENCE_INVALID"
+        );
+      }
+      result.winner = totalFirstEvidence
+        ? {
+            ...winnerEvidence,
+            contractId: row.contract_id,
+            ownershipId: row.ownership_id,
+          }
+        : {
+            bidId: row.winning_bid_id,
+            teamId: row.winning_team_id,
+            submittedTotalValueCents: row.highest_bid_cents,
+            submittedTermYears: row.winning_term_years,
+            lowestOfferedAavCents:
+              row.lowest_offered_aav_cents,
+            highestCompetingAavCents:
+              row.second_price_input_cents === 0
+                ? null
+                : row.second_price_input_cents,
+            persistedSecondPriceInputCents:
+              row.second_price_input_cents,
+            finalTotalValueCents:
+              row.final_contract_value_cents,
+            finalAavCents: row.final_aav_cents,
+            contractId: row.contract_id,
+            ownershipId: row.ownership_id,
+          };
     }
     Object.defineProperty(result, "committedRoster", {
       configurable: false,

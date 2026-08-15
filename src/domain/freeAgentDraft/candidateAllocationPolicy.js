@@ -166,12 +166,6 @@ function canonicalContract(
   ) {
     fail(code, totalReasonCode);
   }
-  if (
-    value.termYears > 1 &&
-    value.totalValueCents % 100 !== 0
-  ) {
-    fail(code, precisionReasonCode);
-  }
   const expectedAavCents = roundedAavCents(
     value.totalValueCents,
     value.termYears
@@ -181,6 +175,14 @@ function canonicalContract(
     value.aavCents !== expectedAavCents
   ) {
     fail(code, aavReasonCode);
+  }
+  const aavFirstContract =
+    value.aavCents % 25 === 0 &&
+    value.totalValueCents === value.aavCents * value.termYears;
+  const legacyContract =
+    (value.termYears === 1 || value.totalValueCents % 100 === 0);
+  if (!aavFirstContract && !legacyContract) {
+    fail(code, precisionReasonCode);
   }
   return immutable({
     totalValueCents: value.totalValueCents,

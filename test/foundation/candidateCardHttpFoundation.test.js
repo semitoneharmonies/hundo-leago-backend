@@ -427,11 +427,11 @@ describe("FAD-09 T-130 and T-133 through T-139 internal HTTP boundary", () => {
     };
     const addBody = {
       playerId: PLAYER_ID,
-      totalValueCents: 600,
+      aavCents: 300,
       termYears: 2,
     };
     const editBody = {
-      totalValueCents: 900,
+      aavCents: 300,
       termYears: 3,
     };
     const moveBody = { slotKey: "B02" };
@@ -1024,6 +1024,7 @@ describe("FAD-09 T-130 and T-133 through T-139 internal HTTP boundary", () => {
       ["CANDIDATE_PLAYER_INELIGIBLE", 422, "CANDIDATE_PLAYER_INELIGIBLE"],
       ["CANDIDATE_CONTRACT_INVALID", 422, "CANDIDATE_CONTRACT_INVALID"],
       ["CANDIDATE_BENCH_AAV_EXCEEDED", 422, "CANDIDATE_BENCH_AAV_EXCEEDED"],
+      ["CANDIDATE_CARD_CAP_EXCEEDED", 422, "CANDIDATE_CARD_CAP_EXCEEDED"],
       ["LEAGUE_FROZEN", 423, "LEAGUE_FROZEN"],
       ["SYNTHETIC_UNKNOWN", 500, "FREE_AGENT_DRAFT_REQUEST_FAILED"],
     ];

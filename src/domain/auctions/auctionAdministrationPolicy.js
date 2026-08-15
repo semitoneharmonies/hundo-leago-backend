@@ -145,9 +145,9 @@ const RESULT_FIELDS = Object.freeze([
   "version",
 ]);
 const EDIT_BODY_FIELDS = Object.freeze([
+  "aavCents",
   "teamId",
   "termYears",
-  "totalValueCents",
 ]);
 const CONFIRMATION_BODY_FIELDS =
   Object.freeze(["confirmation"]);
@@ -446,7 +446,7 @@ function getAuctionAdministrationActionPolicy(action) {
   return actionPolicy(action);
 }
 
-function validateOffer(totalValueCents, termYears) {
+function validateOffer(aavCents, termYears) {
   if (
     !Number.isSafeInteger(termYears) ||
     termYears < 1 ||
@@ -458,10 +458,17 @@ function validateOffer(totalValueCents, termYears) {
     );
   }
   if (
-    !Number.isSafeInteger(totalValueCents) ||
-    totalValueCents < termYears * 100 ||
-    (termYears > 1 && totalValueCents % 100 !== 0)
+    !Number.isSafeInteger(aavCents) ||
+    aavCents < 100 ||
+    aavCents % 25 !== 0
   ) {
+    failRequest(
+      AUCTION_ADMINISTRATION_REASON_CODES
+        .totalValueInvalid
+    );
+  }
+  const totalValueCents = aavCents * termYears;
+  if (!Number.isSafeInteger(totalValueCents)) {
     failRequest(
       AUCTION_ADMINISTRATION_REASON_CODES
         .totalValueInvalid
@@ -470,6 +477,7 @@ function validateOffer(totalValueCents, termYears) {
   return Object.freeze({
     totalValueCents,
     termYears,
+    aavCents,
   });
 }
 
@@ -482,7 +490,7 @@ function validateRequestBody(action, body) {
       );
     }
     const offer = validateOffer(
-      body.totalValueCents,
+      body.aavCents,
       body.termYears
     );
     return Object.freeze({
@@ -493,6 +501,7 @@ function validateRequestBody(action, body) {
           .teamIdInvalid
       ),
       totalValueCents: offer.totalValueCents,
+      aavCents: offer.aavCents,
       termYears: offer.termYears,
     });
   }

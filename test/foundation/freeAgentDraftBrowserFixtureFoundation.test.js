@@ -316,7 +316,7 @@ test(
 );
 
 test(
-  "FAD browser fixture rejects anything except an open schema-50 release-QA runtime",
+  "FAD browser fixture rejects anything except an open schema-51 release-QA runtime",
   async () => {
     const source = fs.readFileSync(
       path.join(
@@ -1074,7 +1074,7 @@ test(
         slotKey: firstEmpty.slotKey,
         input: {
           playerId: unusedPlayer.id,
-          totalValueCents: 100,
+          aavCents: 100,
           termYears: 1,
         },
         expectedCardVersion: firstHistory.cardVersion,
@@ -1086,7 +1086,7 @@ test(
         fadId: gamma.fadId,
         teamId: firstHistory.teamId,
         entryId: firstCandidate.entryId,
-        input: { totalValueCents: 200, termYears: 2 },
+        input: { aavCents: 100, termYears: 2 },
         expectedCardVersion: firstHistory.cardVersion,
         idempotencyKey: "gamma-completed-edit-denied",
       })],
@@ -1120,7 +1120,7 @@ test(
             candidate: slot.occupantKind === "candidate"
               ? {
                   playerId: slot.player.playerId,
-                  totalValueCents: slot.totalValueCents,
+                  aavCents: slot.aavCents,
                   termYears: slot.termYears,
                 }
               : null,

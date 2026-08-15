@@ -77,7 +77,7 @@ const WINNER_TERMINAL_FIELDS = Object.freeze([
   ...TERMINAL_FIELDS,
   "winner",
 ]);
-const WINNER_FIELDS = Object.freeze([
+const LEGACY_WINNER_FIELDS = Object.freeze([
   "bidId",
   "contractId",
   "finalAavCents",
@@ -89,6 +89,14 @@ const WINNER_FIELDS = Object.freeze([
   "submittedTermYears",
   "submittedTotalValueCents",
   "teamId",
+]);
+const TOTAL_FIRST_WINNER_FIELDS = Object.freeze([
+  ...LEGACY_WINNER_FIELDS,
+  "highestCompetingTotalValueCents",
+  "lowestOfferedTotalValueCents",
+  "requiredWinningAavCents",
+  "requiredWinningTotalValueCents",
+  "submittedAavCents",
 ]);
 const DRAW_FIELDS = Object.freeze([
   "algorithmVersion",
@@ -570,8 +578,16 @@ function safeDrawReveal(value, winner) {
 }
 
 function safeWinner(value) {
+  const legacyWinner = hasExactOwnProperties(
+    value,
+    LEGACY_WINNER_FIELDS
+  );
+  const totalFirstWinner = hasExactOwnProperties(
+    value,
+    TOTAL_FIRST_WINNER_FIELDS
+  );
   if (
-    !hasExactOwnProperties(value, WINNER_FIELDS) ||
+    (!legacyWinner && !totalFirstWinner) ||
     !UUID_PATTERN.test(value.bidId || "") ||
     !UUID_PATTERN.test(value.teamId || "") ||
     !UUID_PATTERN.test(value.contractId || "") ||
@@ -616,20 +632,79 @@ function safeWinner(value) {
       value.submittedTotalValueCents ||
     value.lowestOfferedAavCents > submittedAavCents ||
     value.finalAavCents > submittedAavCents ||
-    value.finalAavCents <
-      value.lowestOfferedAavCents ||
-    (
-      value.highestCompetingAavCents === null
-        ? value.persistedSecondPriceInputCents !== 0
-        : value.persistedSecondPriceInputCents !==
-            value.highestCompetingAavCents ||
-          value.highestCompetingAavCents >
-            submittedAavCents ||
-          value.finalAavCents <
-            value.highestCompetingAavCents
-    )
+    (legacyWinner && (
+      value.finalAavCents <
+        value.lowestOfferedAavCents ||
+      (
+        value.highestCompetingAavCents === null
+          ? value.persistedSecondPriceInputCents !== 0
+          : value.persistedSecondPriceInputCents !==
+              value.highestCompetingAavCents ||
+            value.highestCompetingAavCents >
+              submittedAavCents ||
+            value.finalAavCents <
+              value.highestCompetingAavCents
+      )
+    ))
   ) {
     failState("winner_pricing_invalid");
+  }
+  if (totalFirstWinner) {
+    const highestCompetingTotalValueCents =
+      value.highestCompetingTotalValueCents;
+    const legacySubmittedPrice =
+      value.requiredWinningTotalValueCents ===
+        value.submittedTotalValueCents &&
+      (
+        value.submittedTotalValueCents %
+          value.submittedTermYears !== 0 ||
+        (
+          value.submittedTotalValueCents /
+            value.submittedTermYears
+        ) % 25 !== 0
+      );
+    const expectedRequiredAavCents = legacySubmittedPrice
+      ? submittedAavCents
+      : Math.max(
+          100,
+          Math.ceil(
+            value.requiredWinningTotalValueCents /
+              value.submittedTermYears /
+              25
+          ) * 25
+        );
+    const expectedFinalTotalValueCents = legacySubmittedPrice
+      ? value.submittedTotalValueCents
+      : expectedRequiredAavCents * value.submittedTermYears;
+    if (
+      value.submittedAavCents !== submittedAavCents ||
+      !safePositiveMoney(value.lowestOfferedTotalValueCents) ||
+      value.lowestOfferedTotalValueCents >
+        value.submittedTotalValueCents ||
+      (
+        highestCompetingTotalValueCents !== null &&
+        !safePositiveMoney(highestCompetingTotalValueCents)
+      ) ||
+      (
+        highestCompetingTotalValueCents === null
+      ) !== (value.highestCompetingAavCents === null) ||
+      value.persistedSecondPriceInputCents !==
+        (highestCompetingTotalValueCents ?? 0) ||
+      !safePositiveMoney(value.requiredWinningTotalValueCents) ||
+      value.requiredWinningTotalValueCents !==
+        (highestCompetingTotalValueCents === null
+          ? value.submittedTotalValueCents
+          : Math.max(
+              value.lowestOfferedTotalValueCents,
+              highestCompetingTotalValueCents
+            )) ||
+      value.requiredWinningAavCents !==
+        expectedRequiredAavCents ||
+      value.finalTotalValueCents !==
+        expectedFinalTotalValueCents
+    ) {
+      failState("winner_pricing_invalid");
+    }
   }
   return Object.freeze({ ...value });
 }

@@ -9,6 +9,7 @@ const CANDIDATE_CARD_SLOT_COUNT =
   CANDIDATE_CARD_BENCH_SLOT_COUNT;
 const CANDIDATE_CARD_BENCH_MAXIMUM_AAV_CENTS = 400;
 const CANDIDATE_CARD_NORMAL_MINIMUM_AAV_CENTS = 100;
+const CANDIDATE_CARD_AAV_INCREMENT_CENTS = 25;
 
 const CANDIDATE_CARD_CONTRACT_TYPES = Object.freeze([
   "normal",
@@ -40,6 +41,7 @@ const CANDIDATE_CARD_POLICY_CODES = Object.freeze({
   playerDuplicate: "CANDIDATE_PLAYER_DUPLICATE",
   contractInvalid: "CANDIDATE_CONTRACT_INVALID",
   benchAavExceeded: "CANDIDATE_BENCH_AAV_EXCEEDED",
+  capExceeded: "CANDIDATE_CARD_CAP_EXCEEDED",
   capProjectionInvalid:
     "CANDIDATE_CAP_PROJECTION_INVALID",
 });
@@ -261,6 +263,63 @@ function calculateCandidateCardAavCents(
   );
 }
 
+function assertCandidateCardSaveAllowed(evaluation) {
+  if (
+    !isPlainObject(evaluation) ||
+    !["compliant", "over_cap"].includes(
+      evaluation.capStatus
+    )
+  ) {
+    failCap("cap_status_invalid");
+  }
+  if (evaluation.capStatus === "over_cap") {
+    fail(
+      CANDIDATE_CARD_POLICY_CODES.capExceeded,
+      "active_aav_cap_exceeded"
+    );
+  }
+  return evaluation;
+}
+
+function validateCandidateCardOfferAavCents(value) {
+  const aavCents = safePositiveAmount(
+    value,
+    "aav_cents_invalid"
+  );
+  if (
+    aavCents <
+    CANDIDATE_CARD_NORMAL_MINIMUM_AAV_CENTS
+  ) {
+    failContract("minimum_aav_not_met");
+  }
+  if (
+    aavCents %
+      CANDIDATE_CARD_AAV_INCREMENT_CENTS !==
+    0
+  ) {
+    failContract("aav_increment_invalid");
+  }
+  return aavCents;
+}
+
+function calculateCandidateCardTotalValueCents(
+  aavCents,
+  termYears
+) {
+  const aav = validateCandidateCardOfferAavCents(
+    aavCents
+  );
+  const term = safeTerm(
+    termYears,
+    "term_years_invalid"
+  );
+  const total = aav * term;
+  if (!Number.isSafeInteger(total)) {
+    failContract("total_value_cents_invalid");
+  }
+  return total;
+}
+
 function validateCandidateCardContract(
   input = {}
 ) {
@@ -301,29 +360,29 @@ function validateCandidateCardContract(
       );
     }
   } else {
-    if (
-      originalTotalValueCents <
-      originalTermYears *
-        CANDIDATE_CARD_NORMAL_MINIMUM_AAV_CENTS
-    ) {
-      failContract("minimum_aav_not_met");
-    }
-    if (
-      originalTermYears > 1 &&
-      originalTotalValueCents % 100 !== 0
-    ) {
-      failContract(
-        "multi_year_total_precision_invalid"
-      );
-    }
-    if (
-      aavCents !==
+    const expectedAavCents =
       calculateCandidateCardAavCents(
         originalTotalValueCents,
         originalTermYears
-      )
-    ) {
-      failContract("aav_cents_mismatch");
+      );
+    const aavFirstContract =
+      aavCents >= CANDIDATE_CARD_NORMAL_MINIMUM_AAV_CENTS &&
+      aavCents % CANDIDATE_CARD_AAV_INCREMENT_CENTS === 0 &&
+      originalTotalValueCents === aavCents * originalTermYears;
+    const legacyContract =
+      originalTotalValueCents >=
+        originalTermYears * CANDIDATE_CARD_NORMAL_MINIMUM_AAV_CENTS &&
+      (originalTermYears === 1 || originalTotalValueCents % 100 === 0) &&
+      aavCents === expectedAavCents;
+    if (!aavFirstContract && !legacyContract) {
+      failContract(
+        originalTotalValueCents <
+          originalTermYears * CANDIDATE_CARD_NORMAL_MINIMUM_AAV_CENTS
+          ? "minimum_aav_not_met"
+          : aavCents !== expectedAavCents
+            ? "aav_cents_mismatch"
+            : "contract_precision_invalid"
+      );
     }
   }
 
@@ -339,21 +398,20 @@ function createCandidateCardOfferContract(
   input = {}
 ) {
   requireExactObject(input, [
-    "totalValueCents",
+    "aavCents",
     "termYears",
   ]);
-  const totalValueCents =
-    safePositiveAmount(
-      input.totalValueCents,
-      "total_value_cents_invalid"
+  const aavCents =
+    validateCandidateCardOfferAavCents(
+      input.aavCents
     );
   const termYears = safeTerm(
     input.termYears,
     "term_years_invalid"
   );
-  const aavCents =
-    calculateCandidateCardAavCents(
-      totalValueCents,
+  const totalValueCents =
+    calculateCandidateCardTotalValueCents(
+      aavCents,
       termYears
     );
   const contract =
@@ -378,8 +436,47 @@ function createCandidateCardPartialOfferContract(
   input = {}
 ) {
   requireExactObject(input, [
+    "aavCents",
+    "termYears",
+  ]);
+  const aavCents =
+    input.aavCents === null
+      ? null
+      : validateCandidateCardOfferAavCents(
+          input.aavCents
+        );
+  const termYears =
+    input.termYears === null
+      ? null
+      : safeTerm(
+          input.termYears,
+          "term_years_invalid"
+        );
+  if (
+    aavCents !== null &&
+    termYears !== null
+  ) {
+    return createCandidateCardOfferContract({
+      aavCents,
+      termYears,
+    });
+  }
+  return Object.freeze({
+    contractType: "normal",
+    totalValueCents: null,
+    termYears,
+    aavCents,
+    incomplete: true,
+  });
+}
+
+function validatePersistedCandidateCardPartialOfferContract(
+  input = {}
+) {
+  requireExactObject(input, [
     "totalValueCents",
     "termYears",
+    "aavCents",
   ]);
   const totalValueCents =
     input.totalValueCents === null
@@ -395,20 +492,43 @@ function createCandidateCardPartialOfferContract(
           input.termYears,
           "term_years_invalid"
         );
+  const aavCents =
+    input.aavCents === null
+      ? null
+      : safePositiveAmount(
+          input.aavCents,
+          "aav_cents_invalid"
+        );
   if (
     totalValueCents !== null &&
-    termYears !== null
+    termYears !== null &&
+    aavCents !== null
   ) {
-    return createCandidateCardOfferContract({
-      totalValueCents,
-      termYears,
+    const contract = validateCandidateCardContract({
+      contractType: "normal",
+      originalTotalValueCents: totalValueCents,
+      originalTermYears: termYears,
+      aavCents,
     });
+    return Object.freeze({
+      contractType: contract.contractType,
+      totalValueCents:
+        contract.originalTotalValueCents,
+      termYears: contract.originalTermYears,
+      aavCents: contract.aavCents,
+    });
+  }
+  if (
+    totalValueCents !== null &&
+    aavCents !== null
+  ) {
+    failContract("incomplete_total_value_present");
   }
   return Object.freeze({
     contractType: "normal",
     totalValueCents,
     termYears,
-    aavCents: null,
+    aavCents,
     incomplete: true,
   });
 }
@@ -671,6 +791,12 @@ function validateCandidateCardCarryover(
 function validateCandidateCardCandidate(
   input = {}
 ) {
+  const hasPersistedAav =
+    isPlainObject(input) &&
+    Object.prototype.hasOwnProperty.call(
+      input,
+      "aavCents"
+    );
   requireExactObject(input, [
     "entryId",
     "entryKind",
@@ -681,6 +807,7 @@ function validateCandidateCardCandidate(
     "conflictCode",
     "totalValueCents",
     "termYears",
+    ...(hasPersistedAav ? ["aavCents"] : []),
     "eligibilityStatus",
     "validationCode",
   ]);
@@ -711,11 +838,21 @@ function validateCandidateCardCandidate(
     input.placementState,
     input.conflictCode
   );
+  const persistedAavCents = hasPersistedAav
+    ? input.aavCents
+    : input.totalValueCents !== null &&
+        input.termYears !== null
+      ? calculateCandidateCardAavCents(
+          input.totalValueCents,
+          input.termYears
+        )
+      : null;
   const contract =
-    createCandidateCardPartialOfferContract({
+    validatePersistedCandidateCardPartialOfferContract({
       totalValueCents:
         input.totalValueCents,
       termYears: input.termYears,
+      aavCents: persistedAavCents,
     });
   if (
     slot.slotGroup === "B" &&
@@ -1125,7 +1262,9 @@ function evaluateCandidateCard(input = {}) {
       entries
         .filter(
           (entry) =>
-            candidateParticipates(entry) &&
+            entry.entryKind === "candidate" &&
+            entry.placementState === "placed" &&
+            entry.aavCents !== null &&
             (
               entry.slotGroup === "F" ||
               entry.slotGroup === "D"
@@ -1339,6 +1478,7 @@ function evaluateCandidateCardHelpAuthority(
 
 module.exports = {
   CANONICAL_UUID_PATTERN,
+  CANDIDATE_CARD_AAV_INCREMENT_CENTS,
   CANDIDATE_CARD_BENCH_MAXIMUM_AAV_CENTS,
   CANDIDATE_CARD_BENCH_SLOT_COUNT,
   CANDIDATE_CARD_CARRYOVER_ROSTER_CATEGORIES,
@@ -1352,7 +1492,9 @@ module.exports = {
   CANDIDATE_CARD_SLOT_COUNT,
   CANDIDATE_CARD_SLOT_KEYS,
   CandidateCardPolicyError,
+  assertCandidateCardSaveAllowed,
   calculateCandidateCardAavCents,
+  calculateCandidateCardTotalValueCents,
   createCandidateCardOfferContract,
   createCandidateCardPartialOfferContract,
   createCandidateCardSlotStructure,

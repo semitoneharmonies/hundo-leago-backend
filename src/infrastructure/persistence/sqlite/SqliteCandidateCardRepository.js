@@ -10,6 +10,7 @@ const {
   CANDIDATE_CARD_BENCH_MAXIMUM_AAV_CENTS,
   CANDIDATE_CARD_NORMAL_MINIMUM_AAV_CENTS,
   CANDIDATE_CARD_SLOT_KEYS,
+  assertCandidateCardSaveAllowed,
   createCandidateCardOfferContract,
   createCandidateCardPartialOfferContract,
   evaluateCandidateCard,
@@ -477,16 +478,25 @@ function normalizeMutationAction(action) {
         "playerId",
         "slotKey",
         "totalValueCents",
+        "aavCents",
         "termYears",
       ],
       "Candidate add action"
     );
     const contract =
       createCandidateCardOfferContract({
-        totalValueCents:
-          action.totalValueCents,
+        aavCents: action.aavCents,
         termYears: action.termYears,
       });
+    if (
+      action.totalValueCents !==
+      contract.totalValueCents
+    ) {
+      invalid(
+        "The Candidate add action total does not match its AAV and term.",
+        "ACTION_INVALID"
+      );
+    }
     const slot = parseCandidateCardSlotKey(
       action.slotKey
     );
@@ -514,16 +524,25 @@ function normalizeMutationAction(action) {
         "type",
         "entryId",
         "totalValueCents",
+        "aavCents",
         "termYears",
       ],
       "Candidate edit action"
     );
     const contract =
       createCandidateCardOfferContract({
-        totalValueCents:
-          action.totalValueCents,
+        aavCents: action.aavCents,
         termYears: action.termYears,
       });
+    if (
+      action.totalValueCents !==
+      contract.totalValueCents
+    ) {
+      invalid(
+        "The Candidate edit action total does not match its AAV and term.",
+        "ACTION_INVALID"
+      );
+    }
     return Object.freeze({
       type: "edit",
       entryId: stableId(
@@ -614,14 +633,21 @@ function normalizeMutationCommand(command) {
   });
 }
 
+function publicPreviewAction(action) {
+  if (action.type !== "add" && action.type !== "edit") {
+    return action;
+  }
+  const { totalValueCents: _derivedTotalValueCents, ...publicAction } = action;
+  return Object.freeze(publicAction);
+}
+
 function mutationIntentAction(action) {
   if (action.type === "add") {
     return Object.freeze({
       type: action.type,
       playerId: action.playerId,
       slotKey: action.slotKey,
-      totalValueCents:
-        action.totalValueCents,
+      aavCents: action.aavCents,
       termYears: action.termYears,
     });
   }
@@ -629,8 +655,7 @@ function mutationIntentAction(action) {
     return Object.freeze({
       type: action.type,
       entryId: action.entryId,
-      totalValueCents:
-        action.totalValueCents,
+      aavCents: action.aavCents,
       termYears: action.termYears,
     });
   }
@@ -769,6 +794,7 @@ function domainEntry(entry) {
     slotKey: entry.slotKey,
     placementState: entry.placementState,
     conflictCode: entry.conflictCode,
+    aavCents: entry.aavCents,
     totalValueCents:
       entry.totalValueCents,
     termYears: entry.termYears,
@@ -4483,6 +4509,7 @@ function createSqliteCandidateCardRepository({
     return (
       entry.totalValueCents ===
         candidate.totalValueCents &&
+      entry.aavCents === candidate.aavCents &&
       entry.termYears === candidate.termYears
     );
   }
@@ -4542,8 +4569,7 @@ function createSqliteCandidateCardRepository({
       const contract =
         createCandidateCardPartialOfferContract(
           {
-            totalValueCents:
-              candidate.totalValueCents,
+            aavCents: candidate.aavCents,
             termYears: candidate.termYears,
           }
         );
@@ -4554,7 +4580,7 @@ function createSqliteCandidateCardRepository({
           desired.slotKey
         );
       const incomplete =
-        candidate.totalValueCents === null ||
+        candidate.aavCents === null ||
         candidate.termYears === null;
       const current = currentByPlayer.get(
         candidate.playerId
@@ -4563,7 +4589,7 @@ function createSqliteCandidateCardRepository({
         current !== undefined &&
         sameCandidateOffer(
           current,
-          candidate
+            contract
         );
       const preserve =
         current !== undefined &&
@@ -4638,7 +4664,7 @@ function createSqliteCandidateCardRepository({
         aavCents: contract.aavCents,
         remainingYears: null,
         totalValueCents:
-          candidate.totalValueCents,
+          contract.totalValueCents,
         termYears: candidate.termYears,
         eligibilityStatus,
         validationCode,
@@ -4693,7 +4719,7 @@ function createSqliteCandidateCardRepository({
               beforeTermYears:
                 current.termYears,
               afterTotalValueCents:
-                candidate.totalValueCents,
+                contract.totalValueCents,
               afterTermYears:
                 candidate.termYears,
               currentEntry: current,
@@ -4712,7 +4738,7 @@ function createSqliteCandidateCardRepository({
             beforeTotalValueCents: null,
             beforeTermYears: null,
             afterTotalValueCents:
-              candidate.totalValueCents,
+              contract.totalValueCents,
             afterTermYears:
               candidate.termYears,
             currentEntry: null,
@@ -5341,6 +5367,7 @@ function createSqliteCandidateCardRepository({
           command.scope,
           simulation.entries
         );
+      assertCandidateCardSaveAllowed(evaluation);
       const warnings =
         warningCodes(evaluation);
       const expectedCard =
@@ -5776,6 +5803,7 @@ function createSqliteCandidateCardRepository({
       command.scope,
       simulation.entries
     );
+    assertCandidateCardSaveAllowed(evaluation);
     const warnings = warningCodes(evaluation);
     const expectedCard =
       projectionFromEvaluation({
@@ -6409,7 +6437,13 @@ function createSqliteCandidateCardRepository({
               cardId: scope.cardId,
               baseCardVersion:
                 context.card_version,
-              action: options.action,
+              action: {
+                type: options.action.type,
+                slotKey: options.action.slotKey,
+                playerId: options.action.playerId,
+                aavCents: options.action.aavCents,
+                termYears: options.action.termYears,
+              },
               existingEntryIds:
                 before.entries.map(
                   ({ entryId }) => entryId
@@ -6500,7 +6534,7 @@ function createSqliteCandidateCardRepository({
       return deepFreeze({
         baseCardVersion:
           context.card_version,
-        action: options.action,
+        action: publicPreviewAction(options.action),
         projectedCard,
         projectedSlot,
         warnings: previewDiagnostics(

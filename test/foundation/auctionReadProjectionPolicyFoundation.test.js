@@ -381,9 +381,17 @@ test("auction read projection accepts exact ordinary and FAD active DTOs and dee
   inactiveBidProjection.viewerTeams[0].bid.status = "withdrawn";
   inactiveBidProjection.viewerTeams[0].edit = blocked();
   inactiveBidProjection.administrativeBids[0].status = "withdrawn";
+  const aavFirstProjection = ordinaryActive();
+  aavFirstProjection.viewerTeams[0].bid = {
+    ...aavFirstProjection.viewerTeams[0].bid,
+    totalValueCents: 250,
+    termYears: 2,
+    aavCents: 125,
+  };
   for (const projection of [
     ordinaryActive(),
     inactiveBidProjection,
+    aavFirstProjection,
     fadActive(),
     fadActive("fad_restricted"),
   ]) {

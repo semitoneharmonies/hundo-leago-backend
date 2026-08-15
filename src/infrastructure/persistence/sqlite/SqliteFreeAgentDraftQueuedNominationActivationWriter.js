@@ -943,13 +943,16 @@ function createSqliteFreeAgentDraftQueuedNominationActivationWriter({
       INSERT INTO auction_bids (
         id, league_id, season_id, auction_id, team_id,
         submitted_by_user_id, total_value_cents, term_years,
-        lowest_offered_aav_cents, first_submitted_at_ms,
+        lowest_offered_aav_cents,
+        lowest_offered_total_value_cents,
+        first_submitted_at_ms,
         last_edited_at_ms, edit_count, status,
         idempotency_request_id, version
       ) VALUES (
         @starterBidId, @leagueId, @seasonId, @auctionId,
         @teamId, @submittedByUserId, @totalValueCents,
-        @termYears, @aavCents, @acceptedAtMs, @acceptedAtMs,
+        @termYears, @aavCents, @totalValueCents,
+        @acceptedAtMs, @acceptedAtMs,
         0, 'active', @acceptanceIdempotencyRequestId, 1
       )
     `);

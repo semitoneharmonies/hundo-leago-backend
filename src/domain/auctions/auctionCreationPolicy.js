@@ -92,21 +92,25 @@ function calculateAavCents(totalValueCents, termYears) {
   return whole + (remainder * 2 >= termYears ? 1 : 0);
 }
 
-function validateOpeningBid(totalValueCents, termYears) {
+function validateOpeningBid(aavCents, termYears) {
   if (!Number.isSafeInteger(termYears) || termYears < 1 || termYears > 3) {
     fail(AUCTION_CREATION_CODES.termInvalid);
   }
   if (
-    !Number.isSafeInteger(totalValueCents) ||
-    totalValueCents < termYears * 100 ||
-    (termYears > 1 && totalValueCents % 100 !== 0)
+    !Number.isSafeInteger(aavCents) ||
+    aavCents < 100 ||
+    aavCents % 25 !== 0
   ) {
+    fail(AUCTION_CREATION_CODES.valueInvalid);
+  }
+  const totalValueCents = aavCents * termYears;
+  if (!Number.isSafeInteger(totalValueCents)) {
     fail(AUCTION_CREATION_CODES.valueInvalid);
   }
   return Object.freeze({
     totalValueCents,
     termYears,
-    aavCents: calculateAavCents(totalValueCents, termYears),
+    aavCents,
   });
 }
 
@@ -123,7 +127,7 @@ function validateAuctionCreationCommand(input) {
     "actorUserId",
     "actorMembershipId",
     "actorAuthority",
-    "totalValueCents",
+    "aavCents",
     "termYears",
     "idempotencyKey",
     "occurredAtMs",
@@ -139,7 +143,7 @@ function validateAuctionCreationCommand(input) {
   if (idempotencyExpiresAtMs <= occurredAtMs) {
     fail(AUCTION_CREATION_CODES.timestampInvalid);
   }
-  const bid = validateOpeningBid(input.totalValueCents, input.termYears);
+  const bid = validateOpeningBid(input.aavCents, input.termYears);
   return Object.freeze({
     auctionId: stableId(input.auctionId),
     bidId: stableId(input.bidId),

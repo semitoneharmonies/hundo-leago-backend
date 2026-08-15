@@ -50,7 +50,7 @@ function exactStartInput(input) {
     "playerId",
     "teamId",
     "termYears",
-    "totalValueCents",
+    "aavCents",
   ];
   const fadKeys = [
     ...ordinaryKeys,
@@ -74,7 +74,7 @@ function exactStartInput(input) {
 }
 
 function exactBidInput(input) {
-  const ordinaryKeys = ["teamId", "termYears", "totalValueCents"];
+  const ordinaryKeys = ["teamId", "termYears", "aavCents"];
   const fadKeys = [
     ...ordinaryKeys,
     "bindingIllegalityConfirmed",
@@ -540,7 +540,7 @@ function createAuctionService({
       "playerId",
       "teamId",
       "termYears",
-      "totalValueCents",
+      "aavCents",
     ]);
     const result = auctionRepository.startAuction({
       auctionId: secureRandom.id(),
@@ -554,7 +554,7 @@ function createAuctionService({
       actorUserId: authority.actorUserId,
       actorMembershipId: authority.membershipId,
       actorAuthority: authority.authority,
-      totalValueCents: body.totalValueCents,
+      aavCents: body.aavCents,
       termYears: body.termYears,
       idempotencyKey,
       occurredAtMs: nowMs,
@@ -594,7 +594,7 @@ function createAuctionService({
         actorUserId: authority.actorUserId,
         actorMembershipId: authority.membershipId,
         actorAuthority: "manager",
-        totalValueCents: body.totalValueCents,
+        aavCents: body.aavCents,
         termYears: body.termYears,
         expectedBidVersion,
         idempotencyKey,

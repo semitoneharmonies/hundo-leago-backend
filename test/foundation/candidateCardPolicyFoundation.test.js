@@ -277,11 +277,11 @@ describe(
     );
 
     test(
-      "accepts exact normal one-, two-, and three-year minimums and precision",
+      "accepts exact normal one-, two-, and three-year quarter-AAV offers",
       () => {
         assert.deepEqual(
           createCandidateCardOfferContract({
-            totalValueCents: 100,
+            aavCents: 100,
             termYears: 1,
           }),
           {
@@ -293,7 +293,7 @@ describe(
         );
         assert.deepEqual(
           createCandidateCardOfferContract({
-            totalValueCents: 200,
+            aavCents: 100,
             termYears: 2,
           }),
           {
@@ -305,7 +305,7 @@ describe(
         );
         assert.deepEqual(
           createCandidateCardOfferContract({
-            totalValueCents: 300,
+            aavCents: 100,
             termYears: 3,
           }),
           {
@@ -317,7 +317,7 @@ describe(
         );
         assert.deepEqual(
           createCandidateCardOfferContract({
-            totalValueCents: 425,
+            aavCents: 425,
             termYears: 1,
           }),
           {
@@ -331,13 +331,13 @@ describe(
     );
 
     test(
-      "rejects below-minimum, non-whole multi-year, mismatched-AAV, and invalid-term contracts with stable errors",
+      "rejects below-minimum, non-quarter AAV, mismatched persisted AAV, and invalid terms with stable errors",
       () => {
         const cases = [
           {
             callback: () =>
               createCandidateCardOfferContract({
-                totalValueCents: 99,
+                aavCents: 75,
                 termYears: 1,
               }),
             reasonCode: "minimum_aav_not_met",
@@ -345,7 +345,7 @@ describe(
           {
             callback: () =>
               createCandidateCardOfferContract({
-                totalValueCents: 199,
+                aavCents: 75,
                 termYears: 2,
               }),
             reasonCode: "minimum_aav_not_met",
@@ -353,11 +353,11 @@ describe(
           {
             callback: () =>
               createCandidateCardOfferContract({
-                totalValueCents: 250,
+                aavCents: 110,
                 termYears: 2,
               }),
             reasonCode:
-              "multi_year_total_precision_invalid",
+              "aav_increment_invalid",
           },
           {
             callback: () =>
@@ -373,7 +373,7 @@ describe(
           {
             callback: () =>
               createCandidateCardOfferContract({
-                totalValueCents: 400,
+                aavCents: 400,
                 termYears: 4,
               }),
             reasonCode: "term_years_invalid",
@@ -910,7 +910,7 @@ describe(
     );
 
     test(
-      "treats Bench candidates as cap-exempt and includes valid or warning Active offers in the strict projection",
+      "treats Bench candidates as cap-exempt and counts every entered Active AAV in the strict projection",
       () => {
         const entries = [
           carryover({
@@ -973,16 +973,16 @@ describe(
         assert.equal(
           result.capProjection
             .proposedCandidateAavCents,
-          600
+          1_500
         );
         assert.equal(
           result.capProjection
             .maximumPossibleCapCents,
-          1_250
+          2_150
         );
         assert.equal(
           result.capStatus,
-          "compliant"
+          "over_cap"
         );
         assert.equal(
           result.completeness
@@ -994,7 +994,7 @@ describe(
             (entry) =>
               entry.entryId === uuid(104)
           ).participates,
-          true
+          false
         );
       }
     );

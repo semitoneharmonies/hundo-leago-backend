@@ -54,7 +54,7 @@ const FREE_AGENT_DRAFT_AUCTION_START_NOT_APPLICABLE =
 const ORDINARY_BODY_FIELDS = Object.freeze([
   "playerId",
   "teamId",
-  "totalValueCents",
+  "aavCents",
   "termYears",
 ]);
 const FAD_BODY_FIELDS = Object.freeze([
@@ -249,13 +249,13 @@ function normalizeCommand(input) {
     );
   }
   const offer = validateOpeningBid(
-    input.body.totalValueCents,
+    input.body.aavCents,
     input.body.termYears
   );
   const body = Object.freeze({
     playerId: canonicalId(input.body.playerId, "player"),
     teamId: canonicalId(input.body.teamId, "team"),
-    totalValueCents: offer.totalValueCents,
+    aavCents: offer.aavCents,
     termYears: offer.termYears,
     ...(fad
       ? {
@@ -291,7 +291,7 @@ function requestHash(command) {
         actorUserId: command.actorUserId,
         playerId: command.body.playerId,
         teamId: command.body.teamId,
-        totalValueCents: command.body.totalValueCents,
+        aavCents: command.body.aavCents,
         termYears: command.body.termYears,
         bindingConfirmationPresent:
           hasBindingConfirmation,
@@ -823,12 +823,15 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
       INSERT INTO auction_bids (
         id, league_id, season_id, auction_id, team_id,
         submitted_by_user_id, total_value_cents, term_years,
-        lowest_offered_aav_cents, first_submitted_at_ms,
+        lowest_offered_aav_cents,
+        lowest_offered_total_value_cents,
+        first_submitted_at_ms,
         last_edited_at_ms, edit_count, status,
         idempotency_request_id, version
       ) VALUES (
         @bidId, @leagueId, @seasonId, @auctionId, @teamId,
-        @actorUserId, @totalValueCents, @termYears, @aavCents,
+        @actorUserId, @totalValueCents, @termYears,
+        @aavCents, @totalValueCents,
         @nowMs, @nowMs, 0, 'active', @idempotencyRequestId, 1
       )
     `);
@@ -1888,10 +1891,7 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
         totalValueCents:
           decision.body.totalValueCents,
         termYears: decision.body.termYears,
-        aavCents: calculateAavCents(
-          decision.body.totalValueCents,
-          decision.body.termYears
-        ),
+        aavCents: decision.body.aavCents,
         idempotencyRequestId,
         requestHash: requestHash(command),
         actorMembershipId: command.actorMembershipId,

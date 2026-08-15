@@ -111,7 +111,7 @@ function policyAuction(overrides = {}) {
 }
 
 function policyBid(sequence, overrides = {}) {
-  return {
+  const bid = {
     id: uuid(61_000 + sequence),
     leagueId: IDS.league,
     auctionId: IDS.auction,
@@ -125,6 +125,12 @@ function policyBid(sequence, overrides = {}) {
     isStartingBid: false,
     authorityValid: true,
     ...overrides,
+  };
+  return {
+    ...bid,
+    lowestOfferedTotalValueCents:
+      overrides.lowestOfferedTotalValueCents ??
+      bid.totalValueCents,
   };
 }
 
@@ -432,6 +438,8 @@ function createPersistenceRuntime(t) {
       term_years: termYears,
       lowest_offered_aav_cents:
         lowestOfferedAavCents,
+      lowest_offered_total_value_cents:
+        totalValueCents,
       first_submitted_at_ms: occurredAtMs,
       last_edited_at_ms: occurredAtMs,
       edit_count: 0,
@@ -508,7 +516,7 @@ describe(
   "FAD-06 ordinary auction compatibility characterization",
   () => {
     test(
-      "keeps AAV, shorter-term, original-time, then stable-ID ranking and exact due pricing",
+      "ranks total value, AAV, original time, then stable ID and preserves exact due pricing",
       () => {
         const highAav = policyBid(2, {
           totalValueCents: 1_500,
@@ -537,7 +545,7 @@ describe(
         });
         assert.equal(
           winningBidId([longTerm, shortTerm]),
-          shortTerm.id
+          longTerm.id
         );
 
         const earlier = policyBid(5, {
@@ -570,6 +578,7 @@ describe(
             totalValueCents: 1_000,
             termYears: 3,
             lowestOfferedAavCents: 100,
+            lowestOfferedTotalValueCents: 300,
           }),
           policyBid(10, {
             totalValueCents: 500,
@@ -605,10 +614,13 @@ describe(
           submittedTermYears: 3,
           submittedAavCents: 333,
           lowestOfferedAavCents: 100,
+          lowestOfferedTotalValueCents: 300,
           highestCompetingAavCents: 250,
-          requiredWinningAavCents: 250,
-          finalTotalValueCents: 800,
-          finalAavCents: 267,
+          highestCompetingTotalValueCents: 500,
+          requiredWinningTotalValueCents: 500,
+          requiredWinningAavCents: 175,
+          finalTotalValueCents: 525,
+          finalAavCents: 175,
         });
       }
     );
@@ -995,30 +1007,30 @@ describe(
         );
         assert.equal(
           resolution.second_price_input_cents,
-          250
+          500
         );
         assert.equal(
           resolution.final_contract_value_cents,
-          800
+          1_000
         );
         assert.equal(
           resolution.winning_term_years,
           3
         );
-        assert.equal(resolution.final_aav_cents, 267);
+        assert.equal(resolution.final_aav_cents, 333);
 
         const contract = runtime.database
           .prepare("SELECT * FROM contracts")
           .get();
         assert.equal(
           contract.original_total_value_cents,
-          800
+          1_000
         );
         assert.equal(
           contract.original_term_years,
           3
         );
-        assert.equal(contract.aav_cents, 267);
+        assert.equal(contract.aav_cents, 333);
         assert.equal(
           contract.auction_buyout_lock_expires_at_ms,
           DUE_MS + 14 * 24 * 60 * 60 * 1_000
@@ -1034,17 +1046,17 @@ describe(
           [
             {
               year_number: 1,
-              aav_cents: 267,
+              aav_cents: 333,
               status: "current",
             },
             {
               year_number: 2,
-              aav_cents: 267,
+              aav_cents: 333,
               status: "future",
             },
             {
               year_number: 3,
-              aav_cents: 267,
+              aav_cents: 333,
               status: "future",
             },
           ]

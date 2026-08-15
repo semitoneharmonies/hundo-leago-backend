@@ -5,6 +5,7 @@ const test = require("node:test");
 
 const {
   CANDIDATE_CARD_SLOT_KEYS,
+  assertCandidateCardSaveAllowed,
   evaluateCandidateCard,
   validateCandidateCardCandidate,
 } = require(
@@ -39,7 +40,7 @@ test("whole-card input requires exactly 22 canonical ordered slots and accepts p
     normalizeCandidateCardWholeSave(
       body({
         playerId: PLAYER_ID,
-        totalValueCents: 1500,
+        aavCents: 1500,
         termYears: null,
       })
     );
@@ -51,7 +52,7 @@ test("whole-card input requires exactly 22 canonical ordered slots and accepts p
       slotKey: "F01",
       candidate: {
         playerId: PLAYER_ID,
-        totalValueCents: 1500,
+        aavCents: 1500,
         termYears: null,
       },
     }
@@ -81,6 +82,7 @@ test("partial candidate contracts are canonical invalid rows and never participa
     conflictCode: null,
     totalValueCents: null,
     termYears: 3,
+    aavCents: null,
     eligibilityStatus: "invalid",
     validationCode:
       "CANDIDATE_CONTRACT_INCOMPLETE",
@@ -113,5 +115,87 @@ test("partial candidate contracts are canonical invalid rows and never participa
       reasonCode:
         "CANDIDATE_CONTRACT_INCOMPLETE",
     }
+  );
+});
+
+test("an AAV-only partial row still counts against the active cap and blocks saving", () => {
+  const candidateInput = {
+    entryId: ENTRY_ID,
+    entryKind: "candidate",
+    playerId: PLAYER_ID,
+    effectivePositionGroup: "F",
+    slotKey: "F01",
+    placementState: "placed",
+    conflictCode: null,
+    totalValueCents: null,
+    termYears: null,
+    aavCents: 1_500,
+    eligibilityStatus: "invalid",
+    validationCode: "CANDIDATE_CONTRACT_INCOMPLETE",
+  };
+  const evaluation = evaluateCandidateCard({
+    capLimitCents: 1_000,
+    carriedActivePlayerAmountCents: 0,
+    retentionObligationCents: 0,
+    buyoutPenaltyCents: 0,
+    entries: [candidateInput],
+  });
+  assert.equal(evaluation.capProjection.proposedCandidateAavCents, 1_500);
+  assert.equal(evaluation.capStatus, "over_cap");
+  assert.throws(
+    () => assertCandidateCardSaveAllowed(evaluation),
+    (error) => error.code === "CANDIDATE_CARD_CAP_EXCEEDED"
+  );
+});
+
+test("whole-card input derives totals from quarter AAV and rejects illegal money", () => {
+  const complete = normalizeCandidateCardWholeSave(
+    body({
+      playerId: PLAYER_ID,
+      aavCents: 325,
+      termYears: 3,
+    })
+  );
+  assert.deepEqual(complete.slots[0], {
+    slotKey: "F01",
+    candidate: {
+      playerId: PLAYER_ID,
+      aavCents: 325,
+      termYears: 3,
+    },
+  });
+
+  for (const [aavCents, reasonCode] of [
+    [75, "minimum_aav_not_met"],
+    [110, "aav_increment_invalid"],
+  ]) {
+    assert.throws(
+      () =>
+        normalizeCandidateCardWholeSave(
+          body({
+            playerId: PLAYER_ID,
+            aavCents,
+            termYears: 2,
+          })
+        ),
+      (error) =>
+        error.code ===
+          "CANDIDATE_CONTRACT_INVALID" &&
+        error.reasonCode === reasonCode
+    );
+  }
+});
+
+test("whole-card input blocks Bench AAV above four dollars", () => {
+  const request = body();
+  request.slots[18].candidate = {
+    playerId: PLAYER_ID,
+    aavCents: 425,
+    termYears: 1,
+  };
+  assert.throws(
+    () => normalizeCandidateCardWholeSave(request),
+    (error) =>
+      error.code === "CANDIDATE_BENCH_AAV_EXCEEDED"
   );
 });

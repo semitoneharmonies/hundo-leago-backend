@@ -499,7 +499,7 @@ describe("M5-02 auction application service", () => {
     const result = service.putMine({
       leagueId: LEAGUE_ID,
       auctionId: AUCTION_ID,
-      input: { teamId: TEAM_ID, totalValueCents: 600, termYears: 3 },
+      input: { teamId: TEAM_ID, aavCents: 200, termYears: 3 },
       expectedBidVersion: 1,
       idempotencyKey: "manager-edit",
       authenticated: {},
@@ -516,7 +516,7 @@ describe("M5-02 auction application service", () => {
       auctionId: AUCTION_ID,
       input: {
         teamId: TEAM_ID,
-        totalValueCents: 700,
+        aavCents: 225,
         termYears: 3,
         bindingIllegalityConfirmed: true,
       },
@@ -534,7 +534,7 @@ describe("M5-02 auction application service", () => {
         auctionId: AUCTION_ID,
         input: {
           teamId: TEAM_ID,
-          totalValueCents: 700,
+          aavCents: 225,
           termYears: 3,
           bindingIllegalityConfirmed: false,
         },
@@ -554,7 +554,7 @@ describe("M5-02 auction application service", () => {
       input: {
         teamId: TEAM_ID,
         playerId: PLAYER_ID,
-        totalValueCents: 1_000,
+        aavCents: 350,
         termYears: 3,
       },
       idempotencyKey: "commissioner-start",
@@ -578,7 +578,7 @@ describe("M5-02 auction application service", () => {
         body: {
           teamId: TEAM_ID,
           playerId: PLAYER_ID,
-          totalValueCents: 1_000,
+          aavCents: 350,
           termYears: 3,
         },
         idempotencyKey: "commissioner-start",
@@ -605,7 +605,7 @@ describe("M5-02 auction application service", () => {
         actorUserId: USER_ID,
         actorMembershipId: MEMBERSHIP_ID,
         actorAuthority: "commissioner",
-        totalValueCents: 1_000,
+        aavCents: 350,
         termYears: 3,
         idempotencyKey: "commissioner-start",
         occurredAtMs: NOW_MS,
@@ -629,7 +629,7 @@ describe("M5-02 auction application service", () => {
       input: {
         teamId: TEAM_ID,
         playerId: PLAYER_ID,
-        totalValueCents: 1_000,
+        aavCents: 350,
         termYears: 3,
       },
       idempotencyKey: "platform-admin-start",
@@ -679,7 +679,7 @@ describe("M5-02 auction application service", () => {
           body: Object.freeze({
             playerId: PLAYER_ID,
             teamId: TEAM_ID,
-            totalValueCents: 700,
+            aavCents: 225,
             termYears: 3,
             bindingIllegalityConfirmed: true,
           }),
@@ -702,7 +702,7 @@ describe("M5-02 auction application service", () => {
     const body = {
       playerId: PLAYER_ID,
       teamId: TEAM_ID,
-      totalValueCents: 700,
+      aavCents: 225,
       termYears: 3,
       bindingIllegalityConfirmed: true,
     };
@@ -802,7 +802,7 @@ describe("M5-02 auction application service", () => {
     const body = {
       playerId: PLAYER_ID,
       teamId: TEAM_ID,
-      totalValueCents: 700,
+      aavCents: 225,
       termYears: 3,
       bindingIllegalityConfirmed: true,
     };
@@ -1131,7 +1131,7 @@ describe("FAD-06 isolated auction HTTP contract", () => {
         body: JSON.stringify({
           teamId: TEAM_ID,
           playerId: PLAYER_ID,
-          totalValueCents: 1_000,
+          aavCents: 350,
           termYears: 3,
         }),
       }),
@@ -1142,7 +1142,7 @@ describe("FAD-06 isolated auction HTTP contract", () => {
           "idempotency-key": "mine",
           "if-match": '"2"',
         },
-        body: JSON.stringify({ teamId: TEAM_ID, totalValueCents: 600, termYears: 3 }),
+        body: JSON.stringify({ teamId: TEAM_ID, aavCents: 200, termYears: 3 }),
       }),
       fetch(`${baseUrl}/api/v1/leagues/${LEAGUE_ID}/auctions/${AUCTION_ID}/bids/${BID_ID}`, {
         method: "PATCH",
@@ -1151,7 +1151,7 @@ describe("FAD-06 isolated auction HTTP contract", () => {
           "idempotency-key": "admin-edit",
           "if-match": '"3"',
         },
-        body: JSON.stringify({ teamId: TEAM_ID, totalValueCents: 500, termYears: 3 }),
+        body: JSON.stringify({ teamId: TEAM_ID, aavCents: 175, termYears: 3 }),
       }),
       fetch(`${baseUrl}/api/v1/leagues/${LEAGUE_ID}/auctions/${AUCTION_ID}/bids/${BID_ID}`, {
         method: "DELETE",
@@ -1330,7 +1330,7 @@ describe("FAD-06 isolated auction HTTP contract", () => {
       {
         method: "PUT",
         headers: { "content-type": "application/json", "if-match": "2" },
-        body: JSON.stringify({ teamId: TEAM_ID, totalValueCents: 600, termYears: 3 }),
+        body: JSON.stringify({ teamId: TEAM_ID, aavCents: 200, termYears: 3 }),
       }
     );
     assert.equal(malformed.status, 400);
@@ -1340,7 +1340,7 @@ describe("FAD-06 isolated auction HTTP contract", () => {
       {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ teamId: TEAM_ID, totalValueCents: 600, termYears: 3 }),
+        body: JSON.stringify({ teamId: TEAM_ID, aavCents: 200, termYears: 3 }),
       }
     );
     const body = await cooldown.json();
@@ -1390,7 +1390,7 @@ describe("FAD-06 isolated auction HTTP contract", () => {
         },
         body: JSON.stringify({
           teamId: TEAM_ID,
-          totalValueCents: 600,
+          aavCents: 200,
           termYears: 3,
           bindingIllegalityConfirmed: false,
         }),
@@ -1435,7 +1435,7 @@ describe("FAD-06 isolated auction HTTP contract", () => {
         body: JSON.stringify({
           playerId: PLAYER_ID,
           teamId: TEAM_ID,
-          totalValueCents: 600,
+          aavCents: 300,
           termYears: 2,
         }),
       }
@@ -1489,13 +1489,13 @@ describe("FAD-06 isolated auction HTTP contract", () => {
       {
         playerId: PLAYER_ID,
         teamId: TEAM_ID,
-        totalValueCents: 700,
+        aavCents: 225,
         termYears: 3,
       },
       {
         playerId: PLAYER_ID,
         teamId: TEAM_ID,
-        totalValueCents: 700,
+        aavCents: 225,
         termYears: 3,
         bindingIllegalityConfirmed: false,
       },
@@ -1610,7 +1610,7 @@ describe("FAD-06 isolated auction HTTP contract", () => {
         "stale",
         {
           teamId: TEAM_ID,
-          totalValueCents: 600,
+          aavCents: 300,
           termYears: 2,
         }
       ),

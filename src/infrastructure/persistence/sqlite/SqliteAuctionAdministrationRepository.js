@@ -2198,10 +2198,7 @@ function createSqliteAuctionAdministrationRepository({
       );
     }
     const nextVersion = bid.version + 1;
-    const nextAav = calculateAavCents(
-      command.request.body.totalValueCents,
-      command.request.body.termYears
-    );
+    const nextAav = command.request.body.aavCents;
     if (
       restrictedParticipant &&
       !(
@@ -2240,6 +2237,11 @@ function createSqliteAuctionAdministrationRepository({
         lowestOfferedAavCents: Math.min(
           bid.lowest_offered_aav_cents,
           nextAav
+        ),
+        lowestOfferedTotalValueCents: Math.min(
+          bid.lowest_offered_total_value_cents ??
+            bid.total_value_cents,
+          command.request.body.totalValueCents
         ),
         idempotencyRequestId,
         occurredAtMs: command.occurredAtMs,
@@ -2289,6 +2291,9 @@ function createSqliteAuctionAdministrationRepository({
           termYears: bid.term_years,
           lowestOfferedAavCents:
             bid.lowest_offered_aav_cents,
+          lowestOfferedTotalValueCents:
+            bid.lowest_offered_total_value_cents ??
+              bid.total_value_cents,
           editCount: bid.edit_count,
           version: bid.version,
         },
@@ -2301,6 +2306,11 @@ function createSqliteAuctionAdministrationRepository({
           lowestOfferedAavCents: Math.min(
             bid.lowest_offered_aav_cents,
             nextAav
+          ),
+          lowestOfferedTotalValueCents: Math.min(
+            bid.lowest_offered_total_value_cents ??
+              bid.total_value_cents,
+            command.request.body.totalValueCents
           ),
           editCount: bid.edit_count,
           version: nextVersion,
@@ -3857,6 +3867,8 @@ function createSqliteAuctionAdministrationRepository({
           term_years = @termYears,
           lowest_offered_aav_cents =
             @lowestOfferedAavCents,
+          lowest_offered_total_value_cents =
+            @lowestOfferedTotalValueCents,
           last_edited_at_ms = @occurredAtMs,
           idempotency_request_id =
             @idempotencyRequestId,

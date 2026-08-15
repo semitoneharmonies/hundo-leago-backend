@@ -97,6 +97,22 @@ const IDS = Object.freeze({
 });
 
 function command(overrides = {}) {
+  const normalizedOverrides = { ...overrides };
+  if (
+    Object.prototype.hasOwnProperty.call(
+      normalizedOverrides,
+      "totalValueCents"
+    )
+  ) {
+    const termYears = normalizedOverrides.termYears ?? 3;
+    normalizedOverrides.aavCents =
+      Math.round(
+        normalizedOverrides.totalValueCents /
+          termYears /
+          25
+      ) * 25;
+    delete normalizedOverrides.totalValueCents;
+  }
   return validateAuctionBidCommand({
     auctionId: IDS.auction,
     bidId: IDS.bid,
@@ -107,13 +123,13 @@ function command(overrides = {}) {
     actorUserId: IDS.user,
     actorMembershipId: IDS.membership,
     actorAuthority: "manager",
-    totalValueCents: 600,
+    aavCents: 200,
     termYears: 3,
     expectedBidVersion: null,
     idempotencyKey: "m5-02-bid-one",
     occurredAtMs: NOW_MS,
     idempotencyExpiresAtMs: NOW_MS + 86_400_000,
-    ...overrides,
+    ...normalizedOverrides,
   });
 }
 
@@ -153,6 +169,7 @@ function existingBid(overrides = {}) {
     total_value_cents: 600,
     term_years: 3,
     lowest_offered_aav_cents: 200,
+    lowest_offered_total_value_cents: 600,
     first_submitted_at_ms: NOW_MS - COOLDOWN_MS,
     last_edited_at_ms: NOW_MS - COOLDOWN_MS,
     edit_count: 0,
@@ -197,7 +214,7 @@ function expectedRequestHash(value, { fad = false } = {}) {
     actorUserId: value.actorUserId,
     actorMembershipId: value.actorMembershipId,
     actorAuthority: value.actorAuthority,
-    totalValueCents: value.totalValueCents,
+    aavCents: value.aavCents,
     termYears: value.termYears,
     expectedBidVersion: value.expectedBidVersion,
   };
@@ -426,7 +443,7 @@ function createPersistenceRuntime(t) {
     actorUserId: IDS.user,
     actorMembershipId: IDS.membership,
     actorAuthority: "manager",
-    totalValueCents: 1_000,
+    aavCents: 350,
     termYears: 3,
     idempotencyKey: "m5-02-open",
     occurredAtMs: NOW_MS,
@@ -676,6 +693,22 @@ function configureFadBidRuntime(
 
 function persistenceCommand(overrides = {}) {
   const occurredAtMs = overrides.occurredAtMs ?? NOW_MS + 1;
+  const normalizedOverrides = { ...overrides };
+  if (
+    Object.prototype.hasOwnProperty.call(
+      normalizedOverrides,
+      "totalValueCents"
+    )
+  ) {
+    const termYears = normalizedOverrides.termYears ?? 3;
+    normalizedOverrides.aavCents =
+      Math.round(
+        normalizedOverrides.totalValueCents /
+          termYears /
+          25
+      ) * 25;
+    delete normalizedOverrides.totalValueCents;
+  }
   return {
     auctionId: IDS.auction,
     bidId: uuid(100),
@@ -686,36 +719,36 @@ function persistenceCommand(overrides = {}) {
     actorUserId: IDS.managerB,
     actorMembershipId: IDS.membershipB,
     actorAuthority: "manager",
-    totalValueCents: 600,
+    aavCents: 200,
     termYears: 3,
     expectedBidVersion: null,
     idempotencyKey: "m5-02-bravo-join",
     occurredAtMs,
     idempotencyExpiresAtMs: occurredAtMs + 86_400_000,
-    ...overrides,
+    ...normalizedOverrides,
   };
 }
 
 describe("M5-02 auction bid policy", () => {
-  test("enforces joining minimums, term precision, and rounded AAV", () => {
+  test("enforces joining minimums, term, and quarter-AAV precision", () => {
     assert.deepEqual(validateBidOffer(150, 1, { joining: true }), {
       totalValueCents: 150,
       termYears: 1,
       aavCents: 150,
     });
-    assert.deepEqual(validateBidOffer(500, 3, { joining: true }), {
-      totalValueCents: 500,
+    assert.deepEqual(validateBidOffer(175, 3, { joining: true }), {
+      totalValueCents: 525,
       termYears: 3,
-      aavCents: 167,
+      aavCents: 175,
     });
-    for (const [totalValueCents, termYears] of [
+    for (const [aavCents, termYears] of [
       [149, 1],
-      [200, 2],
-      [400, 3],
-      [550, 3],
+      [125, 2],
+      [125, 3],
+      [160, 3],
     ]) {
       assertPolicyError(
-        () => validateBidOffer(totalValueCents, termYears, { joining: true }),
+        () => validateBidOffer(aavCents, termYears, { joining: true }),
         AUCTION_BID_CODES.valueInvalid
       );
     }
@@ -735,6 +768,7 @@ describe("M5-02 auction bid policy", () => {
         termYears: 3,
         aavCents: 200,
         lowestOfferedAavCents: 200,
+        lowestOfferedTotalValueCents: 600,
         firstSubmittedAtMs: NOW_MS,
         lastEditedAtMs: NOW_MS,
         editCount: 0,
@@ -1364,7 +1398,7 @@ describe("M5-02 atomic sealed-bid persistence", () => {
     });
     assert.equal(replayed.replayed, true);
     assert.equal(replayed.bid.version, 1);
-    assert.equal(replayed.bid.totalValueCents, 500);
+    assert.equal(replayed.bid.totalValueCents, 525);
   });
 
   test("gives the immutable queued FAD starter two edits despite its pre-opening submission time", (t) => {
@@ -2157,7 +2191,7 @@ describe("M5-02 atomic sealed-bid persistence", () => {
         bindingIllegalityConfirmed: true,
       })
     );
-    assert.equal(submitted.bid.aavCents, 233);
+    assert.equal(submitted.bid.aavCents, 225);
 
     const editedAtMs = submittedAtMs + COOLDOWN_MS;
     const edited = runtime.repository.putBid(
@@ -2183,7 +2217,7 @@ describe("M5-02 atomic sealed-bid persistence", () => {
         FROM auction_bids
         WHERE id = ?
       `).get(uuid(100)).lowest_offered_aav_cents,
-      233
+      225
     );
   });
 });

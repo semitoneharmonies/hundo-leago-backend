@@ -12,6 +12,7 @@ const AUCTION_RESOLUTION_CODES = Object.freeze({
   authorityInvalid: "AUCTION_RESOLUTION_AUTHORITY_INVALID",
   valueInvalid: "AUCTION_RESOLUTION_VALUE_INVALID",
   lowestAavInvalid: "AUCTION_RESOLUTION_LOWEST_AAV_INVALID",
+  lowestTotalInvalid: "AUCTION_RESOLUTION_LOWEST_TOTAL_INVALID",
 });
 
 class AuctionResolutionPolicyError extends Error {
@@ -83,13 +84,19 @@ function calculateAavCents(totalValueCents, termYears) {
 }
 
 function validateSubmittedValue(totalValueCents, termYears) {
+  const isLegacyOffer =
+    termYears === 1 ||
+    totalValueCents % 100 === 0;
+  const isAavFirstOffer =
+    totalValueCents % termYears === 0 &&
+    (totalValueCents / termYears) % 25 === 0;
   if (
     !Number.isSafeInteger(termYears) ||
     termYears < 1 ||
     termYears > 3 ||
     !Number.isSafeInteger(totalValueCents) ||
     totalValueCents < termYears * 100 ||
-    (termYears > 1 && totalValueCents % 100 !== 0)
+    (!isLegacyOffer && !isAavFirstOffer)
   ) {
     fail(AUCTION_RESOLUTION_CODES.valueInvalid);
   }
@@ -176,6 +183,7 @@ function inspectBid(input, auction) {
         "totalValueCents",
         "termYears",
         "lowestOfferedAavCents",
+        "lowestOfferedTotalValueCents",
         "firstSubmittedAtMs",
         "isStartingBid",
         "authorityValid",
@@ -224,6 +232,18 @@ function inspectBid(input, auction) {
     ) {
       fail(AUCTION_RESOLUTION_CODES.lowestAavInvalid);
     }
+    if (
+      !Number.isSafeInteger(
+        input.lowestOfferedTotalValueCents
+      ) ||
+      input.lowestOfferedTotalValueCents < 1 ||
+      input.lowestOfferedTotalValueCents >
+        offer.totalValueCents
+    ) {
+      fail(
+        AUCTION_RESOLUTION_CODES.lowestTotalInvalid
+      );
+    }
     return {
       bid: freeze({
         id,
@@ -234,6 +254,8 @@ function inspectBid(input, auction) {
         termYears: offer.termYears,
         aavCents: offer.aavCents,
         lowestOfferedAavCents: input.lowestOfferedAavCents,
+        lowestOfferedTotalValueCents:
+          input.lowestOfferedTotalValueCents,
         firstSubmittedAtMs: safeTimestamp(input.firstSubmittedAtMs, {
           reasonCode: AUCTION_RESOLUTION_CODES.bidInvalid,
         }),
@@ -254,8 +276,8 @@ function inspectBid(input, auction) {
 
 function rankBids(left, right) {
   return (
+    right.totalValueCents - left.totalValueCents ||
     right.aavCents - left.aavCents ||
-    left.termYears - right.termYears ||
     left.firstSubmittedAtMs - right.firstSubmittedAtMs ||
     left.id.localeCompare(right.id)
   );
@@ -270,6 +292,8 @@ function safeRankedBid(bid, rank) {
     termYears: bid.termYears,
     aavCents: bid.aavCents,
     lowestOfferedAavCents: bid.lowestOfferedAavCents,
+    lowestOfferedTotalValueCents:
+      bid.lowestOfferedTotalValueCents,
     firstSubmittedAtMs: bid.firstSubmittedAtMs,
   });
 }
@@ -364,12 +388,34 @@ function evaluateAuctionResolution(input) {
   );
   const winner = eligible[0];
   const competitor = eligible[1] || null;
-  const requiredWinningAavCents = competitor
-    ? Math.max(winner.lowestOfferedAavCents, competitor.aavCents)
-    : winner.aavCents;
-  const finalTotalValueCents = competitor
-    ? smallestValidTotalCents(requiredWinningAavCents, winner.termYears)
+  const requiredWinningTotalValueCents = competitor
+    ? Math.max(
+        winner.lowestOfferedTotalValueCents,
+        competitor.totalValueCents
+      )
     : winner.totalValueCents;
+  const legacySubmittedPrice =
+    requiredWinningTotalValueCents ===
+      winner.totalValueCents &&
+    (
+      winner.totalValueCents % winner.termYears !== 0 ||
+      (
+        winner.totalValueCents / winner.termYears
+      ) % 25 !== 0
+    );
+  const requiredWinningAavCents = legacySubmittedPrice
+    ? winner.aavCents
+    : Math.max(
+        100,
+        Math.ceil(
+          requiredWinningTotalValueCents /
+            winner.termYears /
+            25
+        ) * 25
+      );
+  const finalTotalValueCents = legacySubmittedPrice
+    ? winner.totalValueCents
+    : requiredWinningAavCents * winner.termYears;
   if (finalTotalValueCents > winner.totalValueCents) {
     fail(AUCTION_RESOLUTION_CODES.valueInvalid);
   }
@@ -386,7 +432,12 @@ function evaluateAuctionResolution(input) {
       submittedTermYears: winner.termYears,
       submittedAavCents: winner.aavCents,
       lowestOfferedAavCents: winner.lowestOfferedAavCents,
+      lowestOfferedTotalValueCents:
+        winner.lowestOfferedTotalValueCents,
       highestCompetingAavCents: competitor?.aavCents ?? null,
+      highestCompetingTotalValueCents:
+        competitor?.totalValueCents ?? null,
+      requiredWinningTotalValueCents,
       requiredWinningAavCents,
       finalTotalValueCents,
       finalAavCents: calculateAavCents(

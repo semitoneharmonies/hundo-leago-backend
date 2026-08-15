@@ -408,6 +408,7 @@ function createSqliteAuctionResolutionRepository({
         auction_bids.total_value_cents AS total_value_cents,
         auction_bids.term_years AS term_years,
         auction_bids.lowest_offered_aav_cents AS lowest_offered_aav_cents,
+        auction_bids.lowest_offered_total_value_cents AS lowest_offered_total_value_cents,
         auction_bids.first_submitted_at_ms AS first_submitted_at_ms,
         auction_bids.status AS bid_status,
         teams.status AS team_status,
@@ -802,6 +803,8 @@ function createSqliteAuctionResolutionRepository({
         totalValueCents: row.total_value_cents,
         termYears: row.term_years,
         lowestOfferedAavCents: row.lowest_offered_aav_cents,
+        lowestOfferedTotalValueCents:
+          row.lowest_offered_total_value_cents,
         firstSubmittedAtMs: row.first_submitted_at_ms,
         isStartingBid: row.submission_event_type === "auction_started",
         authorityValid: historicalAuthority(row),
@@ -1186,7 +1189,7 @@ function createSqliteAuctionResolutionRepository({
       winning_bid_id: decision.winner.bidId,
       highest_bid_cents: decision.winner.submittedTotalValueCents,
       second_price_input_cents:
-        decision.winner.highestCompetingAavCents,
+        decision.winner.highestCompetingTotalValueCents,
       final_contract_value_cents:
         decision.winner.finalTotalValueCents,
       winning_term_years: decision.winner.submittedTermYears,

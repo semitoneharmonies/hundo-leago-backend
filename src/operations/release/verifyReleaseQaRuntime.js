@@ -542,7 +542,7 @@ async function verifyAdministrator(baseUrl, frontendOrigin, password, expectedWr
     if (
       operations.json?.data?.scheduler?.state !== "disabled" ||
       operations.json?.data?.maintenance?.state !== expectedWriteMode ||
-      operations.json?.data?.schemaVersion !== 50
+      operations.json?.data?.schemaVersion !== 51
     ) {
       fail("administrator-operations-health", "Operations health did not report the release-QA controls.");
     }

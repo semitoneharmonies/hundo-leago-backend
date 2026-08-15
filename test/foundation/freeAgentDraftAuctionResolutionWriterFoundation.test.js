@@ -740,6 +740,7 @@ function seedBid(
     total_value_cents: totalValueCents,
     term_years: termYears,
     lowest_offered_aav_cents: Math.round(totalValueCents / termYears),
+    lowest_offered_total_value_cents: totalValueCents,
     first_submitted_at_ms: submittedAtMs,
     last_edited_at_ms: submittedAtMs,
     edit_count: 0,

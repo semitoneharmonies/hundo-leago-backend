@@ -554,8 +554,7 @@ function canonicalContract(
     termYears < 1 ||
     termYears > 3 ||
     !Number.isSafeInteger(totalValueCents) ||
-    totalValueCents < termYears * 100 ||
-    (termYears > 1 && totalValueCents % 100 !== 0)
+    totalValueCents < termYears * 100
   ) {
     failWith(reasonCode);
   }
@@ -565,6 +564,14 @@ function canonicalContract(
       ? 1
       : 0);
   if (aavCents !== expectedAavCents) {
+    failWith(reasonCode);
+  }
+  const aavFirstContract =
+    aavCents % 25 === 0 &&
+    totalValueCents === aavCents * termYears;
+  const legacyContract =
+    termYears === 1 || totalValueCents % 100 === 0;
+  if (!aavFirstContract && !legacyContract) {
     failWith(reasonCode);
   }
   return Object.freeze({

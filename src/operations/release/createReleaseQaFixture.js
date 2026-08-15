@@ -1111,9 +1111,10 @@ function insertAuctionAndTrades(
     INSERT INTO auction_bids (
       id, league_id, season_id, auction_id, team_id,
       submitted_by_user_id, total_value_cents, term_years,
-      lowest_offered_aav_cents, first_submitted_at_ms,
+      lowest_offered_aav_cents,
+      lowest_offered_total_value_cents, first_submitted_at_ms,
       last_edited_at_ms, edit_count, status, idempotency_request_id, version
-    ) VALUES (?, ?, ?, ?, ?, ?, 900, 3, 300, ?, ?, 0, 'active', NULL, 1)
+    ) VALUES (?, ?, ?, ?, ?, ?, 900, 3, 300, 900, ?, ?, 0, 'active', NULL, 1)
   `).run(
     fixtureId(`auction-bid:${league.alias}`),
     league.leagueId,
