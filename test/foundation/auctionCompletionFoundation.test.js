@@ -380,6 +380,7 @@ function createPersistenceRuntime(
       total_value_cents: totalValueCents,
       term_years: termYears,
       lowest_offered_aav_cents: lowestOfferedAavCents,
+      lowest_offered_total_value_cents: totalValueCents,
       first_submitted_at_ms: occurredAtMs,
       last_edited_at_ms: occurredAtMs,
       edit_count: 0,
@@ -394,6 +395,7 @@ function createPersistenceRuntime(
       termYears,
       aavCents,
       lowestOfferedAavCents,
+      lowestOfferedTotalValueCents: totalValueCents,
       editCount: 0,
       version: 1,
     };
@@ -602,14 +604,14 @@ describe("M5-04 atomic SQLite auction completion", () => {
       .get();
     assert.equal(resolution.winning_bid_id, PERSISTED.bidA);
     assert.equal(resolution.highest_bid_cents, 1_000);
-    assert.equal(resolution.second_price_input_cents, 250);
-    assert.equal(resolution.final_contract_value_cents, 800);
+    assert.equal(resolution.second_price_input_cents, 500);
+    assert.equal(resolution.final_contract_value_cents, 1_000);
     assert.equal(resolution.winning_term_years, 3);
-    assert.equal(resolution.final_aav_cents, 267);
+    assert.equal(resolution.final_aav_cents, 333);
     const contract = runtime.database.prepare("SELECT * FROM contracts").get();
-    assert.equal(contract.original_total_value_cents, 800);
+    assert.equal(contract.original_total_value_cents, 1_000);
     assert.equal(contract.original_term_years, 3);
-    assert.equal(contract.aav_cents, 267);
+    assert.equal(contract.aav_cents, 333);
     assert.equal(
       contract.auction_buyout_lock_expires_at_ms,
       NOW_MS + 14 * 24 * 60 * 60 * 1_000
@@ -622,9 +624,9 @@ describe("M5-04 atomic SQLite auction completion", () => {
         `)
         .all(),
       [
-        { year_number: 1, aav_cents: 267, status: "current" },
-        { year_number: 2, aav_cents: 267, status: "future" },
-        { year_number: 3, aav_cents: 267, status: "future" },
+        { year_number: 1, aav_cents: 333, status: "current" },
+        { year_number: 2, aav_cents: 333, status: "future" },
+        { year_number: 3, aav_cents: 333, status: "future" },
       ]
     );
     assert.deepEqual(
@@ -670,7 +672,7 @@ describe("M5-04 atomic SQLite auction completion", () => {
     const activityMetadata = JSON.parse(activity.metadata_json);
     assert.equal(activity.actor_authority, "system");
     assert.equal(activityMetadata.playerDisplayName, "Target Player");
-    assert.equal(activityMetadata.finalTotalValueCents, 800);
+    assert.equal(activityMetadata.finalTotalValueCents, 1_000);
     assert.equal(activityMetadata.bidHistory.length, 2);
     assert.equal(activityMetadata.rankedBids.length, 2);
     const outbox = runtime.database.prepare("SELECT * FROM outbox_events").get();
@@ -893,7 +895,7 @@ describe("M5-04 atomic SQLite auction completion", () => {
   test("persists exact one- and two-year plans through the shared planner", async (t) => {
     const oneYear = createPersistenceRuntime(t, {
       bidA: {
-        totalValueCents: 400,
+        totalValueCents: 600,
         termYears: 1,
         lowestOfferedAavCents: 100,
       },

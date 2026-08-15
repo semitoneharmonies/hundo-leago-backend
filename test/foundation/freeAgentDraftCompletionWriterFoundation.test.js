@@ -1555,7 +1555,7 @@ function ordinaryAuctionCommand() {
     actorUserId: IDS.user,
     actorMembershipId: IDS.membership,
     actorAuthority: "commissioner",
-    totalValueCents: 600,
+    aavCents: 300,
     termYears: 2,
     idempotencyKey: "ordinary-after-fad-completion",
     occurredAtMs: EXTENDED_COMPLETED_AT_MS,
