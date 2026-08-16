@@ -1204,7 +1204,7 @@ function backfillFourSeasonDraftPickInventory({
   fixtureNowMs,
 }) {
   const repositories = runtime.repositories.context.repositories;
-  runtime.database.transaction(() => {
+  const write = () => {
     for (const league of Object.values(leagues)) {
       const commissioner = accounts[league.commissionerAccountAlias];
       const seasons = runtime.database.prepare(`
@@ -1287,7 +1287,177 @@ function backfillFourSeasonDraftPickInventory({
         }
       }
     }
+  };
+  if (runtime.database.inTransaction) return write();
+  return runtime.database.transaction(write).immediate();
+}
+
+function existingBrowserFixtureFoundations(runtime) {
+  const accounts = {};
+  const leagues = {};
+  for (const [alias, blueprint] of Object.entries(LEAGUE_BLUEPRINTS)) {
+    const leagueId = fixtureId(`fad-browser-v4:league:${alias}`);
+    const seasonId = fixtureId(`fad-browser-v4:season:${alias}`);
+    const league = runtime.database.prepare(`
+      SELECT league.id, commissioner.user_id AS commissioner_user_id
+      FROM leagues AS league
+      JOIN league_memberships AS commissioner
+        ON commissioner.league_id = league.id
+       AND commissioner.id = league.commissioner_membership_id
+       AND commissioner.status = 'active'
+      WHERE league.id = ?
+        AND league.current_season_id = ?
+        AND league.status <> 'deleted'
+    `).get(leagueId, seasonId);
+    const rows = runtime.database.prepare(`
+      SELECT id
+      FROM teams
+      WHERE league_id = ? AND status <> 'deleted'
+    `).all(leagueId);
+    const teamIds = new Set(rows.map(({ id }) => id));
+    const teams = blueprint.teamManagerAccountAliases.map((_, index) => ({
+      teamId: fixtureId(`fad-browser-v4:team:${alias}:${index + 1}`),
+    }));
+    if (
+      !league ||
+      rows.length !== teams.length ||
+      teams.some(({ teamId }) => !teamIds.has(teamId))
+    ) {
+      fail(
+        "FREE_AGENT_DRAFT_BROWSER_FIXTURE_EXISTING_STATE_INVALID",
+        "The existing staging FAD fixture does not match its deterministic league, season, commissioner, and team identities."
+      );
+    }
+    const commissionerAlias = blueprint.commissionerAccountAlias;
+    const priorCommissioner = accounts[commissionerAlias];
+    if (
+      priorCommissioner &&
+      priorCommissioner.userId !== league.commissioner_user_id
+    ) {
+      fail(
+        "FREE_AGENT_DRAFT_BROWSER_FIXTURE_EXISTING_STATE_INVALID",
+        "The shared staging FAD commissioner identity is inconsistent across leagues."
+      );
+    }
+    accounts[commissionerAlias] = {
+      userId: league.commissioner_user_id,
+    };
+    leagues[alias] = {
+      alias,
+      leagueId,
+      seasonId,
+      commissionerAccountAlias: commissionerAlias,
+      teams,
+    };
+  }
+  return { accounts, leagues };
+}
+
+function ensureFourthFutureSeason({ runtime, leagues, fixtureNowMs }) {
+  const repositories = runtime.repositories.context.repositories;
+  const write = () => {
+    for (const league of Object.values(leagues)) {
+      const id = fixtureId(
+        `fad-browser-v4:season:${league.alias}:2029`
+      );
+      const rows = runtime.database.prepare(`
+        SELECT id, label, nhl_season_key
+        FROM seasons
+        WHERE league_id = ?
+          AND (id = ? OR nhl_season_key = '20292030')
+      `).all(league.leagueId, id);
+      if (rows.length === 0) {
+        repositories.seasons.insert({
+          id,
+          league_id: league.leagueId,
+          label: "2029-30",
+          nhl_season_key: "20292030",
+          status: "planned",
+          regular_season_starts_at_ms: null,
+          regular_season_ends_at_ms: null,
+          fantasy_playoffs_start_at_ms: null,
+          fantasy_playoffs_end_at_ms: null,
+          free_agent_draft_completed_at_ms: null,
+          created_at_ms: fixtureNowMs,
+          updated_at_ms: fixtureNowMs,
+          version: 1,
+        });
+        continue;
+      }
+      if (
+        rows.length !== 1 ||
+        rows[0].id !== id ||
+        rows[0].label !== "2029-30" ||
+        rows[0].nhl_season_key !== "20292030"
+      ) {
+        fail(
+          "FREE_AGENT_DRAFT_BROWSER_FIXTURE_EXISTING_STATE_INVALID",
+          "The existing staging FAD fourth future season conflicts with its deterministic identity."
+        );
+      }
+    }
+  };
+  if (runtime.database.inTransaction) return write();
+  return runtime.database.transaction(write).immediate();
+}
+
+function draftPickCounts(database, leagues) {
+  return Object.fromEntries(
+    Object.values(leagues).map((league) => {
+      const counts = database.prepare(`
+        SELECT COUNT(*) AS total,
+               SUM(status = 'unused') AS unused
+        FROM draft_picks
+        WHERE league_id = ?
+      `).get(league.leagueId);
+      return [league.alias, {
+        total: counts.total,
+        unused: counts.unused || 0,
+      }];
+    })
+  );
+}
+
+function backfillExistingFreeAgentDraftBrowserFixturePickInventory({
+  runtime,
+  fixtureNowMs,
+}) {
+  if (
+    !runtime?.database ||
+    !Number.isSafeInteger(fixtureNowMs) ||
+    fixtureNowMs < 0
+  ) {
+    fail(
+      "FREE_AGENT_DRAFT_BROWSER_FIXTURE_RUNTIME_INVALID",
+      "The existing staging FAD pick backfill requires an open runtime and safe timestamp."
+    );
+  }
+  const { accounts, leagues } =
+    existingBrowserFixtureFoundations(runtime);
+  const before = draftPickCounts(runtime.database, leagues);
+  runtime.database.transaction(() => {
+    ensureFourthFutureSeason({ runtime, leagues, fixtureNowMs });
+    backfillFourSeasonDraftPickInventory({
+      runtime,
+      accounts,
+      leagues,
+      fixtureNowMs,
+    });
   }).immediate();
+  const after = draftPickCounts(runtime.database, leagues);
+  return Object.freeze({
+    code: "STAGING_FAD_PICK_INVENTORY_BACKFILLED",
+    leagues: Object.freeze(
+      Object.values(leagues).map((league) => Object.freeze({
+        alias: league.alias,
+        leagueId: league.leagueId,
+        insertedPickCount:
+          after[league.alias].total - before[league.alias].total,
+        totalPickCount: after[league.alias].total,
+        unusedPickCount: after[league.alias].unused,
+      }))
+    ),
+  });
 }
 
 function insertBetaTargetScheduleJobs({
@@ -3425,6 +3595,7 @@ module.exports = {
   BROWSER_FIXTURE_KIND,
   BROWSER_FIXTURE_SCHEMA_VERSION,
   FreeAgentDraftBrowserFixtureError,
+  backfillExistingFreeAgentDraftBrowserFixturePickInventory,
   createFreeAgentDraftBrowserFixture,
   schedulesFor,
   selectCatalogPlayers,

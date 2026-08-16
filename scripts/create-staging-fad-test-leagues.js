@@ -15,6 +15,7 @@ const {
   loadTargetRuntimeConfig,
 } = require("../src/config/loadTargetRuntimeConfig");
 const {
+  backfillExistingFreeAgentDraftBrowserFixturePickInventory,
   createFreeAgentDraftBrowserFixture,
 } = require(
   "../src/operations/release/createFreeAgentDraftBrowserFixture"
@@ -138,6 +139,22 @@ function assertNoPriorFixture(database) {
       "The deterministic staging FAD test leagues already exist or are partial."
     );
   }
+}
+
+function existingFixtureState(database) {
+  const placeholders = EXPECTED_LEAGUE_IDS.map(() => "?").join(", ");
+  const rows = database.prepare(`
+    SELECT id
+    FROM leagues
+    WHERE id IN (${placeholders})
+    ORDER BY id ASC
+  `).all(...EXPECTED_LEAGUE_IDS);
+  if (rows.length === 0) return "absent";
+  if (rows.length === EXPECTED_LEAGUE_IDS.length) return "complete";
+  fail(
+    "STAGING_FAD_TEST_EXISTING_STATE_PARTIAL",
+    "The deterministic staging FAD test leagues are only partially present."
+  );
 }
 
 function hideLegacyFixtures(database, nowMs) {
@@ -593,6 +610,15 @@ async function run({
   });
   try {
     const nowMs = securityFoundations.clock.nowMs();
+    if (existingFixtureState(runtime.database) === "complete") {
+      const result =
+        backfillExistingFreeAgentDraftBrowserFixturePickInventory({
+          runtime,
+          fixtureNowMs: nowMs,
+        });
+      stdout.write(`${JSON.stringify(result)}\n`);
+      return result;
+    }
     const replacement = await createAndActivateFixtureCandidate({
       database: runtime.database,
       nowMs,
@@ -661,6 +687,7 @@ module.exports = {
   assertStagingScope,
   createAndActivateFixtureCandidate,
   hideLegacyFixtures,
+  existingFixtureState,
   replaceFixtureCredentials,
   requireStagingTestPassword,
   run,

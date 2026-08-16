@@ -9,6 +9,7 @@ const {
   BROWSER_FIXTURE_KIND,
   BROWSER_FIXTURE_SCHEMA_VERSION,
   FreeAgentDraftBrowserFixtureError,
+  backfillExistingFreeAgentDraftBrowserFixturePickInventory,
   createFreeAgentDraftBrowserFixture,
   schedulesFor,
 } = require(
@@ -25,6 +26,7 @@ const {
   assertFixtureIdentitiesDistinct,
   assertNoPriorFixture,
   assertStagingScope,
+  existingFixtureState,
 } = require(
   "../../scripts/create-staging-fad-test-leagues"
 );
@@ -276,6 +278,34 @@ test(
           return { all: () => [] };
         },
       })
+    );
+    assert.equal(
+      existingFixtureState({
+        prepare() {
+          return { all: () => [] };
+        },
+      }),
+      "absent"
+    );
+    assert.equal(
+      existingFixtureState({
+        prepare() {
+          return {
+            all: () => EXPECTED_LEAGUE_IDS.map((id) => ({ id })),
+          };
+        },
+      }),
+      "complete"
+    );
+    assert.throws(
+      () =>
+        existingFixtureState({
+          prepare() {
+            return { all: () => [{ id: EXPECTED_LEAGUE_IDS[0] }] };
+          },
+        }),
+      (error) =>
+        error.code === "STAGING_FAD_TEST_EXISTING_STATE_PARTIAL"
     );
     assert.throws(
       () =>
@@ -1262,6 +1292,111 @@ test(
       protectedTriggers,
       triggerBaseline
     );
+  }
+);
+
+test(
+  "existing staging FAD pick inventory backfills in place without changing team identity or used picks",
+  async (t) => {
+    const started = await startRuntime(t);
+    const database = started.runtime.database;
+    seedRealPlayerCatalog(database);
+    const manifest = await createFreeAgentDraftBrowserFixture({
+      runtime: started.runtime,
+    });
+    const leagues = Object.values(manifest.leagues);
+    const gammaTeam = manifest.leagues.gamma.teams[3];
+    database.prepare(`
+      UPDATE teams
+      SET name = 'Golden Grizzlies',
+          name_normalized = 'golden grizzlies',
+          version = version + 1
+      WHERE league_id = ? AND id = ?
+    `).run(manifest.leagues.gamma.leagueId, gammaTeam.teamId);
+    const authoritativePick = database.prepare(`
+      SELECT id, current_owner_team_id, status, selection_id, version
+      FROM draft_picks
+      WHERE league_id = ? AND status <> 'unused'
+      ORDER BY id
+      LIMIT 1
+    `).get(manifest.leagues.beta.leagueId);
+    assert.ok(authoritativePick);
+
+    const leagueIds = leagues.map(({ leagueId }) => leagueId);
+    const placeholders = leagueIds.map(() => "?").join(", ");
+    database.prepare(`
+      DELETE FROM draft_picks
+      WHERE league_id IN (${placeholders}) AND status = 'unused'
+    `).run(...leagueIds);
+    database.prepare(`
+      DELETE FROM entry_drafts
+      WHERE league_id IN (${placeholders}) AND status = 'setup'
+    `).run(...leagueIds);
+    database.prepare(`
+      DELETE FROM seasons
+      WHERE league_id IN (${placeholders})
+        AND nhl_season_key = '20292030'
+    `).run(...leagueIds);
+
+    const first =
+      backfillExistingFreeAgentDraftBrowserFixturePickInventory({
+        runtime: started.runtime,
+        fixtureNowMs: manifest.fixedNowMs + 1,
+      });
+    assert.deepEqual(
+      first.leagues.map((league) => ({
+        alias: league.alias,
+        insertedPickCount: league.insertedPickCount,
+        totalPickCount: league.totalPickCount,
+        unusedPickCount: league.unusedPickCount,
+      })),
+      [
+        {
+          alias: "alpha",
+          insertedPickCount: 128,
+          totalPickCount: 128,
+          unusedPickCount: 128,
+        },
+        {
+          alias: "beta",
+          insertedPickCount: 72,
+          totalPickCount: 96,
+          unusedPickCount: 72,
+        },
+        {
+          alias: "gamma",
+          insertedPickCount: 224,
+          totalPickCount: 224,
+          unusedPickCount: 224,
+        },
+      ]
+    );
+    assert.equal(
+      database.prepare("SELECT name FROM teams WHERE id = ?")
+        .get(gammaTeam.teamId).name,
+      "Golden Grizzlies"
+    );
+    assert.deepEqual(
+      database.prepare(`
+        SELECT id, current_owner_team_id, status, selection_id, version
+        FROM draft_picks WHERE id = ?
+      `).get(authoritativePick.id),
+      authoritativePick
+    );
+
+    const second =
+      backfillExistingFreeAgentDraftBrowserFixturePickInventory({
+        runtime: started.runtime,
+        fixtureNowMs: manifest.fixedNowMs + 2,
+      });
+    assert.deepEqual(
+      second.leagues.map(({ insertedPickCount }) => insertedPickCount),
+      [0, 0, 0]
+    );
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    assert.deepEqual(database.pragma("integrity_check"), [
+      { integrity_check: "ok" },
+    ]);
   }
 );
 
