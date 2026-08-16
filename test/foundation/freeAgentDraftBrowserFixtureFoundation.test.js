@@ -723,7 +723,40 @@ test(
         [
           { label: "2027-28", nhl_season_key: "20272028" },
           { label: "2028-29", nhl_season_key: "20282029" },
+          { label: "2029-30", nhl_season_key: "20292030" },
         ]
+      );
+    }
+    for (const [league, expectedUnusedPicksPerTeam] of [
+      [alpha, 16],
+      [beta, 12],
+      [gamma, 16],
+    ]) {
+      const inventory = database.prepare(`
+        SELECT original_team_id,
+               COUNT(*) AS pick_count,
+               SUM(status = 'unused') AS unused_pick_count,
+               COUNT(DISTINCT target_season_id) AS season_count,
+               COUNT(DISTINCT round_number) AS round_count
+        FROM draft_picks
+        WHERE league_id = ?
+        GROUP BY original_team_id
+        ORDER BY original_team_id
+      `).all(league.leagueId);
+      assert.equal(inventory.length, league.teams.length);
+      assert.deepEqual(
+        inventory.map((row) => ({
+          pick_count: row.pick_count,
+          unused_pick_count: row.unused_pick_count,
+          season_count: row.season_count,
+          round_count: row.round_count,
+        })),
+        Array.from({ length: league.teams.length }, () => ({
+          pick_count: 16,
+          unused_pick_count: expectedUnusedPicksPerTeam,
+          season_count: 4,
+          round_count: 4,
+        }))
       );
     }
     assert.equal(

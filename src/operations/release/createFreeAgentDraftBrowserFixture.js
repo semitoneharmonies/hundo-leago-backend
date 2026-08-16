@@ -1139,7 +1139,7 @@ function insertFutureContractYears({
   runtime.database.transaction(() => {
     const futureSeasonIdsByLeague = {};
     for (const league of Object.values(leagues)) {
-      const insertedFutureSeasonIds = [1, 2].map((offset) => {
+      const insertedFutureSeasonIds = [1, 2, 3].map((offset) => {
         const year = 2026 + offset;
         const futureSeasonId = fixtureId(
           `fad-browser-v4:season:${league.alias}:${year}`
@@ -1193,6 +1193,99 @@ function insertFutureContractYears({
             created_at_ms: fixtureNowMs,
           });
         });
+    }
+  }).immediate();
+}
+
+function backfillFourSeasonDraftPickInventory({
+  runtime,
+  accounts,
+  leagues,
+  fixtureNowMs,
+}) {
+  const repositories = runtime.repositories.context.repositories;
+  runtime.database.transaction(() => {
+    for (const league of Object.values(leagues)) {
+      const commissioner = accounts[league.commissionerAccountAlias];
+      const seasons = runtime.database.prepare(`
+        SELECT future.id, future.nhl_season_key
+        FROM seasons AS current
+        JOIN seasons AS future
+          ON future.league_id = current.league_id
+         AND future.nhl_season_key >= current.nhl_season_key
+        WHERE current.league_id = ?
+          AND current.id = ?
+        ORDER BY future.nhl_season_key, future.id
+        LIMIT 4
+      `).all(league.leagueId, league.seasonId);
+      if (seasons.length !== 4 || !commissioner) {
+        fail(
+          "FREE_AGENT_DRAFT_BROWSER_FIXTURE_PICK_INVENTORY_INVALID",
+          "Every FAD fixture league requires four draft-pick seasons and commissioner authority."
+        );
+      }
+
+      for (const season of seasons) {
+        let draft = runtime.database.prepare(`
+          SELECT id FROM entry_drafts
+          WHERE league_id = ? AND season_id = ?
+        `).get(league.leagueId, season.id);
+        if (!draft) {
+          draft = {
+            id: fixtureId(
+              `fad-browser-v4:entry-draft:${league.alias}:${season.nhl_season_key}`
+            ),
+          };
+          repositories.entry_drafts.insert({
+            id: draft.id,
+            league_id: league.leagueId,
+            season_id: season.id,
+            status: "setup",
+            rounds: 4,
+            pick_clock_seconds: 300,
+            starts_at_ms: null,
+            completed_at_ms: null,
+            created_by_user_id: commissioner.userId,
+            created_at_ms: fixtureNowMs,
+            updated_at_ms: fixtureNowMs,
+            version: 1,
+          });
+        }
+
+        const existingCoordinates = new Set(
+          runtime.database.prepare(`
+            SELECT round_number, original_team_id
+            FROM draft_picks
+            WHERE league_id = ? AND draft_id = ?
+          `).all(league.leagueId, draft.id).map(
+            ({ round_number: round, original_team_id: teamId }) =>
+              `${round}:${teamId}`
+          )
+        );
+        for (let round = 1; round <= 4; round += 1) {
+          league.teams.forEach((team, index) => {
+            const coordinate = `${round}:${team.teamId}`;
+            if (existingCoordinates.has(coordinate)) return;
+            repositories.draft_picks.insert({
+              id: fixtureId(
+                `fad-browser-v4:draft-pick:${league.alias}:${season.nhl_season_key}:${round}:${index + 1}`
+              ),
+              league_id: league.leagueId,
+              draft_id: draft.id,
+              target_season_id: season.id,
+              round_number: round,
+              position_number: index + 1,
+              original_team_id: team.teamId,
+              current_owner_team_id: team.teamId,
+              status: "unused",
+              selection_id: null,
+              created_at_ms: fixtureNowMs,
+              updated_at_ms: fixtureNowMs,
+              version: 1,
+            });
+          });
+        }
+      }
     }
   }).immediate();
 }
@@ -3237,6 +3330,12 @@ async function createFreeAgentDraftBrowserFixture({
       league: foundations.leagues.beta,
       scope: betaScope,
       players: foundations.players,
+    });
+    backfillFourSeasonDraftPickInventory({
+      runtime: targetRuntime,
+      accounts,
+      leagues: foundations.leagues,
+      fixtureNowMs: nowMs,
     });
     const gammaFixtureSentinels = {
       publishedHistoryReadOnly: true,
