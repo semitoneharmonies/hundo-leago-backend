@@ -1973,10 +1973,7 @@ describe("FAD-06 SQLite auction read repository", () => {
         nonceBytes: Buffer.alloc(32, 7),
       }).commitmentHex;
     assert.equal(active.drawCommitment, restrictedCommitment);
-    assert.deepEqual(
-      active.eligibleTeams.map(({ teamId }) => teamId),
-      [IDS.teamOne, IDS.teamTwo, IDS.teamThree]
-    );
+    assert.deepEqual(active.eligibleTeams, []);
     assert.deepEqual(
       active.viewerTeams.map((row) => ({
         teamId: row.teamId,
@@ -2029,12 +2026,7 @@ describe("FAD-06 SQLite auction read repository", () => {
       validateAuctionReadProjection(afterParticipantRemoval),
       afterParticipantRemoval
     );
-    assert.deepEqual(
-      afterParticipantRemoval.eligibleTeams.map(
-        ({ teamId }) => teamId
-      ),
-      [IDS.teamOne, IDS.teamTwo, IDS.teamThree]
-    );
+    assert.deepEqual(afterParticipantRemoval.eligibleTeams, []);
     const removedTeam =
       afterParticipantRemoval.viewerTeams.find(
         ({ teamId }) => teamId === IDS.teamTwo

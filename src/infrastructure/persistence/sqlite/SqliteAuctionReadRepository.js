@@ -1339,7 +1339,9 @@ function createSqliteAuctionReadRepository({ database } = {}) {
       creationCutoffAtMs:
         context.creation_cutoff_at_ms,
       eligibleTeams: freeze(
-        participants.map((row) => teamProjection(row))
+        administrative
+          ? participants.map((row) => teamProjection(row))
+          : []
       ),
       minimumContract,
       drawCommitment: draw?.commitment_hex || null,

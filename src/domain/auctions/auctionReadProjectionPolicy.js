@@ -512,6 +512,7 @@ function validateViewerTeams(value, sourceKind, eligibleIds) {
         row.eligible !==
           (row.participantStatus === "active") ||
         (row.participantStatus !== null &&
+          eligibleIds.size > 0 &&
           !eligibleIds.has(teamId))
       ) {
         fail(reason);
