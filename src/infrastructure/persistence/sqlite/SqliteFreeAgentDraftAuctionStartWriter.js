@@ -57,6 +57,10 @@ const ORDINARY_BODY_FIELDS = Object.freeze([
   "aavCents",
   "termYears",
 ]);
+const FAD_BODY_FIELDS = Object.freeze([
+  ...ORDINARY_BODY_FIELDS,
+  "bindingIllegalityConfirmed",
+]);
 const FIND_FIELDS = Object.freeze([
   "actorMembershipId",
   "actorUserId",
@@ -225,7 +229,25 @@ function normalizeCommand(input) {
   if (!isPlainObject(input.body)) {
     invalid("An exact auction-start body is required.");
   }
-  exactObject(input.body, ORDINARY_BODY_FIELDS, "auction-start body");
+  const actualBodyFields = Object.keys(input.body).sort();
+  const ordinaryFields = [...ORDINARY_BODY_FIELDS].sort();
+  const fadFields = [...FAD_BODY_FIELDS].sort();
+  const ordinary =
+    actualBodyFields.length === ordinaryFields.length &&
+    actualBodyFields.every(
+      (field, index) => field === ordinaryFields[index]
+    );
+  const fad =
+    actualBodyFields.length === fadFields.length &&
+    actualBodyFields.every(
+      (field, index) => field === fadFields[index]
+    );
+  if (!ordinary && !fad) {
+    invalid(
+      "An exact ordinary or FAD auction-start body is required.",
+      "BODY_FIELDS_INVALID"
+    );
+  }
   const offer = validateOpeningBid(
     input.body.aavCents,
     input.body.termYears
@@ -235,6 +257,12 @@ function normalizeCommand(input) {
     teamId: canonicalId(input.body.teamId, "team"),
     aavCents: offer.aavCents,
     termYears: offer.termYears,
+    ...(fad
+      ? {
+          bindingIllegalityConfirmed:
+            input.body.bindingIllegalityConfirmed,
+        }
+      : {}),
   });
   return Object.freeze({
     leagueId: canonicalId(input.leagueId, "league"),
@@ -251,6 +279,11 @@ function normalizeCommand(input) {
 }
 
 function requestHash(command) {
+  const hasBindingConfirmation =
+    Object.prototype.hasOwnProperty.call(
+      command.body,
+      "bindingIllegalityConfirmed"
+    );
   return createHash("sha256")
     .update(
       JSON.stringify({
@@ -260,6 +293,12 @@ function requestHash(command) {
         teamId: command.body.teamId,
         aavCents: command.body.aavCents,
         termYears: command.body.termYears,
+        bindingConfirmationPresent:
+          hasBindingConfirmation,
+        bindingIllegalityConfirmed:
+          hasBindingConfirmation
+            ? command.body.bindingIllegalityConfirmed
+            : null,
       }),
       "utf8"
     )
@@ -1476,6 +1515,7 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
           teamId: metadata.openingTeamId,
           totalValueCents: metadata.totalValueCents,
           termYears: metadata.termYears,
+          bindingIllegalityConfirmed: true,
         },
         idempotencyRequestId: row.request_id,
         auctionId: row.auction_id,
@@ -1608,6 +1648,7 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
           teamId: row.team_id,
           totalValueCents: row.total_value_cents,
           termYears: row.term_years,
+          bindingIllegalityConfirmed: true,
         },
         idempotencyRequestId: row.request_id,
         nominationQueueId: row.queue_id,
@@ -1668,20 +1709,31 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
 
     function replay(idempotency, command) {
       const semanticHash = requestHash(command);
-      if (idempotency.status === "started") {
-        const context = buildStartContext({
-          leagueId: command.leagueId,
-          teamId: command.body.teamId,
-          playerId: command.body.playerId,
-          actorUserId: command.actorUserId,
-          actorMembershipId: command.actorMembershipId,
-          nowMs: command.nowMs,
-        });
-        if (!context) return FREE_AGENT_DRAFT_AUCTION_START_NOT_APPLICABLE;
-        if (idempotency.request_hash !== semanticHash) reusedIdempotencyKey();
-        throw new AuctionCreationPolicyError(
-          AUCTION_CREATION_CODES.idempotencyConflict
+      const hasBindingConfirmation =
+        Object.prototype.hasOwnProperty.call(
+          command.body,
+          "bindingIllegalityConfirmed"
         );
+      if (idempotency.status === "started") {
+        const possibleFadHash = requestHash({
+          ...command,
+          body: {
+            ...command.body,
+            bindingIllegalityConfirmed: true,
+          },
+        });
+        if (
+          hasBindingConfirmation ||
+          idempotency.request_hash === possibleFadHash
+        ) {
+          if (idempotency.request_hash !== semanticHash) {
+            reusedIdempotencyKey();
+          }
+          throw new AuctionCreationPolicyError(
+            AUCTION_CREATION_CODES.idempotencyConflict
+          );
+        }
+        return FREE_AGENT_DRAFT_AUCTION_START_NOT_APPLICABLE;
       }
       if (
         idempotency.status !== "completed" ||

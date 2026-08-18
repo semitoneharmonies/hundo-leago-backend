@@ -507,8 +507,6 @@ function scope(ids, nowMs, overrides = {}) {
 }
 
 function command(ids, nowMs, key, overrides = {}) {
-  const bodyOverrides = { ...(overrides.body || {}) };
-  delete bodyOverrides.bindingIllegalityConfirmed;
   return {
     leagueId: ids.league,
     actorUserId: ids.managerUser,
@@ -518,7 +516,8 @@ function command(ids, nowMs, key, overrides = {}) {
       teamId: ids.team,
       aavCents: 300,
       termYears: 2,
-      ...bodyOverrides,
+      bindingIllegalityConfirmed: true,
+      ...(overrides.body || {}),
     },
     idempotencyKey: key,
     nowMs,
@@ -676,10 +675,10 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
     const fadFixture = createFixture(t, "routing-current-fad", {
       idBase: 8_050,
     });
-    const withoutConfirmation = command(
+    const missingConfirmation = command(
       PRIMARY,
       DIRECT_AT_MS,
-      "without-confirmation"
+      "missing-confirmation"
     );
     delete missingConfirmation.body.bindingIllegalityConfirmed;
     const fadResult =
@@ -722,6 +721,7 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
       ROLLOVER_AT_MS + 1,
       "fresh-ordinary"
     );
+    delete ordinary.body.bindingIllegalityConfirmed;
     const notApplicable = ordinaryFixture.writer.startOrQueue(ordinary);
     assert.equal(
       notApplicable,

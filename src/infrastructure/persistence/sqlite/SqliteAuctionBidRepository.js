@@ -104,7 +104,7 @@ function serverRecordedBinding(command, auction) {
   });
 }
 
-function createRequestHash(command, auction) {
+function createRequestHash(command) {
   const payload = {
     leagueId: command.leagueId,
     auctionId: command.auctionId,
@@ -262,7 +262,9 @@ function createSqliteAuctionBidRepository({ database } = {}) {
       ) ||
       !Number.isSafeInteger(row.first_submitted_at_ms) ||
       row.first_submitted_at_ms > idempotency.created_at_ms ||
-      idempotency.completed_at_ms !== idempotency.created_at_ms
+      idempotency.completed_at_ms !== idempotency.created_at_ms ||
+      (isFadContext(auction) &&
+        command.bindingIllegalityConfirmed !== true)
     ) {
       return null;
     }
@@ -686,7 +688,7 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         inputCommand,
         auction
       );
-      const requestHash = createRequestHash(command, auction);
+      const requestHash = createRequestHash(command);
       const idempotency = unique(
         findIdempotency,
         command,
@@ -715,8 +717,23 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         return replayResult(command, idempotency, auction);
       }
 
+      if (
+        auction?.source_kind === "ordinary_weekly" &&
+        Object.prototype.hasOwnProperty.call(
+          command,
+          "bindingIllegalityConfirmed"
+        )
+      ) {
+        policyFail(AUCTION_BID_CODES.inputInvalid);
+      }
       if (isFadContext(auction) && !isSupportedFadBidContext(auction)) {
         policyFail(AUCTION_BID_CODES.auctionUnavailable);
+      }
+      if (
+        isSupportedFadBidContext(auction) &&
+        command.bindingIllegalityConfirmed !== true
+      ) {
+        policyFail(AUCTION_BID_CODES.inputInvalid);
       }
 
       const participant = unique(

@@ -142,7 +142,13 @@ function validateAuctionBidCommand(input) {
     "occurredAtMs",
     "idempotencyExpiresAtMs",
   ];
-  exactObject(input, ordinaryFields);
+  const fields = Object.prototype.hasOwnProperty.call(
+    input || {},
+    "bindingIllegalityConfirmed"
+  )
+    ? [...ordinaryFields, "bindingIllegalityConfirmed"]
+    : ordinaryFields;
+  exactObject(input, fields);
   if (!ACTOR_AUTHORITIES.includes(input.actorAuthority)) {
     fail(AUCTION_BID_CODES.authorityInvalid);
   }
@@ -170,6 +176,10 @@ function validateAuctionBidCommand(input) {
     occurredAtMs,
     idempotencyExpiresAtMs,
   };
+  if (fields.length !== ordinaryFields.length) {
+    command.bindingIllegalityConfirmed =
+      input.bindingIllegalityConfirmed;
+  }
   return Object.freeze(command);
 }
 

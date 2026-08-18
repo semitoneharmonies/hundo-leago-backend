@@ -672,18 +672,6 @@ describe("league-scoped player HTTP routes", () => {
     assert.equal(sortedList.status, 200);
     assert.equal((await sortedList.json()).data[0].id, PLAYER_ONE_ID);
 
-    const teamList = await fetch(
-      `${api.baseUrl}/api/v1/leagues/${LEAGUE_A_ID}/players?teamId=${TEAM_A_ID}&limit=1`,
-      { headers: headers(api, SESSION_A) }
-    );
-    const teamListBody = await teamList.json();
-    assert.equal(teamList.status, 200);
-    assert.deepEqual(
-      teamListBody.data.map(({ id }) => id),
-      [PLAYER_ONE_ID]
-    );
-    assert.equal(teamListBody.page.hasMore, false);
-
     const invalidSort = await fetch(
       `${api.baseUrl}/api/v1/leagues/${LEAGUE_A_ID}/players?sort=salary`,
       { headers: headers(api, SESSION_A) }

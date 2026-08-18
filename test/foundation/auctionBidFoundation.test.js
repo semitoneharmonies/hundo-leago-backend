@@ -691,7 +691,6 @@ function configureFadBidRuntime(
 function persistenceCommand(overrides = {}) {
   const occurredAtMs = overrides.occurredAtMs ?? NOW_MS + 1;
   const normalizedOverrides = { ...overrides };
-  delete normalizedOverrides.bindingIllegalityConfirmed;
   if (
     Object.prototype.hasOwnProperty.call(
       normalizedOverrides,
@@ -1461,12 +1460,12 @@ describe("M5-02 atomic sealed-bid persistence", () => {
     );
     const beforeOrdinaryConfirmation = semanticHash(runtime.database);
     assertPolicyError(
-      () => validateAuctionBidCommand({
-        ...persistenceCommand({
+      () => runtime.repository.putBid(
+        persistenceCommand({
           idempotencyKey: "legacy-confirmation-rejected",
-        }),
-        bindingIllegalityConfirmed: true,
-      }),
+          bindingIllegalityConfirmed: true,
+        })
+      ),
       AUCTION_BID_CODES.inputInvalid
     );
     assert.equal(
