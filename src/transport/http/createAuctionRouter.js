@@ -18,8 +18,6 @@ const SAFE_MESSAGES = Object.freeze({
   AUCTION_REQUEST_CONFLICT: "The auction request conflicts with current state.",
   AUCTION_REQUEST_FAILED: "The auction request could not be completed.",
   AUCTION_REQUEST_TOO_LARGE: "The auction request is too large.",
-  FAD_BINDING_ILLEGALITY_CONFIRMATION_REQUIRED:
-    "The binding FAD auction confirmation is required.",
   FAD_ALLOCATION_QUARANTINED: "This player is temporarily unavailable.",
   IDEMPOTENCY_KEY_REUSED:
     "This idempotency key was already used for a different request.",

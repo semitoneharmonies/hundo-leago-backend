@@ -104,7 +104,7 @@ function serverRecordedBinding(command, auction) {
   });
 }
 
-function createRequestHash(command, auction) {
+function createRequestHash(command) {
   const payload = {
     leagueId: command.leagueId,
     auctionId: command.auctionId,
@@ -116,16 +116,6 @@ function createRequestHash(command, auction) {
     termYears: command.termYears,
     expectedBidVersion: command.expectedBidVersion,
   };
-  if (
-    isFadContext(auction) ||
-    Object.prototype.hasOwnProperty.call(
-      command,
-      "bindingIllegalityConfirmed"
-    )
-  ) {
-    payload.bindingIllegalityConfirmed =
-      command.bindingIllegalityConfirmed;
-  }
   return crypto
     .createHash("sha256")
     .update(JSON.stringify(payload), "utf8")
@@ -698,7 +688,7 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         inputCommand,
         auction
       );
-      const requestHash = createRequestHash(command, auction);
+      const requestHash = createRequestHash(command);
       const idempotency = unique(
         findIdempotency,
         command,
