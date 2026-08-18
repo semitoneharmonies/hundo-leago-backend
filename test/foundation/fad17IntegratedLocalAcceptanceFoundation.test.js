@@ -517,6 +517,7 @@ test(
             aavCents:
               index < 2 ? 6_000 : 100,
             termYears: 1,
+            bindingIllegalityConfirmed: true,
           },
           idempotencyKey:
             `fad17-concurrent-start-${index + 1}`,
@@ -730,6 +731,7 @@ test(
           teamId: team.teamId,
           aavCents: 100,
           termYears: 1,
+          bindingIllegalityConfirmed: true,
         },
         idempotencyKey:
           "fad17-renominate-next-cycle",

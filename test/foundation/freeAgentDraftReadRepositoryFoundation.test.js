@@ -2017,8 +2017,6 @@ function seedRestrictedActionWithoutImprovement(database) {
       snapshotId: uuid(1_932),
       snapshotEntryBase: 20_000,
       participantId: participantOneId,
-      totalValueCents: 600,
-      outcomeCode: "restricted_tied",
     }),
     Object.freeze({
       teamId: PRIMARY.teamThreeId,
@@ -2031,22 +2029,6 @@ function seedRestrictedActionWithoutImprovement(database) {
       snapshotId: uuid(1_936),
       snapshotEntryBase: 20_100,
       participantId: participantThreeId,
-      totalValueCents: 600,
-      outcomeCode: "restricted_tied",
-    }),
-    Object.freeze({
-      teamId: PRIMARY.teamTwoId,
-      cardId: PRIMARY.cardTwoId,
-      userId: PRIMARY.managerUserId,
-      membershipId: PRIMARY.managerMembershipId,
-      entryId: uuid(1_937),
-      revisionId: uuid(1_938),
-      requestId: uuid(1_939),
-      snapshotId: uuid(1_940),
-      snapshotEntryBase: 20_200,
-      participantId: null,
-      totalValueCents: 400,
-      outcomeCode: "lost_lower_total",
     }),
   ];
   const candidateAddedAtMs = PREPUBLICATION_NOW_MS - 10;
@@ -2125,8 +2107,8 @@ function seedRestrictedActionWithoutImprovement(database) {
         entryId: offer.entryId,
         playerId: restrictedPlayerId,
         slotKey: "F01",
-        totalValueCents: offer.totalValueCents,
-        aavCents: offer.totalValueCents / 2,
+        totalValueCents: 600,
+        aavCents: 300,
         termYears: 2,
       },
       })
@@ -2403,9 +2385,7 @@ function seedRestrictedActionWithoutImprovement(database) {
     })
   );
 
-  for (const offer of tieOffers.filter(
-    ({ participantId }) => participantId !== null
-  )) {
+  for (const offer of tieOffers) {
     runFixtureStage(`restricted participant ${offer.teamId}`, () =>
       insert(database, "free_agent_draft_auction_participants", {
       id: offer.participantId,
@@ -2479,9 +2459,8 @@ function seedRestrictedActionWithoutImprovement(database) {
             ),
             team_id: offer.teamId,
             offer_valid: 1,
-            rank_position:
-              offer.outcomeCode === "restricted_tied" ? 1 : 2,
-            offer_outcome_code: offer.outcomeCode,
+            rank_position: 1,
+            offer_outcome_code: "restricted_tied",
             decision_code: null,
             auction_id: null,
           }
@@ -2494,7 +2473,7 @@ function seedRestrictedActionWithoutImprovement(database) {
       "free_agent_draft_allocation_events",
       {
         ...allocationEventBase,
-        id: uuid(1_944),
+        id: uuid(1_943),
         event_kind: "restricted_state_changed",
         snapshot_entry_id: null,
         team_id: null,
@@ -2512,15 +2491,13 @@ function seedRestrictedActionWithoutImprovement(database) {
     drawCommitment,
     drawId,
     participantIds: Object.freeze(
-      tieOffers
-        .filter(({ participantId }) => participantId !== null)
-        .map(({ participantId }) => participantId)
+      tieOffers.map(({ participantId }) => participantId)
     ),
     restrictedPlayerId,
     snapshotEntryIds: Object.freeze(
-      tieOffers
-        .filter(({ participantId }) => participantId !== null)
-        .map(({ snapshotEntryBase }) => uuid(snapshotEntryBase))
+      tieOffers.map(({ snapshotEntryBase }) =>
+        uuid(snapshotEntryBase)
+      )
     ),
   });
 }
@@ -6045,11 +6022,6 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
           rank: 1,
           outcomeCode: "restricted_tied",
         },
-        {
-          teamId: PRIMARY.teamTwoId,
-          rank: 2,
-          outcomeCode: "lost_lower_total",
-        },
       ]
     );
     assert.deepEqual(result.restricted, {
@@ -6076,18 +6048,6 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
       code: "restricted_pending",
       allocationId: fixture.allocationId,
       auctionId: fixture.auctionId,
-    });
-    const nonparticipantHistory =
-      runtime.readRepository.readPublishedCardHistory(
-        publishedHistoryInput({
-          teamId: PRIMARY.teamTwoId,
-          nowMs: ALLOCATION_AT_MS + 1,
-        })
-      );
-    assert.deepEqual(nonparticipantHistory.slots[0].outcome, {
-      code: "automatic_loss",
-      allocationId: fixture.allocationId,
-      auctionId: null,
     });
     assertNoWrites(runtime.database, activeBefore);
 

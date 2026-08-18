@@ -142,7 +142,13 @@ function validateAuctionBidCommand(input) {
     "occurredAtMs",
     "idempotencyExpiresAtMs",
   ];
-  exactObject(input, ordinaryFields);
+  const fields = Object.prototype.hasOwnProperty.call(
+    input || {},
+    "bindingIllegalityConfirmed"
+  )
+    ? [...ordinaryFields, "bindingIllegalityConfirmed"]
+    : ordinaryFields;
+  exactObject(input, fields);
   if (!ACTOR_AUTHORITIES.includes(input.actorAuthority)) {
     fail(AUCTION_BID_CODES.authorityInvalid);
   }
@@ -170,6 +176,10 @@ function validateAuctionBidCommand(input) {
     occurredAtMs,
     idempotencyExpiresAtMs,
   };
+  if (fields.length !== ordinaryFields.length) {
+    command.bindingIllegalityConfirmed =
+      input.bindingIllegalityConfirmed;
+  }
   return Object.freeze(command);
 }
 
@@ -214,6 +224,14 @@ function isAtOrAboveFloor(offer, totalValueCents, aavCents) {
 function bidContext(command, auction, participant) {
   const sourceKind = auction?.source_kind || "ordinary_weekly";
   if (sourceKind === "ordinary_weekly") {
+    if (
+      Object.prototype.hasOwnProperty.call(
+        command,
+        "bindingIllegalityConfirmed"
+      )
+    ) {
+      fail(AUCTION_BID_CODES.inputInvalid);
+    }
     return Object.freeze({ kind: "ordinary", editLimit: null });
   }
   if (
@@ -243,6 +261,9 @@ function bidContext(command, auction, participant) {
       )
     )
   ) {
+    if (command.bindingIllegalityConfirmed !== true) {
+      fail(AUCTION_BID_CODES.inputInvalid);
+    }
     return Object.freeze({
       kind: "openRapid",
       editLimit: null,
@@ -270,6 +291,9 @@ function bidContext(command, auction, participant) {
     Number.isSafeInteger(participant.minimum_aav_cents) &&
     participant.minimum_aav_cents >= 100
   ) {
+    if (command.bindingIllegalityConfirmed !== true) {
+      fail(AUCTION_BID_CODES.inputInvalid);
+    }
     return Object.freeze({
       kind: "restricted",
       editLimit: participant.manager_edit_limit,
@@ -293,6 +317,9 @@ function bidContext(command, auction, participant) {
     ) &&
     auction.restricted_minimum_aav_cents >= 100
   ) {
+    if (command.bindingIllegalityConfirmed !== true) {
+      fail(AUCTION_BID_CODES.inputInvalid);
+    }
     return Object.freeze({
       kind: "fallback",
       editLimit: 1,
