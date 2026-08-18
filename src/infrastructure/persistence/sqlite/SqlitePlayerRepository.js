@@ -463,6 +463,7 @@ function createSqlitePlayerRepository({ database } = {}) {
           ) ||
           (
             options.auctionEligible === true &&
+            options.teamId === null &&
             typeof options.leagueId === "string" &&
             CANONICAL_UUID_PATTERN.test(options.leagueId) &&
             options.ownershipTeamId === null

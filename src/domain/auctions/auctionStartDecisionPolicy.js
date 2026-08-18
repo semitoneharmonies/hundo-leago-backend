@@ -18,10 +18,7 @@ const ORDINARY_START_BODY_FIELDS = Object.freeze([
   "aavCents",
   "termYears",
 ]);
-const FAD_START_BODY_FIELDS = Object.freeze([
-  ...ORDINARY_START_BODY_FIELDS,
-  "bindingIllegalityConfirmed",
-]);
+const FAD_START_BODY_FIELDS = ORDINARY_START_BODY_FIELDS;
 const START_SOURCE_KINDS = Object.freeze([
   "ordinary_weekly",
   "fad_open_rapid",
@@ -33,8 +30,6 @@ const MANAGER_ASSIGNMENT_STATUSES = new Set([
   "declined",
   "ended",
 ]);
-const FAD_BINDING_CONFIRMATION_REQUIRED =
-  "FAD_BINDING_ILLEGALITY_CONFIRMATION_REQUIRED";
 
 function fail(reasonCode) {
   throw new AuctionCreationPolicyError(reasonCode);
@@ -149,9 +144,6 @@ function validateAuctionStartBody(input, options) {
     aavCents: offer.aavCents,
     termYears: offer.termYears,
   };
-  if (sourceKind === "fad_open_rapid") {
-    body.bindingIllegalityConfirmed = true;
-  }
   return Object.freeze(body);
 }
 
@@ -438,7 +430,6 @@ function decideFreeAgentDraftAuctionStart(input) {
 }
 
 module.exports = {
-  FAD_BINDING_CONFIRMATION_REQUIRED,
   FAD_START_BODY_FIELDS,
   ORDINARY_START_BODY_FIELDS,
   START_SOURCE_KINDS,

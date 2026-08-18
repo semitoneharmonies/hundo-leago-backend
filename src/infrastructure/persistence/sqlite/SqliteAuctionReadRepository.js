@@ -1013,7 +1013,10 @@ function createSqliteAuctionReadRepository({ database } = {}) {
     const participantByTeam = new Map(
       participants.map((row) => [row.team_id, row])
     );
-    return freeze(managed.map((team) => {
+    const visibleManaged = context.source_kind === "fad_restricted"
+      ? managed.filter((team) => participantByTeam.has(team.team_id))
+      : managed;
+    return freeze(visibleManaged.map((team) => {
       const participant = participantByTeam.get(team.team_id) || null;
       const eligible = context.source_kind === "fad_restricted"
         ? participant?.participant_status === "active"
@@ -1695,6 +1698,9 @@ function createSqliteAuctionReadRepository({ database } = {}) {
       viewerUserId: input.viewerUserId,
       viewerMembershipId: input.viewerMembershipId,
       nowMs: input.nowMs,
+      administrative: administrative ? 1 : 0,
+      viewerUserId: input.viewerUserId,
+      viewerMembershipId: input.viewerMembershipId,
       sourceKind: input.sourceKind,
       fadId: input.fadId,
       q: input.q,

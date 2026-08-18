@@ -518,7 +518,6 @@ describe("M5-02 auction application service", () => {
         teamId: TEAM_ID,
         aavCents: 225,
         termYears: 3,
-        bindingIllegalityConfirmed: true,
       },
       expectedBidVersion: null,
       idempotencyKey: "fad-manager-join",
@@ -527,7 +526,10 @@ describe("M5-02 auction application service", () => {
     const fadWrite = fixture.calls.filter(
       ({ method }) => method === "putBid"
     ).at(-1).input;
-    assert.equal(fadWrite.bindingIllegalityConfirmed, true);
+    assert.equal(
+      Object.hasOwn(fadWrite, "bindingIllegalityConfirmed"),
+      false
+    );
     assert.throws(
       () => service.putMine({
         leagueId: LEAGUE_ID,
@@ -542,7 +544,9 @@ describe("M5-02 auction application service", () => {
         idempotencyKey: "fad-manager-invalid",
         authenticated: {},
       }),
-      (error) => error.code === "AUCTION_BID_INPUT_INVALID"
+      (error) =>
+        error instanceof TypeError &&
+        error.message === "The auction request is invalid."
     );
   });
 
@@ -1398,7 +1402,7 @@ describe("FAD-06 isolated auction HTTP contract", () => {
     assert.equal(malformedBody.status, 400);
     assert.equal(
       malformedBodyPayload.error.code,
-      "AUCTION_BID_INPUT_INVALID"
+      "AUCTION_INPUT_INVALID"
     );
     assert.equal(
       validationFixture.calls.some(

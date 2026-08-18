@@ -6,7 +6,6 @@ const {
   AuctionCreationPolicyError,
 } = require("../../src/domain/auctions/auctionCreationPolicy");
 const {
-  FAD_BINDING_CONFIRMATION_REQUIRED,
   decideFreeAgentDraftAuctionStart,
   validateAuctionStartBody,
 } = require("../../src/domain/auctions/auctionStartDecisionPolicy");
@@ -38,7 +37,6 @@ function body(overrides = {}) {
     teamId: IDS.team,
     aavCents: 300,
     termYears: 2,
-    bindingIllegalityConfirmed: true,
     ...overrides,
   };
 }
@@ -157,7 +155,6 @@ describe("FAD-13 server-derived auction-start body policy", () => {
     assert.deepEqual(fad, {
       ...ordinaryInput,
       totalValueCents: 600,
-      bindingIllegalityConfirmed: true,
     });
     assert.ok(Object.isFrozen(ordinary));
     assert.ok(Object.isFrozen(fad));
@@ -191,10 +188,13 @@ describe("FAD-13 server-derived auction-start body policy", () => {
     ]) {
       assertPolicyError(
         () =>
-          validateAuctionStartBody(fadBody, {
+          validateAuctionStartBody(
+            body({ bindingIllegalityConfirmed }),
+            {
             sourceKind: "fad_open_rapid",
-          }),
-        FAD_BINDING_CONFIRMATION_REQUIRED
+            }
+          ),
+        AUCTION_CREATION_CODES.inputInvalid
       );
     }
     const missing = body();
@@ -457,7 +457,17 @@ describe("FAD-13 server-derived rapid start decision policy", () => {
     }
   });
 
-  test("fails closed outside one active rapid context or a current exact elapsed-time rollover", () => {
+  test("admits post-deadline allocating and fails closed outside a valid FAD auction window", () => {
+    const allocating = decideFreeAgentDraftAuctionStart(
+      decisionInput({
+        nowMs: OPENS_AT_MS,
+        rapidContext: rapidContext({
+          allocationCompletedAtMs: null,
+          fadStatus: "allocating",
+        }),
+      })
+    );
+    assert.equal(allocating.kind, "auction_opened");
     for (const nowMs of [
       OPENS_AT_MS - 1,
       ROLLS_OVER_AT_MS,

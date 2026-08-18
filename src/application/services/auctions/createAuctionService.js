@@ -46,7 +46,7 @@ function exactInput(input, keys) {
 }
 
 function exactStartInput(input) {
-  const ordinaryKeys = [
+  return exactInput(input, [
     "playerId",
     "teamId",
     "termYears",
@@ -81,32 +81,7 @@ function exactStartInput(input) {
 }
 
 function exactBidInput(input) {
-  const ordinaryKeys = ["teamId", "termYears", "aavCents"];
-  const fadKeys = [
-    ...ordinaryKeys,
-    "bindingIllegalityConfirmed",
-  ];
-  const keys = input && typeof input === "object" && !Array.isArray(input)
-    ? Object.keys(input).sort().join("|")
-    : "";
-  if (
-    ![
-      ordinaryKeys.sort().join("|"),
-      fadKeys.sort().join("|"),
-    ].includes(keys) ||
-    (
-      Object.prototype.hasOwnProperty.call(
-        input || {},
-        "bindingIllegalityConfirmed"
-      ) &&
-      input.bindingIllegalityConfirmed !== true
-    )
-  ) {
-    const error = new TypeError("The auction-bid request is invalid.");
-    error.code = "AUCTION_BID_INPUT_INVALID";
-    throw error;
-  }
-  return input;
+  return exactInput(input, ["teamId", "termYears", "aavCents"]);
 }
 
 function safeNow(clock) {
@@ -607,15 +582,6 @@ function createAuctionService({
         idempotencyKey,
         occurredAtMs: nowMs,
         idempotencyExpiresAtMs: nowMs + IDEMPOTENCY_LIFETIME_MS,
-        ...(Object.prototype.hasOwnProperty.call(
-          body,
-          "bindingIllegalityConfirmed"
-        )
-          ? {
-              bindingIllegalityConfirmed:
-                body.bindingIllegalityConfirmed,
-            }
-          : {}),
       })
     );
   }
