@@ -25,11 +25,6 @@ const {
   "../../src/infrastructure/database/migrate"
 );
 const {
-  FAD_BINDING_CONFIRMATION_REQUIRED,
-} = require(
-  "../../src/domain/auctions/auctionStartDecisionPolicy"
-);
-const {
   REPOSITORY_ERROR_CODES,
 } = require(
   "../../src/infrastructure/persistence/sqlite/SqliteRepositoryError"
@@ -624,7 +619,59 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
     );
   });
 
-  test("routes fresh ordinary bodies without writes and preserves current FAD confirmation enforcement", (t) => {
+  test("starts an uncarded eligible-player nomination after the Candidate Card deadline while ties still allocate", (t) => {
+    const fixture = createFixture(t, "allocating-direct");
+    withoutTriggers(fixture.database, () => {
+      fixture.database.prepare(`
+        UPDATE free_agent_drafts
+        SET status = 'allocating',
+            allocation_completed_at_ms = NULL,
+            updated_at_ms = @updatedAtMs,
+            version = version + 1
+        WHERE league_id = @leagueId
+          AND id = @fadId
+      `).run({
+        fadId: PRIMARY.fad,
+        leagueId: PRIMARY.league,
+        updatedAtMs: ROLLOVER_OPENS_AT_MS,
+      });
+    });
+
+    const context = fixture.writer.findStartContext(
+      scope(PRIMARY, DIRECT_AT_MS)
+    );
+    assert.equal(context.rapidContext.fadStatus, "allocating");
+    assert.equal(
+      context.rapidContext.allocationCompletedAtMs,
+      null
+    );
+    assert.equal(
+      fixture.database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM candidate_card_entries
+        WHERE league_id = @leagueId
+          AND fad_id = @fadId
+          AND player_id = @playerId
+      `).get({
+        fadId: PRIMARY.fad,
+        leagueId: PRIMARY.league,
+        playerId: PRIMARY.player,
+      }).count,
+      0
+    );
+
+    const result = fixture.writer.startOrQueue(
+      command(
+        PRIMARY,
+        DIRECT_AT_MS,
+        "allocating-direct-start"
+      )
+    );
+    assert.equal(result.kind, "auction_opened");
+    assert.equal(result.actorAuthority, "manager");
+  });
+
+  test("records FAD binding acceptance server-side and routes fresh ordinary bodies without writes", (t) => {
     const fadFixture = createFixture(t, "routing-current-fad", {
       idBase: 8_050,
     });
@@ -634,18 +681,24 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
       "missing-confirmation"
     );
     delete missingConfirmation.body.bindingIllegalityConfirmed;
-    assertPolicyReason(
-      () => fadFixture.writer.startOrQueue(missingConfirmation),
-      FAD_BINDING_CONFIRMATION_REQUIRED
+    const fadResult =
+      fadFixture.writer.startOrQueue(missingConfirmation);
+    assert.equal(fadResult.kind, "auction_opened");
+    assert.equal(
+      fadResult.body.bindingIllegalityConfirmed,
+      true
     );
-    assert.equal(fadFixture.generated.length, 0);
+    assert.equal(
+      fadResult.bindingIllegalityConfirmedAtMs,
+      DIRECT_AT_MS
+    );
     assert.equal(
       count(
         fadFixture.database,
         "idempotency_requests",
         PRIMARY.league
       ),
-      0
+      1
     );
 
     const ordinaryFixture = createFixture(t, "routing-no-fad", {

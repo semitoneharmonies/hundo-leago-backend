@@ -64,7 +64,14 @@ function exactStartInput(input) {
     ![
       ordinaryKeys.sort().join("|"),
       fadKeys.sort().join("|"),
-    ].includes(keys)
+    ].includes(keys) ||
+    (
+      Object.prototype.hasOwnProperty.call(
+        input || {},
+        "bindingIllegalityConfirmed"
+      ) &&
+      input.bindingIllegalityConfirmed !== true
+    )
   ) {
     const error = new TypeError("The auction request is invalid.");
     error.code = "AUCTION_INPUT_INVALID";

@@ -2103,7 +2103,7 @@ describe("FAD-04 reset original-league bootstrap service", () => {
           code:
             "RESET_ORIGINAL_LEAGUE_BOOTSTRAPPED",
           leagueId: created.leagueId,
-          schemaVersion: 51,
+          schemaVersion: 52,
           seasonId: created.seasonId,
           stateHash: created.stateHash,
         });

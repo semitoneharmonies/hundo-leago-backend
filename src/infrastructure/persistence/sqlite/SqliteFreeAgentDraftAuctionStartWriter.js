@@ -591,6 +591,8 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
         season.status AS season_status,
         fad.id AS fad_id,
         fad.status AS fad_status,
+        fad.candidate_deadline_at_ms AS candidate_deadline_at_ms,
+        fad.deadline_locked_at_ms AS deadline_locked_at_ms,
         fad.allocation_completed_at_ms AS allocation_completed_at_ms,
         team.status AS team_status,
         team.version AS team_version,
@@ -612,7 +614,9 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
       JOIN free_agent_drafts AS fad
         ON fad.league_id = league.id
        AND fad.season_id = season.id
-       AND fad.status = 'rapid'
+       AND fad.status IN ('allocating', 'rapid')
+       AND fad.candidate_deadline_at_ms <= @nowMs
+       AND fad.deadline_locked_at_ms <= @nowMs
       LEFT JOIN teams AS team
         ON team.league_id = league.id
        AND team.id = @teamId
@@ -1416,6 +1420,10 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
         rapidContext: {
           allocationCompletedAtMs:
             root.allocation_completed_at_ms,
+          candidateDeadlineAtMs:
+            root.candidate_deadline_at_ms,
+          deadlineLockedAtMs:
+            root.deadline_locked_at_ms,
           fadId: root.fad_id,
           fadStatus: root.fad_status,
           leagueId: scope.leagueId,

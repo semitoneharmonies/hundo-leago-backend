@@ -939,6 +939,7 @@ function createSqliteFreeAgentDraftReadRepository({
   let publishedInterventionsStatement;
   let allocationByPlayerStatement;
   let allocationOfferEventStatement;
+  let restrictedParticipantStatement;
   let allocationResultPageStatement;
   let allocationOffersStatement;
   let allocationWinnerStatement;
@@ -2267,6 +2268,16 @@ function createSqliteFreeAgentDraftReadRepository({
           AND event.event_kind = 'offer_considered'
         LIMIT 2
       `);
+    restrictedParticipantStatement = database.prepare(`
+      SELECT 1 AS eligible
+      FROM free_agent_draft_auction_participants
+      WHERE league_id = @leagueId
+        AND fad_id = @fadId
+        AND auction_id = @auctionId
+        AND team_id = @teamId
+        AND status = 'active'
+      LIMIT 2
+    `);
     allocationResultPageStatement =
       database.prepare(`
         SELECT
@@ -4039,15 +4050,30 @@ function createSqliteFreeAgentDraftReadRepository({
         "restricted_active",
       ].includes(allocation.status)
     ) {
+      const eligibleParticipant =
+        allocation.restricted_auction_id === null
+          ? null
+          : unique(
+              restrictedParticipantStatement,
+              {
+                leagueId: row.league_id,
+                fadId: row.fad_id,
+                auctionId:
+                  allocation.restricted_auction_id,
+                teamId: row.team_id,
+              },
+              "The active restricted-tie participant"
+            );
       code =
         event.offer_outcome_code ===
-        "restricted_tied"
+          "restricted_tied" && eligibleParticipant
           ? "restricted_pending"
           : "automatic_loss";
       auctionId =
-        allocation.status === "restricted_scheduled"
-          ? null
-          : allocation.restricted_auction_id;
+        code === "restricted_pending" &&
+        allocation.status === "restricted_active"
+          ? allocation.restricted_auction_id
+          : null;
     } else if (
       allocation.status ===
       "restricted_fallback_open"

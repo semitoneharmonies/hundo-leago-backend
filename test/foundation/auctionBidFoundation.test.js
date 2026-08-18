@@ -1294,21 +1294,6 @@ describe("M5-02 atomic sealed-bid persistence", () => {
       assert.equal(edited.bid.editCount, index);
     }
 
-    const beforeMissingConfirmation = semanticHash(runtime.database);
-    assertPolicyError(
-      () => runtime.repository.putBid(
-        persistenceCommand({
-          idempotencyKey: "fad-direct-no-confirmation",
-          occurredAtMs: NOW_MS,
-        })
-      ),
-      AUCTION_BID_CODES.inputInvalid
-    );
-    assert.equal(
-      semanticHash(runtime.database),
-      beforeMissingConfirmation
-    );
-
     const beforeBelowJoiningMinimum = semanticHash(runtime.database);
     assertPolicyError(
       () => runtime.repository.putBid(
@@ -1331,7 +1316,6 @@ describe("M5-02 atomic sealed-bid persistence", () => {
       totalValueCents: 500,
       termYears: 3,
       occurredAtMs: NOW_MS,
-      bindingIllegalityConfirmed: true,
     });
     const joined = runtime.repository.putBid(joinCommand);
     assert.equal(joined.action, "submitted");
@@ -1342,7 +1326,13 @@ describe("M5-02 atomic sealed-bid persistence", () => {
         FROM idempotency_requests
         WHERE id = ?
       `).get(uuid(102)).request_hash,
-      expectedRequestHash(joinCommand, { fad: true })
+      expectedRequestHash(
+        {
+          ...joinCommand,
+          bindingIllegalityConfirmed: true,
+        },
+        { fad: true }
+      )
     );
 
     const firstJoinerEditAtMs = NOW_MS + COOLDOWN_MS;
@@ -1797,7 +1787,6 @@ describe("M5-02 atomic sealed-bid persistence", () => {
       occurredAtMs: submittedAtMs,
       idempotencyExpiresAtMs:
         submittedAtMs + 86_400_000,
-      bindingIllegalityConfirmed: true,
     });
     const submitted = runtime.repository.putBid(
       submittedCommand
@@ -1822,7 +1811,13 @@ describe("M5-02 atomic sealed-bid persistence", () => {
         FROM idempotency_requests
         WHERE id = ?
       `).get(uuid(102)).request_hash,
-      expectedRequestHash(submittedCommand, { fad: true })
+      expectedRequestHash(
+        {
+          ...submittedCommand,
+          bindingIllegalityConfirmed: true,
+        },
+        { fad: true }
+      )
     );
     assert.deepEqual(
       runtime.database.prepare(`
@@ -1919,14 +1914,13 @@ describe("M5-02 atomic sealed-bid persistence", () => {
     assert.equal(replayed.bid.lastEditedAtMs, submittedAtMs);
   });
 
-  test("enforces restricted confirmation, authorization, joining minimum, floor, cooldown, and participant permanence without writes", (t) => {
+  test("enforces restricted authorization, joining minimum, floor, cooldown, and participant permanence without writes", (t) => {
     const runtime = configureFadBidRuntime(
       createPersistenceRuntime(t),
       { kind: "restricted" }
     );
     let rejectionIndex = 0;
     for (const [overrides, reasonCode] of [
-      [{}, AUCTION_BID_CODES.inputInvalid],
       [
         {
           bindingIllegalityConfirmed: true,
@@ -1984,7 +1978,6 @@ describe("M5-02 atomic sealed-bid persistence", () => {
         occurredAtMs: submittedAtMs,
         idempotencyExpiresAtMs:
           submittedAtMs + 86_400_000,
-        bindingIllegalityConfirmed: true,
       })
     );
     const beforeCooldown = semanticHash(runtime.database);

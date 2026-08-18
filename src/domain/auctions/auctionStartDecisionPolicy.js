@@ -124,19 +124,18 @@ function validateAuctionStartBody(input, options) {
     );
   } else {
     if (
-      hasExactKeys(input, ORDINARY_START_BODY_FIELDS) ||
-      (
-        hasExactKeys(input, FAD_START_BODY_FIELDS) &&
-        input.bindingIllegalityConfirmed !== true
-      )
+      hasExactKeys(input, FAD_START_BODY_FIELDS) &&
+      input.bindingIllegalityConfirmed !== true
     ) {
       fail(FAD_BINDING_CONFIRMATION_REQUIRED);
     }
-    exactObject(
-      input,
-      FAD_START_BODY_FIELDS,
-      AUCTION_CREATION_CODES.inputInvalid
-    );
+    if (!hasExactKeys(input, ORDINARY_START_BODY_FIELDS)) {
+      exactObject(
+        input,
+        FAD_START_BODY_FIELDS,
+        AUCTION_CREATION_CODES.inputInvalid
+      );
+    }
   }
 
   const offer = validateOpeningBid(
@@ -161,6 +160,8 @@ function canonicalRapidContext(value, nowMs) {
     value,
     [
       "allocationCompletedAtMs",
+      "candidateDeadlineAtMs",
+      "deadlineLockedAtMs",
       "fadId",
       "fadStatus",
       "leagueId",
@@ -176,14 +177,33 @@ function canonicalRapidContext(value, nowMs) {
     fadId: stableId(value.fadId),
     fadStatus: value.fadStatus,
     seasonStatus: value.seasonStatus,
-    allocationCompletedAtMs: safeTimestamp(
+    allocationCompletedAtMs: nullableTimestamp(
       value.allocationCompletedAtMs
+    ),
+    candidateDeadlineAtMs: safeTimestamp(
+      value.candidateDeadlineAtMs
+    ),
+    deadlineLockedAtMs: safeTimestamp(
+      value.deadlineLockedAtMs
     ),
   };
   if (
-    context.fadStatus !== "rapid" ||
+    !["allocating", "rapid"].includes(context.fadStatus) ||
     context.seasonStatus !== "active" ||
-    context.allocationCompletedAtMs > nowMs
+    context.candidateDeadlineAtMs > nowMs ||
+    context.deadlineLockedAtMs > nowMs ||
+    context.deadlineLockedAtMs < context.candidateDeadlineAtMs ||
+    (
+      context.fadStatus === "allocating" &&
+      context.allocationCompletedAtMs !== null
+    ) ||
+    (
+      context.fadStatus === "rapid" &&
+      (
+        context.allocationCompletedAtMs === null ||
+        context.allocationCompletedAtMs > nowMs
+      )
+    )
   ) {
     fail(AUCTION_CREATION_CODES.seasonUnavailable);
   }

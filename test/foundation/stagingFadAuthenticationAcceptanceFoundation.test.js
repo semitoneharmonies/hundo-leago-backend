@@ -235,7 +235,7 @@ test(
       started.runtime.database.pragma("user_version", {
         simple: true,
       }),
-      51
+      52
     );
     assert.equal(
       isStagingAccountAutoVerificationEnabled({

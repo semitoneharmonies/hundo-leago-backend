@@ -376,7 +376,10 @@ function createReadSchema(database) {
       id TEXT PRIMARY KEY,
       league_id TEXT NOT NULL,
       season_id TEXT NOT NULL,
-      status TEXT NOT NULL
+      status TEXT NOT NULL,
+      candidate_deadline_at_ms INTEGER,
+      deadline_locked_at_ms INTEGER,
+      allocation_completed_at_ms INTEGER
     );
     CREATE TABLE free_agent_draft_rollovers (
       id TEXT PRIMARY KEY,
@@ -858,6 +861,9 @@ function seedFadRoot(database) {
     league_id: IDS.league,
     season_id: IDS.season,
     status: "rapid",
+    candidate_deadline_at_ms: NOW_MS - HOUR_MS,
+    deadline_locked_at_ms: NOW_MS - HOUR_MS,
+    allocation_completed_at_ms: NOW_MS - HOUR_MS,
   });
   insert(database, "free_agent_draft_rollovers", {
     id: IDS.rollover,
@@ -1852,6 +1858,43 @@ describe("FAD-06 SQLite auction read repository", () => {
       [IDS.restrictedAuction]
     );
 
+    restricted.database.prepare(`
+      UPDATE team_manager_assignments
+      SET status = 'ended',
+          ended_at_ms = @endedAtMs
+      WHERE id IN (@assignmentOne, @assignmentTwo)
+    `).run({
+      assignmentOne: IDS.assignmentOne,
+      assignmentTwo: IDS.assignmentTwo,
+      endedAtMs: opensAtMs,
+    });
+    assert.equal(
+      restricted.repository.readAuction(
+        detailInput(IDS.restrictedAuction, { nowMs: opensAtMs })
+      ),
+      null
+    );
+    assert.deepEqual(
+      restricted.repository.listAuctions(
+        listInput({
+          sourceKind: "fad_restricted",
+          fadId: IDS.fad,
+          nowMs: opensAtMs,
+        })
+      ).auctions,
+      []
+    );
+    assert.equal(
+      restricted.repository.readAuction(
+        detailInput(IDS.restrictedAuction, {
+          viewerUserId: IDS.commissionerUser,
+          viewerMembershipId: IDS.commissionerMembership,
+          nowMs: opensAtMs,
+        })
+      ).auctionId,
+      IDS.restrictedAuction
+    );
+
     const openRapid = createRuntime(t);
     seedFadRoot(openRapid.database);
     seedAuction(openRapid.database, {
@@ -2526,6 +2569,31 @@ describe("FAD-06 SQLite auction read repository", () => {
     assert.deepEqual(startTeam.startAuction, {
       allowed: false,
       reasonCode: "PHASE_CLOSED",
+    });
+  });
+
+  test("advertises nominations after the Candidate Card deadline while restricted ties still allocate", (t) => {
+    const runtime = createRuntime(t);
+    seedFadRoot(runtime.database);
+    runtime.database.prepare(`
+      UPDATE free_agent_drafts
+      SET status = 'allocating',
+          candidate_deadline_at_ms = @deadlineAtMs,
+          deadline_locked_at_ms = @deadlineAtMs,
+          allocation_completed_at_ms = NULL
+      WHERE id = @fadId
+    `).run({
+      deadlineAtMs: NOW_MS - 1,
+      fadId: IDS.fad,
+    });
+
+    const startTeam = runtime.repository
+      .listAuctions(listInput())
+      .startTeams.find(({ teamId }) => teamId === IDS.teamOne);
+    assert.equal(startTeam.sourceKind, "fad_open_rapid");
+    assert.deepEqual(startTeam.startAuction, {
+      allowed: true,
+      reasonCode: null,
     });
   });
 

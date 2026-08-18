@@ -165,6 +165,15 @@ function createSqlitePlayerRepository({ database } = {}) {
         `${currentSourceJoin} ${currentStatisticsJoin} ` +
         "WHERE (@status = 'all' OR players.status = @status) " +
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
+        "AND (@ownershipTeamId IS NULL OR EXISTS (" +
+        "SELECT 1 FROM leagues AS ownership_league " +
+        "JOIN player_ownerships AS team_ownership " +
+        "ON team_ownership.league_id = ownership_league.id " +
+        "AND team_ownership.season_id = ownership_league.current_season_id " +
+        "WHERE ownership_league.id = @leagueId " +
+        "AND team_ownership.player_id = players.id " +
+        "AND team_ownership.team_id = @ownershipTeamId" +
+        ")) " +
         "AND (@auctionEligible = 0 OR (" +
         "players.status = 'active' " +
         "AND (" +
@@ -221,6 +230,15 @@ function createSqlitePlayerRepository({ database } = {}) {
         `${currentSourceJoin} ${currentStatisticsJoin} ` +
         "WHERE (@status = 'all' OR players.status = @status) " +
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
+        "AND (@ownershipTeamId IS NULL OR EXISTS (" +
+        "SELECT 1 FROM leagues AS ownership_league " +
+        "JOIN player_ownerships AS team_ownership " +
+        "ON team_ownership.league_id = ownership_league.id " +
+        "AND team_ownership.season_id = ownership_league.current_season_id " +
+        "WHERE ownership_league.id = @leagueId " +
+        "AND team_ownership.player_id = players.id " +
+        "AND team_ownership.team_id = @ownershipTeamId" +
+        ")) " +
         "AND (@auctionEligible = 0 OR (" +
         "players.status = 'active' " +
         "AND (" +
@@ -395,6 +413,7 @@ function createSqlitePlayerRepository({ database } = {}) {
           "cursorId",
           "cursorFantasyPoints",
           "leagueId",
+          "ownershipTeamId",
           "auctionEligible",
           "sort",
         ],
@@ -430,11 +449,23 @@ function createSqlitePlayerRepository({ database } = {}) {
         ) ||
         typeof options.auctionEligible !== "boolean" ||
         !(
-          (options.auctionEligible === false && options.leagueId === null) ||
+          (
+            options.auctionEligible === false &&
+            options.leagueId === null &&
+            options.ownershipTeamId === null
+          ) ||
+          (
+            options.auctionEligible === false &&
+            typeof options.leagueId === "string" &&
+            CANONICAL_UUID_PATTERN.test(options.leagueId) &&
+            typeof options.ownershipTeamId === "string" &&
+            CANONICAL_UUID_PATTERN.test(options.ownershipTeamId)
+          ) ||
           (
             options.auctionEligible === true &&
             typeof options.leagueId === "string" &&
-            CANONICAL_UUID_PATTERN.test(options.leagueId)
+            CANONICAL_UUID_PATTERN.test(options.leagueId) &&
+            options.ownershipTeamId === null
           )
         )
       ) {
@@ -463,6 +494,7 @@ function createSqlitePlayerRepository({ database } = {}) {
             cursorFantasyPoints: options.cursorFantasyPoints,
             limit: options.limit,
             leagueId: options.leagueId,
+            ownershipTeamId: options.ownershipTeamId,
             auctionEligible: options.auctionEligible ? 1 : 0,
           })
         );

@@ -118,6 +118,11 @@ const FINAL_MIGRATION_0051 = Object.freeze({
   sha256:
     "fae29fe918fff9a0a8c58f947140e701ebbe0ac35d813bcda4fa28aaaa3cf2b2",
 });
+const FINAL_MIGRATION_0052 = Object.freeze({
+  byteLength: 38_263,
+  sha256:
+    "b1907952dff9b7aa54cadd8f3635ea48961ed47c0fd4a611b35cd9eea965a2dc",
+});
 const FROZEN_MIGRATIONS_0023_THROUGH_0029 = Object.freeze([
   Object.freeze({
     id: 23,
@@ -711,7 +716,7 @@ describe("M2-04 initial relational schema", () => {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     });
 
-    assert.equal(migrations.length, 51);
+    assert.equal(migrations.length, 52);
     assert.equal(migrations[0].id, 1);
     assert.equal(migrations[0].fileName, "0001_initial.sql");
     assert.equal(migrations[1].id, 2);
@@ -1124,6 +1129,19 @@ describe("M2-04 initial relational schema", () => {
       migrations[50].checksum,
       FINAL_MIGRATION_0051.sha256
     );
+    assert.equal(migrations[51].id, 52);
+    assert.equal(
+      migrations[51].fileName,
+      "0052_allow_post_candidate_deadline_nominations.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[51].filePath).size,
+      FINAL_MIGRATION_0052.byteLength
+    );
+    assert.equal(
+      migrations[51].checksum,
+      FINAL_MIGRATION_0052.sha256
+    );
     for (const expected of FROZEN_MIGRATIONS_0023_THROUGH_0029) {
       const migration = migrations[expected.id - 1];
       assert.equal(migration.id, expected.id);
@@ -1135,12 +1153,12 @@ describe("M2-04 initial relational schema", () => {
       assert.equal(migration.checksum, expected.sha256);
     }
     assert.equal(migrationResult.status, "exact");
-    assert.equal(database.pragma("user_version", { simple: true }), 51);
+    assert.equal(database.pragma("user_version", { simple: true }), 52);
 
     const ledgerBefore = database
       .prepare("SELECT * FROM schema_migrations")
       .all();
-    assert.equal(ledgerBefore.length, 51);
+    assert.equal(ledgerBefore.length, 52);
     assert.equal(ledgerBefore[0].checksum, migrations[0].checksum);
     assert.equal(ledgerBefore[1].checksum, migrations[1].checksum);
     assert.equal(ledgerBefore[2].checksum, migrations[2].checksum);
@@ -1289,6 +1307,15 @@ describe("M2-04 initial relational schema", () => {
       ledgerBefore[50].checksum,
       FINAL_MIGRATION_0051.sha256
     );
+    assert.equal(ledgerBefore[51].migration_id, 52);
+    assert.equal(
+      ledgerBefore[51].file_name,
+      "0052_allow_post_candidate_deadline_nominations.sql"
+    );
+    assert.equal(
+      ledgerBefore[51].checksum,
+      FINAL_MIGRATION_0052.sha256
+    );
 
     const rerun = migrateDatabase({
       database,
@@ -1397,7 +1424,7 @@ describe("M2-04 initial relational schema", () => {
         },
       {
         metadata_key: "data_model_version",
-        metadata_value: "51",
+        metadata_value: "52",
       },
       ]
     );

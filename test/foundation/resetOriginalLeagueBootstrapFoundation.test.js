@@ -517,8 +517,8 @@ function createCompletedBootstrap(runtime) {
 }
 
 describe("FAD-04 reset original-league bootstrap guard", () => {
-  test("pins the bootstrap guard to the complete schema-51 application catalog", () => {
-    assert.equal(REQUIRED_SCHEMA_VERSION, 51);
+  test("pins the bootstrap guard to the complete schema-52 application catalog", () => {
+    assert.equal(REQUIRED_SCHEMA_VERSION, 52);
     assert.equal(REQUIRED_APPLICATION_TABLE_COUNT, 132);
     assert.equal(
       REPOSITORY_CATALOG.length,
@@ -544,7 +544,7 @@ describe("FAD-04 reset original-league bootstrap guard", () => {
 
     assert.deepEqual(result, {
       actorUserId: runtime.userId,
-      schemaVersion: 51,
+      schemaVersion: 52,
       stateHash: result.stateHash,
     });
     assert.match(result.stateHash, /^[a-f0-9]{64}$/);
@@ -810,7 +810,7 @@ describe("FAD-04 reset original-league bootstrap postcondition", () => {
     assert.deepEqual(completedState, {
       actorUserId: runtime.userId,
       leagueId: binding.leagueId,
-      schemaVersion: 51,
+      schemaVersion: 52,
       seasonId: binding.seasonId,
       stateHash: completedState.stateHash,
     });

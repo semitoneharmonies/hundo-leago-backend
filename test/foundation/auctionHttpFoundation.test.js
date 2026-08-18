@@ -704,7 +704,6 @@ describe("M5-02 auction application service", () => {
       teamId: TEAM_ID,
       aavCents: 225,
       termYears: 3,
-      bindingIllegalityConfirmed: true,
     };
     const started = service.start({
       leagueId: LEAGUE_ID,
@@ -804,7 +803,6 @@ describe("M5-02 auction application service", () => {
       teamId: TEAM_ID,
       aavCents: 225,
       termYears: 3,
-      bindingIllegalityConfirmed: true,
     };
     const started = service.start({
       leagueId: LEAGUE_ID,
@@ -1462,82 +1460,64 @@ describe("FAD-06 isolated auction HTTP contract", () => {
     }
   });
 
-  test("maps absent and false FAD binding confirmations to the exact safe 422 without an ordinary write", async (t) => {
-    const fixture = serviceDependencies({
-      freeAgentDraftAuctionStartWriter: {
-        startOrQueue(input) {
-          fixture.calls.push({
-            method: "startOrQueue",
-            input,
-          });
-          const error = new Error(
-            "private binding, rollover, and allocation state"
-          );
-          error.code =
-            "AUCTION_CREATION_INPUT_INVALID";
-          error.reasonCode =
-            "FAD_BINDING_ILLEGALITY_CONFIRMATION_REQUIRED";
-          throw error;
-        },
-      },
-    });
+  test("accepts the simplified nomination body and rejects an obsolete false confirmation before writing", async (t) => {
+    const fixture = serviceDependencies();
     const baseUrl = await startApi(
       t,
       createAuctionService(fixture.dependencies)
     );
-    const inputs = [
+    const accepted = await fetch(
+      `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/auctions`,
       {
-        playerId: PLAYER_ID,
-        teamId: TEAM_ID,
-        aavCents: 225,
-        termYears: 3,
-      },
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "fad-binding-absent",
+        },
+        body: JSON.stringify({
+          playerId: PLAYER_ID,
+          teamId: TEAM_ID,
+          aavCents: 225,
+          termYears: 3,
+        }),
+      }
+    );
+    assert.equal(accepted.status, 201);
+
+    const rejected = await fetch(
+      `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/auctions`,
       {
-        playerId: PLAYER_ID,
-        teamId: TEAM_ID,
-        aavCents: 225,
-        termYears: 3,
-        bindingIllegalityConfirmed: false,
-      },
-    ];
-    for (const [index, input] of inputs.entries()) {
-      const response = await fetch(
-        `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/auctions`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "idempotency-key":
-              `fad-binding-${index}`,
-          },
-          body: JSON.stringify(input),
-        }
-      );
-      const payload = await response.json();
-      assert.equal(response.status, 422);
-      assert.deepEqual(payload.error, {
-        code:
-          "FAD_BINDING_ILLEGALITY_CONFIRMATION_REQUIRED",
-        message:
-          "The binding FAD auction confirmation is required.",
-        requestId: "m5-02-request",
-      });
-      assert.equal(
-        JSON.stringify(payload).includes("private"),
-        false
-      );
-    }
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "fad-binding-false",
+        },
+        body: JSON.stringify({
+          playerId: PLAYER_ID,
+          teamId: TEAM_ID,
+          aavCents: 225,
+          termYears: 3,
+          bindingIllegalityConfirmed: false,
+        }),
+      }
+    );
+    const rejectedPayload = await rejected.json();
+    assert.equal(rejected.status, 400);
+    assert.equal(
+      rejectedPayload.error.code,
+      "AUCTION_INPUT_INVALID"
+    );
     assert.equal(
       fixture.calls.filter(
         ({ method }) => method === "startOrQueue"
       ).length,
-      2
+      1
     );
     assert.equal(
       fixture.calls.some(
         ({ method }) => method === "startAuction"
       ),
-      false
+      true
     );
   });
 

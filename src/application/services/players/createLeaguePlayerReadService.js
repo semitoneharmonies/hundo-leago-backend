@@ -27,6 +27,17 @@ function normalizeSort(value) {
   failInput();
 }
 
+function normalizeTeamId(value) {
+  if (value === undefined) return null;
+  if (
+    typeof value !== "string" ||
+    !CANONICAL_UUID_PATTERN.test(value)
+  ) {
+    failInput();
+  }
+  return value;
+}
+
 function safeExternalId(row) {
   return Object.freeze({
     provider: row.provider,
@@ -105,11 +116,13 @@ function createLeaguePlayerReadService({
     limit,
     cursor,
     sort,
+    teamId,
   } = {}) {
     const authority = authorize(authenticated, leagueId);
     const canonicalQuery = normalizeQuery(query);
     const canonicalStatus = normalizeStatus(status);
     const canonicalSort = normalizeSort(sort);
+    const canonicalTeamId = normalizeTeamId(teamId);
     const pageSize = normalizeLimit(limit);
     const cursorId = normalizeCursor(cursor);
     const cursorRow =
@@ -132,7 +145,9 @@ function createLeaguePlayerReadService({
         canonicalSort === "fantasyPoints" && cursorRow
           ? cursorRow.sort_fantasy_points_hundredths
           : null,
-      leagueId: null,
+      leagueId:
+        canonicalTeamId === null ? null : authority.leagueId,
+      ownershipTeamId: canonicalTeamId,
       auctionEligible: false,
       sort: canonicalSort,
     });
@@ -196,5 +211,6 @@ function createLeaguePlayerReadService({
 module.exports = {
   createLeaguePlayerReadService,
   normalizeSort,
+  normalizeTeamId,
   safeLeagueContext,
 };
