@@ -581,6 +581,28 @@ describe("league-scoped player read service", () => {
     assert.equal(before.equals(runtime.database.serialize()), true);
   });
 
+  test("filters the complete catalog by current-season team ownership before pagination", (t) => {
+    const runtime = createRuntime(t);
+    const before = runtime.database.serialize();
+    const result = runtime.service.list({
+      authenticated: authenticated(USER_A_ID),
+      leagueId: LEAGUE_A_ID,
+      teamId: TEAM_A_ID,
+      limit: 1,
+      sort: "fantasyPoints",
+    });
+    assert.deepEqual(
+      result.players.map(({ id }) => id),
+      [PLAYER_ONE_ID]
+    );
+    assert.equal(result.players[0].league.ownership.team.id, TEAM_A_ID);
+    assert.deepEqual(result.page, {
+      nextCursor: null,
+      hasMore: false,
+    });
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
   test("orders cursor pages by fantasy points when requested", (t) => {
     const runtime = createRuntime(t);
     runtime.database.prepare(`
@@ -654,6 +676,18 @@ describe("league-scoped player HTTP routes", () => {
     );
     assert.equal(sortedList.status, 200);
     assert.equal((await sortedList.json()).data[0].id, PLAYER_ONE_ID);
+
+    const teamList = await fetch(
+      `${api.baseUrl}/api/v1/leagues/${LEAGUE_A_ID}/players?teamId=${TEAM_A_ID}&limit=1`,
+      { headers: headers(api, SESSION_A) }
+    );
+    const teamListBody = await teamList.json();
+    assert.equal(teamList.status, 200);
+    assert.deepEqual(
+      teamListBody.data.map(({ id }) => id),
+      [PLAYER_ONE_ID]
+    );
+    assert.equal(teamListBody.page.hasMore, false);
 
     const invalidSort = await fetch(
       `${api.baseUrl}/api/v1/leagues/${LEAGUE_A_ID}/players?sort=salary`,

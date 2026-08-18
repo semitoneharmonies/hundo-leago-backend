@@ -518,7 +518,6 @@ describe("M5-02 auction application service", () => {
         teamId: TEAM_ID,
         aavCents: 225,
         termYears: 3,
-        bindingIllegalityConfirmed: true,
       },
       expectedBidVersion: null,
       idempotencyKey: "fad-manager-join",
@@ -527,7 +526,10 @@ describe("M5-02 auction application service", () => {
     const fadWrite = fixture.calls.filter(
       ({ method }) => method === "putBid"
     ).at(-1).input;
-    assert.equal(fadWrite.bindingIllegalityConfirmed, true);
+    assert.equal(
+      Object.hasOwn(fadWrite, "bindingIllegalityConfirmed"),
+      false
+    );
     assert.throws(
       () => service.putMine({
         leagueId: LEAGUE_ID,
@@ -542,7 +544,9 @@ describe("M5-02 auction application service", () => {
         idempotencyKey: "fad-manager-invalid",
         authenticated: {},
       }),
-      (error) => error.code === "AUCTION_BID_INPUT_INVALID"
+      (error) =>
+        error instanceof TypeError &&
+        error.message === "The auction request is invalid."
     );
   });
 
@@ -704,7 +708,6 @@ describe("M5-02 auction application service", () => {
       teamId: TEAM_ID,
       aavCents: 225,
       termYears: 3,
-      bindingIllegalityConfirmed: true,
     };
     const started = service.start({
       leagueId: LEAGUE_ID,
@@ -804,7 +807,6 @@ describe("M5-02 auction application service", () => {
       teamId: TEAM_ID,
       aavCents: 225,
       termYears: 3,
-      bindingIllegalityConfirmed: true,
     };
     const started = service.start({
       leagueId: LEAGUE_ID,
@@ -1400,7 +1402,7 @@ describe("FAD-06 isolated auction HTTP contract", () => {
     assert.equal(malformedBody.status, 400);
     assert.equal(
       malformedBodyPayload.error.code,
-      "AUCTION_BID_INPUT_INVALID"
+      "AUCTION_INPUT_INVALID"
     );
     assert.equal(
       validationFixture.calls.some(
@@ -1462,82 +1464,60 @@ describe("FAD-06 isolated auction HTTP contract", () => {
     }
   });
 
-  test("maps absent and false FAD binding confirmations to the exact safe 422 without an ordinary write", async (t) => {
-    const fixture = serviceDependencies({
-      freeAgentDraftAuctionStartWriter: {
-        startOrQueue(input) {
-          fixture.calls.push({
-            method: "startOrQueue",
-            input,
-          });
-          const error = new Error(
-            "private binding, rollover, and allocation state"
-          );
-          error.code =
-            "AUCTION_CREATION_INPUT_INVALID";
-          error.reasonCode =
-            "FAD_BINDING_ILLEGALITY_CONFIRMATION_REQUIRED";
-          throw error;
-        },
-      },
-    });
+  test("accepts auction starts without a client confirmation field and rejects the removed legacy field", async (t) => {
+    const fixture = serviceDependencies();
     const baseUrl = await startApi(
       t,
       createAuctionService(fixture.dependencies)
     );
-    const inputs = [
+    const input = {
+      playerId: PLAYER_ID,
+      teamId: TEAM_ID,
+      aavCents: 225,
+      termYears: 3,
+    };
+    const accepted = await fetch(
+      `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/auctions`,
       {
-        playerId: PLAYER_ID,
-        teamId: TEAM_ID,
-        aavCents: 225,
-        termYears: 3,
-      },
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "no-confirmation-needed",
+        },
+        body: JSON.stringify(input),
+      }
+    );
+    assert.equal(accepted.status, 201);
+    assert.equal(
+      Object.hasOwn(fixture.calls[0].input.body, "bindingIllegalityConfirmed"),
+      false
+    );
+    const legacy = await fetch(
+      `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/auctions`,
       {
-        playerId: PLAYER_ID,
-        teamId: TEAM_ID,
-        aavCents: 225,
-        termYears: 3,
-        bindingIllegalityConfirmed: false,
-      },
-    ];
-    for (const [index, input] of inputs.entries()) {
-      const response = await fetch(
-        `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/auctions`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "idempotency-key":
-              `fad-binding-${index}`,
-          },
-          body: JSON.stringify(input),
-        }
-      );
-      const payload = await response.json();
-      assert.equal(response.status, 422);
-      assert.deepEqual(payload.error, {
-        code:
-          "FAD_BINDING_ILLEGALITY_CONFIRMATION_REQUIRED",
-        message:
-          "The binding FAD auction confirmation is required.",
-        requestId: "m5-02-request",
-      });
-      assert.equal(
-        JSON.stringify(payload).includes("private"),
-        false
-      );
-    }
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "legacy-confirmation-field",
+        },
+        body: JSON.stringify({
+          ...input,
+          bindingIllegalityConfirmed: false,
+        }),
+      }
+    );
+    assert.equal(legacy.status, 400);
     assert.equal(
       fixture.calls.filter(
         ({ method }) => method === "startOrQueue"
       ).length,
-      2
+      1
     );
     assert.equal(
       fixture.calls.some(
         ({ method }) => method === "startAuction"
       ),
-      false
+      true
     );
   });
 

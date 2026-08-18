@@ -165,6 +165,14 @@ function createSqlitePlayerRepository({ database } = {}) {
         `${currentSourceJoin} ${currentStatisticsJoin} ` +
         "WHERE (@status = 'all' OR players.status = @status) " +
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
+        "AND (@teamId IS NULL OR EXISTS (" +
+        "SELECT 1 FROM player_ownerships AS team_ownership " +
+        "JOIN leagues AS team_league ON team_league.id = team_ownership.league_id " +
+        "WHERE team_ownership.league_id = @leagueId " +
+        "AND team_ownership.season_id = team_league.current_season_id " +
+        "AND team_ownership.player_id = players.id " +
+        "AND team_ownership.team_id = @teamId" +
+        ")) " +
         "AND (@auctionEligible = 0 OR (" +
         "players.status = 'active' " +
         "AND (" +
@@ -221,6 +229,14 @@ function createSqlitePlayerRepository({ database } = {}) {
         `${currentSourceJoin} ${currentStatisticsJoin} ` +
         "WHERE (@status = 'all' OR players.status = @status) " +
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
+        "AND (@teamId IS NULL OR EXISTS (" +
+        "SELECT 1 FROM player_ownerships AS team_ownership " +
+        "JOIN leagues AS team_league ON team_league.id = team_ownership.league_id " +
+        "WHERE team_ownership.league_id = @leagueId " +
+        "AND team_ownership.season_id = team_league.current_season_id " +
+        "AND team_ownership.player_id = players.id " +
+        "AND team_ownership.team_id = @teamId" +
+        ")) " +
         "AND (@auctionEligible = 0 OR (" +
         "players.status = 'active' " +
         "AND (" +
@@ -395,6 +411,7 @@ function createSqlitePlayerRepository({ database } = {}) {
           "cursorId",
           "cursorFantasyPoints",
           "leagueId",
+          "teamId",
           "auctionEligible",
           "sort",
         ],
@@ -430,9 +447,17 @@ function createSqlitePlayerRepository({ database } = {}) {
         ) ||
         typeof options.auctionEligible !== "boolean" ||
         !(
-          (options.auctionEligible === false && options.leagueId === null) ||
+          (options.auctionEligible === false &&
+            options.teamId === null &&
+            options.leagueId === null) ||
+          (options.auctionEligible === false &&
+            typeof options.teamId === "string" &&
+            CANONICAL_UUID_PATTERN.test(options.teamId) &&
+            typeof options.leagueId === "string" &&
+            CANONICAL_UUID_PATTERN.test(options.leagueId)) ||
           (
             options.auctionEligible === true &&
+            options.teamId === null &&
             typeof options.leagueId === "string" &&
             CANONICAL_UUID_PATTERN.test(options.leagueId)
           )
@@ -463,6 +488,7 @@ function createSqlitePlayerRepository({ database } = {}) {
             cursorFantasyPoints: options.cursorFantasyPoints,
             limit: options.limit,
             leagueId: options.leagueId,
+            teamId: options.teamId,
             auctionEligible: options.auctionEligible ? 1 : 0,
           })
         );

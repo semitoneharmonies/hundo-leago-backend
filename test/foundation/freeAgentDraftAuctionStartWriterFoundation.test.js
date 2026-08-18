@@ -25,11 +25,6 @@ const {
   "../../src/infrastructure/database/migrate"
 );
 const {
-  FAD_BINDING_CONFIRMATION_REQUIRED,
-} = require(
-  "../../src/domain/auctions/auctionStartDecisionPolicy"
-);
-const {
   REPOSITORY_ERROR_CODES,
 } = require(
   "../../src/infrastructure/persistence/sqlite/SqliteRepositoryError"
@@ -512,6 +507,8 @@ function scope(ids, nowMs, overrides = {}) {
 }
 
 function command(ids, nowMs, key, overrides = {}) {
+  const bodyOverrides = { ...(overrides.body || {}) };
+  delete bodyOverrides.bindingIllegalityConfirmed;
   return {
     leagueId: ids.league,
     actorUserId: ids.managerUser,
@@ -521,8 +518,7 @@ function command(ids, nowMs, key, overrides = {}) {
       teamId: ids.team,
       aavCents: 300,
       termYears: 2,
-      bindingIllegalityConfirmed: true,
-      ...(overrides.body || {}),
+      ...bodyOverrides,
     },
     idempotencyKey: key,
     nowMs,
@@ -624,28 +620,33 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
     );
   });
 
-  test("routes fresh ordinary bodies without writes and preserves current FAD confirmation enforcement", (t) => {
+  test("starts FAD auctions without a client confirmation field and routes ordinary bodies without writes", (t) => {
     const fadFixture = createFixture(t, "routing-current-fad", {
       idBase: 8_050,
     });
-    const missingConfirmation = command(
+    const withoutConfirmation = command(
       PRIMARY,
       DIRECT_AT_MS,
-      "missing-confirmation"
+      "without-confirmation"
     );
-    delete missingConfirmation.body.bindingIllegalityConfirmed;
-    assertPolicyReason(
-      () => fadFixture.writer.startOrQueue(missingConfirmation),
-      FAD_BINDING_CONFIRMATION_REQUIRED
+    const started = fadFixture.writer.startOrQueue(withoutConfirmation);
+    assert.equal(started.kind, "auction_opened");
+    assert.equal(fadFixture.generated.length, 6);
+    const metadata = JSON.parse(
+      fadFixture.database.prepare(`
+        SELECT metadata_json AS metadataJson
+        FROM auction_events
+        WHERE id = ?
+      `).get(started.auctionEventId).metadataJson
     );
-    assert.equal(fadFixture.generated.length, 0);
+    assert.equal(metadata.bindingIllegalityConfirmed, true);
     assert.equal(
       count(
         fadFixture.database,
         "idempotency_requests",
         PRIMARY.league
       ),
-      0
+      1
     );
 
     const ordinaryFixture = createFixture(t, "routing-no-fad", {
@@ -668,7 +669,6 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
       ROLLOVER_AT_MS + 1,
       "fresh-ordinary"
     );
-    delete ordinary.body.bindingIllegalityConfirmed;
     const notApplicable = ordinaryFixture.writer.startOrQueue(ordinary);
     assert.equal(
       notApplicable,

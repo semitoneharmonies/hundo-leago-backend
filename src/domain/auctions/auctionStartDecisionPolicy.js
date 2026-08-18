@@ -18,10 +18,7 @@ const ORDINARY_START_BODY_FIELDS = Object.freeze([
   "aavCents",
   "termYears",
 ]);
-const FAD_START_BODY_FIELDS = Object.freeze([
-  ...ORDINARY_START_BODY_FIELDS,
-  "bindingIllegalityConfirmed",
-]);
+const FAD_START_BODY_FIELDS = ORDINARY_START_BODY_FIELDS;
 const START_SOURCE_KINDS = Object.freeze([
   "ordinary_weekly",
   "fad_open_rapid",
@@ -33,8 +30,6 @@ const MANAGER_ASSIGNMENT_STATUSES = new Set([
   "declined",
   "ended",
 ]);
-const FAD_BINDING_CONFIRMATION_REQUIRED =
-  "FAD_BINDING_ILLEGALITY_CONFIRMATION_REQUIRED";
 
 function fail(reasonCode) {
   throw new AuctionCreationPolicyError(reasonCode);
@@ -123,15 +118,6 @@ function validateAuctionStartBody(input, options) {
       AUCTION_CREATION_CODES.inputInvalid
     );
   } else {
-    if (
-      hasExactKeys(input, ORDINARY_START_BODY_FIELDS) ||
-      (
-        hasExactKeys(input, FAD_START_BODY_FIELDS) &&
-        input.bindingIllegalityConfirmed !== true
-      )
-    ) {
-      fail(FAD_BINDING_CONFIRMATION_REQUIRED);
-    }
     exactObject(
       input,
       FAD_START_BODY_FIELDS,
@@ -150,9 +136,6 @@ function validateAuctionStartBody(input, options) {
     aavCents: offer.aavCents,
     termYears: offer.termYears,
   };
-  if (sourceKind === "fad_open_rapid") {
-    body.bindingIllegalityConfirmed = true;
-  }
   return Object.freeze(body);
 }
 
@@ -176,14 +159,18 @@ function canonicalRapidContext(value, nowMs) {
     fadId: stableId(value.fadId),
     fadStatus: value.fadStatus,
     seasonStatus: value.seasonStatus,
-    allocationCompletedAtMs: safeTimestamp(
+    allocationCompletedAtMs: nullableTimestamp(
       value.allocationCompletedAtMs
     ),
   };
   if (
-    context.fadStatus !== "rapid" ||
+    !["allocating", "rapid"].includes(context.fadStatus) ||
     context.seasonStatus !== "active" ||
-    context.allocationCompletedAtMs > nowMs
+    (context.fadStatus === "allocating" &&
+      context.allocationCompletedAtMs !== null) ||
+    (context.fadStatus === "rapid" &&
+      (context.allocationCompletedAtMs === null ||
+        context.allocationCompletedAtMs > nowMs))
   ) {
     fail(AUCTION_CREATION_CODES.seasonUnavailable);
   }
@@ -418,7 +405,6 @@ function decideFreeAgentDraftAuctionStart(input) {
 }
 
 module.exports = {
-  FAD_BINDING_CONFIRMATION_REQUIRED,
   FAD_START_BODY_FIELDS,
   ORDINARY_START_BODY_FIELDS,
   START_SOURCE_KINDS,

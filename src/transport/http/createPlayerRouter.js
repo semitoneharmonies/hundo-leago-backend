@@ -141,6 +141,7 @@ function createPlayerRouter({
             limit: request.query.limit,
             cursor: request.query.cursor,
             sort: request.query.sort,
+            teamId: request.query.teamId,
           });
           return response.status(200).json({
             data: result.players,

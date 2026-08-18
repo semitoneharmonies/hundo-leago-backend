@@ -99,16 +99,6 @@ function createRequestHash(command, auction) {
     termYears: command.termYears,
     expectedBidVersion: command.expectedBidVersion,
   };
-  if (
-    isFadContext(auction) ||
-    Object.prototype.hasOwnProperty.call(
-      command,
-      "bindingIllegalityConfirmed"
-    )
-  ) {
-    payload.bindingIllegalityConfirmed =
-      command.bindingIllegalityConfirmed;
-  }
   return crypto
     .createHash("sha256")
     .update(JSON.stringify(payload), "utf8")
@@ -255,9 +245,7 @@ function createSqliteAuctionBidRepository({ database } = {}) {
       ) ||
       !Number.isSafeInteger(row.first_submitted_at_ms) ||
       row.first_submitted_at_ms > idempotency.created_at_ms ||
-      idempotency.completed_at_ms !== idempotency.created_at_ms ||
-      (isFadContext(auction) &&
-        command.bindingIllegalityConfirmed !== true)
+      idempotency.completed_at_ms !== idempotency.created_at_ms
     ) {
       return null;
     }
@@ -706,23 +694,8 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         return replayResult(command, idempotency, auction);
       }
 
-      if (
-        auction?.source_kind === "ordinary_weekly" &&
-        Object.prototype.hasOwnProperty.call(
-          command,
-          "bindingIllegalityConfirmed"
-        )
-      ) {
-        policyFail(AUCTION_BID_CODES.inputInvalid);
-      }
       if (isFadContext(auction) && !isSupportedFadBidContext(auction)) {
         policyFail(AUCTION_BID_CODES.auctionUnavailable);
-      }
-      if (
-        isSupportedFadBidContext(auction) &&
-        command.bindingIllegalityConfirmed !== true
-      ) {
-        policyFail(AUCTION_BID_CODES.inputInvalid);
       }
 
       const participant = unique(

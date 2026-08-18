@@ -150,6 +150,9 @@ const IDS = Object.freeze({
   failedStartEvent: uuid(115),
   nonTieStartEvent: uuid(116),
   replacementAssignment: uuid(117),
+  uninvolvedUser: uuid(118),
+  uninvolvedMembership: uuid(119),
+  uninvolvedAssignment: uuid(120),
 });
 
 function insert(database, tableName, values) {
@@ -1790,6 +1793,49 @@ describe("FAD-06 SQLite auction read repository", () => {
         WHERE id = ?
       `)
       .run(IDS.allocation);
+    insert(restricted.database, "users", {
+      id: IDS.uninvolvedUser,
+      status: "active",
+    });
+    insert(restricted.database, "league_memberships", {
+      id: IDS.uninvolvedMembership,
+      league_id: IDS.league,
+      user_id: IDS.uninvolvedUser,
+      permission_category: "manager",
+      status: "active",
+    });
+    insert(restricted.database, "team_manager_assignments", {
+      id: IDS.uninvolvedAssignment,
+      league_id: IDS.league,
+      team_id: IDS.teamFour,
+      user_id: IDS.uninvolvedUser,
+      membership_id: IDS.uninvolvedMembership,
+      status: "accepted",
+      accepted_at_ms: NOW_MS - DAY_MS,
+      ended_at_ms: null,
+    });
+    assert.deepEqual(
+      restricted.repository.listAuctions(
+        listInput({
+          viewerUserId: IDS.uninvolvedUser,
+          viewerMembershipId: IDS.uninvolvedMembership,
+          sourceKind: "fad_restricted",
+          fadId: IDS.fad,
+          nowMs: opensAtMs,
+        })
+      ).auctions,
+      []
+    );
+    assert.equal(
+      restricted.repository.readAuction(
+        detailInput(IDS.restrictedAuction, {
+          viewerUserId: IDS.uninvolvedUser,
+          viewerMembershipId: IDS.uninvolvedMembership,
+          nowMs: opensAtMs,
+        })
+      ),
+      null
+    );
     assert.equal(
       restricted.repository.readAuction(
         detailInput(IDS.restrictedAuction, {
@@ -1815,14 +1861,11 @@ describe("FAD-06 SQLite auction read repository", () => {
       ).join,
       { allowed: true, reasonCode: null }
     );
-    assert.deepEqual(
-      activeManager.viewerTeams.find(
+    assert.equal(
+      activeManager.viewerTeams.some(
         ({ teamId }) => teamId === IDS.teamFour
-      ).join,
-      {
-        allowed: false,
-        reasonCode: "TEAM_NOT_PARTICIPANT",
-      }
+      ),
+      false
     );
     const activeCommissioner =
       restricted.repository.readAuction(
@@ -1994,22 +2037,12 @@ describe("FAD-06 SQLite auction read repository", () => {
           participantStatus: "active",
           hasBid: false,
         },
-        {
-          teamId: IDS.teamFour,
-          eligible: false,
-          participantStatus: null,
-          hasBid: false,
-        },
       ]
     );
     assert.equal(
       active.viewerTeams[0].bid.bindingIllegalityConfirmedAtMs,
       NOW_MS - 2 * HOUR_MS
     );
-    assert.deepEqual(active.viewerTeams[2].join, {
-      allowed: false,
-      reasonCode: "TEAM_NOT_PARTICIPANT",
-    });
     assert.equal(JSON.stringify(active).includes("987"), false);
     assert.equal(active.result, null);
 

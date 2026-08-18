@@ -4045,6 +4045,7 @@ function createSqliteFreeAgentDraftReadRepository({
           ? "restricted_pending"
           : "automatic_loss";
       auctionId =
+        code !== "restricted_pending" ||
         allocation.status === "restricted_scheduled"
           ? null
           : allocation.restricted_auction_id;
@@ -4052,12 +4053,8 @@ function createSqliteFreeAgentDraftReadRepository({
       allocation.status ===
       "restricted_fallback_open"
     ) {
-      code =
-        event.offer_outcome_code ===
-        "restricted_tied"
-          ? "fallback_pending"
-          : "automatic_loss";
-      auctionId = allocation.fallback_open_auction_id;
+      code = "automatic_loss";
+      auctionId = null;
     } else if (
       allocation.status === "restricted_resolved"
     ) {

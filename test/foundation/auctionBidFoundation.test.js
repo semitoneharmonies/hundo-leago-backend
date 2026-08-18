@@ -98,6 +98,7 @@ const IDS = Object.freeze({
 
 function command(overrides = {}) {
   const normalizedOverrides = { ...overrides };
+  delete normalizedOverrides.bindingIllegalityConfirmed;
   if (
     Object.prototype.hasOwnProperty.call(
       normalizedOverrides,
@@ -206,7 +207,7 @@ function semanticHash(database) {
     .digest("hex");
 }
 
-function expectedRequestHash(value, { fad = false } = {}) {
+function expectedRequestHash(value) {
   const payload = {
     leagueId: value.leagueId,
     auctionId: value.auctionId,
@@ -218,10 +219,6 @@ function expectedRequestHash(value, { fad = false } = {}) {
     termYears: value.termYears,
     expectedBidVersion: value.expectedBidVersion,
   };
-  if (fad) {
-    payload.bindingIllegalityConfirmed =
-      value.bindingIllegalityConfirmed;
-  }
   return crypto.createHash("sha256")
     .update(JSON.stringify(payload), "utf8")
     .digest("hex");
@@ -694,6 +691,7 @@ function configureFadBidRuntime(
 function persistenceCommand(overrides = {}) {
   const occurredAtMs = overrides.occurredAtMs ?? NOW_MS + 1;
   const normalizedOverrides = { ...overrides };
+  delete normalizedOverrides.bindingIllegalityConfirmed;
   if (
     Object.prototype.hasOwnProperty.call(
       normalizedOverrides,
@@ -967,14 +965,14 @@ describe("M5-02 auction bid policy", () => {
       2
     );
 
-    assertPolicyError(
-      () => assertAuctionBidState({
+    assert.equal(
+      assertAuctionBidState({
         command: command({ expectedBidVersion: 1 }),
         authority: authority(),
         auction: nominatedAuction(),
         existingBid: existingBid(),
-      }),
-      AUCTION_BID_CODES.inputInvalid
+      }).action,
+      "edited"
     );
   });
 
@@ -1098,13 +1096,13 @@ describe("M5-02 atomic sealed-bid persistence", () => {
       0
     );
     const beforeConfirmedReuse = semanticHash(runtime.database);
-    assertPolicyError(
-      () => runtime.repository.putBid(
+    assert.equal(
+      runtime.repository.putBid(
         persistenceCommand({
           bindingIllegalityConfirmed: true,
         })
-      ),
-      AUCTION_BID_CODES.idempotencyKeyReused
+      ).replayed,
+      true
     );
     assert.equal(
       semanticHash(runtime.database),
@@ -1294,21 +1292,6 @@ describe("M5-02 atomic sealed-bid persistence", () => {
       assert.equal(edited.bid.editCount, index);
     }
 
-    const beforeMissingConfirmation = semanticHash(runtime.database);
-    assertPolicyError(
-      () => runtime.repository.putBid(
-        persistenceCommand({
-          idempotencyKey: "fad-direct-no-confirmation",
-          occurredAtMs: NOW_MS,
-        })
-      ),
-      AUCTION_BID_CODES.inputInvalid
-    );
-    assert.equal(
-      semanticHash(runtime.database),
-      beforeMissingConfirmation
-    );
-
     const beforeBelowJoiningMinimum = semanticHash(runtime.database);
     assertPolicyError(
       () => runtime.repository.putBid(
@@ -1473,12 +1456,12 @@ describe("M5-02 atomic sealed-bid persistence", () => {
     );
     const beforeOrdinaryConfirmation = semanticHash(runtime.database);
     assertPolicyError(
-      () => runtime.repository.putBid(
-        persistenceCommand({
-          idempotencyKey: "ordinary-confirmation-rejected",
-          bindingIllegalityConfirmed: true,
-        })
-      ),
+      () => validateAuctionBidCommand({
+        ...persistenceCommand({
+          idempotencyKey: "legacy-confirmation-rejected",
+        }),
+        bindingIllegalityConfirmed: true,
+      }),
       AUCTION_BID_CODES.inputInvalid
     );
     assert.equal(
@@ -1919,14 +1902,13 @@ describe("M5-02 atomic sealed-bid persistence", () => {
     assert.equal(replayed.bid.lastEditedAtMs, submittedAtMs);
   });
 
-  test("enforces restricted confirmation, authorization, joining minimum, floor, cooldown, and participant permanence without writes", (t) => {
+  test("enforces restricted authorization, joining minimum, floor, cooldown, and participant permanence without writes", (t) => {
     const runtime = configureFadBidRuntime(
       createPersistenceRuntime(t),
       { kind: "restricted" }
     );
     let rejectionIndex = 0;
     for (const [overrides, reasonCode] of [
-      [{}, AUCTION_BID_CODES.inputInvalid],
       [
         {
           bindingIllegalityConfirmed: true,
