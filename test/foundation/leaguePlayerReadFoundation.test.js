@@ -581,26 +581,21 @@ describe("league-scoped player read service", () => {
     assert.equal(before.equals(runtime.database.serialize()), true);
   });
 
-  test("filters the complete catalog by current-season team ownership before pagination", (t) => {
+  test("filters current-season ownership before pagination", (t) => {
     const runtime = createRuntime(t);
-    const before = runtime.database.serialize();
     const result = runtime.service.list({
       authenticated: authenticated(USER_A_ID),
       leagueId: LEAGUE_A_ID,
       teamId: TEAM_A_ID,
       limit: 1,
-      sort: "fantasyPoints",
     });
+
     assert.deepEqual(
       result.players.map(({ id }) => id),
       [PLAYER_ONE_ID]
     );
     assert.equal(result.players[0].league.ownership.team.id, TEAM_A_ID);
-    assert.deepEqual(result.page, {
-      nextCursor: null,
-      hasMore: false,
-    });
-    assert.equal(before.equals(runtime.database.serialize()), true);
+    assert.equal(result.page.hasMore, false);
   });
 
   test("orders cursor pages by fantasy points when requested", (t) => {

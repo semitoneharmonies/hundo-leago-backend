@@ -147,7 +147,7 @@ function normalizeRequest(request) {
     artifact.payload?.verification?.status !==
       "verified" ||
     artifact.payload?.verification?.database
-      ?.userVersion !== 51 ||
+      ?.userVersion !== 52 ||
     !Array.isArray(
       artifact.payload.verification.database
         .migrationLedger

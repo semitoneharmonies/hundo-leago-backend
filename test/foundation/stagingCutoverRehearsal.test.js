@@ -371,7 +371,7 @@ describe("M2-14 staging cutover and rollback rehearsal", () => {
     );
   });
 
-  test("reconciles the schema-51 activation and rollback copies", async (t) => {
+  test("reconciles the schema-52 activation and rollback copies", async (t) => {
     const attempt = createImportedAttempt(t);
     const source = databaseReconciliation(
       attempt.databasePath
@@ -388,7 +388,7 @@ describe("M2-14 staging cutover and rollback rehearsal", () => {
     const expectedLedger = discoverMigrations({
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     })
-      .filter(({ id }) => id <= 51)
+      .filter(({ id }) => id <= 52)
       .map(({ id, fileName, checksum }) => ({
         id,
         fileName,
@@ -404,11 +404,11 @@ describe("M2-14 staging cutover and rollback rehearsal", () => {
     assert.equal(REPOSITORY_CATALOG.length, 132);
     assert.deepEqual(
       expectedLedger.map(({ id }) => id),
-      Array.from({ length: 51 }, (_, index) => index + 1)
+      Array.from({ length: 52 }, (_, index) => index + 1)
     );
     assert.equal(
       expectedLedger.at(-1).fileName,
-      "0051_use_aav_first_candidate_cards_and_auctions.sql"
+      "0052_allow_post_candidate_deadline_nominations.sql"
     );
     for (const candidate of [source, activation, rollback]) {
       assert.equal(candidate.inspection.integrity, "ok");
@@ -416,8 +416,8 @@ describe("M2-14 staging cutover and rollback rehearsal", () => {
         candidate.inspection.foreignKeyViolationCount,
         0
       );
-      assert.equal(candidate.inspection.userVersion, 51);
-      assert.equal(candidate.dataModelVersion, "51");
+      assert.equal(candidate.inspection.userVersion, 52);
+      assert.equal(candidate.dataModelVersion, "52");
       assert.deepEqual(
         candidate.inspection.migrations,
         expectedLedger
@@ -429,7 +429,7 @@ describe("M2-14 staging cutover and rollback rehearsal", () => {
       );
       assert.equal(
         candidate.tableState.schema_migrations.rowCount,
-        51
+        52
       );
       for (const tableName of FAD_STATE_TABLES) {
         assert.equal(

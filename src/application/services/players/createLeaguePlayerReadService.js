@@ -28,7 +28,7 @@ function normalizeSort(value) {
 }
 
 function normalizeTeamId(value) {
-  if (value === undefined || value === "") return null;
+  if (value === undefined) return null;
   if (
     typeof value !== "string" ||
     !CANONICAL_UUID_PATTERN.test(value)
@@ -145,8 +145,9 @@ function createLeaguePlayerReadService({
         canonicalSort === "fantasyPoints" && cursorRow
           ? cursorRow.sort_fantasy_points_hundredths
           : null,
-      leagueId: canonicalTeamId === null ? null : authority.leagueId,
-      teamId: canonicalTeamId,
+      leagueId:
+        canonicalTeamId === null ? null : authority.leagueId,
+      ownershipTeamId: canonicalTeamId,
       auctionEligible: false,
       sort: canonicalSort,
     });

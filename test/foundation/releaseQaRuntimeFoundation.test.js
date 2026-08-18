@@ -140,7 +140,7 @@ test("M7 release-QA runtime passes full-stack role, isolation, privacy, health, 
   assert.equal(fs.existsSync(started.databasePath), true);
   assert.equal(
     started.runtime.database.pragma("user_version", { simple: true }),
-    51
+    52
   );
 
   const report = await verifyReleaseQaRuntime({

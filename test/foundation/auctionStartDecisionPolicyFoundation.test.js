@@ -59,6 +59,8 @@ function authority(overrides = {}) {
 function rapidContext(overrides = {}, rolloverOverrides = {}) {
   return {
     allocationCompletedAtMs: OPENS_AT_MS,
+    candidateDeadlineAtMs: OPENS_AT_MS - 2,
+    deadlineLockedAtMs: OPENS_AT_MS - 1,
     fadId: IDS.fad,
     fadStatus: "rapid",
     leagueId: IDS.league,
@@ -118,7 +120,7 @@ function assertPolicyError(callback, reasonCode) {
 }
 
 describe("FAD-13 server-derived auction-start body policy", () => {
-  test("uses the same exact four-field client body for ordinary and FAD starts", () => {
+  test("preserves the exact ordinary four-field body and records FAD binding acceptance server-side", () => {
     const ordinaryInput = {
       playerId: IDS.player,
       teamId: IDS.team,
@@ -128,7 +130,7 @@ describe("FAD-13 server-derived auction-start body policy", () => {
     const ordinary = validateAuctionStartBody(ordinaryInput, {
       sourceKind: "ordinary_weekly",
     });
-    const fad = validateAuctionStartBody(body(), {
+    const fad = validateAuctionStartBody(ordinaryInput, {
       sourceKind: "fad_open_rapid",
     });
 
@@ -162,7 +164,7 @@ describe("FAD-13 server-derived auction-start body policy", () => {
     );
   });
 
-  test("rejects the removed legacy confirmation field on every start", () => {
+  test("rejects confirmation on ordinary starts and accepts only an optional literal true on FAD starts", () => {
     for (const bindingIllegalityConfirmed of [
       true,
       false,
@@ -177,6 +179,13 @@ describe("FAD-13 server-derived auction-start body policy", () => {
           ),
         AUCTION_CREATION_CODES.inputInvalid
       );
+    }
+
+    for (const fadBody of [
+      body({ bindingIllegalityConfirmed: false }),
+      body({ bindingIllegalityConfirmed: null }),
+      body({ bindingIllegalityConfirmed: 1 }),
+    ]) {
       assertPolicyError(
         () =>
           validateAuctionStartBody(
@@ -188,6 +197,14 @@ describe("FAD-13 server-derived auction-start body policy", () => {
         AUCTION_CREATION_CODES.inputInvalid
       );
     }
+    const missing = body();
+    delete missing.bindingIllegalityConfirmed;
+    assert.equal(
+      validateAuctionStartBody(missing, {
+        sourceKind: "fad_open_rapid",
+      }).bindingIllegalityConfirmed,
+      true
+    );
   });
 
   test("rejects every caller-authored context, rollover, timing, and unknown body field", () => {
@@ -491,6 +508,22 @@ describe("FAD-13 server-derived rapid start decision policy", () => {
         AUCTION_CREATION_CODES.seasonUnavailable
       );
     }
+    for (const contextValue of [
+      rapidContext({ candidateDeadlineAtMs: CREATION_CUTOFF_AT_MS }),
+      rapidContext({ deadlineLockedAtMs: CREATION_CUTOFF_AT_MS }),
+      rapidContext({ fadStatus: "allocating" }),
+    ]) {
+      if (contextValue.fadStatus === "allocating") {
+        contextValue.allocationCompletedAtMs = OPENS_AT_MS;
+      }
+      assertPolicyError(
+        () =>
+          decideFreeAgentDraftAuctionStart(
+            decisionInput({ rapidContext: contextValue })
+          ),
+        AUCTION_CREATION_CODES.seasonUnavailable
+      );
+    }
     assertPolicyError(
       () =>
         decideFreeAgentDraftAuctionStart(
@@ -522,6 +555,20 @@ describe("FAD-13 server-derived rapid start decision policy", () => {
         AUCTION_CREATION_CODES.inputInvalid
       );
     }
+  });
+
+  test("allows an eligible nomination while allocation ties are still resolving", () => {
+    const decision = decideFreeAgentDraftAuctionStart(
+      decisionInput({
+        rapidContext: rapidContext({
+          allocationCompletedAtMs: null,
+          fadStatus: "allocating",
+        }),
+      })
+    );
+
+    assert.equal(decision.kind, "auction_opened");
+    assert.equal(decision.sourceKind, "fad_open_rapid");
   });
 
   test("uses elapsed milliseconds across DST rather than local-calendar arithmetic", () => {

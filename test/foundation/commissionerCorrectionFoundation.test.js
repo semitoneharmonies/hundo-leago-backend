@@ -651,7 +651,7 @@ describe("M4-11 optional-reason migration", () => {
       IDS.commissioner,
       NOW_MS + 1
     );
-    assert.equal(database.pragma("user_version", { simple: true }), 51);
+    assert.equal(database.pragma("user_version", { simple: true }), 52);
   });
 });
 

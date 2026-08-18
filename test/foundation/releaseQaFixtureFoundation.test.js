@@ -144,7 +144,7 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
 
   assert.deepEqual(first.manifest, second.manifest);
   assert.deepEqual(first.manifest, verifyReleaseQaFixture({ databasePath: firstPath }));
-  assert.equal(first.manifest.schemaVersion, 51);
+  assert.equal(first.manifest.schemaVersion, 52);
   assert.equal(first.manifest.manifestChecksum, checksumManifest(first.manifest));
   assert.match(first.manifest.manifestChecksum, /^[0-9a-f]{64}$/);
   assert.equal(first.manifest.global.leagueCount, 2);

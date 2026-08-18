@@ -1422,6 +1422,10 @@ function createSqliteAuctionReadRepository({ database } = {}) {
           authority.league_status === "active" &&
           authority.season_status === "active" &&
           ["allocating", "rapid"].includes(fad.fad_status) &&
+          Number.isSafeInteger(fad.candidate_deadline_at_ms) &&
+          Number.isSafeInteger(fad.deadline_locked_at_ms) &&
+          fad.candidate_deadline_at_ms <= input.nowMs &&
+          fad.deadline_locked_at_ms <= input.nowMs &&
           Boolean(rollover),
         blockedReason:
           authority.league_status === "frozen"
@@ -1528,7 +1532,7 @@ function createSqliteAuctionReadRepository({ database } = {}) {
     return "updated_at_ms";
   }
 
-  function selectBoundedAuctionHeads(input, administrative) {
+  function selectBoundedAuctionHeads(input, authority) {
     const statuses = input.statuses;
     const statusParameters = Object.fromEntries(
       statuses.map((status, index) => [`status${index}`, status])
@@ -1578,17 +1582,23 @@ function createSqliteAuctionReadRepository({ database } = {}) {
           )
           OR EXISTS (
             SELECT 1
-            FROM free_agent_draft_auction_participants AS private_participant
+            FROM free_agent_draft_auction_participants
+              AS private_participant
             JOIN team_manager_assignments AS private_assignment
-              ON private_assignment.league_id = private_participant.league_id
-             AND private_assignment.team_id = private_participant.team_id
+              ON private_assignment.league_id =
+                  private_participant.league_id
+             AND private_assignment.team_id =
+                  private_participant.team_id
              AND private_assignment.user_id = @viewerUserId
              AND private_assignment.membership_id = @viewerMembershipId
              AND private_assignment.status = 'accepted'
+             AND private_assignment.accepted_at_ms IS NOT NULL
              AND private_assignment.accepted_at_ms <= @nowMs
              AND private_assignment.ended_at_ms IS NULL
-            WHERE private_participant.league_id = auction_heads.league_id
-              AND private_participant.auction_id = auction_heads.auction_id
+            WHERE private_participant.league_id =
+                auction_heads.league_id
+              AND private_participant.auction_id =
+                auction_heads.auction_id
               AND private_participant.status = 'active'
           )
         )
@@ -1685,6 +1695,8 @@ function createSqliteAuctionReadRepository({ database } = {}) {
     `);
     return statement.all({
       leagueId: input.leagueId,
+      viewerUserId: input.viewerUserId,
+      viewerMembershipId: input.viewerMembershipId,
       nowMs: input.nowMs,
       administrative: administrative ? 1 : 0,
       viewerUserId: input.viewerUserId,
@@ -1695,6 +1707,7 @@ function createSqliteAuctionReadRepository({ database } = {}) {
       cursorSortMs: input.cursor?.sortMs ?? null,
       cursorAuctionId: input.cursor?.auctionId ?? null,
       limit: input.limit,
+      administrative: authority.administrative ? 1 : 0,
       ...statusParameters,
     });
   }
@@ -1847,13 +1860,17 @@ function createSqliteAuctionReadRepository({ database } = {}) {
           )
           OR EXISTS (
             SELECT 1
-            FROM free_agent_draft_auction_participants AS private_participant
+            FROM free_agent_draft_auction_participants
+              AS private_participant
             JOIN team_manager_assignments AS private_assignment
-              ON private_assignment.league_id = private_participant.league_id
-             AND private_assignment.team_id = private_participant.team_id
+              ON private_assignment.league_id =
+                  private_participant.league_id
+             AND private_assignment.team_id =
+                  private_participant.team_id
              AND private_assignment.user_id = @viewerUserId
              AND private_assignment.membership_id = @viewerMembershipId
              AND private_assignment.status = 'accepted'
+             AND private_assignment.accepted_at_ms IS NOT NULL
              AND private_assignment.accepted_at_ms <= @nowMs
              AND private_assignment.ended_at_ms IS NULL
             WHERE private_participant.league_id = auctions.league_id
@@ -2056,7 +2073,11 @@ function createSqliteAuctionReadRepository({ database } = {}) {
       LIMIT 3
     `);
     listCurrentFads = database.prepare(`
-      SELECT id AS fad_id, status AS fad_status
+      SELECT
+        id AS fad_id,
+        status AS fad_status,
+        candidate_deadline_at_ms,
+        deadline_locked_at_ms
       FROM free_agent_drafts
       WHERE league_id = @leagueId
         AND season_id = @seasonId
@@ -2098,10 +2119,7 @@ function createSqliteAuctionReadRepository({ database } = {}) {
       try {
         const authority = requireAuthority(canonical);
         const managed = managedTeams(canonical);
-        const projected = selectBoundedAuctionHeads(
-          canonical,
-          authority.administrative
-        )
+        const projected = selectBoundedAuctionHeads(canonical, authority)
           .map((head) =>
             projectAuction(
               head,

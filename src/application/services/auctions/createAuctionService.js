@@ -51,7 +51,33 @@ function exactStartInput(input) {
     "teamId",
     "termYears",
     "aavCents",
-  ]);
+  ];
+  const fadKeys = [
+    ...ordinaryKeys,
+    "bindingIllegalityConfirmed",
+  ];
+  const keys =
+    input && typeof input === "object" && !Array.isArray(input)
+      ? Object.keys(input).sort().join("|")
+      : "";
+  if (
+    ![
+      ordinaryKeys.sort().join("|"),
+      fadKeys.sort().join("|"),
+    ].includes(keys) ||
+    (
+      Object.prototype.hasOwnProperty.call(
+        input || {},
+        "bindingIllegalityConfirmed"
+      ) &&
+      input.bindingIllegalityConfirmed !== true
+    )
+  ) {
+    const error = new TypeError("The auction request is invalid.");
+    error.code = "AUCTION_INPUT_INVALID";
+    throw error;
+  }
+  return input;
 }
 
 function exactBidInput(input) {

@@ -787,7 +787,7 @@ describe("FAD-04 reset migration-report evidence projection", () => {
     assert.equal(serialized.includes("directArrayCounts"), false);
   });
 
-  test("projects genuine import and independent-verification artifacts under schema 51", (t) => {
+  test("projects genuine import and independent-verification artifacts under schema 52", (t) => {
     const artifacts = createVerifiedImportAttempt(t);
     const projected =
       projectSucceededResetMigrationReport(artifacts);
@@ -795,7 +795,7 @@ describe("FAD-04 reset migration-report evidence projection", () => {
       projected.sourceHashesJson
     );
 
-    assert.equal(projected.databaseSchemaVersion, 51);
+    assert.equal(projected.databaseSchemaVersion, 52);
     assert.equal(projected.status, "succeeded");
     assert.equal(projected.rejectsJson, "[]");
     assert.equal(hashes.sourceBundle.manifestVersion, 1);

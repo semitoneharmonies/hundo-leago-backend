@@ -223,7 +223,7 @@ function createPlayerReadService({
       cursorId: cursorRow?.id || null,
       cursorFantasyPoints: null,
       leagueId: eligibility.leagueId,
-      teamId: null,
+      ownershipTeamId: null,
       auctionEligible: eligibility.auctionEligible,
       sort: "name",
     });

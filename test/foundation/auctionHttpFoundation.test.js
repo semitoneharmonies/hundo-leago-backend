@@ -1464,49 +1464,53 @@ describe("FAD-06 isolated auction HTTP contract", () => {
     }
   });
 
-  test("accepts auction starts without a client confirmation field and rejects the removed legacy field", async (t) => {
+  test("accepts the simplified nomination body and rejects an obsolete false confirmation before writing", async (t) => {
     const fixture = serviceDependencies();
     const baseUrl = await startApi(
       t,
       createAuctionService(fixture.dependencies)
     );
-    const input = {
-      playerId: PLAYER_ID,
-      teamId: TEAM_ID,
-      aavCents: 225,
-      termYears: 3,
-    };
     const accepted = await fetch(
       `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/auctions`,
       {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": "no-confirmation-needed",
+          "idempotency-key": "fad-binding-absent",
         },
-        body: JSON.stringify(input),
+        body: JSON.stringify({
+          playerId: PLAYER_ID,
+          teamId: TEAM_ID,
+          aavCents: 225,
+          termYears: 3,
+        }),
       }
     );
     assert.equal(accepted.status, 201);
-    assert.equal(
-      Object.hasOwn(fixture.calls[0].input.body, "bindingIllegalityConfirmed"),
-      false
-    );
-    const legacy = await fetch(
+
+    const rejected = await fetch(
       `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/auctions`,
       {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": "legacy-confirmation-field",
+          "idempotency-key": "fad-binding-false",
         },
         body: JSON.stringify({
-          ...input,
+          playerId: PLAYER_ID,
+          teamId: TEAM_ID,
+          aavCents: 225,
+          termYears: 3,
           bindingIllegalityConfirmed: false,
         }),
       }
     );
-    assert.equal(legacy.status, 400);
+    const rejectedPayload = await rejected.json();
+    assert.equal(rejected.status, 400);
+    assert.equal(
+      rejectedPayload.error.code,
+      "AUCTION_INPUT_INVALID"
+    );
     assert.equal(
       fixture.calls.filter(
         ({ method }) => method === "startOrQueue"

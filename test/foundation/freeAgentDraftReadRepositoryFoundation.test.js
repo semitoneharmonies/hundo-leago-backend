@@ -6172,6 +6172,55 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
     assertNoWrites(runtime.database, corruptBefore);
   });
 
+  test("does not project a restricted tie for a Candidate Card team that is no longer eligible", (t) => {
+    const runtime = createRuntime(t);
+    openDraft(runtime.database, PRIMARY);
+    const fixture =
+      seedRestrictedActionWithoutImprovement(
+        runtime.database
+      );
+    dropTableTriggers(
+      runtime.database,
+      "free_agent_draft_auction_participants"
+    );
+    runtime.database
+      .prepare(`
+        UPDATE free_agent_draft_auction_participants
+        SET status = 'removed',
+            removed_by_user_id = @userId,
+            removed_by_membership_id = @membershipId,
+            removed_authority = 'commissioner',
+            removal_reason = 'Foundation eligibility change',
+            removed_at_ms = @removedAtMs,
+            updated_at_ms = @removedAtMs,
+            version = version + 1
+        WHERE league_id = @leagueId
+          AND id = @participantId
+      `)
+      .run({
+        leagueId: PRIMARY.leagueId,
+        membershipId: PRIMARY.commissionerMembershipId,
+        participantId: fixture.participantIds[0],
+        removedAtMs: ALLOCATION_AT_MS + 1,
+        userId: PRIMARY.commissionerUserId,
+      });
+    const before = noWriteSnapshot(runtime.database);
+
+    const history =
+      runtime.readRepository.readPublishedCardHistory(
+        publishedHistoryInput({
+          nowMs: ALLOCATION_AT_MS + 2,
+        })
+      );
+
+    assert.deepEqual(history.slots[0].outcome, {
+      code: "automatic_loss",
+      allocationId: fixture.allocationId,
+      auctionId: null,
+    });
+    assertNoWrites(runtime.database, before);
+  });
+
   test("reads the internal opening preflight context without byte, semantic, or total-change writes", (t) => {
     const runtime = createRuntime(t);
     const before = noWriteSnapshot(runtime.database);

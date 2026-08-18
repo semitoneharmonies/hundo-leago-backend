@@ -1314,7 +1314,6 @@ describe("M5-02 atomic sealed-bid persistence", () => {
       totalValueCents: 500,
       termYears: 3,
       occurredAtMs: NOW_MS,
-      bindingIllegalityConfirmed: true,
     });
     const joined = runtime.repository.putBid(joinCommand);
     assert.equal(joined.action, "submitted");
@@ -1325,7 +1324,13 @@ describe("M5-02 atomic sealed-bid persistence", () => {
         FROM idempotency_requests
         WHERE id = ?
       `).get(uuid(102)).request_hash,
-      expectedRequestHash(joinCommand, { fad: true })
+      expectedRequestHash(
+        {
+          ...joinCommand,
+          bindingIllegalityConfirmed: true,
+        },
+        { fad: true }
+      )
     );
 
     const firstJoinerEditAtMs = NOW_MS + COOLDOWN_MS;
@@ -1780,7 +1785,6 @@ describe("M5-02 atomic sealed-bid persistence", () => {
       occurredAtMs: submittedAtMs,
       idempotencyExpiresAtMs:
         submittedAtMs + 86_400_000,
-      bindingIllegalityConfirmed: true,
     });
     const submitted = runtime.repository.putBid(
       submittedCommand
@@ -1805,7 +1809,13 @@ describe("M5-02 atomic sealed-bid persistence", () => {
         FROM idempotency_requests
         WHERE id = ?
       `).get(uuid(102)).request_hash,
-      expectedRequestHash(submittedCommand, { fad: true })
+      expectedRequestHash(
+        {
+          ...submittedCommand,
+          bindingIllegalityConfirmed: true,
+        },
+        { fad: true }
+      )
     );
     assert.deepEqual(
       runtime.database.prepare(`
@@ -1966,7 +1976,6 @@ describe("M5-02 atomic sealed-bid persistence", () => {
         occurredAtMs: submittedAtMs,
         idempotencyExpiresAtMs:
           submittedAtMs + 86_400_000,
-        bindingIllegalityConfirmed: true,
       })
     );
     const beforeCooldown = semanticHash(runtime.database);

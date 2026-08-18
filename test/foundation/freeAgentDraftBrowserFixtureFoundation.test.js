@@ -346,7 +346,7 @@ test(
 );
 
 test(
-  "FAD browser fixture rejects anything except an open schema-51 release-QA runtime",
+  "FAD browser fixture rejects anything except an open schema-52 release-QA runtime",
   async () => {
     const source = fs.readFileSync(
       path.join(

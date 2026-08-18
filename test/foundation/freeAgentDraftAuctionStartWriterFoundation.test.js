@@ -620,7 +620,59 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
     );
   });
 
-  test("starts FAD auctions without a client confirmation field and routes ordinary bodies without writes", (t) => {
+  test("starts an uncarded eligible-player nomination after the Candidate Card deadline while ties still allocate", (t) => {
+    const fixture = createFixture(t, "allocating-direct");
+    withoutTriggers(fixture.database, () => {
+      fixture.database.prepare(`
+        UPDATE free_agent_drafts
+        SET status = 'allocating',
+            allocation_completed_at_ms = NULL,
+            updated_at_ms = @updatedAtMs,
+            version = version + 1
+        WHERE league_id = @leagueId
+          AND id = @fadId
+      `).run({
+        fadId: PRIMARY.fad,
+        leagueId: PRIMARY.league,
+        updatedAtMs: ROLLOVER_OPENS_AT_MS,
+      });
+    });
+
+    const context = fixture.writer.findStartContext(
+      scope(PRIMARY, DIRECT_AT_MS)
+    );
+    assert.equal(context.rapidContext.fadStatus, "allocating");
+    assert.equal(
+      context.rapidContext.allocationCompletedAtMs,
+      null
+    );
+    assert.equal(
+      fixture.database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM candidate_card_entries
+        WHERE league_id = @leagueId
+          AND fad_id = @fadId
+          AND player_id = @playerId
+      `).get({
+        fadId: PRIMARY.fad,
+        leagueId: PRIMARY.league,
+        playerId: PRIMARY.player,
+      }).count,
+      0
+    );
+
+    const result = fixture.writer.startOrQueue(
+      command(
+        PRIMARY,
+        DIRECT_AT_MS,
+        "allocating-direct-start"
+      )
+    );
+    assert.equal(result.kind, "auction_opened");
+    assert.equal(result.actorAuthority, "manager");
+  });
+
+  test("records FAD binding acceptance server-side and routes fresh ordinary bodies without writes", (t) => {
     const fadFixture = createFixture(t, "routing-current-fad", {
       idBase: 8_050,
     });
@@ -629,17 +681,18 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
       DIRECT_AT_MS,
       "without-confirmation"
     );
-    const started = fadFixture.writer.startOrQueue(withoutConfirmation);
-    assert.equal(started.kind, "auction_opened");
-    assert.equal(fadFixture.generated.length, 6);
-    const metadata = JSON.parse(
-      fadFixture.database.prepare(`
-        SELECT metadata_json AS metadataJson
-        FROM auction_events
-        WHERE id = ?
-      `).get(started.auctionEventId).metadataJson
+    delete missingConfirmation.body.bindingIllegalityConfirmed;
+    const fadResult =
+      fadFixture.writer.startOrQueue(missingConfirmation);
+    assert.equal(fadResult.kind, "auction_opened");
+    assert.equal(
+      fadResult.body.bindingIllegalityConfirmed,
+      true
     );
-    assert.equal(metadata.bindingIllegalityConfirmed, true);
+    assert.equal(
+      fadResult.bindingIllegalityConfirmedAtMs,
+      DIRECT_AT_MS
+    );
     assert.equal(
       count(
         fadFixture.database,

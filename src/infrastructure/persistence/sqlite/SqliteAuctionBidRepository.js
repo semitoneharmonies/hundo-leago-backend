@@ -87,6 +87,23 @@ function isReplayableFadBidContext(auction) {
   );
 }
 
+function serverRecordedBinding(command, auction) {
+  if (!isFadContext(auction)) return command;
+  if (
+    Object.prototype.hasOwnProperty.call(
+      command,
+      "bindingIllegalityConfirmed"
+    ) &&
+    command.bindingIllegalityConfirmed !== true
+  ) {
+    policyFail(AUCTION_BID_CODES.inputInvalid);
+  }
+  return freeze({
+    ...command,
+    bindingIllegalityConfirmed: true,
+  });
+}
+
 function createRequestHash(command, auction) {
   const payload = {
     leagueId: command.leagueId,
@@ -659,11 +676,15 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         AND id = @participantId
       LIMIT 2
     `);
-    putTransaction = database.transaction((command) => {
+    putTransaction = database.transaction((inputCommand) => {
       const auction = unique(
         findAuction,
-        command,
+        inputCommand,
         "An auction identifier is not unique within its league."
+      );
+      const command = serverRecordedBinding(
+        inputCommand,
+        auction
       );
       const requestHash = createRequestHash(command, auction);
       const idempotency = unique(
