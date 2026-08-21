@@ -752,17 +752,38 @@ function insertLeagueBase(database, leagueAlias, accounts) {
   });
 
   const assignmentAccounts = managerAliases;
-  assignmentAccounts.forEach((accountAlias, index) => {
-    database.prepare(`
+  const insertManagerAssignment = database.prepare(`
       INSERT INTO team_manager_assignments (
         id, league_id, team_id, user_id, membership_id,
         assigned_by_user_id, replaces_assignment_id, status,
         assigned_at_ms, accepted_at_ms, ended_at_ms, version
       ) VALUES (?, ?, ?, ?, ?, ?, NULL, 'accepted', ?, ?, NULL, 1)
-    `).run(
+    `);
+  assignmentAccounts.forEach((accountAlias, index) => {
+    insertManagerAssignment.run(
       fixtureId(`assignment:${leagueAlias}:${accountAlias}`),
       leagueId,
       teams[index + 1].id,
+      accounts[accountAlias].id,
+      memberships[accountAlias].id,
+      accounts[commissionerAlias].id,
+      FIXTURE_NOW_MS,
+      FIXTURE_NOW_MS
+    );
+  });
+  const additionalManagerTeamIndexes = leagueAlias === "leagueA"
+    ? [0, 3, 5]
+    : [0, 2, 3, 5];
+  additionalManagerTeamIndexes.forEach((teamIndex) => {
+    const team = teams[teamIndex];
+    if (!team) return;
+    const accountAlias = leagueAlias === "leagueB" && teamIndex === 0
+      ? commissionerAlias
+      : managerAliases[teamIndex % managerAliases.length];
+    insertManagerAssignment.run(
+      fixtureId(`assignment:${leagueAlias}:${accountAlias}:team-${teamIndex + 1}`),
+      leagueId,
+      team.id,
       accounts[accountAlias].id,
       memberships[accountAlias].id,
       accounts[commissionerAlias].id,
@@ -1180,11 +1201,26 @@ function insertAuctionAndTrades(
     clock,
     secureRandom,
   });
-  const authenticated = Object.freeze({
-    valid: true,
-    user: Object.freeze({ id: accounts[league.commissionerAlias].id }),
-    session: Object.freeze({ userId: accounts[league.commissionerAlias].id }),
-  });
+  function authenticatedManager(teamId) {
+    const assignment = database.prepare(`
+      SELECT user_id
+      FROM team_manager_assignments
+      WHERE league_id = ? AND team_id = ? AND status = 'accepted'
+        AND ended_at_ms IS NULL
+      LIMIT 2
+    `).get(league.leagueId, teamId);
+    if (!assignment) {
+      fail(
+        "RELEASE_QA_TRADE_MANAGER_REQUIRED",
+        `The ${league.alias} release-QA trade team has no current manager.`
+      );
+    }
+    return Object.freeze({
+      valid: true,
+      user: Object.freeze({ id: assignment.user_id }),
+      session: Object.freeze({ userId: assignment.user_id }),
+    });
+  }
 
   function beginScenario(alias, occurredAtMs) {
     scenarioAlias = alias;
@@ -1198,7 +1234,7 @@ function insertAuctionAndTrades(
       leagueId: league.leagueId,
       input,
       idempotencyKey: `release-qa:${league.alias}:${alias}:create`,
-      authenticated,
+      authenticated: authenticatedManager(input.proposingTeamId),
     });
   }
 
@@ -1223,7 +1259,7 @@ function insertAuctionAndTrades(
     leagueId: league.leagueId,
     input: { tradeId: completed.proposal.id },
     idempotencyKey: `release-qa:${league.alias}:accepted:execute`,
-    authenticated,
+    authenticated: authenticatedManager(completed.proposal.receivingTeamId),
   }).then((accepted) => {
     if (
       accepted.proposal.storageStatus !== "completed" ||
@@ -1260,7 +1296,7 @@ function insertAuctionAndTrades(
     leagueId: league.leagueId,
     input: { tradeId: rejected.proposal.id, action: "reject" },
     idempotencyKey: `release-qa:${league.alias}:rejected:respond`,
-    authenticated,
+    authenticated: authenticatedManager(rejected.proposal.receivingTeamId),
   });
   if (rejectedResult.proposal.storageStatus !== "declined") {
     fail(
@@ -1294,7 +1330,7 @@ function insertAuctionAndTrades(
   const invalidCapPreview = previewService.preview({
     leagueId: league.leagueId,
     input: { tradeId: invalidCap.proposal.id },
-    authenticated,
+    authenticated: authenticatedManager(invalidCap.proposal.receivingTeamId),
   });
   const receivingCapIssue = invalidCapPreview.teams
     .find(({ teamId }) => teamId === league.teams[2].id)

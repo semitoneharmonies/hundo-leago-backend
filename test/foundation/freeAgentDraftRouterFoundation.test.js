@@ -79,6 +79,45 @@ const CORRECTION_PREVIEW_DATA = Object.freeze({
   allocationVersion: 3,
   previewFingerprint: "a".repeat(64),
   reversible: true,
+  currentDecision: Object.freeze({
+    rankedOffers: Object.freeze([
+      Object.freeze({
+        totalValueCents: null,
+        termYears: null,
+        aavCents: null,
+      }),
+    ]),
+    winner: Object.freeze({
+      totalValueCents: null,
+      termYears: null,
+      aavCents: null,
+    }),
+    restricted: Object.freeze({
+      minimumTotalValueCents: null,
+      minimumTermYears: null,
+      minimumAavCents: null,
+    }),
+  }),
+  recomputedDecision: Object.freeze({
+    rankedOffers: Object.freeze([
+      Object.freeze({
+        totalValueCents: null,
+        termYears: null,
+        aavCents: null,
+      }),
+    ]),
+    winner: null,
+    restricted: null,
+  }),
+  deltas: Object.freeze([
+    Object.freeze({
+      afterSummary: Object.freeze({
+        totalValueCents: null,
+        termYears: null,
+        aavCents: null,
+      }),
+    }),
+  ]),
   projection: "correction-preview",
 });
 const CORRECTION_DATA = Object.freeze({
@@ -87,8 +126,36 @@ const CORRECTION_DATA = Object.freeze({
   allocation: Object.freeze({
     allocationId: ALLOCATION_ID,
     allocationVersion: 4,
+    rankedOffers: Object.freeze([
+      Object.freeze({
+        totalValueCents: null,
+        termYears: null,
+        aavCents: null,
+      }),
+    ]),
+    winner: Object.freeze({
+      totalValueCents: null,
+      termYears: null,
+      aavCents: null,
+    }),
+    restricted: Object.freeze({
+      minimumTotalValueCents: null,
+      minimumTermYears: null,
+      minimumAavCents: null,
+    }),
+    fallback: Object.freeze({
+      minimumTotalValueCents: null,
+    }),
   }),
-  appliedDeltas: Object.freeze([]),
+  appliedDeltas: Object.freeze([
+    Object.freeze({
+      afterSummary: Object.freeze({
+        totalValueCents: null,
+        termYears: null,
+        aavCents: null,
+      }),
+    }),
+  ]),
   activityId:
     "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
   completedAtMs: 1_200_000,
@@ -773,6 +840,17 @@ describe("FAD published-read HTTP boundary", () => {
       data: CORRECTION_PREVIEW_DATA,
       meta: { requestId: "fad-router-request" },
     });
+    assert.deepEqual(
+      [
+        response.body.data.currentDecision.rankedOffers[0]
+          .totalValueCents,
+        response.body.data.currentDecision.winner.termYears,
+        response.body.data.currentDecision.restricted
+          .minimumAavCents,
+        response.body.data.deltas[0].afterSummary.aavCents,
+      ],
+      [null, null, null, null]
+    );
     assert.deepEqual(context.calls, [
       [
         "previewAllocationCorrection",
@@ -849,6 +927,20 @@ describe("FAD published-read HTTP boundary", () => {
       data: CORRECTION_DATA,
       meta: { requestId: "fad-router-request" },
     });
+    assert.deepEqual(
+      [
+        response.body.data.allocation.rankedOffers[0]
+          .totalValueCents,
+        response.body.data.allocation.winner.termYears,
+        response.body.data.allocation.restricted
+          .minimumAavCents,
+        response.body.data.allocation.fallback
+          .minimumTotalValueCents,
+        response.body.data.appliedDeltas[0].afterSummary
+          .aavCents,
+      ],
+      [null, null, null, null, null]
+    );
     assert.equal("replayed" in response.body, false);
     assert.equal("committedRoster" in response.body, false);
     assert.deepEqual(context.rateCalls, [
@@ -885,6 +977,15 @@ describe("FAD published-read HTTP boundary", () => {
       data: CORRECTION_DATA,
       meta: { requestId: "fad-router-request" },
     });
+    assert.deepEqual(
+      [
+        replayResponse.body.data.allocation.winner
+          .totalValueCents,
+        replayResponse.body.data.appliedDeltas[0]
+          .afterSummary.termYears,
+      ],
+      [null, null]
+    );
     assert.equal("replayed" in replayResponse.body, false);
   });
 
@@ -944,8 +1045,9 @@ describe("FAD published-read HTTP boundary", () => {
     ]);
 
     const results = await getJson(
-      `${base}/results?q=%20ALEX%09Example%20` +
-        "&status=pending&cursor=result-cursor&limit=9"
+      `${base}/results?teamId=${TEAM_ID}` +
+        "&q=%20ALEX%09Example%20" +
+        "&status=signed&cursor=result-cursor&limit=9"
     );
     assert.equal(results.status, 200);
     assert.equal(
@@ -967,8 +1069,9 @@ describe("FAD published-read HTTP boundary", () => {
         fadId: FAD_ID,
         authenticated: AUTHENTICATED,
         query: {
+          teamId: TEAM_ID,
           q: "alex example",
-          status: "pending",
+          status: "signed",
           cursor: "result-cursor",
           limit: 9,
         },
@@ -1044,14 +1147,18 @@ describe("FAD published-read HTTP boundary", () => {
       `${base}/${FAD_ID}/candidate-cards?cursor=bad%2Bcursor`,
       `${base}/${FAD_ID}/candidate-cards?cursor=one&cursor=two`,
       `${base}/${FAD_ID}/candidate-cards/${TEAM_ID}/history?unknown=1`,
+      `${base}/${FAD_ID}/results`,
+      `${base}/${FAD_ID}/results?teamId=`,
+      `${base}/${FAD_ID}/results?teamId=${TEAM_ID}&teamId=${TEAM_ID}`,
       `${base}/${FAD_ID}/results?unknown=1`,
-      `${base}/${FAD_ID}/results?status=unknown`,
-      `${base}/${FAD_ID}/results?status=pending&status=invalid`,
-      `${base}/${FAD_ID}/results?limit=0`,
-      `${base}/${FAD_ID}/results?limit=101`,
-      `${base}/${FAD_ID}/results?cursor=bad%2Bcursor`,
-      `${base}/${FAD_ID}/results?q=%00`,
-      `${base}/${FAD_ID}/results?q=${"x".repeat(201)}`,
+      `${base}/${FAD_ID}/results?teamId=bad`,
+      `${base}/${FAD_ID}/results?teamId=${TEAM_ID}&status=unknown`,
+      `${base}/${FAD_ID}/results?teamId=${TEAM_ID}&status=signed&status=tied`,
+      `${base}/${FAD_ID}/results?teamId=${TEAM_ID}&limit=0`,
+      `${base}/${FAD_ID}/results?teamId=${TEAM_ID}&limit=101`,
+      `${base}/${FAD_ID}/results?teamId=${TEAM_ID}&cursor=bad%2Bcursor`,
+      `${base}/${FAD_ID}/results?teamId=${TEAM_ID}&q=%00`,
+      `${base}/${FAD_ID}/results?teamId=${TEAM_ID}&q=${"x".repeat(201)}`,
     ];
 
     for (const url of urls) {

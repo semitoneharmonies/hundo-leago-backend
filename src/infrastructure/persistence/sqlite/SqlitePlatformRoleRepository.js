@@ -76,8 +76,13 @@ function createSqlitePlatformRoleRepository({
     database,
     definition: getRepositoryDefinition("platform_roles"),
   });
+  const memberships = createSqliteRecordRepository({
+    database,
+    definition: getRepositoryDefinition("league_memberships"),
+  });
   let countAllStatement;
   let findActiveByUserStatement;
+  let listUncoveredLeaguesStatement;
   try {
     countAllStatement = database.prepare(`
       SELECT COUNT(*) AS count
@@ -91,6 +96,19 @@ function createSqlitePlatformRoleRepository({
         "AND role = 'platform_administrator' " +
         "AND status = 'active'"
     );
+    listUncoveredLeaguesStatement = database.prepare(`
+      SELECT leagues.id
+      FROM leagues
+      WHERE leagues.status <> 'deleted'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM league_memberships
+          WHERE league_memberships.league_id = leagues.id
+            AND league_memberships.user_id = @userId
+            AND league_memberships.status = 'active'
+        )
+      ORDER BY leagues.id ASC
+    `);
   } catch (error) {
     throw mapRepositoryError(error, {
       operation: "preparePlatformRoleRepository",
@@ -123,6 +141,45 @@ function createSqlitePlatformRoleRepository({
           tableName: "platform_roles",
         });
       }
+    },
+    listUncoveredLeagueIds(userId) {
+      const stableUserId = assertStableId(userId);
+      try {
+        return Object.freeze(
+          listUncoveredLeaguesStatement
+            .all({ userId: stableUserId })
+            .map(({ id }) => id)
+        );
+      } catch (error) {
+        throw mapRepositoryError(error, {
+          operation: "listUncoveredPlatformAdministratorLeagues",
+          tableName: "league_memberships",
+        });
+      }
+    },
+    insertProtectedLeagueMembership({
+      id,
+      leagueId,
+      userId,
+      nowMs,
+    } = {}) {
+      if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
+        invalid("A safe platform-role membership timestamp is required.");
+      }
+      return freezeRow(
+        memberships.insert({
+          id: assertStableId(id),
+          league_id: assertStableId(leagueId),
+          user_id: assertStableId(userId),
+          permission_category: "member",
+          status: "active",
+          joined_at_ms: nowMs,
+          ended_at_ms: null,
+          created_at_ms: nowMs,
+          updated_at_ms: nowMs,
+          version: 1,
+        })
+      );
     },
     insertActive(record) {
       return freezeRow(

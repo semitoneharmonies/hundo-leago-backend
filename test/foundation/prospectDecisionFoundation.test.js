@@ -61,6 +61,7 @@ const IDS = Object.freeze({
   otherSeason: uuid(23),
   team: uuid(30),
   otherTeam: uuid(31),
+  tradeTeam: uuid(32),
   player: uuid(40),
   ownership: uuid(50),
   contract: uuid(60),
@@ -73,6 +74,10 @@ const IDS = Object.freeze({
   activity: uuid(90),
   otherEvent: uuid(91),
   otherActivity: uuid(92),
+  trade: uuid(100),
+  tradeAsset: uuid(101),
+  trade2: uuid(102),
+  tradeAsset2: uuid(103),
 });
 
 function seed(context) {
@@ -128,6 +133,7 @@ function seed(context) {
   for (const [id, leagueId, name] of [
     [IDS.team, IDS.league, "Team"],
     [IDS.otherTeam, IDS.otherLeague, "Other Team"],
+    [IDS.tradeTeam, IDS.league, "Trade Team"],
   ]) {
     context.repositories.teams.insert({
       id,
@@ -174,7 +180,10 @@ function seed(context) {
 
 function createRuntime(
   t,
-  { candidateCardSummerSynchronizer } = {}
+  {
+    candidateCardSummerSynchronizer,
+    tradePublicationWriter,
+  } = {}
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m4-06-"));
   const connection = openDatabase({
@@ -209,8 +218,43 @@ function createRuntime(
             });
           },
         },
+      tradePublicationWriter,
     }),
   };
+}
+
+function seedPendingProspectTrade(
+  context,
+  { tradeId = IDS.trade, tradeAssetId = IDS.tradeAsset } = {}
+) {
+  context.repositories.trades.insert({
+    id: tradeId,
+    league_id: IDS.league,
+    season_id: IDS.season1,
+    proposing_team_id: IDS.team,
+    receiving_team_id: IDS.tradeTeam,
+    proposing_user_id: IDS.user,
+    status: "proposed",
+    created_at_ms: NOW_MS,
+    expires_at_ms: NOW_MS + 60_000,
+    responded_at_ms: null,
+    completed_at_ms: null,
+    commissioner_completion_reference: null,
+    updated_at_ms: NOW_MS,
+    version: 1,
+  });
+  context.repositories.trade_assets.insert({
+    id: tradeAssetId,
+    league_id: IDS.league,
+    trade_id: tradeId,
+    direction: "proposing_to_receiving",
+    source_team_id: IDS.team,
+    destination_team_id: IDS.tradeTeam,
+    asset_type: "prospect_right",
+    player_id: IDS.player,
+    sequence: 1,
+    created_at_ms: NOW_MS,
+  });
 }
 
 function signingInput(overrides = {}) {
@@ -229,6 +273,9 @@ function signingInput(overrides = {}) {
     activityId: IDS.activity,
     actorUserId: IDS.user,
     actorAuthority: "manager",
+    destinationCategory: "Prospect",
+    destinationPositionGroup: "F",
+    destinationSlotNumber: null,
     occurredAtMs: NOW_MS + 1,
     ...overrides,
   };
@@ -437,10 +484,11 @@ describe("M4-06 atomic prospect decisions", () => {
     ]);
   });
 
-  test("signs one ELC and converts the right to a cap-exempt rostered Prospect", (t) => {
-    const { database, repository } = createRuntime(t);
+  test("signs one ELC and keeps a cap-exempt signed Prospect Right", (t) => {
+    const { context, database, repository } = createRuntime(t);
+    seedPendingProspectTrade(context);
     const result = repository.signFantasyElc(signingInput());
-    assert.equal(result.ownership.ownership_kind, "Rostered");
+    assert.equal(result.ownership.ownership_kind, "Prospect Right");
     assert.equal(result.ownership.roster_category, "Prospect");
     assert.equal(result.ownership.version, 2);
     assert.equal(result.contract.contract_type, "fantasy_elc");
@@ -449,11 +497,97 @@ describe("M4-06 atomic prospect decisions", () => {
     assert.equal(result.contractEvent.event_type, "fantasy_elc_created");
     assert.equal(result.ownershipEvent.event_type, "fantasy_elc_signed");
     assert.equal(result.activity.event_type, "fantasy_elc_signed");
+    assert.deepEqual(result.automaticallyCancelledTradeIds, [IDS.trade]);
     assert.equal(count(database, "contracts"), 1);
     assert.equal(count(database, "contract_years"), 3);
     assert.equal(count(database, "contract_events"), 1);
     assert.equal(count(database, "ownership_events"), 1);
-    assert.equal(count(database, "league_activity"), 1);
+    assert.equal(count(database, "league_activity"), 2);
+    assert.equal(count(database, "trade_events"), 1);
+    assert.equal(count(database, "outbox_events"), 1);
+    assert.equal(
+      database.prepare("SELECT status FROM trades WHERE id = ?").get(IDS.trade)
+        .status,
+      "cancelled"
+    );
+  });
+
+  test("atomically signs directly into one authoritative legal roster destination", (t) => {
+    const { context, database, repository } = createRuntime(t);
+    seedPendingProspectTrade(context);
+    seedPendingProspectTrade(context, {
+      tradeId: IDS.trade2,
+      tradeAssetId: IDS.tradeAsset2,
+    });
+    const result = repository.signFantasyElc(
+      signingInput({
+        destinationCategory: "Active",
+        destinationPositionGroup: "F",
+        destinationSlotNumber: 1,
+      })
+    );
+    assert.deepEqual(
+      [
+        result.ownership.ownership_kind,
+        result.ownership.roster_category,
+        result.ownership.position_group,
+        result.ownership.slot_number,
+      ],
+      ["Rostered", "Active", "F", 1]
+    );
+    assert.equal(count(database, "contracts"), 1);
+    assert.equal(count(database, "ownership_events"), 1);
+    assert.equal(count(database, "league_activity"), 3);
+    assert.equal(count(database, "outbox_events"), 2);
+    assert.deepEqual(result.automaticallyCancelledTradeIds, [
+      IDS.trade,
+      IDS.trade2,
+    ]);
+    assert.equal(
+      JSON.parse(result.activity.metadata_json).rosterCategory,
+      "Active"
+    );
+    const trade = database
+      .prepare("SELECT * FROM trades WHERE id = ?")
+      .get(IDS.trade);
+    assert.deepEqual(
+      [trade.status, trade.responded_at_ms, trade.version],
+      ["cancelled", NOW_MS + 1, 2]
+    );
+    assert.deepEqual(
+      database
+        .prepare("SELECT status, version FROM trades WHERE id = ?")
+        .get(IDS.trade2),
+      { status: "cancelled", version: 2 }
+    );
+    const tradeEvent = database
+      .prepare("SELECT * FROM trade_events WHERE trade_id = ?")
+      .get(IDS.trade);
+    assert.equal(tradeEvent.event_type, "proposal_auto_cancelled");
+    assert.equal(tradeEvent.reason, "prospect_right_converted");
+    assert.deepEqual(JSON.parse(tradeEvent.metadata_json), {
+      schemaVersion: 1,
+      prospectDecisionId: IDS.ownershipEvent,
+      playerId: IDS.player,
+      fromStatus: "proposed",
+      reasonCode: "prospect_right_converted",
+    });
+    const cancellationActivity = database
+      .prepare(`
+        SELECT * FROM league_activity
+        WHERE event_type = 'trade_proposal_automatically_cancelled'
+      `)
+      .get();
+    assert.equal(cancellationActivity.related_id, IDS.trade);
+    assert.equal(cancellationActivity.reason, "prospect_right_converted");
+    assert.equal(
+      JSON.parse(
+        database
+          .prepare("SELECT payload_json FROM outbox_events WHERE aggregate_id = ?")
+          .get(IDS.trade).payload_json
+      ).type,
+      "trade.changed"
+    );
   });
 
   test("rejects stale, wrong-team, and already-signed ownership without writes", (t) => {
@@ -500,27 +634,51 @@ describe("M4-06 atomic prospect decisions", () => {
   });
 
   test("declines the ELC by releasing only current rights and retaining history", (t) => {
-    const { database, repository } = createRuntime(t);
+    const { context, database, repository } = createRuntime(t);
+    seedPendingProspectTrade(context);
     const result = repository.releaseUnsignedRights(releaseInput());
     assert.equal(result.releasedOwnership.id, IDS.ownership);
     assert.equal(result.ownershipEvent.event_type, "fantasy_elc_declined");
     assert.equal(result.ownershipEvent.ownership_id, IDS.ownership);
     assert.equal(result.activity.event_type, "fantasy_elc_declined");
+    assert.deepEqual(result.automaticallyCancelledTradeIds, [IDS.trade]);
     assert.equal(count(database, "player_ownerships"), 0);
     assert.equal(count(database, "contracts"), 0);
     assert.equal(count(database, "ownership_events"), 1);
-    assert.equal(count(database, "league_activity"), 1);
+    assert.equal(count(database, "league_activity"), 2);
+    assert.equal(count(database, "trade_events"), 1);
+    assert.equal(count(database, "outbox_events"), 1);
+    assert.deepEqual(
+      database
+        .prepare("SELECT status, version FROM trades WHERE id = ?")
+        .get(IDS.trade),
+      { status: "cancelled", version: 2 }
+    );
+    assert.equal(
+      database
+        .prepare("SELECT reason FROM trade_events WHERE trade_id = ?")
+        .get(IDS.trade).reason,
+      "prospect_right_released"
+    );
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   });
 
   test("records voluntary release distinctly and rolls late release failure back", (t) => {
     const first = createRuntime(t);
+    seedPendingProspectTrade(first.context);
     const released = first.repository.releaseUnsignedRights(
       releaseInput({ decision: "release_unsigned_rights" })
     );
     assert.equal(
       released.ownershipEvent.event_type,
       "unsigned_prospect_rights_released"
+    );
+    assert.deepEqual(released.automaticallyCancelledTradeIds, [IDS.trade]);
+    assert.equal(
+      first.database
+        .prepare("SELECT status FROM trades WHERE id = ?")
+        .get(IDS.trade).status,
+      "cancelled"
     );
 
     const second = createRuntime(t);
@@ -556,6 +714,39 @@ describe("M4-06 atomic prospect decisions", () => {
             "injected Candidate synchronization failure"
       );
       assert.equal(databaseSemanticHash(runtime.database), before);
+    }
+  });
+
+  test("rolls the prospect decision and pending trade back together when cancellation publication fails", (t) => {
+    for (const execute of [
+      (repository) =>
+        repository.signFantasyElc(
+          signingInput({
+            destinationCategory: "Bench",
+            destinationPositionGroup: "F",
+            destinationSlotNumber: 1,
+          })
+        ),
+      (repository) => repository.releaseUnsignedRights(releaseInput()),
+    ]) {
+      const runtime = createRuntime(t, {
+        tradePublicationWriter: {
+          publish() {
+            throw new Error("injected trade publication failure");
+          },
+        },
+      });
+      seedPendingProspectTrade(runtime.context);
+      const before = databaseSemanticHash(runtime.database);
+
+      assert.throws(() => execute(runtime.repository));
+      assert.equal(databaseSemanticHash(runtime.database), before);
+      assert.equal(
+        runtime.database
+          .prepare("SELECT status FROM trades WHERE id = ?")
+          .get(IDS.trade).status,
+        "proposed"
+      );
     }
   });
 });

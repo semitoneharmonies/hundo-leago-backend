@@ -776,7 +776,7 @@ describe("FAD-13 queued-nomination activation writer", () => {
         [
           replacementCommissionerMembership,
           replacementCommissionerUser,
-          "commissioner",
+          "member",
         ],
       ]) {
         insert(fixture.database, "league_memberships", {
@@ -1041,6 +1041,26 @@ describe("FAD-13 queued-nomination activation writer", () => {
       `).run({
         endedAtMs: ACTIVATED_AT_MS + 1,
         roleId: administratorRole,
+      });
+      fixture.database.prepare(`
+        UPDATE league_memberships
+        SET permission_category = 'member',
+            updated_at_ms = @updatedAtMs,
+            version = version + 1
+        WHERE id = @membershipId
+      `).run({
+        membershipId: commissionerMembership,
+        updatedAtMs: ACTIVATED_AT_MS + 1,
+      });
+      fixture.database.prepare(`
+        UPDATE league_memberships
+        SET permission_category = 'commissioner',
+            updated_at_ms = @updatedAtMs,
+            version = version + 1
+        WHERE id = @membershipId
+      `).run({
+        membershipId: replacementCommissionerMembership,
+        updatedAtMs: ACTIVATED_AT_MS + 1,
       });
       fixture.database.prepare(`
         UPDATE leagues

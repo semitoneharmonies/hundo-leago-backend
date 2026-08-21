@@ -298,6 +298,26 @@ describe("M6-08 SELECT-only authoritative standings", () => {
     );
     assert.ok(Object.isFrozen(standings.missingMatchupIds));
     assert.equal(standings.sourceResultVersion, 3);
+    assert.deepEqual(standings.results[0], {
+      id: IDS.resultAB,
+      version: 2,
+      versionNumber: 2,
+      status: "corrected",
+      week: {
+        id: IDS.week1,
+        sequence: 1,
+        startsAtMs: 100,
+        endsAtMs: 200,
+      },
+      matchup: {
+        id: IDS.matchAB,
+        homeTeam: { id: IDS.teamA, name: "Alpha" },
+        awayTeam: { id: IDS.teamB, name: "Bravo" },
+      },
+      homeScoreHundredths: 100,
+      awayScoreHundredths: 300,
+      outcome: "away_win",
+    });
     assert.deepEqual(
       standings.rows.map((row) => [row.teamDisplayName, row.standingsPoints, row.fantasyPointsDifferentialHundredths, row.rank]),
       [
@@ -314,7 +334,38 @@ describe("M6-08 SELECT-only authoritative standings", () => {
         .pointsPercentageHundredths,
       0
     );
+    const preview = service.previewCorrection({
+      leagueId: IDS.league,
+      seasonId: IDS.season,
+      resultId: IDS.resultAB,
+      homeScoreHundredths: 600,
+      awayScoreHundredths: 300,
+    });
+    assert.deepEqual(preview.changedTeamIds, [
+      IDS.teamA,
+      IDS.teamB,
+    ]);
+    assert.deepEqual(
+      preview.projectedRows.map(
+        ({ teamDisplayName, standingsPoints, rank }) => [
+          teamDisplayName,
+          standingsPoints,
+          rank,
+        ]
+      ),
+      [
+        ["Alpha", 2, 1],
+        ["Charlie", 1, 2],
+        ["Delta", 1, 2],
+        ["Echo", 0, 4],
+        ["Bravo", 0, 5],
+      ]
+    );
     assert.equal(after, before);
+    assert.equal(
+      database.prepare("SELECT total_changes() AS count").get().count,
+      before
+    );
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM standings_snapshots").get().count, 0);
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM league_activity").get().count, 0);
   });

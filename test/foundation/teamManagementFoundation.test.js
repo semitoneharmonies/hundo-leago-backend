@@ -432,6 +432,7 @@ describe("M3-16 SELECT-only authenticated team reads", () => {
       assignmentId: uuid(50),
       userId: MEMBER_ID,
       displayName: "Team Manager",
+      isProtectedPlatformAdministrator: false,
       acceptedAtMs: NOW_MS,
       version: 1,
     });

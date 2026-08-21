@@ -302,7 +302,7 @@ function addRapidAuctionPlayers({
 }
 
 test(
-  "FAD-17 rehearses exact schema 22 through 52 with fresh schema and repository-catalog agreement",
+  "FAD-17 rehearses exact schema 22 through 54 with fresh schema and repository-catalog agreement",
   (t) => {
     const upgraded = createMigrationRuntime(
       t,
@@ -327,25 +327,25 @@ test(
     copyMigrationRange(
       upgraded.migrationsDirectory,
       23,
-      52
+      54
     );
     assert.equal(
-      migrate(upgraded, "fad17-schema52-upgrade")
+      migrate(upgraded, "fad17-schema54-upgrade")
         .status,
       "exact"
     );
 
     const fresh = createMigrationRuntime(
       t,
-      "hundo-fad17-schema52-fresh-"
+      "hundo-fad17-schema54-fresh-"
     );
     copyMigrationRange(
       fresh.migrationsDirectory,
       1,
-      52
+      54
     );
     assert.equal(
-      migrate(fresh, "fad17-schema52-fresh").status,
+      migrate(fresh, "fad17-schema54-fresh").status,
       "exact"
     );
 
@@ -354,7 +354,7 @@ test(
         runtime.database.pragma("user_version", {
           simple: true,
         }),
-        52
+        54
       );
       assert.deepEqual(
         runtime.database.pragma("foreign_key_check"),
@@ -382,7 +382,7 @@ test(
     );
     assert.equal(
       migrationLedger(upgraded.database).length,
-      52
+      54
     );
   }
 );

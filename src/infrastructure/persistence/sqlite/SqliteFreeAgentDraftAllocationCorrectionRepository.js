@@ -17,6 +17,7 @@ const {
 const {
   FREE_AGENT_DRAFT_CORRECTION_MODE,
   hashFreeAgentDraftCorrectionApplyRequest,
+  projectFreeAgentDraftCorrectionApplyResultForPublic,
   serializeFreeAgentDraftCorrectionApplyRequest,
   validateFreeAgentDraftCorrectionApplyCommand,
   validateFreeAgentDraftCorrectionApplyResult,
@@ -28,11 +29,6 @@ const {
   deriveFreeAgentDraftCorrectionResourceId,
 } = require(
   "../../../domain/freeAgentDraft/freeAgentDraftCorrectionResourceIdentityPolicy"
-);
-const {
-  normalizeCandidateEligiblePlayerName,
-} = require(
-  "../../../domain/freeAgentDraft/candidateEligiblePlayerSearchPolicy"
 );
 const {
   createFreeAgentDraftActivityContract,
@@ -59,7 +55,7 @@ const {
   createSqliteFreeAgentDraftCorrectionPreviewRepository,
 } = require("./SqliteFreeAgentDraftCorrectionPreviewRepository");
 const {
-  createSqliteFreeAgentDraftReadRepository,
+  createSqliteFreeAgentDraftInternalReadRepository,
 } = require("./SqliteFreeAgentDraftReadRepository");
 const {
   resolveSqliteLeagueOutboxWriter,
@@ -469,7 +465,7 @@ function slotNumberForWinner(winner) {
 function createSqliteFreeAgentDraftAllocationCorrectionRepository({
   database,
   previewRepository,
-  readRepository,
+  internalReadRepository,
   createId = () => randomUUID(),
   leagueOutboxWriter,
   failureInjector = () => {},
@@ -500,10 +496,12 @@ function createSqliteFreeAgentDraftAllocationCorrectionRepository({
           database,
         })
       : previewRepository;
-  const publishedReader =
-    readRepository === undefined
-      ? createSqliteFreeAgentDraftReadRepository({ database })
-      : readRepository;
+  const internalReader =
+    internalReadRepository === undefined
+      ? createSqliteFreeAgentDraftInternalReadRepository({
+          database,
+        })
+      : internalReadRepository;
   if (
     !previewReader ||
     typeof previewReader.previewAllocationCorrection !==
@@ -514,11 +512,12 @@ function createSqliteFreeAgentDraftAllocationCorrectionRepository({
     );
   }
   if (
-    !publishedReader ||
-    typeof publishedReader.readAllocationResults !== "function"
+    !internalReader ||
+    typeof internalReader.readInternalAllocationResult !==
+      "function"
   ) {
     throw new TypeError(
-      "FAD allocation correction requires a published-result repository"
+      "FAD allocation correction requires a protected allocation-result repository"
     );
   }
 
@@ -1242,14 +1241,14 @@ function createSqliteFreeAgentDraftAllocationCorrectionRepository({
       );
     }
     let preview;
-    let data;
+    let storedData;
     try {
       preview = validateFreeAgentDraftCorrectionPreview({
         leagueId: row.league_id,
         fadId: row.fad_id,
         preview: JSON.parse(row.preview_json),
       });
-      data = validateFreeAgentDraftCorrectionApplyResult(
+      storedData = validateFreeAgentDraftCorrectionApplyResult(
         JSON.parse(row.response_json)
       );
     } catch (error) {
@@ -1267,15 +1266,19 @@ function createSqliteFreeAgentDraftAllocationCorrectionRepository({
       preview.reversible !== true ||
       preview.blockers.length !== 0 ||
       serializeCanonicalJsonV1(preview) !== row.preview_json ||
-      serializeCanonicalJsonV1(data) !== row.response_json ||
-      hashCanonicalJsonV1(data) !== row.response_sha256 ||
-      data.correctionId !== row.commissioner_correction_id ||
-      data.activityId !== row.activity_id ||
-      data.allocation.allocationId !== command.allocationId ||
-      data.allocation.allocationVersion !==
+      serializeCanonicalJsonV1(storedData) !==
+        row.response_json ||
+      hashCanonicalJsonV1(storedData) !==
+        row.response_sha256 ||
+      storedData.correctionId !==
+        row.commissioner_correction_id ||
+      storedData.activityId !== row.activity_id ||
+      storedData.allocation.allocationId !==
+        command.allocationId ||
+      storedData.allocation.allocationVersion !==
         row.resulting_allocation_version ||
-      data.allocation.decisionCode !== "corrected" ||
-      data.completedAtMs !== row.completed_at_ms
+      storedData.allocation.decisionCode !== "corrected" ||
+      storedData.completedAtMs !== row.completed_at_ms
     ) {
       incompatible(
         "The stored FAD allocation-correction response evidence is inconsistent."
@@ -1325,9 +1328,9 @@ function createSqliteFreeAgentDraftAllocationCorrectionRepository({
       evidence.event_kind !== "correction_applied" ||
       evidence.event_decision_code !== "corrected" ||
       evidence.event_contract_id !==
-        (data.allocation.winner?.contractId ?? null) ||
+        (storedData.allocation.winner?.contractId ?? null) ||
       evidence.event_ownership_id !==
-        (data.allocation.winner?.ownershipId ?? null) ||
+        (storedData.allocation.winner?.ownershipId ?? null) ||
       evidence.event_actor_user_id !== command.actorUserId ||
       evidence.event_actor_membership_id !==
         command.actorMembershipId ||
@@ -1349,7 +1352,8 @@ function createSqliteFreeAgentDraftAllocationCorrectionRepository({
     );
     const related = createEmptySocketRelated({
       fadId: command.fadId,
-      teamId: data.allocation.winner?.teamId ?? null,
+      teamId:
+        storedData.allocation.winner?.teamId ?? null,
       allocationId: command.allocationId,
       auctionId: auctionDelta?.resourceId ?? null,
     });
@@ -1375,6 +1379,17 @@ function createSqliteFreeAgentDraftAllocationCorrectionRepository({
       related,
       version: 1,
     });
+    let data;
+    try {
+      data = projectFreeAgentDraftCorrectionApplyResultForPublic(
+        storedData
+      );
+    } catch (error) {
+      incompatible(
+        "The stored FAD allocation-correction receipt cannot be safely projected.",
+        error
+      );
+    }
     return deepFreeze({
       data,
       httpStatus: 200,
@@ -2400,41 +2415,15 @@ function createSqliteFreeAgentDraftAllocationCorrectionRepository({
   }
 
   function readCorrectedAllocation(command, context) {
-    let cursor = null;
-    for (let page = 0; page < 100; page += 1) {
-      const result = publishedReader.readAllocationResults({
-        leagueId: command.leagueId,
-        fadId: command.fadId,
-        viewerUserId: command.actorUserId,
-        viewerMembershipId: command.actorMembershipId,
-        nowMs: command.completedAtMs,
-        query: {
-          q: normalizeCandidateEligiblePlayerName(
-            context.player_full_name
-          ),
-          status: null,
-          limit: 100,
-          cursor,
-        },
-      });
-      const allocation = result.data.find(
-        (item) => item.allocationId === context.id
-      );
-      if (allocation) return allocation;
-      if (!result.page.hasMore) break;
-      if (
-        typeof result.page.nextCursor !== "string" ||
-        result.page.nextCursor === cursor
-      ) {
-        incompatible(
-          "The corrected FAD allocation result cursor is invalid."
-        );
-      }
-      cursor = result.page.nextCursor;
-    }
-    incompatible(
-      "The corrected FAD allocation result is unavailable."
-    );
+    return internalReader.readInternalAllocationResult({
+      allocationId: context.id,
+      fadId: command.fadId,
+      leagueId: command.leagueId,
+      nowMs: command.completedAtMs,
+      playerId: context.player_id,
+      viewerMembershipId: command.actorMembershipId,
+      viewerUserId: command.actorUserId,
+    });
   }
 
   function committedRoster(
@@ -2594,7 +2583,7 @@ function createSqliteFreeAgentDraftAllocationCorrectionRepository({
     const deltas = appliedDeltas(preview, activityId);
     let data;
     try {
-      data = validateFreeAgentDraftCorrectionApplyResult({
+      data = projectFreeAgentDraftCorrectionApplyResultForPublic({
         correctionId,
         allocation,
         appliedDeltas: deltas,

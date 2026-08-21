@@ -320,8 +320,9 @@ describe("FAD-08 read application boundary", () => {
         fadId: FAD_ID,
         authenticated: AUTHENTICATED,
         query: {
+          teamId: TEAM_ID,
           q: "  ALEX\tExample ",
-          status: "pending",
+          status: "signed",
           limit: "7",
           cursor: encodedCursor,
         },
@@ -337,8 +338,9 @@ describe("FAD-08 read application boundary", () => {
         viewerUserId: USER_ID,
         nowMs: NOW_MS,
         query: {
+          teamId: TEAM_ID,
           q: "alex example",
-          status: "pending",
+          status: "signed",
           limit: 7,
           cursor: encodedCursor,
         },
@@ -360,21 +362,52 @@ describe("FAD-08 read application boundary", () => {
           leagueId: LEAGUE_ID,
           fadId: FAD_ID,
           authenticated: AUTHENTICATED,
-          query: { limit: 101 },
+          query: {},
         }),
       (service) =>
         service.allocationResults({
           leagueId: LEAGUE_ID,
           fadId: FAD_ID,
           authenticated: AUTHENTICATED,
-          query: { status: "unknown" },
+          query: { teamId: "bad" },
         }),
       (service) =>
         service.allocationResults({
           leagueId: LEAGUE_ID,
           fadId: FAD_ID,
           authenticated: AUTHENTICATED,
-          query: { cursor: "bad+cursor" },
+          query: {
+            teamId: TEAM_ID,
+            status: "pending",
+          },
+        }),
+      (service) =>
+        service.allocationResults({
+          leagueId: LEAGUE_ID,
+          fadId: FAD_ID,
+          authenticated: AUTHENTICATED,
+          query: { teamId: TEAM_ID, unknown: true },
+        }),
+      (service) =>
+        service.allocationResults({
+          leagueId: LEAGUE_ID,
+          fadId: FAD_ID,
+          authenticated: AUTHENTICATED,
+          query: { teamId: TEAM_ID, limit: 101 },
+        }),
+      (service) =>
+        service.allocationResults({
+          leagueId: LEAGUE_ID,
+          fadId: FAD_ID,
+          authenticated: AUTHENTICATED,
+          query: { teamId: TEAM_ID, status: "unknown" },
+        }),
+      (service) =>
+        service.allocationResults({
+          leagueId: LEAGUE_ID,
+          fadId: FAD_ID,
+          authenticated: AUTHENTICATED,
+          query: { teamId: TEAM_ID, cursor: "bad+cursor" },
         }),
     ]) {
       const { calls, service } = harness();
@@ -461,6 +494,7 @@ describe("FAD-08 read application boundary", () => {
             leagueId: LEAGUE_ID,
             fadId: FAD_ID,
             authenticated: AUTHENTICATED,
+            query: { teamId: TEAM_ID },
           }),
         /canonical FAD read collection is unavailable/
       );

@@ -19,6 +19,8 @@ const SAFE_MESSAGES = Object.freeze({
     "The earlier request result is unavailable.",
   PLATFORM_ADMINISTRATOR_REQUIRED:
     "Platform-administrator authority is required.",
+  PLATFORM_ADMINISTRATOR_COMMISSIONER_PROTECTED:
+    "Platform-administrator league access cannot be changed through commissioner assignment.",
 });
 
 function assertMethod(value, method, description) {
@@ -142,6 +144,7 @@ function createCommissionerAssignmentRouter({
         "COMMISSIONER_ASSIGNMENT_RESULT_UNAVAILABLE",
         "IDEMPOTENCY_KEY_REUSED",
         "IDEMPOTENCY_REQUEST_UNAVAILABLE",
+        "PLATFORM_ADMINISTRATOR_COMMISSIONER_PROTECTED",
       ].includes(error?.code)
     ) {
       return errorResponse(request, response, 409, error.code);

@@ -523,7 +523,7 @@ describe("FAD-18 read-only SportsDataIO live capability discovery", () => {
       ...configured.databaseGuard,
       identity: Object.freeze({
         ...configured.databaseGuard.identity,
-        size: configured.databaseGuard.identity.size + 1,
+        size: configured.databaseGuard.identity.size + 1n,
       }),
     });
     function StaleIdentityDatabaseConstructor(receivedPath) {
@@ -582,6 +582,125 @@ describe("FAD-18 read-only SportsDataIO live capability discovery", () => {
     );
     assert.deepEqual(capture.stdout, []);
     assert.deepEqual(capture.stderr, []);
+  });
+
+  test("uses exact BigInt inode identity and nanosecond zero-inode fallback", async (t) => {
+    const collidingBefore = 9_007_199_254_740_992n;
+    const collidingAfter = collidingBefore + 1n;
+    assert.equal(
+      Number(collidingBefore),
+      Number(collidingAfter),
+      "the regression requires two distinct BigInts that collide as Numbers"
+    );
+
+    const cases = [
+      {
+        name: "inode precision collision",
+        beforeIdentity: { ino: collidingBefore },
+        openedIdentity: { ino: collidingAfter },
+      },
+      {
+        name: "zero-inode birthtime precision collision",
+        beforeIdentity: {
+          ino: 0n,
+          birthtimeNs: collidingBefore,
+        },
+        openedIdentity: {
+          ino: 0n,
+          birthtimeNs: collidingAfter,
+        },
+      },
+    ];
+
+    for (const scenario of cases) {
+      await t.test(scenario.name, async (t) => {
+        const { databasePath } = createDatabaseFixture(t);
+        const descriptors = new Map();
+        const sourceLstatOptions = [];
+        const sourceFstatOptions = [];
+        const fsModule = Object.create(fs);
+
+        function withIdentity(stat, identity) {
+          const bigint = typeof stat.ino === "bigint";
+          const overrides = {
+            ino: bigint ? identity.ino : Number(identity.ino),
+          };
+          if (identity.birthtimeNs !== undefined) {
+            if (bigint) {
+              overrides.birthtimeNs = identity.birthtimeNs;
+            } else {
+              overrides.birthtimeMs = Number(identity.birthtimeNs);
+            }
+          }
+          return Object.assign(
+            Object.create(Object.getPrototypeOf(stat)),
+            stat,
+            overrides
+          );
+        }
+
+        fsModule.lstatSync = (candidate, ...arguments_) => {
+          const stat = fs.lstatSync(candidate, ...arguments_);
+          if (candidate !== databasePath) return stat;
+          sourceLstatOptions.push(arguments_[0]);
+          return withIdentity(stat, scenario.beforeIdentity);
+        };
+        fsModule.openSync = (candidate, ...arguments_) => {
+          const descriptor = fs.openSync(candidate, ...arguments_);
+          descriptors.set(descriptor, candidate);
+          return descriptor;
+        };
+        fsModule.fstatSync = (descriptor, ...arguments_) => {
+          const stat = fs.fstatSync(descriptor, ...arguments_);
+          if (descriptors.get(descriptor) !== databasePath) return stat;
+          sourceFstatOptions.push(arguments_[0]);
+          return withIdentity(stat, scenario.openedIdentity);
+        };
+        fsModule.closeSync = (descriptor, ...arguments_) => {
+          try {
+            return fs.closeSync(descriptor, ...arguments_);
+          } finally {
+            descriptors.delete(descriptor);
+          }
+        };
+
+        const capture = capturedOutput();
+        let databaseOpenCount = 0;
+        let discoveryCount = 0;
+        await assert.rejects(
+          () => runSportsDataIoLiveCapabilityDiscoveryCommand({
+            argv: ["--historical-date", HISTORICAL_DATE],
+            env: environment(databasePath),
+            output: capture.output,
+            fsModule,
+            openDatabase() {
+              databaseOpenCount += 1;
+              throw new Error("database must not open");
+            },
+            discover: async () => {
+              discoveryCount += 1;
+              throw new Error("discovery must not run");
+            },
+          }),
+          {
+            code:
+              SPORTS_DATA_IO_LIVE_CAPABILITY_DISCOVERY_COMMAND_ERROR_CODES
+                .databaseInvalid,
+          }
+        );
+        assert.equal(
+          sourceLstatOptions.filter(
+            (options) => options?.bigint === true
+          ).length,
+          2
+        );
+        assert.deepEqual(sourceFstatOptions, [{ bigint: true }]);
+        assert.equal(databaseOpenCount, 0);
+        assert.equal(discoveryCount, 0);
+        assert.deepEqual(capture.stdout, []);
+        assert.deepEqual(capture.stderr, []);
+      });
+    }
   });
 
   test("rejects every quiescence drift before database open, provider fetch, or output", async (t) => {

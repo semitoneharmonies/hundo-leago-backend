@@ -156,7 +156,15 @@ function createSqliteTradeExpiryRepository({
         id AS trade_id,
         league_id,
         season_id,
-        status AS trade_status,
+        CASE
+          WHEN status = 'proposed' AND EXISTS (
+            SELECT 1
+            FROM trade_future_consideration_acceptances AS acceptance
+            WHERE acceptance.league_id = trades.league_id
+              AND acceptance.trade_id = trades.id
+          ) THEN 'awaiting_commissioner_approval'
+          ELSE status
+        END AS trade_status,
         effective_deadline_at_ms,
         version AS trade_version
       FROM trades
@@ -328,7 +336,11 @@ function createSqliteTradeExpiryRepository({
     if (!context) {
       throw new TradeLifecyclePolicyError("TRADE_LIFECYCLE_NOT_FOUND");
     }
-    if (context.trade_status !== "proposed") {
+    if (
+      !["proposed", "awaiting_commissioner_approval"].includes(
+        context.trade_status
+      )
+    ) {
       return freeze({
         completed: false,
         reason: "terminal",
@@ -348,7 +360,7 @@ function createSqliteTradeExpiryRepository({
       schemaVersion: 1,
       occurrenceKey: command.occurrenceKey,
       effectiveDeadlineAtMs: command.effectiveDeadlineAtMs,
-      fromStatus: "proposed",
+      fromStatus: context.trade_status,
       toStatus: "expired",
     });
     insertEventStatement.run({ ...command, metadataJson });
@@ -370,7 +382,10 @@ function createSqliteTradeExpiryRepository({
         proposalId: command.tradeId,
         occurrenceKey: command.occurrenceKey,
         effectiveDeadlineAtMs: command.effectiveDeadlineAtMs,
-        fromStatus: "Pending",
+        fromStatus:
+          context.trade_status === "awaiting_commissioner_approval"
+            ? "Awaiting Commissioner Approval"
+            : "Pending",
         toStatus: "Expired",
       }),
       occurred_at_ms: command.occurredAtMs,

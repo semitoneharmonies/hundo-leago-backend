@@ -72,13 +72,11 @@ function createRespondToTradeProposalService({
   clock,
   secureRandom,
 } = {}) {
-  for (const method of ["requireActiveMembership", "requireCommissioner"]) {
-    assertMethod(
-      leagueAuthorization,
-      method,
-      "league membership and commissioner authorization"
-    );
-  }
+  assertMethod(
+    leagueAuthorization,
+    "requireActiveMembership",
+    "league membership authorization"
+  );
   assertMethod(teamAuthorization, "requireManager", "team-manager authorization");
   for (const method of ["findLifecycleParticipants", "transitionLifecycle"]) {
     assertMethod(repository, method, "an atomic trade lifecycle repository");
@@ -87,11 +85,6 @@ function createRespondToTradeProposalService({
   assertMethod(secureRandom, "id", "secure identifiers");
 
   function authority(authenticated, leagueId, teamId) {
-    try {
-      return leagueAuthorization.requireCommissioner(authenticated, leagueId);
-    } catch (error) {
-      if (error?.code !== "LEAGUE_COMMISSIONER_REQUIRED") throw error;
-    }
     return teamAuthorization.requireManager(authenticated, leagueId, teamId);
   }
 
@@ -112,7 +105,11 @@ function createRespondToTradeProposalService({
       body.action === "reject"
         ? proposal.receiving_team_id
         : proposal.proposing_team_id;
-    const actor = authority(authenticated, leagueId, participantTeamId);
+    const actor = authority(
+      authenticated,
+      leagueId,
+      participantTeamId
+    );
     const occurredAtMs = safeNow(clock);
     const result = repository.transitionLifecycle({
       tradeId: proposal.trade_id,

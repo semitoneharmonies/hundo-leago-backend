@@ -62,6 +62,10 @@ const IDS = Object.freeze({
   event2: uuid(61),
   activity1: uuid(70),
   activity2: uuid(71),
+  trade: uuid(80),
+  tradeAsset: uuid(81),
+  contract: uuid(90),
+  contractYear: uuid(91),
 });
 
 function seed(context) {
@@ -160,7 +164,10 @@ function ownership(overrides = {}) {
 
 function createRuntime(
   t,
-  { candidateCardSummerSynchronizer } = {}
+  {
+    candidateCardSummerSynchronizer,
+    tradePublicationWriter,
+  } = {}
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m4-04-"));
   const connection = openDatabase({
@@ -195,8 +202,100 @@ function createRuntime(
             });
           },
         },
+      tradePublicationWriter,
     }),
   };
+}
+
+function seedPendingProspectTrade(context) {
+  context.repositories.trades.insert({
+    id: IDS.trade,
+    league_id: IDS.league,
+    season_id: IDS.season,
+    proposing_team_id: IDS.team,
+    receiving_team_id: IDS.otherTeam,
+    proposing_user_id: IDS.user,
+    status: "proposed",
+    created_at_ms: NOW_MS,
+    expires_at_ms: NOW_MS + 60_000,
+    responded_at_ms: null,
+    completed_at_ms: null,
+    commissioner_completion_reference: null,
+    updated_at_ms: NOW_MS,
+    version: 1,
+  });
+  context.repositories.trade_assets.insert({
+    id: IDS.tradeAsset,
+    league_id: IDS.league,
+    trade_id: IDS.trade,
+    direction: "proposing_to_receiving",
+    source_team_id: IDS.team,
+    destination_team_id: IDS.otherTeam,
+    asset_type: "prospect_right",
+    player_id: IDS.player1,
+    sequence: 1,
+    created_at_ms: NOW_MS,
+  });
+}
+
+function seedPendingContractTrade(context) {
+  context.repositories.contracts.insert({
+    id: IDS.contract,
+    league_id: IDS.league,
+    player_id: IDS.player1,
+    current_team_id: IDS.team,
+    contract_type: "normal",
+    original_total_value_cents: 100,
+    original_term_years: 1,
+    aav_cents: 100,
+    start_season_id: IDS.season,
+    status: "active",
+    acquisition_source_type: "migration",
+    acquisition_source_id: null,
+    auction_buyout_lock_expires_at_ms: null,
+    created_at_ms: NOW_MS,
+    updated_at_ms: NOW_MS,
+    version: 1,
+  });
+  context.repositories.contract_years.insert({
+    id: IDS.contractYear,
+    league_id: IDS.league,
+    contract_id: IDS.contract,
+    season_id: IDS.season,
+    year_number: 1,
+    aav_cents: 100,
+    status: "current",
+    rollover_at_ms: null,
+    created_at_ms: NOW_MS,
+  });
+  context.repositories.trades.insert({
+    id: IDS.trade,
+    league_id: IDS.league,
+    season_id: IDS.season,
+    proposing_team_id: IDS.team,
+    receiving_team_id: IDS.otherTeam,
+    proposing_user_id: IDS.user,
+    status: "proposed",
+    created_at_ms: NOW_MS,
+    expires_at_ms: NOW_MS + 60_000,
+    responded_at_ms: null,
+    completed_at_ms: null,
+    commissioner_completion_reference: null,
+    updated_at_ms: NOW_MS,
+    version: 1,
+  });
+  context.repositories.trade_assets.insert({
+    id: IDS.tradeAsset,
+    league_id: IDS.league,
+    trade_id: IDS.trade,
+    direction: "proposing_to_receiving",
+    source_team_id: IDS.team,
+    destination_team_id: IDS.otherTeam,
+    asset_type: "contract",
+    contract_id: IDS.contract,
+    sequence: 1,
+    created_at_ms: NOW_MS,
+  });
 }
 
 function moveInput(overrides = {}) {
@@ -230,7 +329,7 @@ function assertPolicyError(callback, reasonCode) {
 }
 
 describe("M4-04 roster movement policy", () => {
-  test("accepts only Active-mediated ordinary category transitions", () => {
+  test("keeps ordinary moves Active-mediated and permits one-way Prospect activation", () => {
     for (const [source, destination] of [
       ["Active", "Bench"],
       ["Bench", "Active"],
@@ -247,6 +346,21 @@ describe("M4-04 roster movement policy", () => {
           )
         ),
         true
+      );
+    }
+    for (const destinationCategory of [
+      "Active",
+      "Bench",
+      "Injured Reserve",
+    ]) {
+      assert.equal(
+        validateRosterMove(
+          moveInput({
+            expectedSourceCategory: "Prospect",
+            destinationCategory,
+          })
+        ).destinationCategory,
+        destinationCategory
       );
     }
     for (const [source, destination] of [
@@ -349,6 +463,7 @@ describe("M4-04 atomic roster movement repository", () => {
 
   test("moves one ownership and appends both required histories atomically", (t) => {
     const runtime = createRuntime(t);
+    seedPendingContractTrade(runtime.context);
     runtime.context.repositories.player_ownerships.insert(ownership());
     const result = runtime.repository.move(moveInput());
 
@@ -362,6 +477,13 @@ describe("M4-04 atomic roster movement repository", () => {
     assert.equal(Object.isFrozen(result.affectedOwnerships), true);
     assert.equal(result.ownershipEvent.event_type, "roster_category_moved");
     assert.equal(result.activity.event_type, "roster_moved");
+    assert.deepEqual(result.automaticallyCancelledTradeIds, []);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT status FROM trades WHERE id = ?")
+        .get(IDS.trade).status,
+      "proposed"
+    );
     assert.equal(Object.isFrozen(result), true);
     assert.equal(
       runtime.database
@@ -459,6 +581,117 @@ describe("M4-04 atomic roster movement repository", () => {
     );
     assert.equal(returned.ownership.roster_category, "Active");
     assert.equal(returned.ownership.version, 3);
+  });
+
+  test("atomically converts a signed Prospect Right to Rostered without adding a return transition", (t) => {
+    const runtime = createRuntime(t);
+    seedPendingProspectTrade(runtime.context);
+    runtime.context.repositories.player_ownerships.insert(
+      ownership({
+        ownership_kind: "Prospect Right",
+        roster_category: "Prospect",
+        slot_number: null,
+      })
+    );
+    const result = runtime.repository.move(
+      moveInput({
+        expectedSourceCategory: "Prospect",
+        destinationCategory: "Bench",
+      })
+    );
+    assert.equal(result.ownership.roster_category, "Bench");
+    assert.equal(result.ownership.ownership_kind, "Rostered");
+    assert.equal(result.ownership.slot_number, 1);
+    assert.equal(result.activity.event_type, "roster_moved");
+    assert.deepEqual(result.automaticallyCancelledTradeIds, [IDS.trade]);
+    assert.deepEqual(
+      runtime.database
+        .prepare("SELECT status, version FROM trades WHERE id = ?")
+        .get(IDS.trade),
+      { status: "cancelled", version: 2 }
+    );
+    assert.equal(
+      runtime.database
+        .prepare("SELECT reason FROM trade_events WHERE trade_id = ?")
+        .get(IDS.trade).reason,
+      "prospect_right_converted"
+    );
+    assert.equal(
+      JSON.parse(result.ownershipEvent.before_metadata_json).ownershipKind,
+      "Prospect Right"
+    );
+    assert.equal(
+      JSON.parse(result.ownershipEvent.after_metadata_json).ownershipKind,
+      "Rostered"
+    );
+    assertPolicyError(
+      () =>
+        validateRosterMove(
+          moveInput({
+            expectedSourceCategory: "Bench",
+            destinationCategory: "Prospect",
+          })
+        ),
+      ROSTER_MOVEMENT_CODES.categoryInvalid
+    );
+  });
+
+  test("rolls signed-Prospect activation and trade cancellation back when publication fails", (t) => {
+    const runtime = createRuntime(t, {
+      tradePublicationWriter: {
+        publish() {
+          throw new Error("injected trade publication failure");
+        },
+      },
+    });
+    seedPendingProspectTrade(runtime.context);
+    runtime.context.repositories.player_ownerships.insert(
+      ownership({
+        ownership_kind: "Prospect Right",
+        roster_category: "Prospect",
+        slot_number: null,
+      })
+    );
+
+    assert.throws(() =>
+      runtime.repository.move(
+        moveInput({
+          expectedSourceCategory: "Prospect",
+          destinationCategory: "Bench",
+        })
+      )
+    );
+    assert.deepEqual(
+      runtime.database
+        .prepare(
+          "SELECT ownership_kind, roster_category, version " +
+            "FROM player_ownerships WHERE id = ?"
+        )
+        .get(IDS.ownership1),
+      {
+        ownership_kind: "Prospect Right",
+        roster_category: "Prospect",
+        version: 1,
+      }
+    );
+    assert.deepEqual(
+      runtime.database
+        .prepare("SELECT status, version FROM trades WHERE id = ?")
+        .get(IDS.trade),
+      { status: "proposed", version: 1 }
+    );
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM ownership_events")
+        .get().count,
+      0
+    );
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM league_activity")
+        .get().count,
+      0
+    );
   });
 
   test("rejects stale category, version, and scope without writes", (t) => {

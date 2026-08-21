@@ -155,9 +155,11 @@ function createAdministrativeLeagueService({
     "findLeagueByNormalizedName",
     "insertInitialSettings",
     "insertPlannedSeason",
+    "insertProtectedAdministratorMembership",
     "insertSetupLeague",
     "insertStartedIdempotency",
     "setCurrentSeason",
+    "listActivePlatformAdministrators",
   ]) {
     assertMethod(
       leagueCreationRepository,
@@ -255,6 +257,27 @@ function createAdministrativeLeagueService({
             nameNormalized: leagueInput.nameNormalized,
             nowMs,
           });
+        const administrators =
+          leagueCreationRepository.listActivePlatformAdministrators();
+        if (
+          administrators.length < 1 ||
+          !administrators.some(
+            ({ user_id: userId }) =>
+              userId === authority.actorUserId
+          )
+        ) {
+          throw new TypeError(
+            "administrative league creation requires current platform-administrator membership coverage"
+          );
+        }
+        for (const administrator of administrators) {
+          leagueCreationRepository.insertProtectedAdministratorMembership({
+            id: secureRandom.id(),
+            leagueId: ids.league,
+            userId: administrator.user_id,
+            nowMs,
+          });
+        }
         leagueCreationRepository.insertInitialSettings({
           leagueId: ids.league,
           nowMs,
@@ -362,6 +385,8 @@ function createAdministrativeLeagueService({
             displayName: row.display_name,
             email: row.email_display,
             status: row.status,
+            isPlatformAdministrator:
+              row.is_platform_administrator === 1,
           })
         )
       ),

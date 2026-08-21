@@ -185,11 +185,13 @@ function createCommissionerAssignmentService({
     "findIdempotency",
     "findLeagueById",
     "findPendingCommissionerAssignment",
+    "isActivePlatformAdministrator",
     "insertCommissionerInvitation",
     "insertInvitedCommissionerMembership",
     "insertProposalNotification",
     "insertStartedIdempotency",
     "setLeagueCommissioner",
+    "updateMembershipPermission",
   ]) {
     assertMethod(
       assignmentRepository,
@@ -229,7 +231,7 @@ function createCommissionerAssignmentService({
     if (
       !row ||
       row.proposed_user_id !== user.id ||
-      row.permission_category !== "commissioner"
+      row.assignment_workflow !== null
     ) {
       throw new CommissionerAssignmentNotFoundError();
     }
@@ -303,19 +305,55 @@ function createCommissionerAssignmentService({
           canonicalLeagueId
         );
         const proposedUser = userRepository.findById(proposal.userId);
-        if (
-          !league ||
-          league.status !== "setup" ||
-          league.commissioner_membership_id !== null ||
-          !proposedUser ||
-          proposedUser.status !== "active" ||
+        const activeCommissioner =
           assignmentRepository.findActiveCommissionerMembership(
             canonicalLeagueId
-          ) ||
-          assignmentRepository.findActiveMembershipForUser({
-            leagueId: canonicalLeagueId,
-            userId: proposedUser.id,
-          }) ||
+          );
+        const activeMembership = proposedUser
+          ? assignmentRepository.findActiveMembershipForUser({
+              leagueId: canonicalLeagueId,
+              userId: proposedUser.id,
+            })
+          : null;
+        const isInitialAssignment =
+          league?.commissioner_membership_id === null;
+        const hasValidCurrentCommissioner =
+          activeCommissioner?.id ===
+            league?.commissioner_membership_id &&
+          activeCommissioner?.permission_category === "commissioner" &&
+          activeCommissioner?.status === "active";
+        if (
+          proposedUser &&
+          assignmentRepository.isActivePlatformAdministrator(
+            proposedUser.id
+          )
+        ) {
+          throw new CommissionerAssignmentConflictError(
+            "PLATFORM_ADMINISTRATOR_COMMISSIONER_PROTECTED"
+          );
+        }
+        if (
+          activeCommissioner &&
+          assignmentRepository.isActivePlatformAdministrator(
+            activeCommissioner.user_id
+          )
+        ) {
+          throw new CommissionerAssignmentConflictError(
+            "PLATFORM_ADMINISTRATOR_COMMISSIONER_PROTECTED"
+          );
+        }
+        if (
+          !league ||
+          league.status === "deleted" ||
+          !proposedUser ||
+          proposedUser.status !== "active" ||
+          activeMembership?.permission_category === "commissioner" ||
+          (isInitialAssignment
+            ? league.status !== "setup" ||
+              Boolean(activeCommissioner) ||
+              Boolean(activeMembership)
+            : !hasValidCurrentCommissioner ||
+              activeCommissioner.user_id === proposedUser.id) ||
           assignmentRepository.findPendingCommissionerAssignment(
             canonicalLeagueId
           )
@@ -333,19 +371,20 @@ function createCommissionerAssignmentService({
           createdAtMs: nowMs,
           expiresAtMs: nowMs + IDEMPOTENCY_LIFETIME_MS,
         });
-        assignmentRepository.insertInvitedCommissionerMembership({
-          id: ids.membership,
-          leagueId: canonicalLeagueId,
-          userId: proposedUser.id,
-          nowMs,
-        });
+        const proposedMembership = activeMembership ||
+          assignmentRepository.insertInvitedCommissionerMembership({
+            id: ids.membership,
+            leagueId: canonicalLeagueId,
+            userId: proposedUser.id,
+            nowMs,
+          });
         assignmentRepository.insertCommissionerInvitation({
           id: ids.assignment,
           leagueId: canonicalLeagueId,
           invitedEmailNormalized: proposedUser.email_normalized,
           invitedUserId: proposedUser.id,
           invitingUserId: authority.actorUserId,
-          membershipId: ids.membership,
+          membershipId: proposedMembership.id,
           nowMs,
         });
         assignmentRepository.insertProposalNotification({
@@ -453,6 +492,7 @@ function createCommissionerAssignmentService({
     const auditId = secureRandom.id();
     const commissionerAssignmentPublicationId = secureRandom.id();
     const membershipPublicationId = secureRandom.id();
+    const previousMembershipPublicationId = secureRandom.id();
     const audit = auditContext || {};
 
     try {
@@ -475,30 +515,86 @@ function createCommissionerAssignmentService({
           true
         );
       }
-      if (
-        row.assignment_status !== "pending" ||
-        row.membership_status !== "invited" ||
-        row.joined_at_ms !== null ||
-        row.league_status !== "setup" ||
-        row.commissioner_membership_id !== null ||
-        row.proposed_user_status !== "active" ||
+      const activeCommissioner =
         assignmentRepository.findActiveCommissionerMembership(
           row.league_id
-        ) ||
+        );
+      const activeProposedMembership =
         assignmentRepository.findActiveMembershipForUser({
           leagueId: row.league_id,
           userId: user.id,
-        })
+        });
+      const isInitialAssignment =
+        row.commissioner_membership_id === null;
+      const validInvitedMembership =
+        row.membership_status === "invited" &&
+        row.permission_category === "commissioner" &&
+        row.joined_at_ms === null &&
+        activeProposedMembership === null;
+      const validExistingMembership =
+        row.membership_status === "active" &&
+        ["member", "manager"].includes(row.permission_category) &&
+        row.joined_at_ms !== null &&
+        activeProposedMembership?.id === row.membership_id;
+      if (
+        row.proposed_user_is_platform_administrator === 1 ||
+        assignmentRepository.isActivePlatformAdministrator(user.id) ||
+        (!isInitialAssignment &&
+          (row.current_commissioner_is_platform_administrator === 1 ||
+            (activeCommissioner &&
+              assignmentRepository.isActivePlatformAdministrator(
+                activeCommissioner.user_id
+              ))))
+      ) {
+        throw new CommissionerAssignmentConflictError(
+          "PLATFORM_ADMINISTRATOR_COMMISSIONER_PROTECTED"
+        );
+      }
+      if (
+        row.assignment_status !== "pending" ||
+        row.league_status === "deleted" ||
+        row.proposed_user_status !== "active" ||
+        (!validInvitedMembership && !validExistingMembership) ||
+        (isInitialAssignment
+          ? row.league_status !== "setup" || Boolean(activeCommissioner)
+          : activeCommissioner?.id !==
+              row.commissioner_membership_id ||
+            activeCommissioner?.user_id === user.id ||
+            row.current_commissioner_user_id !==
+              activeCommissioner?.user_id ||
+            row.current_commissioner_is_platform_administrator === 1)
       ) {
         throw new CommissionerAssignmentConflictError();
       }
 
-      const membership = assignmentRepository.activateMembership({
-        leagueId: row.league_id,
-        membershipId: row.membership_id,
-        expectedVersion: row.membership_version,
-        nowMs,
-      });
+      let previousMembership = null;
+      if (!isInitialAssignment) {
+        previousMembership =
+          assignmentRepository.updateMembershipPermission({
+            leagueId: row.league_id,
+            membershipId: activeCommissioner.id,
+            expectedVersion: activeCommissioner.version,
+            permissionCategory:
+              row.current_commissioner_has_active_team === 1
+                ? "manager"
+                : "member",
+            nowMs,
+          });
+      }
+      const membership = validInvitedMembership
+        ? assignmentRepository.activateMembership({
+            leagueId: row.league_id,
+            membershipId: row.membership_id,
+            expectedVersion: row.membership_version,
+            nowMs,
+          })
+        : assignmentRepository.updateMembershipPermission({
+            leagueId: row.league_id,
+            membershipId: row.membership_id,
+            expectedVersion: row.membership_version,
+            permissionCategory: "commissioner",
+            nowMs,
+          });
       assignmentRepository.setLeagueCommissioner({
         leagueId: row.league_id,
         membershipId: row.membership_id,
@@ -518,6 +614,15 @@ function createCommissionerAssignmentService({
         version: membership.version,
         nowMs,
       });
+      if (previousMembership) {
+        assignmentRepository.appendMembershipChangedPublication({
+          id: previousMembershipPublicationId,
+          leagueId: row.league_id,
+          membershipId: previousMembership.id,
+          version: previousMembership.version,
+          nowMs,
+        });
+      }
       assignmentRepository.appendCommissionerAssignmentChangedPublication({
         id: commissionerAssignmentPublicationId,
         leagueId: row.league_id,
@@ -594,9 +699,10 @@ function createCommissionerAssignmentService({
       );
       if (
         row.assignment_status === "cancelled" &&
-        row.membership_status === "ended" &&
-        row.joined_at_ms === null &&
-        row.commissioner_membership_id === null
+        ((row.membership_status === "ended" &&
+          row.joined_at_ms === null) ||
+          (row.membership_status === "active" &&
+            row.joined_at_ms !== null))
       ) {
         return internalResult(
           safeAssignment(
@@ -608,21 +714,30 @@ function createCommissionerAssignmentService({
       }
       if (
         row.assignment_status !== "pending" ||
-        row.membership_status !== "invited" ||
-        row.joined_at_ms !== null ||
-        row.league_status !== "setup" ||
-        row.commissioner_membership_id !== null ||
-        row.proposed_user_status !== "active"
+        row.league_status === "deleted" ||
+        row.proposed_user_status !== "active" ||
+        !(
+          (row.membership_status === "invited" &&
+            row.permission_category === "commissioner" &&
+            row.joined_at_ms === null) ||
+          (row.membership_status === "active" &&
+            ["member", "manager"].includes(
+              row.permission_category
+            ) &&
+            row.joined_at_ms !== null)
+        )
       ) {
         throw new CommissionerAssignmentConflictError();
       }
 
-      assignmentRepository.endNeverActiveMembership({
-        leagueId: row.league_id,
-        membershipId: row.membership_id,
-        expectedVersion: row.membership_version,
-        nowMs,
-      });
+      if (row.membership_status === "invited") {
+        assignmentRepository.endNeverActiveMembership({
+          leagueId: row.league_id,
+          membershipId: row.membership_id,
+          expectedVersion: row.membership_version,
+          nowMs,
+        });
+      }
       assignmentRepository.cancelInvitation({
         leagueId: row.league_id,
         assignmentId: row.assignment_id,

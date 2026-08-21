@@ -113,6 +113,16 @@ function createFirstPlatformAdministratorService({
     "a platform-role repository"
   );
   assertMethod(
+    platformRoleRepository,
+    "listUncoveredLeagueIds",
+    "a platform-role repository"
+  );
+  assertMethod(
+    platformRoleRepository,
+    "insertProtectedLeagueMembership",
+    "a platform-role repository"
+  );
+  assertMethod(
     actionTokenService,
     "issue",
     "an action-token service"
@@ -176,6 +186,15 @@ function createFirstPlatformAdministratorService({
           ended_at_ms: null,
           version: 1,
         });
+        for (const leagueId of
+          platformRoleRepository.listUncoveredLeagueIds(userId)) {
+          platformRoleRepository.insertProtectedLeagueMembership({
+            id: secureRandom.id(),
+            leagueId,
+            userId,
+            nowMs,
+          });
+        }
         const issued = actionTokenService.issue({
           userId,
           purpose: "administrator_setup",

@@ -566,6 +566,11 @@ const RESET_V1_POST_RESET_TABLE_POLICY = deepFreeze([
     introducedByMigrationId: 30,
     treatment: "require_empty",
   },
+  {
+    tableName: "trade_future_consideration_acceptances",
+    introducedByMigrationId: 53,
+    treatment: "require_empty",
+  },
 ]);
 
 function manifestPayload() {

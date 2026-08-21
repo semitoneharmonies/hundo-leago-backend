@@ -14,6 +14,7 @@ const {
 );
 const {
   hashCanonicalJsonV1,
+  serializeCanonicalJsonV1,
 } = require(
   "../../src/domain/leagues/seasonRolloverEvidencePolicy"
 );
@@ -63,14 +64,14 @@ const {
   "../../src/infrastructure/persistence/sqlite/SqliteAuctionAdministrationRepository"
 );
 const {
-  createSqliteFreeAgentDraftReadRepository,
-} = require(
-  "../../src/infrastructure/persistence/sqlite/SqliteFreeAgentDraftReadRepository"
-);
-const {
   createSqliteRestrictedNoImprovementFallbackWriter,
 } = require(
   "../../src/infrastructure/persistence/sqlite/SqliteRestrictedNoImprovementFallbackWriter"
+);
+const {
+  createSqliteFreeAgentDraftInternalReadRepository,
+} = require(
+  "../../src/infrastructure/persistence/sqlite/SqliteFreeAgentDraftReadRepository"
 );
 const {
   createSqliteRepositoryContext,
@@ -1835,32 +1836,6 @@ function bidRow(database) {
     .get(IDS.bid);
 }
 
-function fadAllocationProjection(database, status) {
-  const result =
-    createSqliteFreeAgentDraftReadRepository({
-      database,
-    }).readAllocationResults({
-      leagueId: IDS.league,
-      fadId: IDS.fad,
-      viewerUserId: IDS.commissionerUser,
-      viewerMembershipId:
-        IDS.commissionerMembership,
-      nowMs: NOW_MS + 1,
-      query: {
-        cursor: null,
-        limit: 50,
-        q: "",
-        status,
-      },
-    });
-  assert.equal(result.page.hasMore, false);
-  assert.equal(result.data.length, 1);
-  assert.equal(
-    result.data[0].allocationId,
-    IDS.allocation
-  );
-  return result.data[0];
-}
 
 function allocationOfferEvents(database, version) {
   return database
@@ -3859,6 +3834,36 @@ describe(
           result.data.fadAllocation.allocationVersion,
           before.allocation.version + 1
         );
+        for (const offer of
+          result.data.fadAllocation.rankedOffers) {
+          assert.deepEqual(
+            [
+              offer.totalValueCents,
+              offer.termYears,
+              offer.aavCents,
+            ],
+            [null, null, null]
+          );
+        }
+        assert.deepEqual(
+          [
+            result.data.fadAllocation.restricted
+              .minimumTotalValueCents,
+            result.data.fadAllocation.restricted
+              .minimumTermYears,
+            result.data.fadAllocation.restricted
+              .minimumAavCents,
+          ],
+          [null, null, null]
+        );
+        assert.equal(
+          result.data.fadAllocation.fallback,
+          null
+        );
+        assert.deepEqual(
+          storedResult(runtime.database).data,
+          result.data
+        );
 
         const after = restrictedCancellationSnapshot(
           runtime.database
@@ -4196,6 +4201,74 @@ describe(
           hashCanonicalJsonV1(result.data)
         );
 
+        const fullAllocation =
+          createSqliteFreeAgentDraftInternalReadRepository({
+            database: runtime.database,
+          }).readInternalAllocationResult({
+            allocationId: IDS.allocation,
+            fadId: IDS.fad,
+            leagueId: IDS.league,
+            nowMs: command.occurredAtMs,
+            playerId: IDS.player,
+            viewerMembershipId:
+              IDS.commissionerMembership,
+            viewerUserId: IDS.commissionerUser,
+          });
+        assert.equal(
+          fullAllocation.rankedOffers.every((offer) =>
+            [
+              offer.totalValueCents,
+              offer.termYears,
+              offer.aavCents,
+            ].every(Number.isSafeInteger)
+          ),
+          true
+        );
+        assert.equal(
+          Number.isSafeInteger(
+            fullAllocation.restricted
+              .minimumTotalValueCents
+          ),
+          true
+        );
+        const receipt = runtime.database
+          .prepare(`
+            SELECT id, response_json
+            FROM auction_administration_command_results
+            WHERE league_id = ? AND action = 'cancel_auction'
+          `)
+          .get(IDS.league);
+        const legacyResponseData = {
+          ...JSON.parse(receipt.response_json),
+          fadAllocation: fullAllocation,
+        };
+        const legacyResponseJson =
+          serializeCanonicalJsonV1(legacyResponseData);
+        withTableTriggersDisabled(
+          runtime.database,
+          ["auction_administration_command_results"],
+          () => {
+            assert.equal(
+              runtime.database
+                .prepare(`
+                  UPDATE auction_administration_command_results
+                  SET response_json = @responseJson,
+                      response_sha256 = @responseSha256
+                  WHERE id = @resultId
+                `)
+                .run({
+                  responseJson: legacyResponseJson,
+                  responseSha256:
+                    hashCanonicalJsonV1(
+                      legacyResponseData
+                    ),
+                  resultId: receipt.id,
+                }).changes,
+              1
+            );
+          }
+        );
+
         const idsBeforeReplay =
           runtime.generatedIdCount();
         const replay = runtime.repository.administer(
@@ -4203,14 +4276,31 @@ describe(
         );
         assert.equal(replay.replayed, true);
         assert.deepEqual(replay.data, result.data);
+        assert.deepEqual(
+          JSON.parse(
+            runtime.database
+              .prepare(`
+                SELECT response_json
+                FROM auction_administration_command_results
+                WHERE id = ?
+              `)
+              .get(receipt.id).response_json
+          ).fadAllocation,
+          fullAllocation
+        );
         assert.equal(
           runtime.generatedIdCount(),
           idsBeforeReplay
         );
-        assert.deepEqual(
+        const afterReplay =
           restrictedCancellationSnapshot(
             runtime.database
-          ),
+          );
+        assert.deepEqual(
+          {
+            ...afterReplay,
+            commandResults: after.commandResults,
+          },
           after
         );
       }

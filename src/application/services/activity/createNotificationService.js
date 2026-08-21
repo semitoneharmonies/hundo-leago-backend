@@ -3,7 +3,8 @@ const {
   ActivityPolicyError,
   encodeCursor,
   validateNotificationId,
-  validatePageInput,
+  validateNotificationIds,
+  validateNotificationPageInput,
 } = require("../../../domain/activity/activityPolicy");
 
 function assertMethod(value, method, description) {
@@ -56,7 +57,12 @@ function createNotificationService({
     "requireActiveUser",
     "active-user authorization"
   );
-  for (const method of ["listPage", "markAllRead", "markRead"]) {
+  for (const method of [
+    "listPage",
+    "markAllRead",
+    "markBatchRead",
+    "markRead",
+  ]) {
     assertMethod(repository, method, "a notification repository");
   }
   assertMethod(clock, "nowMs", "a clock");
@@ -67,11 +73,12 @@ function createNotificationService({
 
   function list({ query, authenticated } = {}) {
     const authority = user(authenticated);
-    const page = validatePageInput(query || {});
+    const page = validateNotificationPageInput(query || {});
     const result = repository.listPage({
       userId: authority.actorUserId,
       limit: page.limit,
       cursor: page.cursor,
+      readStatus: page.readStatus,
     });
     const notifications = Object.freeze(result.rows.map(projectRow));
     const last = result.rows.at(-1);
@@ -85,6 +92,24 @@ function createNotificationService({
             ? encodeCursor({ occurredAtMs: last.created_at_ms, id: last.id })
             : null,
       }),
+    });
+  }
+
+  function markBatchRead({ notificationIds, authenticated } = {}) {
+    const authority = user(authenticated);
+    const result = repository.markBatchRead({
+      notificationIds: validateNotificationIds(notificationIds),
+      userId: authority.actorUserId,
+      readAtMs: safeNow(clock),
+    });
+    if (!result) {
+      throw new ActivityPolicyError(ACTIVITY_CODES.notificationNotFound);
+    }
+    return Object.freeze({
+      code: "NOTIFICATIONS_READ",
+      changedCount: result.changedCount,
+      readAtMs: result.readAtMs,
+      notificationIds: Object.freeze([...result.notificationIds]),
     });
   }
 
@@ -117,7 +142,7 @@ function createNotificationService({
     });
   }
 
-  return Object.freeze({ list, markAllRead, markRead });
+  return Object.freeze({ list, markAllRead, markBatchRead, markRead });
 }
 
 module.exports = { createNotificationService };

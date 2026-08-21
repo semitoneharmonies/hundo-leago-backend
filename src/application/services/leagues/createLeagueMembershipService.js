@@ -85,6 +85,11 @@ function createLeagueMembershipService({
         "COMMISSIONER_MEMBERSHIP_PROTECTED"
       );
     }
+    if (membership.is_platform_administrator === 1) {
+      throw new LeagueMembershipConflictError(
+        "PLATFORM_ADMINISTRATOR_MEMBERSHIP_PROTECTED"
+      );
+    }
     if (
       !["active", "invited"].includes(membership.membership_status) ||
       membership.membership_version !== input.expectedVersion

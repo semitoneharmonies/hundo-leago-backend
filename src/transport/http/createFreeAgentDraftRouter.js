@@ -7,18 +7,6 @@ const UUID_V4_PATTERN =
 const CONTROL_PATTERN =
   /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
-const ALLOCATION_STATUSES = Object.freeze([
-  "pending",
-  "automatic_award",
-  "restricted_scheduled",
-  "restricted_active",
-  "restricted_fallback_open",
-  "restricted_resolved",
-  "fallback_open_resolved",
-  "no_valid_offer",
-  "invalid",
-  "correction_required",
-]);
 const FAD_OPERATIONAL_WRITE_ACTION =
   "fad_operational_write";
 const RECOVERY_VALIDATION_REASON_CODES = new Set([
@@ -209,10 +197,19 @@ function allocationResultsQuery(query) {
     "limit",
     "q",
     "status",
+    "teamId",
   ]);
   if (
+    source.teamId === undefined ||
+    !UUID_V4_PATTERN.test(source.teamId)
+  ) {
+    inputInvalid();
+  }
+  if (
     source.status !== undefined &&
-    !ALLOCATION_STATUSES.includes(source.status)
+    !["signed", "not_won", "tied"].includes(
+      source.status
+    )
   ) {
     inputInvalid();
   }
@@ -229,6 +226,7 @@ function allocationResultsQuery(query) {
     ...(source.status === undefined
       ? {}
       : { status: source.status }),
+    teamId: source.teamId,
   });
 }
 

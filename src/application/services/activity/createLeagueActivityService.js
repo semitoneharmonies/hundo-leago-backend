@@ -1,6 +1,6 @@
 const {
   encodeCursor,
-  validatePageInput,
+  validateActivityPageInput,
 } = require("../../../domain/activity/activityPolicy");
 
 function assertMethod(value, method, description) {
@@ -27,9 +27,16 @@ function projectRow(row) {
     actor: Object.freeze({
       userId: row.actor_user_id,
       authority: row.actor_authority,
+      displayName: row.actor_display_name,
     }),
     teamId: row.team_id,
     playerId: row.player_id,
+    team: row.team_id
+      ? Object.freeze({ id: row.team_id, name: row.team_name })
+      : null,
+    player: row.player_id
+      ? Object.freeze({ id: row.player_id, name: row.player_full_name })
+      : null,
     related: row.related_type
       ? Object.freeze({ type: row.related_type, id: row.related_id })
       : null,
@@ -56,11 +63,12 @@ function createLeagueActivityService({
       authenticated,
       leagueId
     );
-    const page = validatePageInput(query || {});
+    const page = validateActivityPageInput(query || {});
     const result = repository.listPage({
       leagueId: authority.leagueId,
       limit: page.limit,
       cursor: page.cursor,
+      category: page.category,
     });
     const activity = Object.freeze(result.rows.map(projectRow));
     const last = result.rows.at(-1);

@@ -12,6 +12,8 @@ const SAFE_MESSAGES = Object.freeze({
   LEAGUE_MEMBERSHIP_NOT_FOUND: "The league membership was not found.",
   LEAGUE_MEMBERSHIP_REQUEST_FAILED:
     "The league membership could not be removed.",
+  PLATFORM_ADMINISTRATOR_MEMBERSHIP_PROTECTED:
+    "Platform-administrator league access is protected and cannot be changed here.",
 });
 
 function assertMethod(value, method, description) {
@@ -77,6 +79,7 @@ function createLeagueMembershipRouter({
               : [
                     "COMMISSIONER_MEMBERSHIP_PROTECTED",
                     "LEAGUE_MEMBERSHIP_NOT_FOUND",
+                    "PLATFORM_ADMINISTRATOR_MEMBERSHIP_PROTECTED",
                   ].includes(error?.code)
                 ? error.code
                 : error?.name === "LeagueMembershipConflictError" ||

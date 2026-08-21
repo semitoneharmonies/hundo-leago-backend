@@ -460,11 +460,16 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
           introducedByMigrationId: 30,
           treatment: "require_empty",
         },
+        {
+          tableName: "trade_future_consideration_acceptances",
+          introducedByMigrationId: 53,
+          treatment: "require_empty",
+        },
       ]
     );
-    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 50);
-    assert.equal(classifiedTables.length, 132);
-    assert.equal(new Set(classifiedTables).size, 132);
+    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 51);
+    assert.equal(classifiedTables.length, 133);
+    assert.equal(new Set(classifiedTables).size, 133);
     assert.deepEqual(
       [...classifiedTables].sort(),
       [...catalogTables].sort()

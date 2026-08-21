@@ -15,6 +15,7 @@ const SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_DIRECTORY_MODE =
   0o700;
 const SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_FILE_MODE =
   0o600;
+const BIGINT_STAT_OPTIONS = Object.freeze({ bigint: true });
 const SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_LOCK_VERSION = 1;
 const SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_FAILURE_SEAMS =
   Object.freeze([
@@ -198,6 +199,15 @@ function childRelativePath(root, candidate) {
 }
 
 function safeStatSize(stat, maximum, code) {
+  if (typeof stat?.size === "bigint") {
+    if (
+      stat.size < 1n ||
+      stat.size > BigInt(maximum)
+    ) {
+      fail(code);
+    }
+    return Number(stat.size);
+  }
   if (
     !Number.isSafeInteger(stat?.size) ||
     stat.size < 1 ||
@@ -214,12 +224,31 @@ function sameFileIdentity(left, right) {
     left !== undefined &&
     right !== null &&
     right !== undefined &&
+    typeof left.dev === "bigint" &&
+    typeof left.ino === "bigint" &&
+    typeof right.dev === "bigint" &&
+    typeof right.ino === "bigint" &&
     left.dev === right.dev &&
     left.ino === right.ino &&
     (
-      left.ino !== 0 ||
-      left.birthtimeMs === right.birthtimeMs
+      left.ino !== 0n ||
+      (
+        typeof left.birthtimeNs === "bigint" &&
+        typeof right.birthtimeNs === "bigint" &&
+        left.birthtimeNs === right.birthtimeNs
+      )
     )
+  );
+}
+
+function sameFileTimestamps(left, right) {
+  return (
+    typeof left?.mtimeNs === "bigint" &&
+    typeof left.ctimeNs === "bigint" &&
+    typeof right?.mtimeNs === "bigint" &&
+    typeof right.ctimeNs === "bigint" &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
   );
 }
 
@@ -232,12 +261,15 @@ function isSymbolicOrNonDirectory(stat) {
 }
 
 function enforceMode(stat, expectedMode, code) {
+  const mode = stat?.mode;
+  const modeMatches =
+    typeof mode === "bigint"
+      ? (mode & 0o777n) === BigInt(expectedMode)
+      : Number.isInteger(mode) &&
+        (mode & 0o777) === expectedMode;
   if (
     process.platform !== "win32" &&
-    (
-      !Number.isInteger(stat.mode) ||
-      (stat.mode & 0o777) !== expectedMode
-    )
+    !modeMatches
   ) {
     fail(code);
   }
@@ -669,7 +701,10 @@ function readVerifiedFile({
   }
   let before;
   try {
-    before = fsModule.lstatSync(filePath);
+    before = fsModule.lstatSync(
+      filePath,
+      BIGINT_STAT_OPTIONS
+    );
   } catch (error) {
     if (error?.code === "ENOENT") {
       fail(
@@ -710,11 +745,20 @@ function readVerifiedFile({
   let bytes;
   try {
     descriptor = openReadOnlyNoFollow(filePath, fsModule);
-    const opened = fsModule.fstatSync(descriptor);
+    const opened = fsModule.fstatSync(
+      descriptor,
+      BIGINT_STAT_OPTIONS
+    );
     if (
       isSymbolicOrNonFile(opened) ||
       !sameFileIdentity(before, opened) ||
-      opened.size !== size
+      safeStatSize(
+        opened,
+        SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_MAX_BYTES,
+        SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_ERROR_CODES
+          .verificationFailed
+      ) !== size ||
+      !sameFileTimestamps(before, opened)
     ) {
       fail(
         SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_ERROR_CODES
@@ -732,15 +776,31 @@ function readVerifiedFile({
       expectedSize: size,
       fsModule,
     });
-    const afterDescriptor = fsModule.fstatSync(descriptor);
-    const afterPath = fsModule.lstatSync(filePath);
+    const afterDescriptor = fsModule.fstatSync(
+      descriptor,
+      BIGINT_STAT_OPTIONS
+    );
+    const afterPath = fsModule.lstatSync(
+      filePath,
+      BIGINT_STAT_OPTIONS
+    );
     if (
       !sameFileIdentity(opened, afterDescriptor) ||
       !sameFileIdentity(opened, afterPath) ||
-      afterDescriptor.size !== size ||
-      afterPath.size !== size ||
-      afterDescriptor.mtimeMs !== opened.mtimeMs ||
-      afterDescriptor.ctimeMs !== opened.ctimeMs
+      safeStatSize(
+        afterDescriptor,
+        SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_MAX_BYTES,
+        SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_ERROR_CODES
+          .verificationFailed
+      ) !== size ||
+      safeStatSize(
+        afterPath,
+        SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_MAX_BYTES,
+        SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_ERROR_CODES
+          .verificationFailed
+      ) !== size ||
+      !sameFileTimestamps(opened, afterDescriptor) ||
+      !sameFileTimestamps(opened, afterPath)
     ) {
       fail(
         SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_ERROR_CODES
@@ -900,8 +960,14 @@ function captureOwnedFileIdentity({
   fsModule,
 }) {
   try {
-    const opened = fsModule.fstatSync(descriptor);
-    const linked = fsModule.lstatSync(filePath);
+    const opened = fsModule.fstatSync(
+      descriptor,
+      BIGINT_STAT_OPTIONS
+    );
+    const linked = fsModule.lstatSync(
+      filePath,
+      BIGINT_STAT_OPTIONS
+    );
     if (
       isSymbolicOrNonFile(opened) ||
       isSymbolicOrNonFile(linked) ||
@@ -979,7 +1045,10 @@ function removeExactOwnedFile({
     return false;
   }
   try {
-    const stat = fsModule.lstatSync(quarantinePath);
+    const stat = fsModule.lstatSync(
+      quarantinePath,
+      BIGINT_STAT_OPTIONS
+    );
     const expectedBytes =
       expectedRaw === null
         ? null
@@ -990,7 +1059,12 @@ function removeExactOwnedFile({
       (
         expectedRaw !== null &&
         (
-          stat.size !== expectedBytes ||
+          safeStatSize(
+            stat,
+            SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_MAX_BYTES,
+            SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_ERROR_CODES
+              .publicationFailed
+          ) !== expectedBytes ||
           fsModule.readFileSync(quarantinePath, "utf8") !==
             expectedRaw
         )

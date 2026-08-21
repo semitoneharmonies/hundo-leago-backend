@@ -141,7 +141,7 @@ function validateRosterMove(input) {
   ]);
   const expectedSourceCategory = oneOf(
     input.expectedSourceCategory,
-    NORMAL_CATEGORIES,
+    [...NORMAL_CATEGORIES, "Prospect"],
     ROSTER_MOVEMENT_CODES.categoryInvalid
   );
   const destinationCategory = oneOf(
@@ -151,7 +151,8 @@ function validateRosterMove(input) {
   );
   if (
     expectedSourceCategory === destinationCategory ||
-    (expectedSourceCategory !== "Active" &&
+    (expectedSourceCategory !== "Prospect" &&
+      expectedSourceCategory !== "Active" &&
       destinationCategory !== "Active")
   ) {
     fail(ROSTER_MOVEMENT_CODES.transitionInvalid);
@@ -203,10 +204,11 @@ function assertCurrentOwnershipForMove(input) {
   ) {
     fail(ROSTER_MOVEMENT_CODES.scopeMismatch);
   }
-  if (
-    current.ownership_kind !== "Rostered" ||
-    current.roster_category === "Prospect"
-  ) {
+  const expectedOwnershipKind =
+    move.expectedSourceCategory === "Prospect"
+      ? "Prospect Right"
+      : "Rostered";
+  if (current.ownership_kind !== expectedOwnershipKind) {
     fail(ROSTER_MOVEMENT_CODES.ownershipInvalid);
   }
   if (current.roster_category !== move.expectedSourceCategory) {

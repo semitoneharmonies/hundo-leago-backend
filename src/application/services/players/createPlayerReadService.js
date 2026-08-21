@@ -224,6 +224,11 @@ function createPlayerReadService({
       cursorFantasyPoints: null,
       leagueId: eligibility.leagueId,
       ownershipTeamId: null,
+      providerPosition: null,
+      providerActive: null,
+      nhlTeam: null,
+      ownershipFilter: "all",
+      minimumGames: 0,
       auctionEligible: eligibility.auctionEligible,
       sort: "name",
     });

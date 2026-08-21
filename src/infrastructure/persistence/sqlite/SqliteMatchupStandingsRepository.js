@@ -74,6 +74,7 @@ function createSqliteMatchupStandingsRepository({ database } = {}) {
       "matchup_results.league_id AS result_league_id, " +
       "matchup_results.season_id AS result_season_id, " +
       "matchup_results.matchup_id, " +
+      "matchup_results.version AS result_version, " +
       "matchup_results.current_version_id AS selected_result_version_id, " +
       "matchup_results.status AS result_status, " +
       "matchup_results.finalized_at_ms, " +
@@ -498,6 +499,8 @@ function createSqliteMatchupStandingsRepository({ database } = {}) {
           matchups.length;
       return Object.freeze({
         season: Object.freeze({ ...season }),
+        weeks: freezeRows(weeks),
+        matchups: freezeRows(matchups),
         expectedWeekCount: weeks.length,
         expectedMatchupCount: matchups.length,
         missingMatchupIds: Object.freeze(

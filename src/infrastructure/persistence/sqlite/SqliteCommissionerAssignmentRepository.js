@@ -140,6 +140,7 @@ function createSqliteCommissionerAssignmentRepository({
   let findAssignmentAggregateStatement;
   let findActiveCommissionerStatement;
   let findActiveMembershipForUserStatement;
+  let findActivePlatformAdministratorStatement;
   let findPendingCommissionerStatement;
   let findIdempotencyByScope;
   let findIdempotencyById;
@@ -152,6 +153,7 @@ function createSqliteCommissionerAssignmentRepository({
         league_invitations.invited_user_id AS proposed_user_id,
         league_invitations.inviting_user_id AS proposed_by_user_id,
         league_invitations.membership_id AS membership_id,
+        league_invitations.workflow AS assignment_workflow,
         league_invitations.status AS assignment_status,
         league_invitations.created_at_ms AS proposed_at_ms,
         league_invitations.accepted_at_ms AS accepted_at_ms,
@@ -166,7 +168,37 @@ function createSqliteCommissionerAssignmentRepository({
         leagues.version AS league_version,
         users.display_name AS proposed_user_display_name,
         users.status AS proposed_user_status,
-        users.version AS proposed_user_version
+        users.version AS proposed_user_version,
+        EXISTS (
+          SELECT 1
+          FROM platform_roles proposed_user_role
+          WHERE proposed_user_role.user_id = users.id
+            AND proposed_user_role.role = 'platform_administrator'
+            AND proposed_user_role.status = 'active'
+            AND proposed_user_role.ended_at_ms IS NULL
+        ) AS proposed_user_is_platform_administrator,
+        current_commissioner.user_id AS current_commissioner_user_id,
+        current_commissioner.permission_category
+          AS current_commissioner_permission_category,
+        current_commissioner.status AS current_commissioner_status,
+        current_commissioner.version AS current_commissioner_version,
+        EXISTS (
+          SELECT 1
+          FROM platform_roles current_commissioner_role
+          WHERE current_commissioner_role.user_id = current_commissioner.user_id
+            AND current_commissioner_role.role = 'platform_administrator'
+            AND current_commissioner_role.status = 'active'
+            AND current_commissioner_role.ended_at_ms IS NULL
+        ) AS current_commissioner_is_platform_administrator,
+        EXISTS (
+          SELECT 1
+          FROM team_manager_assignments
+          WHERE team_manager_assignments.league_id = leagues.id
+            AND team_manager_assignments.user_id = current_commissioner.user_id
+            AND team_manager_assignments.membership_id = current_commissioner.id
+            AND team_manager_assignments.status = 'accepted'
+            AND team_manager_assignments.ended_at_ms IS NULL
+        ) AS current_commissioner_has_active_team
       FROM league_invitations
       JOIN league_memberships
         ON league_memberships.league_id = league_invitations.league_id
@@ -175,6 +207,9 @@ function createSqliteCommissionerAssignmentRepository({
         ON leagues.id = league_invitations.league_id
       JOIN users
         ON users.id = league_invitations.invited_user_id
+      LEFT JOIN league_memberships current_commissioner
+        ON current_commissioner.league_id = leagues.id
+       AND current_commissioner.id = leagues.commissioner_membership_id
       WHERE league_invitations.id = @assignmentId
     `);
     findPendingCommissionerStatement = database.prepare(`
@@ -185,7 +220,7 @@ function createSqliteCommissionerAssignmentRepository({
        AND league_memberships.id = league_invitations.membership_id
       WHERE league_invitations.league_id = @leagueId
         AND league_invitations.status = 'pending'
-        AND league_memberships.permission_category = 'commissioner'
+        AND league_invitations.workflow IS NULL
       ORDER BY league_invitations.created_at_ms ASC,
         league_invitations.id ASC
       LIMIT 2
@@ -207,6 +242,15 @@ function createSqliteCommissionerAssignmentRepository({
         AND status = 'active'
       ORDER BY created_at_ms ASC, id ASC
       LIMIT 2
+    `);
+    findActivePlatformAdministratorStatement = database.prepare(`
+      SELECT 1 AS active
+      FROM platform_roles
+      WHERE user_id = @userId
+        AND role = 'platform_administrator'
+        AND status = 'active'
+        AND ended_at_ms IS NULL
+      LIMIT 1
     `);
     findIdempotencyByScope = database.prepare(
       `SELECT ${IDEMPOTENCY_COLUMNS.join(", ")} ` +
@@ -323,6 +367,20 @@ function createSqliteCommissionerAssignmentRepository({
         });
       }
     },
+    isActivePlatformAdministrator(userId) {
+      try {
+        return Boolean(
+          findActivePlatformAdministratorStatement.get({
+            userId: stableId(userId),
+          })
+        );
+      } catch (error) {
+        throw mapRepositoryError(error, {
+          operation: "findActivePlatformAdministrator",
+          tableName: "platform_roles",
+        });
+      }
+    },
     findPendingCommissionerAssignment(leagueId) {
       try {
         const rows = findPendingCommissionerStatement.all({
@@ -388,6 +446,8 @@ function createSqliteCommissionerAssignmentRepository({
           invited_user_id: stableId(options.invitedUserId),
           inviting_user_id: stableId(options.invitingUserId),
           membership_id: stableId(options.membershipId),
+          workflow: null,
+          team_id: null,
           status: "pending",
           created_at_ms: nowMs,
           expires_at_ms: Number.MAX_SAFE_INTEGER,
@@ -519,6 +579,37 @@ function createSqliteCommissionerAssignmentRepository({
             status: "active",
             joined_at_ms: safeTimestamp(options.nowMs),
             updated_at_ms: options.nowMs,
+          },
+        })
+      );
+    },
+    updateMembershipPermission(options) {
+      exactObject(
+        options,
+        [
+          "leagueId",
+          "membershipId",
+          "expectedVersion",
+          "permissionCategory",
+          "nowMs",
+        ],
+        "An exact commissioner membership permission update is required."
+      );
+      if (
+        !["commissioner", "manager", "member"].includes(
+          options.permissionCategory
+        )
+      ) {
+        invalid("An approved membership permission is required.");
+      }
+      return freezeRow(
+        memberships.updateVersioned({
+          key: stableId(options.membershipId),
+          leagueId: stableId(options.leagueId),
+          expectedVersion: positiveInteger(options.expectedVersion),
+          changes: {
+            permission_category: options.permissionCategory,
+            updated_at_ms: safeTimestamp(options.nowMs),
           },
         })
       );

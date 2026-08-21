@@ -43,7 +43,15 @@ const TEAM_SUMMARY_SELECT = `
     team_manager_assignments.user_id AS manager_user_id,
     team_manager_assignments.accepted_at_ms AS manager_accepted_at_ms,
     team_manager_assignments.version AS manager_assignment_version,
-    users.display_name AS manager_display_name
+    users.display_name AS manager_display_name,
+    CASE WHEN EXISTS (
+      SELECT 1
+      FROM platform_roles AS manager_role
+      WHERE manager_role.user_id = team_manager_assignments.user_id
+        AND manager_role.role = 'platform_administrator'
+        AND manager_role.status = 'active'
+        AND manager_role.ended_at_ms IS NULL
+    ) THEN 1 ELSE 0 END AS manager_is_platform_administrator
   FROM teams
   LEFT JOIN team_manager_assignments
     ON team_manager_assignments.league_id = teams.league_id

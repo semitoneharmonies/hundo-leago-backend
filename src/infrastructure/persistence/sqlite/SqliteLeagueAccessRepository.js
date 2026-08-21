@@ -145,7 +145,15 @@ function createSqliteLeagueAccessRepository({
         league_memberships.ended_at_ms AS ended_at_ms,
         league_memberships.created_at_ms AS created_at_ms,
         league_memberships.updated_at_ms AS updated_at_ms,
-        league_memberships.version AS membership_version
+        league_memberships.version AS membership_version,
+        CASE WHEN EXISTS (
+          SELECT 1
+          FROM platform_roles AS protected_role
+          WHERE protected_role.user_id = league_memberships.user_id
+            AND protected_role.role = 'platform_administrator'
+            AND protected_role.status = 'active'
+            AND protected_role.ended_at_ms IS NULL
+        ) THEN 1 ELSE 0 END AS is_platform_administrator
       FROM league_memberships
       JOIN users
         ON users.id = league_memberships.user_id
@@ -182,9 +190,19 @@ function createSqliteLeagueAccessRepository({
       ORDER BY users.display_name_normalized ASC, users.id ASC
     `);
     findMembershipStatement = database.prepare(`
-      SELECT *
+      SELECT
+        league_memberships.*,
+        CASE WHEN EXISTS (
+          SELECT 1
+          FROM platform_roles AS protected_role
+          WHERE protected_role.user_id = league_memberships.user_id
+            AND protected_role.role = 'platform_administrator'
+            AND protected_role.status = 'active'
+            AND protected_role.ended_at_ms IS NULL
+        ) THEN 1 ELSE 0 END AS is_platform_administrator
       FROM league_memberships
-      WHERE league_id = @leagueId AND id = @membershipId
+      WHERE league_memberships.league_id = @leagueId
+        AND league_memberships.id = @membershipId
       LIMIT 2
     `);
     listEndingManagerAssignmentsStatement = database.prepare(`
@@ -257,6 +275,13 @@ function createSqliteLeagueAccessRepository({
         throw repositoryError(
           REPOSITORY_ERROR_CODES.versionConflict,
           "The league membership changed before removal."
+        );
+      }
+      if (current.is_platform_administrator === 1) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.constraint,
+          "A protected platform-administrator membership cannot be removed.",
+          { details: { tableName: "league_memberships" } }
         );
       }
       const currentManagerAssignments =

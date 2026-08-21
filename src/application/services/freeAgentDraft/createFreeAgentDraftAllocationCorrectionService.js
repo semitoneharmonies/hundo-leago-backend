@@ -2,9 +2,10 @@
 
 const {
   hashFreeAgentDraftCorrectionApplyRequest,
+  projectFreeAgentDraftCorrectionApplyResultForPublic,
   serializeFreeAgentDraftCorrectionApplyRequest,
   validateFreeAgentDraftCorrectionApplyCommand,
-  validateFreeAgentDraftCorrectionApplyResult,
+  validateFreeAgentDraftCorrectionPublicApplyResult,
 } = require(
   "../../../domain/freeAgentDraft/freeAgentDraftCorrectionPolicy"
 );
@@ -169,7 +170,11 @@ function validateResult({
   }
   let data;
   try {
-    data = validateFreeAgentDraftCorrectionApplyResult(result.data);
+    data = validateFreeAgentDraftCorrectionPublicApplyResult(
+      projectFreeAgentDraftCorrectionApplyResultForPublic(
+        result.data
+      )
+    );
   } catch {
     resultInvalid(
       "The FAD allocation-correction result is invalid."

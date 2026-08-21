@@ -253,6 +253,22 @@ function validateTradeProposalCreationInput(input) {
   });
 }
 
+function assertNewTradeProposalAssetTypes(assets) {
+  if (!Array.isArray(assets)) {
+    fail(TRADE_ASSET_CODES.inputInvalid);
+  }
+  if (
+    assets.some(
+      (asset) =>
+        asset?.inputType === "retention_obligation" ||
+        asset?.assetType === "retention_obligation"
+    )
+  ) {
+    fail(TRADE_ASSET_CODES.typeUnsupported);
+  }
+  return true;
+}
+
 function createTradeAssetCommands({
   input,
   assetIds,
@@ -426,6 +442,7 @@ module.exports = {
   TRADE_ASSET_CODES,
   TRADE_ASSET_TYPES,
   TradeAssetPolicyError,
+  assertNewTradeProposalAssetTypes,
   assertSnapshot,
   boundedIdempotencyKey,
   createTradeAssetCommands,

@@ -8,6 +8,12 @@ const {
 } = require(
   "../../../domain/auctions/auctionAdministrationPolicy"
 );
+const {
+  FreeAgentDraftCorrectionPolicyError,
+  validateFreeAgentDraftPublicAllocationResultProjection,
+} = require(
+  "../../../domain/freeAgentDraft/freeAgentDraftCorrectionPolicy"
+);
 
 const AUCTION_ADMINISTRATION_IDEMPOTENCY_LIFETIME_MS =
   24 * 60 * 60 * 1_000;
@@ -426,6 +432,34 @@ function validateRepositoryResult({
     )
   ) {
     failResult("service_result_invalid");
+  }
+  if (
+    request.action === "cancel_auction" &&
+    isPlainObject(result.data) &&
+    result.data.fadAllocation !== null &&
+    result.data.fadAllocation !== undefined
+  ) {
+    try {
+      result = {
+        ...result,
+        data: {
+          ...result.data,
+          fadAllocation:
+            validateFreeAgentDraftPublicAllocationResultProjection(
+              result.data.fadAllocation
+            ),
+        },
+      };
+    } catch (error) {
+      if (
+        error instanceof FreeAgentDraftCorrectionPolicyError
+      ) {
+        failResult(
+          "service_cancellation_context_invalid"
+        );
+      }
+      throw error;
+    }
   }
   const evidence = result.evidence;
   if (

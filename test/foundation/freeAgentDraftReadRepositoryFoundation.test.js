@@ -65,6 +65,7 @@ const {
 const {
   FREE_AGENT_DRAFT_READ_REPOSITORY_CODES,
   FREE_AGENT_DRAFT_READ_REPOSITORY_METHODS,
+  createSqliteFreeAgentDraftInternalReadRepository,
   createSqliteFreeAgentDraftReadRepository,
 } = require(
   "../../src/infrastructure/persistence/sqlite/SqliteFreeAgentDraftReadRepository"
@@ -1724,6 +1725,9 @@ function moveDraftToDeadlineLocked(
   database,
   scope = PRIMARY
 ) {
+  const deadlineAtMs =
+    scopedWeekOneStartsAtMs(scope) -
+    FREE_AGENT_DRAFT_INITIAL_WINDOW_MS;
   // FAD-10 owns the atomic deadline lock and snapshot transition. Until that
   // writer exists, read-foundation fixtures bypass only the two aggregate
   // lifecycle guards; entry, snapshot, allocation, context, and FK guards stay.
@@ -1743,7 +1747,7 @@ function moveDraftToDeadlineLocked(
     .run({
       fadId: scope.fadId,
       leagueId: scope.leagueId,
-      lockedAtMs: PUBLICATION_AT_MS,
+      lockedAtMs: deadlineAtMs,
     });
   database
     .prepare(`
@@ -1756,7 +1760,7 @@ function moveDraftToDeadlineLocked(
         AND id = @fadId
     `)
     .run({
-      deadlineLockedAtMs: PUBLICATION_AT_MS,
+      deadlineLockedAtMs: deadlineAtMs,
       fadId: scope.fadId,
       leagueId: scope.leagueId,
     });
@@ -2612,8 +2616,16 @@ function terminalizeRestrictedDrawForRead(
   return Object.freeze({ terminalAtMs });
 }
 
-function seedPublishedPendingResults(database) {
-  openDraft(database, PRIMARY);
+function seedPublishedPendingResults(
+  database,
+  scope = PRIMARY
+) {
+  const isPrimary = scope === PRIMARY;
+  const publicationAtMs =
+    scopedWeekOneStartsAtMs(scope) -
+    FREE_AGENT_DRAFT_INITIAL_WINDOW_MS;
+  const playerIdBase = isPrimary ? 21_000 : 24_000;
+  openDraft(database, scope);
   const {
     createSqliteCandidateCardRepository,
   } = require(
@@ -2627,18 +2639,22 @@ function seedPublishedPendingResults(database) {
     });
   const players = Object.freeze({
     amy: Object.freeze({
-      playerId: uuid(21_000),
-      fullName: "Amy Candidate",
+      playerId: uuid(playerIdBase),
+      fullName: isPrimary
+        ? "Amy Candidate"
+        : "Sage Candidate",
       positionGroup: "D",
-      positionId: uuid(21_001),
-      allocationId: uuid(21_002),
+      positionId: uuid(playerIdBase + 1),
+      allocationId: uuid(playerIdBase + 2),
     }),
     zed: Object.freeze({
-      playerId: uuid(21_010),
-      fullName: "Zed Candidate",
+      playerId: uuid(playerIdBase + 10),
+      fullName: isPrimary
+        ? "Zed Candidate"
+        : "Tess Candidate",
       positionGroup: "F",
-      positionId: uuid(21_011),
-      allocationId: uuid(21_012),
+      positionId: uuid(playerIdBase + 11),
+      allocationId: uuid(playerIdBase + 12),
     }),
   });
   for (const player of Object.values(players)) {
@@ -2657,19 +2673,19 @@ function seedPublishedPendingResults(database) {
     });
     insert(database, "league_player_positions", {
       id: player.positionId,
-      league_id: PRIMARY.leagueId,
+      league_id: scope.leagueId,
       player_id: player.playerId,
       position_group: player.positionGroup,
       reason: "Published-read foundation fixture",
       corrected_by_user_id:
-        PRIMARY.commissionerUserId,
+        scope.commissionerUserId,
       effective_at_ms: 1,
       ended_at_ms: null,
       version: 1,
     });
   }
 
-  const offers = [
+  const offers = isPrimary ? [
     {
       teamId: PRIMARY.teamOneId,
       cardId: PRIMARY.cardOneId,
@@ -2716,15 +2732,31 @@ function seedPublishedPendingResults(database) {
       snapshotId: uuid(21_123),
       snapshotEntryBase: 22_200,
     },
+  ] : [
+    {
+      teamId: scope.teamOneId,
+      cardId: scope.cardOneId,
+      userId: scope.managerUserId,
+      membershipId: scope.managerMembershipId,
+      player: players.amy,
+      slotKey: "D01",
+      totalValueCents: 1_500,
+      termYears: 3,
+      entryId: uuid(24_100),
+      revisionId: uuid(24_101),
+      requestId: uuid(24_102),
+      snapshotId: uuid(24_103),
+      snapshotEntryBase: 24_200,
+    },
   ];
   const candidateAddedAtMs =
     PREPUBLICATION_NOW_MS - 10;
   for (const offer of offers) {
     candidateRepository.mutate({
       scope: {
-        leagueId: PRIMARY.leagueId,
-        seasonId: PRIMARY.seasonId,
-        fadId: PRIMARY.fadId,
+        leagueId: scope.leagueId,
+        seasonId: scope.seasonId,
+        fadId: scope.fadId,
         cardId: offer.cardId,
         teamId: offer.teamId,
       },
@@ -2756,7 +2788,7 @@ function seedPublishedPendingResults(database) {
     });
   }
 
-  moveDraftToDeadlineLocked(database);
+  moveDraftToDeadlineLocked(database, scope);
   const slotCoordinates = [
     ...Array.from({ length: 12 }, (_, index) => [
       "F",
@@ -2779,7 +2811,7 @@ function seedPublishedPendingResults(database) {
         WHERE league_id = ?
           AND id = ?
       `)
-      .get(PRIMARY.leagueId, offer.cardId);
+      .get(scope.leagueId, offer.cardId);
     const entry = database
       .prepare(`
         SELECT *
@@ -2789,15 +2821,15 @@ function seedPublishedPendingResults(database) {
           AND id = ?
       `)
       .get(
-        PRIMARY.leagueId,
+        scope.leagueId,
         offer.cardId,
         offer.entryId
       );
     insert(database, "candidate_card_snapshots", {
       id: offer.snapshotId,
-      league_id: PRIMARY.leagueId,
-      season_id: PRIMARY.seasonId,
-      fad_id: PRIMARY.fadId,
+      league_id: scope.leagueId,
+      season_id: scope.seasonId,
+      fad_id: scope.fadId,
       card_id: offer.cardId,
       team_id: offer.teamId,
       locked_card_version: card.version,
@@ -2824,9 +2856,9 @@ function seedPublishedPendingResults(database) {
         card.maximum_possible_cap_cents,
       maximum_cap_space_cents:
         100_000 - card.maximum_possible_cap_cents,
-      effective_deadline_at_ms: PUBLICATION_AT_MS,
-      processed_at_ms: PUBLICATION_AT_MS,
-      created_at_ms: PUBLICATION_AT_MS,
+      effective_deadline_at_ms: publicationAtMs,
+      processed_at_ms: publicationAtMs,
+      created_at_ms: publicationAtMs,
       carried_roster_structural_conflict_count:
         card.carried_roster_structural_conflict_count,
       cap_status: card.cap_status,
@@ -2854,9 +2886,9 @@ function seedPublishedPendingResults(database) {
         "candidate_card_snapshot_entries",
         {
           id: snapshotEntryId,
-          league_id: PRIMARY.leagueId,
-          season_id: PRIMARY.seasonId,
-          fad_id: PRIMARY.fadId,
+          league_id: scope.leagueId,
+          season_id: scope.seasonId,
+          fad_id: scope.fadId,
           snapshot_id: offer.snapshotId,
           card_id: offer.cardId,
           team_id: offer.teamId,
@@ -2913,7 +2945,7 @@ function seedPublishedPendingResults(database) {
           last_edited_at_ms: isCandidate
             ? entry.updated_at_ms
             : null,
-          created_at_ms: PUBLICATION_AT_MS,
+          created_at_ms: publicationAtMs,
           allocation_eligibility: isCandidate
             ? card.allocation_eligibility
             : null,
@@ -2931,9 +2963,9 @@ function seedPublishedPendingResults(database) {
       "free_agent_draft_player_allocations",
       {
         id: player.allocationId,
-        league_id: PRIMARY.leagueId,
-        season_id: PRIMARY.seasonId,
-        fad_id: PRIMARY.fadId,
+        league_id: scope.leagueId,
+        season_id: scope.seasonId,
+        fad_id: scope.fadId,
         player_id: player.playerId,
         status: "pending",
         decision_code: null,
@@ -2948,8 +2980,8 @@ function seedPublishedPendingResults(database) {
         restricted_minimum_aav_cents: null,
         accounted_at_ms: null,
         last_error_code: null,
-        created_at_ms: PUBLICATION_AT_MS,
-        updated_at_ms: PUBLICATION_AT_MS,
+        created_at_ms: publicationAtMs,
+        updated_at_ms: publicationAtMs,
         version: 1,
       }
     );
@@ -2960,6 +2992,170 @@ function seedPublishedPendingResults(database) {
     ),
     players,
   });
+}
+
+function seedAutomaticAwardResult(
+  database,
+  {
+    scope,
+    offer,
+    contractId,
+    ownershipId,
+    eventId,
+    losingOffers = [],
+    losingEventIds = [],
+    decisionCode = "sole_valid_offer",
+    accountedAtMs = ALLOCATION_AT_MS,
+  }
+) {
+  const aavCents =
+    offer.totalValueCents / offer.termYears;
+  dropTableTriggers(database, "contracts");
+  dropTableTriggers(database, "player_ownerships");
+  dropTableTriggers(
+    database,
+    "free_agent_draft_player_allocations"
+  );
+  dropTableTriggers(
+    database,
+    "free_agent_draft_allocation_events"
+  );
+  insert(database, "contracts", {
+    id: contractId,
+    league_id: scope.leagueId,
+    player_id: offer.player.playerId,
+    current_team_id: offer.teamId,
+    contract_type: "normal",
+    original_total_value_cents:
+      offer.totalValueCents,
+    original_term_years: offer.termYears,
+    aav_cents: aavCents,
+    start_season_id: scope.seasonId,
+    status: "active",
+    acquisition_source_type: "free_agent_draft",
+    acquisition_source_id: offer.player.allocationId,
+    auction_buyout_lock_expires_at_ms: null,
+    created_at_ms: accountedAtMs,
+    updated_at_ms: accountedAtMs,
+    version: 1,
+  });
+  insert(database, "player_ownerships", {
+    id: ownershipId,
+    league_id: scope.leagueId,
+    season_id: scope.seasonId,
+    player_id: offer.player.playerId,
+    team_id: offer.teamId,
+    ownership_kind: "Rostered",
+    roster_category: "Active",
+    position_group: offer.player.positionGroup,
+    slot_number: Number(offer.slotKey.slice(1)),
+    acquired_transaction_type: "free_agent_draft",
+    acquired_transaction_id: offer.player.allocationId,
+    created_at_ms: accountedAtMs,
+    updated_at_ms: accountedAtMs,
+    version: 1,
+    trade_blocked: 0,
+  });
+  database
+    .prepare(`
+      UPDATE free_agent_draft_player_allocations
+      SET status = 'automatic_award',
+          decision_code = @decisionCode,
+          winning_snapshot_entry_id = @snapshotEntryId,
+          winning_team_id = @teamId,
+          contract_id = @contractId,
+          ownership_id = @ownershipId,
+          accounted_at_ms = @accountedAtMs,
+          updated_at_ms = @accountedAtMs,
+          version = 2
+      WHERE league_id = @leagueId
+        AND id = @allocationId
+    `)
+    .run({
+      accountedAtMs,
+      allocationId: offer.player.allocationId,
+      contractId,
+      decisionCode,
+      leagueId: scope.leagueId,
+      ownershipId,
+      snapshotEntryId: offer.snapshotEntryId,
+      teamId: offer.teamId,
+    });
+  insert(
+    database,
+    "free_agent_draft_allocation_events",
+    {
+      id: eventId,
+      league_id: scope.leagueId,
+      season_id: scope.seasonId,
+      fad_id: scope.fadId,
+      allocation_id: offer.player.allocationId,
+      allocation_version: 2,
+      player_id: offer.player.playerId,
+      event_kind: "offer_considered",
+      snapshot_entry_id: offer.snapshotEntryId,
+      team_id: offer.teamId,
+      offer_valid: 1,
+      rank_position: 1,
+      offer_outcome_code: "winner",
+      decision_code: null,
+      resulting_allocation_status: "automatic_award",
+      contract_id: null,
+      ownership_id: null,
+      auction_id: null,
+      activity_id: null,
+      correction_id: null,
+      actor_user_id: null,
+      actor_membership_id: null,
+      actor_authority: "system",
+      evidence_json: "{}",
+      occurred_at_ms: accountedAtMs,
+      created_at_ms: accountedAtMs,
+      version: 1,
+    }
+  );
+  assert.equal(
+    losingEventIds.length,
+    losingOffers.length
+  );
+  for (const [index, losingOffer] of
+    losingOffers.entries()) {
+    insert(
+      database,
+      "free_agent_draft_allocation_events",
+      {
+        id: losingEventIds[index],
+        league_id: scope.leagueId,
+        season_id: scope.seasonId,
+        fad_id: scope.fadId,
+        allocation_id: offer.player.allocationId,
+        allocation_version: 2,
+        player_id: offer.player.playerId,
+        event_kind: "offer_considered",
+        snapshot_entry_id:
+          losingOffer.snapshotEntryId,
+        team_id: losingOffer.teamId,
+        offer_valid: 1,
+        rank_position: index + 2,
+        offer_outcome_code: "lost_lower_total",
+        decision_code: null,
+        resulting_allocation_status:
+          "automatic_award",
+        contract_id: null,
+        ownership_id: null,
+        auction_id: null,
+        activity_id: null,
+        correction_id: null,
+        actor_user_id: null,
+        actor_membership_id: null,
+        actor_authority: "system",
+        evidence_json: "{}",
+        occurred_at_ms: accountedAtMs,
+        created_at_ms: accountedAtMs,
+        version: 1,
+      }
+    );
+  }
 }
 
 function moveDraftToCompleted(database, scope = PRIMARY) {
@@ -4850,6 +5046,7 @@ function allocationResultsInput(overrides = {}) {
       limit: 50,
       q: "",
       status: null,
+      teamId: PRIMARY.teamOneId,
     },
     ...overrides,
   };
@@ -5139,7 +5336,7 @@ function assertOverviewShape(overview) {
 }
 
 describe("SQLite Free Agent Draft read repository foundation", () => {
-  test("publishes only the locked seven-method read surface", () => {
+  test("publishes only the locked seven-method surface and isolates the protected exact-allocation reader", (t) => {
     assert.deepEqual(
       FREE_AGENT_DRAFT_READ_REPOSITORY_METHODS,
       [
@@ -5162,6 +5359,19 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
         cardsNotPublished:
           "FAD_CARDS_NOT_PUBLISHED",
       }
+    );
+    const runtime = createRuntime(t);
+    assert.deepEqual(
+      Object.keys(runtime.readRepository).sort(),
+      [...FREE_AGENT_DRAFT_READ_REPOSITORY_METHODS].sort()
+    );
+    assert.deepEqual(
+      Object.keys(
+        createSqliteFreeAgentDraftInternalReadRepository({
+          database: runtime.database,
+        })
+      ),
+      ["readInternalAllocationResult"]
     );
   });
 
@@ -5199,7 +5409,7 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
     assertNoWrites(runtime.database, before);
   });
 
-  test("reads deterministic published Candidate summaries and immutable 22-slot history without writes", (t) => {
+  test("reads deterministic exact published summaries and selected-team results without writes", (t) => {
     const runtime = createRuntime(t);
     runtime.database
       .prepare(`
@@ -5266,49 +5476,19 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
     });
     const summary = first.data[0];
     assertExactKeys(summary, [
-      "allocationEligibility",
-      "allocationExclusionReason",
-      "capStatus",
-      "carriedCapUsageCents",
-      "commissionerInterventionCount",
-      "completeness",
-      "counts",
       "fadId",
-      "historyDescriptor",
       "leagueId",
       "lifecycleStatus",
-      "lockedCardVersion",
-      "maximumPossibleCapCents",
       "outcomeCounts",
       "seasonId",
-      "snapshotId",
       "team",
       "teamId",
     ]);
     assertSafeTeamShape(summary.team);
-    assert.deepEqual(summary.counts, {
-      carryovers: 0,
-      candidates: 1,
-      emptyMandatory: 17,
-      emptyBench: 4,
-      conflicts: 0,
-    });
     assert.deepEqual(summary.outcomeCounts, {
-      automaticWins: 0,
-      restrictedPending: 0,
-      restrictedWins: 0,
-      fallbackPending: 0,
-      fallbackWins: 0,
-      fallbackNoWinner: 0,
-      losses: 0,
-      invalidOffers: 0,
-    });
-    assert.deepEqual(summary.historyDescriptor, {
-      mode: "published_card",
-      seasonId: PRIMARY.seasonId,
-      fadId: PRIMARY.fadId,
-      teamId: PRIMARY.teamTwoId,
-      cardId: PRIMARY.cardTwoId,
+      signed: 0,
+      notWon: 0,
+      tied: 0,
     });
 
     assertRepositoryError(
@@ -5330,114 +5510,17 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
         publishedHistoryInput()
       );
     assertExactKeys(history, [
-      "accessReason",
-      "allocationEligibility",
-      "allocationExclusionReason",
-      "authorizationEvidence",
-      "capProjection",
-      "capStatus",
-      "capabilities",
-      "cardId",
-      "cardVersion",
-      "commissionerInterventions",
-      "completeness",
-      "conflicts",
       "fadId",
-      "helpContext",
       "leagueId",
-      "lifecycleStatus",
-      "phase",
+      "results",
       "seasonId",
-      "slots",
+      "team",
       "teamId",
-      "visibilityMode",
     ]);
-    assert.equal(history.phase, "allocating");
-    assert.equal(
-      history.visibilityMode,
-      "published_history"
-    );
-    assert.equal(history.slots.length, 22);
-    assert.deepEqual(
-      history.slots.map(({ slotKey }) => slotKey),
-      [
-        ...Array.from(
-          { length: 12 },
-          (_, index) =>
-            `F${String(index + 1).padStart(2, "0")}`
-        ),
-        ...Array.from(
-          { length: 6 },
-          (_, index) =>
-            `D${String(index + 1).padStart(2, "0")}`
-        ),
-        ...Array.from(
-          { length: 4 },
-          (_, index) =>
-            `B${String(index + 1).padStart(2, "0")}`
-        ),
-      ]
-    );
-    const candidate = history.slots[0];
-    const teamOneOffer = fixture.offers.find(
-      ({ teamId }) => teamId === PRIMARY.teamOneId
-    );
-    assertExactKeys(candidate, [
-      "aavCents",
-      "authoritativeRosterCategory",
-      "capabilities",
-      "entryId",
-      "entryVersion",
-      "lastEditedAtMs",
-      "lastEditedBy",
-      "locked",
-      "occupantKind",
-      "outcome",
-      "player",
-      "remainingYears",
-      "required",
-      "slotGroup",
-      "slotKey",
-      "termYears",
-      "totalValueCents",
-      "validation",
-    ]);
-    assert.deepEqual(candidate.player, {
-      playerId: fixture.players.zed.playerId,
-      fullName: "Zed Candidate",
-      positionGroup: "F",
-    });
-    assert.equal(candidate.entryId, teamOneOffer.entryId);
-    assert.equal(candidate.occupantKind, "candidate");
-    assert.equal(candidate.totalValueCents, 900);
-    assert.equal(candidate.termYears, 3);
-    assert.equal(candidate.aavCents, 300);
-    assert.equal(candidate.outcome, null);
-    assert.deepEqual(candidate.validation, {
-      status: "valid",
-      codes: [],
-    });
-    assert.deepEqual(candidate.lastEditedBy, {
-      userId: PRIMARY.managerUserId,
-      displayName: "Multi Team Manager",
-      authority: "manager",
-    });
-    for (const capability of Object.values(
-      candidate.capabilities
-    )) {
-      assert.deepEqual(capability, {
-        allowed: false,
-        reasonCode: "PHASE_CLOSED",
-      });
-    }
-    assert.deepEqual(history.conflicts, []);
-    assert.equal(history.helpContext, null);
-    assert.deepEqual(
-      history.commissionerInterventions,
-      []
-    );
+    assertSafeTeamShape(history.team);
+    assert.deepEqual(history.results, []);
     assert.equal(Object.isFrozen(history), true);
-    assert.equal(Object.isFrozen(history.slots), true);
+    assert.equal(Object.isFrozen(history.results), true);
 
     assertRepositoryError(
       () =>
@@ -5462,7 +5545,108 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
     assertNoWrites(runtime.database, before);
   });
 
-  test("publishes an incomplete Candidate snapshot row as invalid_offer without requiring an allocation", (t) => {
+  test("keeps pending selected-team result money private for every viewer without writes", (t) => {
+    const runtime = createRuntime(t);
+    seedPublishedPendingResults(runtime.database);
+    const before = noWriteSnapshot(runtime.database);
+    const viewers = [
+      {
+        viewerUserId: PRIMARY.managerUserId,
+        viewerMembershipId: PRIMARY.managerMembershipId,
+      },
+      {
+        viewerUserId: PRIMARY.otherManagerUserId,
+        viewerMembershipId:
+          PRIMARY.otherManagerMembershipId,
+      },
+      {
+        viewerUserId: PRIMARY.commissionerUserId,
+        viewerMembershipId:
+          PRIMARY.commissionerMembershipId,
+      },
+      {
+        viewerUserId: PRIMARY.administratorUserId,
+        viewerMembershipId:
+          PRIMARY.administratorMembershipId,
+      },
+    ];
+
+    for (const viewer of viewers) {
+      const summaries =
+        runtime.readRepository.readPublishedCardSummaries(
+          publishedSummaryInput(viewer)
+        ).data;
+      assert.equal(summaries.length, 3);
+      for (const summary of summaries) {
+        assertExactKeys(summary, [
+          "fadId",
+          "leagueId",
+          "lifecycleStatus",
+          "outcomeCounts",
+          "seasonId",
+          "team",
+          "teamId",
+        ]);
+        assert.deepEqual(summary.outcomeCounts, {
+          signed: 0,
+          notWon: 0,
+          tied: 0,
+        });
+      }
+
+      for (const teamId of [
+        PRIMARY.teamOneId,
+        PRIMARY.teamTwoId,
+        PRIMARY.teamThreeId,
+      ]) {
+        const selected =
+          runtime.readRepository.readPublishedCardHistory(
+            publishedHistoryInput({
+              teamId,
+              ...viewer,
+            })
+          );
+        assert.deepEqual(selected.results, []);
+
+        const results =
+          runtime.readRepository.readAllocationResults(
+            allocationResultsInput({
+              ...viewer,
+              query: {
+                cursor: null,
+                limit: 50,
+                q: "",
+                status: null,
+                teamId,
+              },
+            })
+          );
+        assert.deepEqual(results, {
+          data: [],
+          page: {
+            nextCursor: null,
+            hasMore: false,
+          },
+        });
+      }
+    }
+
+    assertRepositoryError(
+      () =>
+        runtime.readRepository.readAllocationResults(
+          allocationResultsInput({
+            viewerUserId: PRIMARY.managerUserId,
+            viewerMembershipId:
+              SECONDARY.managerMembershipId,
+          })
+        ),
+      FREE_AGENT_DRAFT_READ_REPOSITORY_CODES
+        .authorizationDenied
+    );
+    assertNoWrites(runtime.database, before);
+  });
+
+  test("maps an incomplete final Candidate request to not_won but omits pending and correction-required allocations", (t) => {
     const runtime = createRuntime(t);
     const fixture = seedPublishedPendingResults(
       runtime.database
@@ -5501,244 +5685,170 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
             'CANDIDATE_CONTRACT_INCOMPLETE'
       WHERE id = ?
     `).run(offer.snapshotEntryId);
-    runtime.database.prepare(`
-      DELETE FROM free_agent_draft_player_allocations
-      WHERE id = ?
-    `).run(fixture.players.amy.allocationId);
-    const before = noWriteSnapshot(runtime.database);
 
-    const history =
+    const readSelected = () =>
+      runtime.readRepository.readAllocationResults(
+        allocationResultsInput({
+          viewerUserId: PRIMARY.managerUserId,
+          viewerMembershipId:
+            PRIMARY.managerMembershipId,
+          query: {
+            cursor: null,
+            limit: 50,
+            q: "",
+            status: null,
+            teamId: PRIMARY.teamTwoId,
+          },
+        })
+      );
+    const readHistory = () =>
       runtime.readRepository.readPublishedCardHistory(
         publishedHistoryInput({
           teamId: PRIMARY.teamTwoId,
         })
       );
-    const partial = history.slots.find(
-      ({ entryId }) => entryId === offer.entryId
-    );
-    assert.deepEqual(partial.outcome, {
-      code: "invalid_offer",
-      allocationId: null,
-      auctionId: null,
+    const readCounts = () =>
+      runtime.readRepository.readPublishedCardSummaries(
+        publishedSummaryInput()
+      ).data.find(
+        ({ teamId }) => teamId === PRIMARY.teamTwoId
+      ).outcomeCounts;
+
+    assert.deepEqual(readSelected().data, []);
+    assert.deepEqual(readHistory().results, []);
+    assert.deepEqual(readCounts(), {
+      signed: 0,
+      notWon: 0,
+      tied: 0,
     });
-    assert.deepEqual(
-      partial.validation,
-      {
-        status: "invalid",
-        codes: [
-          "CANDIDATE_CONTRACT_INCOMPLETE",
-        ],
-      }
-    );
-    assert.equal(
-      partial.totalValueCents,
-      400
-    );
-    assert.equal(partial.termYears, null);
-    assert.equal(partial.aavCents, null);
+
+    runtime.database.prepare(`
+      UPDATE free_agent_draft_player_allocations
+      SET status = 'correction_required'
+      WHERE id = ?
+    `).run(fixture.players.amy.allocationId);
+    assert.deepEqual(readSelected().data, []);
+    assert.deepEqual(readHistory().results, []);
+    assert.deepEqual(readCounts(), {
+      signed: 0,
+      notWon: 0,
+      tied: 0,
+    });
+
+    runtime.database.prepare(`
+      DELETE FROM free_agent_draft_player_allocations
+      WHERE id = ?
+    `).run(fixture.players.amy.allocationId);
+    const before = noWriteSnapshot(runtime.database);
+    const result = readSelected().data[0];
+    assertExactKeys(result, [
+      "offer",
+      "player",
+      "status",
+      "tieAuctionId",
+    ]);
+    assert.deepEqual(result, {
+      player: {
+        playerId: fixture.players.amy.playerId,
+        fullName: "Amy Candidate",
+        positionGroup: "D",
+      },
+      status: "not_won",
+      offer: null,
+      tieAuctionId: null,
+    });
+    assert.deepEqual(readHistory().results, [result]);
+    assert.deepEqual(readCounts(), {
+      signed: 0,
+      notWon: 1,
+      tied: 0,
+    });
     assertNoWrites(runtime.database, before);
   });
 
-  test("reads pending T-140 allocations immediately with snapshot evidence, bound cursors, and no writes", (t) => {
+  test("omits pending allocations and enforces the exact selected-team T-140 query grammar without writes", (t) => {
     const runtime = createRuntime(t);
-    const fixture = seedPublishedPendingResults(
-      runtime.database
-    );
+    seedPublishedPendingResults(runtime.database);
     const before = noWriteSnapshot(runtime.database);
 
-    const first =
-      runtime.readRepository.readAllocationResults(
-        allocationResultsInput({
-          query: {
-            cursor: null,
-            limit: 1,
-            q: "",
-            status: null,
-          },
-        })
-      );
-    assert.equal(first.page.hasMore, true);
-    assert.equal(typeof first.page.nextCursor, "string");
-    assert.equal(first.data.length, 1);
-    const amy = first.data[0];
-    assertExactKeys(amy, [
-      "allocationId",
-      "allocationVersion",
-      "decisionCode",
-      "draws",
-      "fallback",
-      "player",
-      "rankedOffers",
-      "recoveryStatus",
-      "resolvedAtMs",
-      "restricted",
-      "status",
-      "winner",
-    ]);
-    assert.equal(
-      amy.allocationId,
-      fixture.players.amy.allocationId
-    );
-    assert.deepEqual(amy.player, {
-      playerId: fixture.players.amy.playerId,
-      fullName: "Amy Candidate",
-      positionGroup: "D",
-    });
-    assert.equal(amy.status, "pending");
-    assert.equal(amy.decisionCode, null);
-    assert.equal(amy.winner, null);
-    assert.equal(amy.restricted, null);
-    assert.equal(amy.fallback, null);
-    assert.deepEqual(amy.draws, []);
-    assert.equal(amy.recoveryStatus, null);
-    assert.equal(amy.resolvedAtMs, null);
-    assert.equal(amy.rankedOffers.length, 1);
-    assert.deepEqual(
+    for (const teamId of [
+      PRIMARY.teamOneId,
+      PRIMARY.teamTwoId,
+      PRIMARY.teamThreeId,
+    ]) {
+      for (const status of [
+        null,
+        "signed",
+        "not_won",
+        "tied",
+      ]) {
+        assert.deepEqual(
+          runtime.readRepository.readAllocationResults(
+            allocationResultsInput({
+              query: {
+                cursor: null,
+                limit: 1,
+                q: "",
+                status,
+                teamId,
+              },
+            })
+          ),
+          {
+            data: [],
+            page: {
+              nextCursor: null,
+              hasMore: false,
+            },
+          }
+        );
+      }
+    }
+
+    for (const query of [
       {
-        ...amy.rankedOffers[0],
-        team: undefined,
+        cursor: null,
+        limit: 50,
+        q: "",
+        status: "pending",
+        teamId: PRIMARY.teamOneId,
       },
       {
-        snapshotEntryId:
-          fixture.offers.find(
-            ({ teamId }) => teamId === PRIMARY.teamTwoId
-          ).snapshotEntryId,
-        teamId: PRIMARY.teamTwoId,
-        team: undefined,
-        slotKey: "D01",
-        totalValueCents: 400,
-        termYears: 2,
-        aavCents: 200,
-        valid: true,
-        validationCode: null,
-        rank: null,
-        outcomeCode: "pending",
-      }
-    );
-    assertSafeTeamShape(amy.rankedOffers[0].team);
-
-    const second =
-      runtime.readRepository.readAllocationResults(
-        allocationResultsInput({
-          query: {
-            cursor: first.page.nextCursor,
-            limit: 1,
-            q: "",
-            status: null,
-          },
-        })
-      );
-    assert.deepEqual(second.page, {
-      nextCursor: null,
-      hasMore: false,
-    });
-    const zed = second.data[0];
-    assert.equal(
-      zed.allocationId,
-      fixture.players.zed.allocationId
-    );
-    assert.equal(zed.status, "pending");
-    assert.deepEqual(
-      zed.rankedOffers.map((offer) => ({
-        teamId: offer.teamId,
-        totalValueCents: offer.totalValueCents,
-        rank: offer.rank,
-        outcomeCode: offer.outcomeCode,
-      })),
-      [
-        {
-          teamId: PRIMARY.teamOneId,
-          totalValueCents: 900,
-          rank: null,
-          outcomeCode: "pending",
-        },
-        {
-          teamId: PRIMARY.teamThreeId,
-          totalValueCents: 600,
-          rank: null,
-          outcomeCode: "pending",
-        },
-      ]
-    );
-
-    const search =
-      runtime.readRepository.readAllocationResults(
-        allocationResultsInput({
-          query: {
-            cursor: null,
-            limit: 50,
-            q: "  ZED\tCandidate ",
-            status: "pending",
-          },
-        })
-      );
-    assert.deepEqual(
-      search.data.map(({ allocationId }) => allocationId),
-      [fixture.players.zed.allocationId]
-    );
-    assert.deepEqual(search.page, {
-      nextCursor: null,
-      hasMore: false,
-    });
-    for (const literalSearch of ["%", "_"]) {
-      assert.deepEqual(
-        runtime.readRepository.readAllocationResults(
-          allocationResultsInput({
-            query: {
-              cursor: null,
-              limit: 50,
-              q: literalSearch,
-              status: null,
-            },
-          })
-        ),
-        {
-          data: [],
-          page: { nextCursor: null, hasMore: false },
-        }
+        cursor: null,
+        limit: 50,
+        q: "",
+        status: null,
+      },
+      {
+        cursor: null,
+        limit: 50,
+        q: "",
+        status: null,
+        teamId: PRIMARY.teamOneId,
+        unknown: true,
+      },
+    ]) {
+      assertRepositoryError(
+        () =>
+          runtime.readRepository.readAllocationResults(
+            allocationResultsInput({ query })
+          ),
+        REPOSITORY_ERROR_CODES.argumentInvalid
       );
     }
-    const noAutomaticAwards =
-      runtime.readRepository.readAllocationResults(
-        allocationResultsInput({
-          query: {
-            cursor: null,
-            limit: 50,
-            q: "",
-            status: "automatic_award",
-          },
-        })
-      );
-    assert.deepEqual(noAutomaticAwards, {
-      data: [],
-      page: { nextCursor: null, hasMore: false },
-    });
-    assertRepositoryError(
-      () =>
-        runtime.readRepository.readAllocationResults(
-          allocationResultsInput({
-            query: {
-              cursor: first.page.nextCursor,
-              limit: 1,
-              q: "zed",
-              status: null,
-            },
-          })
-        ),
-      REPOSITORY_ERROR_CODES.argumentInvalid
-    );
-    assert.equal(Object.isFrozen(amy), true);
-    assert.equal(Object.isFrozen(amy.rankedOffers), true);
     assertNoWrites(runtime.database, before);
   });
 
-  test("projects an automatic winner and rejects omission of its Candidate snapshot identity", (t) => {
+  test("projects an automatic winner with money only for the current selected-team manager", (t) => {
     const runtime = createRuntime(t);
     const fixture = seedPublishedPendingResults(
       runtime.database
     );
     const amyOffer = fixture.offers.find(
       ({ teamId }) => teamId === PRIMARY.teamTwoId
+    );
+    const zedOffer = fixture.offers.find(
+      ({ teamId }) => teamId === PRIMARY.teamOneId
     );
     const contractId = uuid(23_000);
     const ownershipId = uuid(23_001);
@@ -5859,6 +5969,22 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
         version: 1,
       }
     ));
+    seedAutomaticAwardResult(runtime.database, {
+      scope: PRIMARY,
+      offer: zedOffer,
+      contractId: uuid(23_010),
+      ownershipId: uuid(23_011),
+      eventId: uuid(23_012),
+      losingOffers: [
+        fixture.offers.find(
+          ({ teamId }) =>
+            teamId === PRIMARY.teamThreeId
+        ),
+      ],
+      losingEventIds: [uuid(23_013)],
+      decisionCode: "highest_total",
+    });
+    const before = noWriteSnapshot(runtime.database);
     const awarded =
       runtime.readRepository.readAllocationResults(
         allocationResultsInput({
@@ -5866,59 +5992,490 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
             cursor: null,
             limit: 50,
             q: "amy",
-            status: "automatic_award",
+            status: "signed",
+            teamId: PRIMARY.teamTwoId,
           },
         })
       ).data[0];
-    assert.deepEqual(awarded.winner, {
-      teamId: PRIMARY.teamTwoId,
-      snapshotEntryId: amyOffer.snapshotEntryId,
-      contractId,
-      ownershipId,
-      slotKey: "D01",
-      totalValueCents: 400,
-      termYears: 2,
-      aavCents: 200,
+    assert.deepEqual(awarded, {
+      player: {
+        playerId: fixture.players.amy.playerId,
+        fullName: "Amy Candidate",
+        positionGroup: "D",
+      },
+      status: "signed",
+      offer: null,
+      tieAuctionId: null,
     });
-    runtime.database.pragma(
-      "ignore_check_constraints = ON"
-    );
-    try {
+    assertExactKeys(awarded, [
+      "offer",
+      "player",
+      "status",
+      "tieAuctionId",
+    ]);
+
+    const managerAwarded =
+      runtime.readRepository.readAllocationResults(
+        allocationResultsInput({
+          viewerUserId: PRIMARY.managerUserId,
+          viewerMembershipId:
+            PRIMARY.managerMembershipId,
+          query: {
+            cursor: null,
+            limit: 50,
+            q: "amy",
+            status: "signed",
+            teamId: PRIMARY.teamTwoId,
+          },
+        })
+      ).data[0];
+    assert.deepEqual(managerAwarded, {
+      ...awarded,
+      offer: {
+        totalValueCents: 400,
+        termYears: 2,
+        aavCents: 200,
+      },
+    });
+    assertExactKeys(managerAwarded, [
+      "offer",
+      "player",
+      "status",
+      "tieAuctionId",
+    ]);
+
+    assert.equal(
       runtime.database
         .prepare(`
-          UPDATE free_agent_draft_player_allocations
-          SET winning_snapshot_entry_id = NULL
+          SELECT COUNT(*) AS count
+          FROM team_manager_assignments
           WHERE league_id = ?
-            AND id = ?
+            AND user_id = ?
+            AND membership_id = ?
+            AND team_id IN (?, ?)
+            AND status = 'accepted'
+            AND accepted_at_ms IS NOT NULL
+            AND ended_at_ms IS NULL
         `)
-        .run(
+        .get(
           PRIMARY.leagueId,
-          fixture.players.amy.allocationId
-        );
-    } finally {
-      runtime.database.pragma(
-        "ignore_check_constraints = OFF"
+          PRIMARY.managerUserId,
+          PRIMARY.managerMembershipId,
+          PRIMARY.teamOneId,
+          PRIMARY.teamTwoId
+        ).count,
+      2
+    );
+    const teamOneAwardedResponse =
+      runtime.readRepository.readAllocationResults(
+        allocationResultsInput({
+          viewerUserId: PRIMARY.managerUserId,
+          viewerMembershipId:
+            PRIMARY.managerMembershipId,
+          query: {
+            cursor: null,
+            limit: 50,
+            q: "zed",
+            status: "signed",
+            teamId: PRIMARY.teamOneId,
+          },
+        })
       );
-    }
-    const before = noWriteSnapshot(runtime.database);
-    assertRepositoryError(
-      () =>
+    assert.deepEqual(teamOneAwardedResponse, {
+      data: [
+        {
+          player: {
+            playerId: fixture.players.zed.playerId,
+            fullName: "Zed Candidate",
+            positionGroup: "F",
+          },
+          status: "signed",
+          offer: {
+            totalValueCents: 900,
+            termYears: 3,
+            aavCents: 300,
+          },
+          tieAuctionId: null,
+        },
+      ],
+      page: {
+        nextCursor: null,
+        hasMore: false,
+      },
+    });
+    const teamOneAwarded =
+      teamOneAwardedResponse.data[0];
+    assertExactKeys(teamOneAwarded, [
+      "offer",
+      "player",
+      "status",
+      "tieAuctionId",
+    ]);
+    for (const [teamId, q] of [
+      [PRIMARY.teamOneId, "amy"],
+      [PRIMARY.teamTwoId, "zed"],
+    ]) {
+      assert.deepEqual(
         runtime.readRepository.readAllocationResults(
           allocationResultsInput({
+            viewerUserId: PRIMARY.managerUserId,
+            viewerMembershipId:
+              PRIMARY.managerMembershipId,
+            query: {
+              cursor: null,
+              limit: 50,
+              q,
+              status: "signed",
+              teamId,
+            },
+          })
+        ),
+        {
+          data: [],
+          page: {
+            nextCursor: null,
+            hasMore: false,
+          },
+        }
+      );
+    }
+
+    for (const viewer of [
+      {
+        viewerUserId: PRIMARY.commissionerUserId,
+        viewerMembershipId:
+          PRIMARY.commissionerMembershipId,
+      },
+      {
+        viewerUserId: PRIMARY.administratorUserId,
+        viewerMembershipId:
+          PRIMARY.administratorMembershipId,
+      },
+      {
+        viewerUserId: PRIMARY.otherManagerUserId,
+        viewerMembershipId:
+          PRIMARY.otherManagerMembershipId,
+      },
+    ]) {
+      assert.equal(
+        runtime.readRepository.readAllocationResults(
+          allocationResultsInput({
+            ...viewer,
             query: {
               cursor: null,
               limit: 50,
               q: "amy",
-              status: "automatic_award",
+              status: "signed",
+              teamId: PRIMARY.teamTwoId,
             },
           })
-        ),
-      REPOSITORY_ERROR_CODES.schemaIncompatible
+        ).data[0].offer,
+        null
+      );
+    }
+
+    const selectedResource =
+      runtime.readRepository.readPublishedCardHistory(
+        publishedHistoryInput({
+          teamId: PRIMARY.teamTwoId,
+          viewerUserId: PRIMARY.managerUserId,
+          viewerMembershipId:
+            PRIMARY.managerMembershipId,
+        })
+      );
+    assert.deepEqual(selectedResource.results, [
+      managerAwarded,
+    ]);
+    assert.deepEqual(
+      runtime.readRepository.readPublishedCardHistory(
+        publishedHistoryInput({
+          teamId: PRIMARY.teamOneId,
+          viewerUserId: PRIMARY.managerUserId,
+          viewerMembershipId:
+            PRIMARY.managerMembershipId,
+        })
+      ).results,
+      [teamOneAwarded]
+    );
+    const summary =
+      runtime.readRepository.readPublishedCardSummaries(
+        publishedSummaryInput()
+      ).data.find(
+        ({ teamId }) => teamId === PRIMARY.teamTwoId
+      );
+    assert.deepEqual(summary.outcomeCounts, {
+      signed: 1,
+      notWon: 0,
+      tied: 0,
+    });
+    assert.equal(
+      Object.values(summary).some(
+        (value) =>
+          value === contractId ||
+          value === ownershipId ||
+          value === amyOffer.snapshotEntryId
+      ),
+      false
+    );
+    assert.deepEqual(
+      runtime.readRepository.readPublishedCardSummaries(
+        publishedSummaryInput()
+      ).data.find(
+        ({ teamId }) => teamId === PRIMARY.teamOneId
+      ).outcomeCounts,
+      {
+        signed: 1,
+        notWon: 0,
+        tied: 0,
+      }
+    );
+    assertNoWrites(runtime.database, before);
+    dropTableTriggers(
+      runtime.database,
+      "team_manager_assignments"
+    );
+    runtime.database
+      .prepare(`
+        UPDATE team_manager_assignments
+        SET status = 'ended',
+            ended_at_ms = @transferredAtMs,
+            version = version + 1
+        WHERE league_id = @leagueId
+          AND id = @assignmentId
+          AND team_id = @teamId
+          AND user_id = @userId
+          AND status = 'accepted'
+          AND accepted_at_ms IS NOT NULL
+          AND ended_at_ms IS NULL
+      `)
+      .run({
+        assignmentId: PRIMARY.assignmentTwoId,
+        leagueId: PRIMARY.leagueId,
+        teamId: PRIMARY.teamTwoId,
+        transferredAtMs: ALLOCATION_AT_MS + 1,
+        userId: PRIMARY.managerUserId,
+      });
+    insert(runtime.database, "team_manager_assignments", {
+      id: uuid(23_020),
+      league_id: PRIMARY.leagueId,
+      team_id: PRIMARY.teamTwoId,
+      user_id: PRIMARY.otherManagerUserId,
+      membership_id: PRIMARY.otherManagerMembershipId,
+      assigned_by_user_id: PRIMARY.commissionerUserId,
+      replaces_assignment_id: PRIMARY.assignmentTwoId,
+      status: "accepted",
+      assigned_at_ms: ALLOCATION_AT_MS + 1,
+      accepted_at_ms: ALLOCATION_AT_MS + 1,
+      ended_at_ms: null,
+      version: 1,
+    });
+    const transferredBefore = noWriteSnapshot(
+      runtime.database
+    );
+    const formerManagerAwarded =
+      runtime.readRepository.readAllocationResults(
+        allocationResultsInput({
+          viewerUserId: PRIMARY.managerUserId,
+          viewerMembershipId:
+            PRIMARY.managerMembershipId,
+          query: {
+            cursor: null,
+            limit: 50,
+            q: "amy",
+            status: "signed",
+            teamId: PRIMARY.teamTwoId,
+          },
+        })
+      ).data[0];
+    assert.deepEqual(formerManagerAwarded, awarded);
+    assertExactKeys(formerManagerAwarded, [
+      "offer",
+      "player",
+      "status",
+      "tieAuctionId",
+    ]);
+    const replacementManagerAwarded =
+      runtime.readRepository.readAllocationResults(
+        allocationResultsInput({
+          viewerUserId: PRIMARY.otherManagerUserId,
+          viewerMembershipId:
+            PRIMARY.otherManagerMembershipId,
+          query: {
+            cursor: null,
+            limit: 50,
+            q: "amy",
+            status: "signed",
+            teamId: PRIMARY.teamTwoId,
+          },
+        })
+      ).data[0];
+    assert.deepEqual(
+      replacementManagerAwarded,
+      managerAwarded
+    );
+    assertExactKeys(replacementManagerAwarded, [
+      "offer",
+      "player",
+      "status",
+      "tieAuctionId",
+    ]);
+    assertNoWrites(runtime.database, transferredBefore);
+  });
+
+  test("returns independent selected-team results for two valid active league contexts without writes", (t) => {
+    const runtime = createRuntime(t);
+    const primaryFixture = seedPublishedPendingResults(
+      runtime.database,
+      PRIMARY
+    );
+    const secondaryFixture = seedPublishedPendingResults(
+      runtime.database,
+      SECONDARY
+    );
+    const primaryOffer = primaryFixture.offers.find(
+      ({ teamId }) => teamId === PRIMARY.teamTwoId
+    );
+    const secondaryOffer = secondaryFixture.offers[0];
+    seedAutomaticAwardResult(runtime.database, {
+      scope: PRIMARY,
+      offer: primaryOffer,
+      contractId: uuid(25_000),
+      ownershipId: uuid(25_001),
+      eventId: uuid(25_002),
+    });
+    seedAutomaticAwardResult(runtime.database, {
+      scope: SECONDARY,
+      offer: secondaryOffer,
+      contractId: uuid(25_010),
+      ownershipId: uuid(25_011),
+      eventId: uuid(25_012),
+    });
+    const before = noWriteSnapshot(runtime.database);
+
+    const primaryResult =
+      runtime.readRepository.readAllocationResults(
+        allocationResultsInput({
+          leagueId: PRIMARY.leagueId,
+          fadId: PRIMARY.fadId,
+          viewerUserId: PRIMARY.managerUserId,
+          viewerMembershipId:
+            PRIMARY.managerMembershipId,
+          query: {
+            cursor: null,
+            limit: 50,
+            q: "amy",
+            status: "signed",
+            teamId: PRIMARY.teamTwoId,
+          },
+        })
+      );
+    const secondaryResult =
+      runtime.readRepository.readAllocationResults(
+        allocationResultsInput({
+          leagueId: SECONDARY.leagueId,
+          fadId: SECONDARY.fadId,
+          viewerUserId: SECONDARY.managerUserId,
+          viewerMembershipId:
+            SECONDARY.managerMembershipId,
+          query: {
+            cursor: null,
+            limit: 50,
+            q: "sage",
+            status: "signed",
+            teamId: SECONDARY.teamOneId,
+          },
+        })
+      );
+    assert.deepEqual(primaryResult, {
+      data: [
+        {
+          player: {
+            playerId: primaryFixture.players.amy.playerId,
+            fullName: "Amy Candidate",
+            positionGroup: "D",
+          },
+          status: "signed",
+          offer: {
+            totalValueCents: 400,
+            termYears: 2,
+            aavCents: 200,
+          },
+          tieAuctionId: null,
+        },
+      ],
+      page: {
+        nextCursor: null,
+        hasMore: false,
+      },
+    });
+    assert.deepEqual(secondaryResult, {
+      data: [
+        {
+          player: {
+            playerId: secondaryFixture.players.amy.playerId,
+            fullName: "Sage Candidate",
+            positionGroup: "D",
+          },
+          status: "signed",
+          offer: {
+            totalValueCents: 1_500,
+            termYears: 3,
+            aavCents: 500,
+          },
+          tieAuctionId: null,
+        },
+      ],
+      page: {
+        nextCursor: null,
+        hasMore: false,
+      },
+    });
+    for (const result of [
+      primaryResult,
+      secondaryResult,
+    ]) {
+      assertExactKeys(result.data[0], [
+        "offer",
+        "player",
+        "status",
+        "tieAuctionId",
+      ]);
+      assertExactKeys(result.data[0].offer, [
+        "aavCents",
+        "termYears",
+        "totalValueCents",
+      ]);
+    }
+    assert.deepEqual(
+      runtime.readRepository.readPublishedCardHistory(
+        publishedHistoryInput({
+          leagueId: PRIMARY.leagueId,
+          fadId: PRIMARY.fadId,
+          teamId: PRIMARY.teamTwoId,
+          viewerUserId: PRIMARY.managerUserId,
+          viewerMembershipId:
+            PRIMARY.managerMembershipId,
+        })
+      ).results,
+      primaryResult.data
+    );
+    assert.deepEqual(
+      runtime.readRepository.readPublishedCardHistory(
+        publishedHistoryInput({
+          leagueId: SECONDARY.leagueId,
+          fadId: SECONDARY.fadId,
+          teamId: SECONDARY.teamOneId,
+          viewerUserId: SECONDARY.managerUserId,
+          viewerMembershipId:
+            SECONDARY.managerMembershipId,
+        })
+      ).results,
+      secondaryResult.data
     );
     assertNoWrites(runtime.database, before);
   });
 
-  test("keeps a precreated delayed restricted auction private until activation", (t) => {
+  test("keeps a scheduled restricted tie action private until activation", (t) => {
     const runtime = createRuntime(t);
     openDraft(runtime.database, PRIMARY);
     const fixture =
@@ -5939,29 +6496,64 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
       .run(PRIMARY.leagueId, fixture.allocationId);
     const before = noWriteSnapshot(runtime.database);
 
-    const result =
+    const selectedFor = (teamId, viewer = {}) =>
       runtime.readRepository.readAllocationResults(
         allocationResultsInput({
+          ...viewer,
           nowMs: ALLOCATION_AT_MS + 1,
           query: {
             cursor: null,
             limit: 50,
             q: "casey restricted",
-            status: "restricted_scheduled",
+            status: "tied",
+            teamId,
           },
         })
       ).data[0];
-
-    assert.equal(result.allocationId, fixture.allocationId);
-    assert.deepEqual(result.restricted, {
-      auctionId: null,
-      status: "scheduled",
-      participantTeamIds: [],
-      minimumTotalValueCents: 600,
-      minimumTermYears: 2,
-      minimumAavCents: 300,
+    const publicResult = selectedFor(
+      PRIMARY.teamOneId
+    );
+    assert.deepEqual(publicResult, {
+      player: {
+        playerId: fixture.restrictedPlayerId,
+        fullName: "Casey Restricted",
+        positionGroup: "F",
+      },
+      status: "tied",
+      offer: null,
+      tieAuctionId: null,
     });
-    assert.deepEqual(result.draws, []);
+    const managerResult = selectedFor(
+      PRIMARY.teamOneId,
+      {
+        viewerUserId: PRIMARY.managerUserId,
+        viewerMembershipId:
+          PRIMARY.managerMembershipId,
+      }
+    );
+    assert.deepEqual(managerResult, {
+      ...publicResult,
+      offer: {
+        totalValueCents: 600,
+        termYears: 2,
+        aavCents: 300,
+      },
+    });
+    const otherTeamResult = selectedFor(
+      PRIMARY.teamThreeId,
+      {
+        viewerUserId: PRIMARY.otherManagerUserId,
+        viewerMembershipId:
+          PRIMARY.otherManagerMembershipId,
+      }
+    );
+    assert.deepEqual(otherTeamResult.offer, {
+      totalValueCents: 600,
+      termYears: 2,
+      aavCents: 300,
+    });
+    assert.equal(otherTeamResult.tieAuctionId, null);
+
     const history =
       runtime.readRepository.readPublishedCardHistory(
         publishedHistoryInput({
@@ -5969,86 +6561,103 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
           nowMs: ALLOCATION_AT_MS + 1,
         })
       );
-    assert.deepEqual(history.slots[0].outcome, {
-      code: "restricted_pending",
-      allocationId: fixture.allocationId,
-      auctionId: null,
-    });
+    assert.deepEqual(history.results, [publicResult]);
     assertNoWrites(runtime.database, before);
   });
 
-  test("publishes restricted outcomes with the persisted fad_restricted draw context", (t) => {
+  test("publishes only selected-team restricted action state and omits terminal correction evidence", (t) => {
     const runtime = createRuntime(t);
     openDraft(runtime.database, PRIMARY);
     const fixture =
       seedRestrictedActionWithoutImprovement(
         runtime.database
       );
-    const activeBefore = noWriteSnapshot(runtime.database);
-
-    const results =
+    const selectedFor = (
+      teamId,
+      viewer = {},
+      nowMs = ALLOCATION_AT_MS + 1
+    ) =>
       runtime.readRepository.readAllocationResults(
         allocationResultsInput({
-          nowMs: ALLOCATION_AT_MS + 1,
+          ...viewer,
+          nowMs,
           query: {
             cursor: null,
             limit: 50,
             q: "casey restricted",
-            status: "restricted_active",
+            status: "tied",
+            teamId,
           },
         })
       );
-    assert.equal(results.data.length, 1);
-    const result = results.data[0];
-    assert.equal(result.allocationId, fixture.allocationId);
-    assert.equal(
-      result.decisionCode,
-      "exact_total_and_term_tie"
-    );
-    assert.deepEqual(
-      result.rankedOffers.map((offer) => ({
-        teamId: offer.teamId,
-        rank: offer.rank,
-        outcomeCode: offer.outcomeCode,
-      })),
-      [
-        {
-          teamId: PRIMARY.teamThreeId,
-          rank: 1,
-          outcomeCode: "restricted_tied",
-        },
-        {
-          teamId: PRIMARY.teamOneId,
-          rank: 1,
-          outcomeCode: "restricted_tied",
-        },
-      ]
-    );
-    assert.deepEqual(result.restricted, {
-      auctionId: fixture.auctionId,
-      status: "open",
-      participantTeamIds: [
-        PRIMARY.teamOneId,
-        PRIMARY.teamThreeId,
-      ],
-      minimumTotalValueCents: 600,
-      minimumTermYears: 2,
-      minimumAavCents: 300,
-    });
-    assert.equal(result.fallback, null);
-    assert.deepEqual(result.draws, []);
+    const activeBefore = noWriteSnapshot(runtime.database);
 
-    const history =
-      runtime.readRepository.readPublishedCardHistory(
-        publishedHistoryInput({
-          nowMs: ALLOCATION_AT_MS + 1,
-        })
-      );
-    assert.deepEqual(history.slots[0].outcome, {
-      code: "restricted_pending",
-      allocationId: fixture.allocationId,
-      auctionId: fixture.auctionId,
+    const publicResult =
+      selectedFor(PRIMARY.teamOneId).data[0];
+    assert.deepEqual(publicResult, {
+      player: {
+        playerId: fixture.restrictedPlayerId,
+        fullName: "Casey Restricted",
+        positionGroup: "F",
+      },
+      status: "tied",
+      offer: null,
+      tieAuctionId: null,
     });
+    const managerResult = selectedFor(
+      PRIMARY.teamOneId,
+      {
+        viewerUserId: PRIMARY.managerUserId,
+        viewerMembershipId:
+          PRIMARY.managerMembershipId,
+      }
+    ).data[0];
+    assert.deepEqual(managerResult, {
+      ...publicResult,
+      offer: {
+        totalValueCents: 600,
+        termYears: 2,
+        aavCents: 300,
+      },
+      tieAuctionId: fixture.auctionId,
+    });
+    const otherManagerResult = selectedFor(
+      PRIMARY.teamThreeId,
+      {
+        viewerUserId: PRIMARY.otherManagerUserId,
+        viewerMembershipId:
+          PRIMARY.otherManagerMembershipId,
+      }
+    ).data[0];
+    assert.deepEqual(otherManagerResult.offer, {
+      totalValueCents: 600,
+      termYears: 2,
+      aavCents: 300,
+    });
+    assert.equal(
+      otherManagerResult.tieAuctionId,
+      fixture.auctionId
+    );
+
+    for (const viewer of [
+      {
+        viewerUserId: PRIMARY.commissionerUserId,
+        viewerMembershipId:
+          PRIMARY.commissionerMembershipId,
+      },
+      {
+        viewerUserId: PRIMARY.administratorUserId,
+        viewerMembershipId:
+          PRIMARY.administratorMembershipId,
+      },
+    ]) {
+      const result = selectedFor(
+        PRIMARY.teamOneId,
+        viewer
+      ).data[0];
+      assert.equal(result.offer, null);
+      assert.equal(result.tieAuctionId, null);
+    }
     assertNoWrites(runtime.database, activeBefore);
 
     const terminal = terminalizeRestrictedDrawForRead(
@@ -6058,45 +6667,29 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
     const terminalBefore = noWriteSnapshot(
       runtime.database
     );
-    const terminalResults =
-      runtime.readRepository.readAllocationResults(
-        allocationResultsInput({
+    assert.deepEqual(
+      selectedFor(
+        PRIMARY.teamOneId,
+        {},
+        terminal.terminalAtMs
+      ),
+      {
+        data: [],
+        page: {
+          nextCursor: null,
+          hasMore: false,
+        },
+      }
+    );
+    assert.deepEqual(
+      runtime.readRepository.readPublishedCardHistory(
+        publishedHistoryInput({
+          teamId: PRIMARY.teamOneId,
           nowMs: terminal.terminalAtMs,
-          query: {
-            cursor: null,
-            limit: 50,
-            q: "casey restricted",
-            status: "correction_required",
-          },
         })
-      );
-    assert.equal(terminalResults.data.length, 1);
-    const terminalResult = terminalResults.data[0];
-    assert.equal(
-      terminalResult.allocationId,
-      fixture.allocationId
+      ).results,
+      []
     );
-    assert.equal(
-      terminalResult.restricted.status,
-      "no_winner"
-    );
-    assert.equal(terminalResult.draws.length, 1);
-    assert.deepEqual(terminalResult.draws[0], {
-      auctionId: fixture.auctionId,
-      auctionType: "fad_restricted",
-      drawCommitment: fixture.drawCommitment,
-      drawReveal: {
-        algorithmVersion: 1,
-        nonceHex: "2a".repeat(32),
-        selectionUsed: false,
-        orderedBidIds: [],
-        counter: null,
-        digestHex: null,
-        selectedIndex: null,
-        selectedBidId: null,
-        selectedTeamId: null,
-      },
-    });
     assertNoWrites(runtime.database, terminalBefore);
 
     runtime.database
@@ -6114,20 +6707,13 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
     const corruptBefore = noWriteSnapshot(
       runtime.database
     );
-    assertRepositoryError(
-      () =>
-        runtime.readRepository.readAllocationResults(
-          allocationResultsInput({
-            nowMs: terminal.terminalAtMs,
-            query: {
-              cursor: null,
-              limit: 50,
-              q: "casey restricted",
-              status: "correction_required",
-            },
-          })
-        ),
-      REPOSITORY_ERROR_CODES.schemaIncompatible
+    assert.deepEqual(
+      selectedFor(
+        PRIMARY.teamOneId,
+        {},
+        terminal.terminalAtMs
+      ).data,
+      []
     );
     assertNoWrites(runtime.database, corruptBefore);
   });
@@ -6173,11 +6759,466 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
         })
       );
 
-    assert.deepEqual(history.slots[0].outcome, {
-      code: "automatic_loss",
-      allocationId: fixture.allocationId,
-      auctionId: null,
+    assert.deepEqual(history.results, [{
+      player: {
+        playerId: fixture.restrictedPlayerId,
+        fullName: "Casey Restricted",
+        positionGroup: "F",
+      },
+      status: "not_won",
+      offer: null,
+      tieAuctionId: null,
+    }]);
+    const managerResult =
+      runtime.readRepository.readAllocationResults(
+        allocationResultsInput({
+          viewerUserId: PRIMARY.managerUserId,
+          viewerMembershipId:
+            PRIMARY.managerMembershipId,
+          nowMs: ALLOCATION_AT_MS + 2,
+          query: {
+            cursor: null,
+            limit: 50,
+            q: "casey restricted",
+            status: "not_won",
+            teamId: PRIMARY.teamOneId,
+          },
+        })
+      ).data[0];
+    assert.deepEqual(managerResult.offer, {
+      totalValueCents: 600,
+      termYears: 2,
+      aavCents: 300,
     });
+    assert.equal(managerResult.tieAuctionId, null);
+    assertNoWrites(runtime.database, before);
+  });
+
+  test("publishes a league-wide fallback winner even when the selected team's original Candidate offer was incomplete", (t) => {
+    const runtime = createRuntime(t);
+    openDraft(runtime.database, PRIMARY);
+    const fixture =
+      seedRestrictedActionWithoutImprovement(
+        runtime.database
+      );
+    const sourceEntry = runtime.database
+      .prepare(`
+        SELECT *
+        FROM candidate_card_entries
+        WHERE league_id = ? AND fad_id = ?
+          AND team_id = ? AND player_id = ?
+      `)
+      .get(
+        PRIMARY.leagueId,
+        PRIMARY.fadId,
+        PRIMARY.teamOneId,
+        fixture.restrictedPlayerId
+      );
+    const sourceSnapshot = runtime.database
+      .prepare(`
+        SELECT *
+        FROM candidate_card_snapshots
+        WHERE league_id = ? AND fad_id = ? AND team_id = ?
+      `)
+      .get(
+        PRIMARY.leagueId,
+        PRIMARY.fadId,
+        PRIMARY.teamOneId
+      );
+    const sourceSnapshotRows = runtime.database
+      .prepare(`
+        SELECT *
+        FROM candidate_card_snapshot_entries
+        WHERE league_id = ? AND snapshot_id = ?
+        ORDER BY slot_group, slot_number
+      `)
+      .all(PRIMARY.leagueId, sourceSnapshot.id);
+    const teamTwoCard = runtime.database
+      .prepare(`
+        SELECT * FROM candidate_cards
+        WHERE league_id = ? AND id = ?
+      `)
+      .get(PRIMARY.leagueId, PRIMARY.cardTwoId);
+    for (const tableName of [
+      "candidate_card_entries",
+      "candidate_card_snapshots",
+      "candidate_card_snapshot_entries",
+      "contracts",
+      "player_ownerships",
+      "free_agent_draft_allocation_events",
+      "free_agent_draft_player_allocations",
+    ]) {
+      dropTableTriggers(runtime.database, tableName);
+    }
+
+    const lowerEntryId = uuid(52_000);
+    const lowerSnapshotId = uuid(52_001);
+    const literalPlayerId = uuid(52_002);
+    const literalPositionId = uuid(52_003);
+    const literalEntryId = uuid(52_004);
+    insert(runtime.database, "players", {
+      id: literalPlayerId,
+      first_name: "Aaron %_",
+      last_name: "Literal",
+      full_name: "Aaron %_ Literal",
+      birth_date: null,
+      status: "active",
+      created_at_ms: 1,
+      updated_at_ms: 1,
+      version: 1,
+    });
+    insert(runtime.database, "league_player_positions", {
+      id: literalPositionId,
+      league_id: PRIMARY.leagueId,
+      player_id: literalPlayerId,
+      position_group: "F",
+      reason: "Selected-team pagination fixture",
+      corrected_by_user_id:
+        PRIMARY.commissionerUserId,
+      effective_at_ms: 1,
+      ended_at_ms: null,
+      version: 1,
+    });
+    insert(runtime.database, "candidate_card_entries", {
+      ...sourceEntry,
+      id: lowerEntryId,
+      card_id: PRIMARY.cardTwoId,
+      team_id: PRIMARY.teamTwoId,
+      proposed_total_value_cents: 500,
+      proposed_term_years: null,
+      proposed_aav_cents: null,
+      eligibility_status: "invalid",
+      validation_code: "CANDIDATE_CONTRACT_INCOMPLETE",
+    });
+    insert(runtime.database, "candidate_card_entries", {
+      ...sourceEntry,
+      id: literalEntryId,
+      card_id: PRIMARY.cardTwoId,
+      team_id: PRIMARY.teamTwoId,
+      player_id: literalPlayerId,
+      requested_slot_number: 2,
+      proposed_total_value_cents: 300,
+      proposed_term_years: null,
+      proposed_aav_cents: null,
+      eligibility_status: "invalid",
+      validation_code: "CANDIDATE_CONTRACT_INCOMPLETE",
+    });
+    insert(runtime.database, "candidate_card_snapshots", {
+      ...sourceSnapshot,
+      id: lowerSnapshotId,
+      card_id: PRIMARY.cardTwoId,
+      team_id: PRIMARY.teamTwoId,
+      locked_card_version: teamTwoCard.version,
+      locked_status: teamTwoCard.status,
+      proposed_candidate_aav_cents: 0,
+      maximum_possible_cap_cents:
+        teamTwoCard.maximum_possible_cap_cents,
+      maximum_cap_space_cents:
+        100_000 - teamTwoCard.maximum_possible_cap_cents,
+    });
+    for (const [index, row] of
+      sourceSnapshotRows.entries()) {
+      const candidate = row.occupant_kind === "candidate";
+      const literalCandidate =
+        row.slot_group === "F" && row.slot_number === 2;
+      const selectedEntryId = literalCandidate
+        ? literalEntryId
+        : lowerEntryId;
+      const selectedPlayerId = literalCandidate
+        ? literalPlayerId
+        : row.player_id;
+      insert(
+        runtime.database,
+        "candidate_card_snapshot_entries",
+        {
+          ...row,
+          id: uuid(52_100 + index),
+          snapshot_id: lowerSnapshotId,
+          card_id: PRIMARY.cardTwoId,
+          team_id: PRIMARY.teamTwoId,
+          occupant_kind:
+            candidate || literalCandidate
+              ? "candidate"
+              : "empty",
+          source_entry_id: candidate || literalCandidate
+            ? selectedEntryId
+            : null,
+          source_entry_version:
+            candidate || literalCandidate
+              ? sourceEntry.version
+              : null,
+          player_id: candidate || literalCandidate
+            ? selectedPlayerId
+            : null,
+          effective_position_group:
+            candidate || literalCandidate ? "F" : null,
+          proposed_total_value_cents: literalCandidate
+            ? 300
+            : candidate
+              ? 500
+              : null,
+          proposed_term_years: null,
+          proposed_aav_cents: null,
+          eligibility_status:
+            candidate || literalCandidate
+              ? "invalid"
+              : null,
+          validation_code:
+            candidate || literalCandidate
+              ? "CANDIDATE_CONTRACT_INCOMPLETE"
+              : null,
+          last_edited_by_user_id:
+            candidate || literalCandidate
+              ? sourceEntry.last_edited_by_user_id
+              : null,
+          last_edited_by_membership_id:
+            candidate || literalCandidate
+              ? sourceEntry.last_edited_by_membership_id
+              : null,
+          last_edited_by_authority:
+            candidate || literalCandidate
+              ? sourceEntry.last_edited_by_authority
+              : null,
+          last_edited_at_ms:
+            candidate || literalCandidate
+              ? sourceEntry.updated_at_ms
+              : null,
+          allocation_eligibility:
+            candidate || literalCandidate
+              ? row.allocation_eligibility
+              : null,
+          allocation_exclusion_reason:
+            candidate || literalCandidate
+              ? row.allocation_exclusion_reason
+            : null,
+        }
+      );
+    }
+
+    const contractId = uuid(52_200);
+    const ownershipId = uuid(52_201);
+    insert(runtime.database, "contracts", {
+      id: contractId,
+      league_id: PRIMARY.leagueId,
+      player_id: fixture.restrictedPlayerId,
+      current_team_id: PRIMARY.teamTwoId,
+      contract_type: "normal",
+      original_total_value_cents: 900,
+      original_term_years: 3,
+      aav_cents: 300,
+      start_season_id: PRIMARY.seasonId,
+      status: "active",
+      acquisition_source_type: "free_agent_draft",
+      acquisition_source_id: fixture.allocationId,
+      auction_buyout_lock_expires_at_ms: null,
+      created_at_ms: ALLOCATION_AT_MS + 10,
+      updated_at_ms: ALLOCATION_AT_MS + 10,
+      version: 1,
+    });
+    insert(runtime.database, "player_ownerships", {
+      id: ownershipId,
+      league_id: PRIMARY.leagueId,
+      season_id: PRIMARY.seasonId,
+      player_id: fixture.restrictedPlayerId,
+      team_id: PRIMARY.teamTwoId,
+      ownership_kind: "Rostered",
+      roster_category: "Active",
+      position_group: "F",
+      slot_number: 1,
+      acquired_transaction_type: "free_agent_draft",
+      acquired_transaction_id: fixture.allocationId,
+      created_at_ms: ALLOCATION_AT_MS + 10,
+      updated_at_ms: ALLOCATION_AT_MS + 10,
+      version: 1,
+      trade_blocked: 0,
+    });
+    runtime.database
+      .prepare(`
+        UPDATE free_agent_draft_player_allocations
+        SET status = 'fallback_open_resolved',
+            decision_code = 'fallback_open_result',
+            winning_snapshot_entry_id = NULL,
+            winning_team_id = @teamId,
+            contract_id = @contractId,
+            ownership_id = @ownershipId,
+            fallback_open_auction_id = @auctionId,
+            accounted_at_ms = @resolvedAtMs,
+            updated_at_ms = @resolvedAtMs,
+            version = version + 1
+        WHERE league_id = @leagueId
+          AND id = @allocationId
+      `)
+      .run({
+        allocationId: fixture.allocationId,
+        auctionId: fixture.auctionId,
+        contractId,
+        leagueId: PRIMARY.leagueId,
+        ownershipId,
+        resolvedAtMs: ALLOCATION_AT_MS + 10,
+        teamId: PRIMARY.teamTwoId,
+      });
+    const priorOfferEvents = runtime.database
+      .prepare(`
+        SELECT *
+        FROM free_agent_draft_allocation_events
+        WHERE league_id = ? AND allocation_id = ?
+          AND event_kind = 'offer_considered'
+        ORDER BY id
+      `)
+      .all(PRIMARY.leagueId, fixture.allocationId);
+    for (const [index, event] of
+      priorOfferEvents.entries()) {
+      insert(
+        runtime.database,
+        "free_agent_draft_allocation_events",
+        {
+          ...event,
+          id: uuid(52_210 + index),
+          allocation_version: 3,
+          resulting_allocation_status:
+            "fallback_open_resolved",
+          occurred_at_ms: ALLOCATION_AT_MS + 10,
+          created_at_ms: ALLOCATION_AT_MS + 10,
+        }
+      );
+    }
+    const before = noWriteSnapshot(runtime.database);
+
+    const winner = runtime.readRepository
+      .readAllocationResults(
+        allocationResultsInput({
+          viewerUserId: PRIMARY.managerUserId,
+          viewerMembershipId:
+            PRIMARY.managerMembershipId,
+          nowMs: ALLOCATION_AT_MS + 11,
+          query: {
+            cursor: null,
+            limit: 50,
+            q: "casey restricted",
+            status: "signed",
+            teamId: PRIMARY.teamTwoId,
+          },
+        })
+      ).data[0];
+    assert.deepEqual(winner, {
+      player: {
+        playerId: fixture.restrictedPlayerId,
+        fullName: "Casey Restricted",
+        positionGroup: "F",
+      },
+      status: "signed",
+      offer: null,
+      tieAuctionId: null,
+    });
+    const originalTeam = runtime.readRepository
+      .readAllocationResults(
+        allocationResultsInput({
+          viewerUserId: PRIMARY.managerUserId,
+          viewerMembershipId:
+            PRIMARY.managerMembershipId,
+          nowMs: ALLOCATION_AT_MS + 11,
+          query: {
+            cursor: null,
+            limit: 50,
+            q: "casey restricted",
+            status: "not_won",
+            teamId: PRIMARY.teamOneId,
+          },
+        })
+      ).data[0];
+    assert.equal(originalTeam.status, "not_won");
+    assert.equal(originalTeam.tieAuctionId, null);
+    assert.deepEqual(
+      runtime.readRepository.readPublishedCardSummaries(
+        publishedSummaryInput()
+      ).data.find(
+        ({ teamId }) => teamId === PRIMARY.teamTwoId
+      ).outcomeCounts,
+      { signed: 1, notWon: 1, tied: 0 }
+    );
+    const firstPage = runtime.readRepository
+      .readAllocationResults(
+        allocationResultsInput({
+          query: {
+            cursor: null,
+            limit: 1,
+            q: "",
+            status: null,
+            teamId: PRIMARY.teamTwoId,
+          },
+        })
+      );
+    assert.deepEqual(
+      firstPage.data.map(({ player }) => player.fullName),
+      ["Aaron %_ Literal"]
+    );
+    assert.equal(firstPage.page.hasMore, true);
+    assert.equal(typeof firstPage.page.nextCursor, "string");
+    const secondPage = runtime.readRepository
+      .readAllocationResults(
+        allocationResultsInput({
+          query: {
+            cursor: firstPage.page.nextCursor,
+            limit: 1,
+            q: "",
+            status: null,
+            teamId: PRIMARY.teamTwoId,
+          },
+        })
+      );
+    assert.deepEqual(
+      secondPage.data.map(({ player }) => player.fullName),
+      ["Casey Restricted"]
+    );
+    assert.deepEqual(secondPage.page, {
+      nextCursor: null,
+      hasMore: false,
+    });
+    assert.deepEqual(
+      runtime.readRepository.readAllocationResults(
+        allocationResultsInput({
+          query: {
+            cursor: null,
+            limit: 50,
+            q: "%_",
+            status: "not_won",
+            teamId: PRIMARY.teamTwoId,
+          },
+        })
+      ).data.map(({ player }) => player.fullName),
+      ["Aaron %_ Literal"]
+    );
+    for (const query of [
+      {
+        cursor: firstPage.page.nextCursor,
+        limit: 1,
+        q: "",
+        status: null,
+        teamId: PRIMARY.teamOneId,
+      },
+      {
+        cursor: firstPage.page.nextCursor,
+        limit: 1,
+        q: "casey",
+        status: null,
+        teamId: PRIMARY.teamTwoId,
+      },
+      {
+        cursor: firstPage.page.nextCursor,
+        limit: 1,
+        q: "",
+        status: "signed",
+        teamId: PRIMARY.teamTwoId,
+      },
+    ]) {
+      assertRepositoryError(
+        () =>
+          runtime.readRepository.readAllocationResults(
+            allocationResultsInput({ query })
+          ),
+        REPOSITORY_ERROR_CODES.argumentInvalid
+      );
+    }
     assertNoWrites(runtime.database, before);
   });
 
@@ -8335,15 +9376,33 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
       id: newCommissionerMembershipId,
       leagueId: PRIMARY.leagueId,
       userId: newCommissionerUserId,
-      permissionCategory: "commissioner",
+      permissionCategory: "member",
     });
     const commissioners =
       createSqliteCommissionerAssignmentRepository({
         database: runtime.database,
       });
     const league = commissioners.findLeagueById(PRIMARY.leagueId);
+    const currentCommissioner =
+      commissioners.findActiveCommissionerMembership(
+        PRIMARY.leagueId
+      );
     runtime.database.exec("BEGIN IMMEDIATE");
     try {
+      commissioners.updateMembershipPermission({
+        leagueId: PRIMARY.leagueId,
+        membershipId: currentCommissioner.id,
+        expectedVersion: currentCommissioner.version,
+        permissionCategory: "member",
+        nowMs: PREPUBLICATION_NOW_MS + 1,
+      });
+      commissioners.updateMembershipPermission({
+        leagueId: PRIMARY.leagueId,
+        membershipId: newCommissionerMembershipId,
+        expectedVersion: 1,
+        permissionCategory: "commissioner",
+        nowMs: PREPUBLICATION_NOW_MS + 1,
+      });
       commissioners.setLeagueCommissioner({
         leagueId: PRIMARY.leagueId,
         membershipId: newCommissionerMembershipId,

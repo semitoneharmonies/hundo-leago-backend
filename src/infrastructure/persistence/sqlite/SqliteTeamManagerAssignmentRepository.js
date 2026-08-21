@@ -116,6 +116,7 @@ function createSqliteTeamManagerAssignmentRepository({
   let findActiveMembershipStatement;
   let findCurrentStatement;
   let findPendingStatement;
+  let findActivePlatformAdministratorStatement;
   let findIdempotencyStatement;
   let findIdempotencyByIdStatement;
   let completeIdempotencyStatement;
@@ -142,6 +143,14 @@ function createSqliteTeamManagerAssignmentRepository({
         teams.version AS team_version,
         proposed_users.display_name AS proposed_user_display_name,
         proposed_users.status AS proposed_user_status,
+        CASE WHEN EXISTS (
+          SELECT 1
+          FROM platform_roles AS proposed_role
+          WHERE proposed_role.user_id = proposed.user_id
+            AND proposed_role.role = 'platform_administrator'
+            AND proposed_role.status = 'active'
+            AND proposed_role.ended_at_ms IS NULL
+        ) THEN 1 ELSE 0 END AS proposed_user_is_platform_administrator,
         memberships.permission_category AS permission_category,
         memberships.user_id AS membership_user_id,
         memberships.status AS membership_status,
@@ -150,6 +159,14 @@ function createSqliteTeamManagerAssignmentRepository({
         current_assignment.user_id AS current_manager_user_id,
         current_assignment.version AS current_assignment_version,
         current_users.display_name AS current_manager_display_name,
+        CASE WHEN EXISTS (
+          SELECT 1
+          FROM platform_roles AS current_role
+          WHERE current_role.user_id = current_assignment.user_id
+            AND current_role.role = 'platform_administrator'
+            AND current_role.status = 'active'
+            AND current_role.ended_at_ms IS NULL
+        ) THEN 1 ELSE 0 END AS current_manager_is_platform_administrator,
         replaced.user_id AS replaced_manager_user_id,
         replaced.status AS replaced_assignment_status,
         replaced.version AS replaced_assignment_version,
@@ -186,20 +203,53 @@ function createSqliteTeamManagerAssignmentRepository({
       LIMIT 2
     `);
     findActiveMembershipStatement = database.prepare(`
-      SELECT * FROM league_memberships
-      WHERE league_id = @leagueId AND user_id = @userId AND status = 'active'
+      SELECT
+        league_memberships.*,
+        CASE WHEN EXISTS (
+          SELECT 1
+          FROM platform_roles AS protected_role
+          WHERE protected_role.user_id = league_memberships.user_id
+            AND protected_role.role = 'platform_administrator'
+            AND protected_role.status = 'active'
+            AND protected_role.ended_at_ms IS NULL
+        ) THEN 1 ELSE 0 END AS is_platform_administrator
+      FROM league_memberships
+      WHERE league_memberships.league_id = @leagueId
+        AND league_memberships.user_id = @userId
+        AND league_memberships.status = 'active'
       ORDER BY created_at_ms ASC, id ASC LIMIT 2
     `);
     findCurrentStatement = database.prepare(`
-      SELECT * FROM team_manager_assignments
-      WHERE league_id = @leagueId AND team_id = @teamId
-        AND status = 'accepted' AND ended_at_ms IS NULL
+      SELECT
+        team_manager_assignments.*,
+        CASE WHEN EXISTS (
+          SELECT 1
+          FROM platform_roles AS protected_role
+          WHERE protected_role.user_id = team_manager_assignments.user_id
+            AND protected_role.role = 'platform_administrator'
+            AND protected_role.status = 'active'
+            AND protected_role.ended_at_ms IS NULL
+        ) THEN 1 ELSE 0 END AS is_platform_administrator
+      FROM team_manager_assignments
+      WHERE team_manager_assignments.league_id = @leagueId
+        AND team_manager_assignments.team_id = @teamId
+        AND team_manager_assignments.status = 'accepted'
+        AND team_manager_assignments.ended_at_ms IS NULL
       ORDER BY assigned_at_ms ASC, id ASC LIMIT 2
     `);
     findPendingStatement = database.prepare(`
       SELECT * FROM team_manager_assignments
       WHERE league_id = @leagueId AND team_id = @teamId AND status = 'pending'
       ORDER BY assigned_at_ms ASC, id ASC LIMIT 2
+    `);
+    findActivePlatformAdministratorStatement = database.prepare(`
+      SELECT 1 AS protected
+      FROM platform_roles
+      WHERE user_id = @userId
+        AND role = 'platform_administrator'
+        AND status = 'active'
+        AND ended_at_ms IS NULL
+      LIMIT 2
     `);
     findIdempotencyStatement = database.prepare(
       `SELECT ${IDEMPOTENCY_COLUMNS.join(", ")} FROM idempotency_requests ` +
@@ -242,6 +292,19 @@ function createSqliteTeamManagerAssignmentRepository({
       leagueId: stableId(options.leagueId),
       teamId: stableId(options.teamId),
     };
+  }
+
+  function requireUnprotectedUser(userId) {
+    const role = findActivePlatformAdministratorStatement.all({
+      userId: stableId(userId),
+    });
+    if (role.length > 0) {
+      throw repositoryError(
+        REPOSITORY_ERROR_CODES.constraint,
+        "Protected platform-administrator team access cannot be changed.",
+        { details: { tableName: "team_manager_assignments" } }
+      );
+    }
   }
 
   return Object.freeze({
@@ -317,6 +380,7 @@ function createSqliteTeamManagerAssignmentRepository({
         ],
         "An exact pending manager assignment is required."
       );
+      requireUnprotectedUser(options.userId);
       return freezeRow(assignments.insert({
         id: stableId(options.id),
         league_id: stableId(options.leagueId),
@@ -338,6 +402,16 @@ function createSqliteTeamManagerAssignmentRepository({
         ["leagueId", "assignmentId", "expectedVersion", "nowMs"],
         "An exact manager-assignment acceptance is required."
       );
+      const current = uniqueRow(
+        findAggregateStatement,
+        { assignmentId: stableId(options.assignmentId) },
+        {
+          operation: "protectManagerAssignmentAcceptance",
+          tableName: "team_manager_assignments",
+          message: "A team-manager assignment aggregate is ambiguous.",
+        }
+      );
+      if (current) requireUnprotectedUser(current.proposed_user_id);
       return freezeRow(assignments.updateVersioned({
         key: stableId(options.assignmentId),
         leagueId: stableId(options.leagueId),
@@ -354,6 +428,16 @@ function createSqliteTeamManagerAssignmentRepository({
         ["leagueId", "assignmentId", "expectedVersion"],
         "An exact manager-assignment decline is required."
       );
+      const current = uniqueRow(
+        findAggregateStatement,
+        { assignmentId: stableId(options.assignmentId) },
+        {
+          operation: "protectManagerAssignmentDecline",
+          tableName: "team_manager_assignments",
+          message: "A team-manager assignment aggregate is ambiguous.",
+        }
+      );
+      if (current) requireUnprotectedUser(current.proposed_user_id);
       return freezeRow(assignments.updateVersioned({
         key: stableId(options.assignmentId),
         leagueId: stableId(options.leagueId),
@@ -367,6 +451,16 @@ function createSqliteTeamManagerAssignmentRepository({
         ["leagueId", "assignmentId", "expectedVersion", "nowMs"],
         "An exact manager-assignment ending is required."
       );
+      const current = uniqueRow(
+        findAggregateStatement,
+        { assignmentId: stableId(options.assignmentId) },
+        {
+          operation: "protectManagerAssignmentEnding",
+          tableName: "team_manager_assignments",
+          message: "A team-manager assignment aggregate is ambiguous.",
+        }
+      );
+      if (current) requireUnprotectedUser(current.proposed_user_id);
       return freezeRow(assignments.updateVersioned({
         key: stableId(options.assignmentId),
         leagueId: stableId(options.leagueId),

@@ -144,7 +144,7 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
 
   assert.deepEqual(first.manifest, second.manifest);
   assert.deepEqual(first.manifest, verifyReleaseQaFixture({ databasePath: firstPath }));
-  assert.equal(first.manifest.schemaVersion, 52);
+  assert.equal(first.manifest.schemaVersion, 54);
   assert.equal(first.manifest.manifestChecksum, checksumManifest(first.manifest));
   assert.match(first.manifest.manifestChecksum, /^[0-9a-f]{64}$/);
   assert.equal(first.manifest.global.leagueCount, 2);
@@ -267,10 +267,7 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
     `).get(leagueA, completedTradeId);
     assert.equal(completedTrade.status, "completed");
     assert.equal(Number.isSafeInteger(completedTrade.completed_at_ms), true);
-    assert.equal(
-      typeof completedTrade.commissioner_completion_reference,
-      "string"
-    );
+    assert.equal(completedTrade.commissioner_completion_reference, null);
     assert.equal(database.prepare(`
       SELECT COUNT(*) AS count
       FROM trade_events
@@ -282,16 +279,12 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
       WHERE league_id=? AND trade_id=? AND event_type='proposal_accepted'
     `).get(leagueA, completedTradeId);
     assert.equal(
-      acceptedEvent.id,
-      completedTrade.commissioner_completion_reference
-    );
-    assert.equal(
       acceptedEvent.actor_user_id,
-      fixtureId("account:leagueACommissioner")
+      fixtureId("account:leagueAManagerOne")
     );
     assert.equal(acceptedEvent.occurred_at_ms, completedTrade.completed_at_ms);
     const acceptedMetadata = JSON.parse(acceptedEvent.metadata_json);
-    assert.equal(acceptedMetadata.actorAuthority, "commissioner");
+    assert.equal(acceptedMetadata.actorAuthority, "manager");
     assert.equal(acceptedMetadata.generallyIllegal, false);
     assert.equal(acceptedMetadata.ownershipTransfers.length, 2);
     assert.deepEqual(acceptedMetadata.automaticallyCancelledTradeIds, []);
@@ -346,7 +339,7 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
       assert.equal(destinationEvent.team_id, transfer.destinationTeamId);
       assert.equal(
         sourceEvent.actor_user_id,
-        fixtureId("account:leagueACommissioner")
+        fixtureId("account:leagueAManagerOne")
       );
       assert.equal(destinationEvent.actor_user_id, sourceEvent.actor_user_id);
       assert.equal(sourceEvent.source_type, "trade");
@@ -432,9 +425,9 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
     `).get(leagueA, completedTradeId);
     assert.equal(
       completionActivity.actor_user_id,
-      fixtureId("account:leagueACommissioner")
+      fixtureId("account:leagueAManagerOne")
     );
-    assert.equal(completionActivity.actor_authority, "commissioner");
+    assert.equal(completionActivity.actor_authority, "manager");
     assert.equal(completionActivity.team_id, null);
     assert.equal(
       completionActivity.occurred_at_ms,
@@ -443,7 +436,7 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
     assert.equal(
       JSON.parse(completionActivity.metadata_json)
         .commissionerCompletionReference,
-      acceptedEvent.id
+      null
     );
     assert.deepEqual(database.prepare(`
       SELECT status, completed_at_ms
@@ -701,7 +694,7 @@ test("release-QA verifier fails closed when a required scenario is missing", asy
   );
 });
 
-test("release-QA verifier fails closed when accepted tenure history loses its commissioner actor", async (t) => {
+test("release-QA verifier fails closed when accepted tenure history loses its manager actor", async (t) => {
   const root = temporaryRoot(t);
   const databasePath = path.join(root, "history-tamper-release-qa.sqlite3");
   await createReleaseQaFixture({

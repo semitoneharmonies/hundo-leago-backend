@@ -57,8 +57,6 @@ const MAXIMUM_PUBLISHED_SEARCH_CODE_POINTS = 200;
 const MAXIMUM_PUBLISHED_CURSOR_CODE_POINTS = 1_024;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
-const RESULT_PLAYER_NAME_SQL_FUNCTION =
-  "hundo_fad_result_player_name_v1";
 const ALLOCATION_STATUSES = Object.freeze([
   "pending",
   "automatic_award",
@@ -70,6 +68,11 @@ const ALLOCATION_STATUSES = Object.freeze([
   "no_valid_offer",
   "invalid",
   "correction_required",
+]);
+const PUBLISHED_RESULT_STATUSES = Object.freeze([
+  "signed",
+  "not_won",
+  "tied",
 ]);
 const ACTIONABLE_RECOVERY_KINDS = Object.freeze([
   "deadline_retry",
@@ -243,93 +246,6 @@ function candidateSlotKey(group, number) {
     2,
     "0"
   )}`;
-}
-
-function publishedValidation(row) {
-  if (row.occupant_kind === "empty") {
-    return freeze({
-      status: "valid",
-      codes: freeze([]),
-    });
-  }
-  const codes = [
-    row.conflict_code,
-    row.validation_code,
-  ].filter(
-    (code, index, values) =>
-      code !== null &&
-      values.indexOf(code) === index
-  );
-  const status =
-    row.row_kind === "conflict"
-      ? "invalid"
-      : row.occupant_kind === "carryover"
-        ? "valid"
-        : row.eligibility_status;
-  if (
-    !["valid", "warning", "invalid"].includes(
-      status
-    )
-  ) {
-    incompatible(
-      "Published Candidate validation is noncanonical."
-    );
-  }
-  return freeze({
-    status,
-    codes: freeze(codes),
-  });
-}
-
-function publishedLastEditor(row) {
-  if (row.occupant_kind === "empty") return null;
-  if (row.last_edited_by_authority === "system") {
-    if (
-      row.last_edited_by_user_id !== null ||
-      row.editor_display_name !== null
-    ) {
-      incompatible(
-        "Published Candidate system-editor evidence is invalid."
-      );
-    }
-    return freeze({
-      userId: null,
-      displayName: null,
-      authority: "system",
-    });
-  }
-  if (
-    !UUID_PATTERN.test(
-      row.last_edited_by_user_id || ""
-    ) ||
-    typeof row.editor_display_name !== "string" ||
-    row.editor_display_name.length < 1 ||
-    ![
-      "manager",
-      "commissioner",
-      "platform_administrator_as_commissioner",
-    ].includes(row.last_edited_by_authority)
-  ) {
-    incompatible(
-      "Published Candidate editor evidence is invalid."
-    );
-  }
-  return freeze({
-    userId: row.last_edited_by_user_id,
-    displayName: row.editor_display_name,
-    authority: row.last_edited_by_authority,
-  });
-}
-
-function publishedSlotCapabilities() {
-  const denied = blockedCapability("PHASE_CLOSED");
-  return freeze({
-    addCandidate: denied,
-    editCandidate: denied,
-    moveCandidate: denied,
-    moveCarryover: denied,
-    removeCandidate: denied,
-  });
 }
 
 function helpRequestStatus(row, nowMs) {
@@ -832,7 +748,7 @@ function normalizeAllocationResultsInput(input) {
   );
   exactObject(
     input.query,
-    ["cursor", "limit", "q", "status"],
+    ["cursor", "limit", "q", "status", "teamId"],
     "An exact FAD allocation-result query is required."
   );
   const limit = normalizePageLimit(
@@ -842,24 +758,27 @@ function normalizeAllocationResultsInput(input) {
   const status = input.query.status;
   if (
     status !== null &&
-    !ALLOCATION_STATUSES.includes(status)
+    !PUBLISHED_RESULT_STATUSES.includes(status)
   ) {
     invalid(
-      "A canonical FAD allocation status is required."
+      "A canonical selected-team FAD result status is required."
     );
   }
+  const teamId = stableId(input.query.teamId);
   const filter = freeze({
     fadId: normalized.fadId,
     leagueId: normalized.leagueId,
     limit,
     q,
     status,
+    teamId,
   });
   return freeze({
     ...normalized,
     query: freeze({
       q,
       status,
+      teamId,
       limit,
       cursor: decodePublishedCursor(
         input.query.cursor,
@@ -871,8 +790,34 @@ function normalizeAllocationResultsInput(input) {
   });
 }
 
+function normalizeInternalAllocationResultInput(input) {
+  exactObject(
+    input,
+    [
+      "allocationId",
+      "fadId",
+      "leagueId",
+      "nowMs",
+      "playerId",
+      "viewerMembershipId",
+      "viewerUserId",
+    ],
+    "An exact internal FAD allocation-result input is required."
+  );
+  return freeze({
+    allocationId: stableId(input.allocationId),
+    fadId: stableId(input.fadId),
+    leagueId: stableId(input.leagueId),
+    nowMs: safeTimestamp(input.nowMs),
+    playerId: stableId(input.playerId),
+    viewerMembershipId: stableId(input.viewerMembershipId),
+    viewerUserId: stableId(input.viewerUserId),
+  });
+}
+
 function createSqliteFreeAgentDraftReadRepository({
   database,
+  internalOnly = false,
 } = {}) {
   if (
     !database ||
@@ -880,6 +825,11 @@ function createSqliteFreeAgentDraftReadRepository({
   ) {
     throw new TypeError(
       "createSqliteFreeAgentDraftReadRepository requires an opened database"
+    );
+  }
+  if (typeof internalOnly !== "boolean") {
+    throw new TypeError(
+      "The FAD read repository requires an exact surface selection"
     );
   }
 
@@ -936,11 +886,10 @@ function createSqliteFreeAgentDraftReadRepository({
   let publishedSnapshotCountStatement;
   let publishedSnapshotStatement;
   let publishedSnapshotEntriesStatement;
-  let publishedInterventionsStatement;
   let allocationByPlayerStatement;
   let allocationOfferEventStatement;
   let restrictedParticipantStatement;
-  let allocationResultPageStatement;
+  let actionableTieAuctionStatement;
   let allocationOffersStatement;
   let allocationWinnerStatement;
   let allocationAuctionsStatement;
@@ -1270,19 +1219,6 @@ function createSqliteFreeAgentDraftReadRepository({
   }
 
   try {
-    database.function(
-      RESULT_PLAYER_NAME_SQL_FUNCTION,
-      { deterministic: true },
-      (value) => {
-        try {
-          return normalizeCandidateEligiblePlayerName(
-            value
-          );
-        } catch {
-          return null;
-        }
-      }
-    );
     openingSeasonStatement = database.prepare(`
       SELECT
         leagues.id AS league_id,
@@ -2177,7 +2113,24 @@ function createSqliteFreeAgentDraftReadRepository({
           fad.status AS fad_status,
           fad.opened_at_ms,
           fad.help_opens_at_ms,
-          fad.candidate_deadline_at_ms
+          fad.candidate_deadline_at_ms,
+          team.name AS team_name,
+          team.primary_colour,
+          team.secondary_colour,
+          team.tertiary_colour,
+          team.pattern_template,
+          team.logo_reference,
+          CASE WHEN EXISTS (
+            SELECT 1
+            FROM team_manager_assignments AS viewer_assignment
+            WHERE viewer_assignment.league_id = snapshot.league_id
+              AND viewer_assignment.team_id = snapshot.team_id
+              AND viewer_assignment.user_id = @viewerUserId
+              AND viewer_assignment.membership_id = @viewerMembershipId
+              AND viewer_assignment.status = 'accepted'
+              AND viewer_assignment.accepted_at_ms IS NOT NULL
+              AND viewer_assignment.ended_at_ms IS NULL
+          ) THEN 1 ELSE 0 END AS viewer_manages_team
         FROM candidate_card_snapshots AS snapshot
         JOIN candidate_cards AS card
           ON card.league_id = snapshot.league_id
@@ -2192,6 +2145,9 @@ function createSqliteFreeAgentDraftReadRepository({
          AND fad.season_id = snapshot.season_id
          AND fad.id = snapshot.fad_id
          AND fad.deadline_locked_at_ms IS NOT NULL
+        JOIN teams AS team
+          ON team.league_id = snapshot.league_id
+         AND team.id = snapshot.team_id
         WHERE snapshot.league_id = @leagueId
           AND snapshot.fad_id = @fadId
           AND snapshot.team_id = @teamId
@@ -2227,65 +2183,11 @@ function createSqliteFreeAgentDraftReadRepository({
           END,
           entry.id
       `);
-    publishedInterventionsStatement =
-      database.prepare(`
-        SELECT revision.*, actor.display_name
-        FROM candidate_card_revisions AS revision
-        JOIN users AS actor
-          ON actor.id = revision.actor_user_id
-        WHERE revision.league_id = @leagueId
-          AND revision.season_id = @seasonId
-          AND revision.fad_id = @fadId
-          AND revision.card_id = @cardId
-          AND revision.team_id = @teamId
-          AND revision.actor_authority IN (
-            'commissioner',
-            'platform_administrator_as_commissioner'
-          )
-        ORDER BY revision.occurred_at_ms, revision.id
-      `);
     allocationByPlayerStatement =
-      database.prepare(`
-        SELECT *
-        FROM free_agent_draft_player_allocations
-        WHERE league_id = @leagueId
-          AND fad_id = @fadId
-          AND player_id = @playerId
-        LIMIT 2
-      `);
-    allocationOfferEventStatement =
-      database.prepare(`
-        SELECT event.*
-        FROM free_agent_draft_allocation_events AS event
-        JOIN free_agent_draft_player_allocations AS allocation
-          ON allocation.league_id = event.league_id
-         AND allocation.id = event.allocation_id
-         AND allocation.version = event.allocation_version
-        WHERE event.league_id = @leagueId
-          AND event.fad_id = @fadId
-          AND event.allocation_id = @allocationId
-          AND event.snapshot_entry_id = @snapshotEntryId
-          AND event.event_kind = 'offer_considered'
-        LIMIT 2
-      `);
-    restrictedParticipantStatement = database.prepare(`
-      SELECT 1 AS eligible
-      FROM free_agent_draft_auction_participants
-      WHERE league_id = @leagueId
-        AND fad_id = @fadId
-        AND auction_id = @auctionId
-        AND team_id = @teamId
-        AND status = 'active'
-      LIMIT 2
-    `);
-    allocationResultPageStatement =
       database.prepare(`
         SELECT
           allocation.*,
           player.full_name AS player_full_name,
-          ${RESULT_PLAYER_NAME_SQL_FUNCTION}(
-            player.full_name
-          ) AS player_sort_name,
           (
             SELECT correction.position_group
             FROM league_player_positions AS correction
@@ -2322,38 +2224,65 @@ function createSqliteFreeAgentDraftReadRepository({
               AND source.normalized_position IN ('F', 'D')
           ) AS source_position_count
         FROM free_agent_draft_player_allocations AS allocation
-        JOIN players AS player
-          ON player.id = allocation.player_id
+        JOIN players AS player ON player.id = allocation.player_id
         WHERE allocation.league_id = @leagueId
           AND allocation.fad_id = @fadId
-          AND (
-            @status IS NULL
-            OR allocation.status = @status
-          )
-          AND (
-            @q = ''
-            OR instr(
-              ${RESULT_PLAYER_NAME_SQL_FUNCTION}(
-                player.full_name
-              ),
-              @q
-            ) > 0
-          )
-          AND (
-            @cursorSortName IS NULL
-            OR ${RESULT_PLAYER_NAME_SQL_FUNCTION}(
-              player.full_name
-            ) > @cursorSortName
-            OR (
-              ${RESULT_PLAYER_NAME_SQL_FUNCTION}(
-                player.full_name
-              ) = @cursorSortName
-              AND player.id > @cursorPlayerId
-            )
-          )
-        ORDER BY player_sort_name, player.id
-        LIMIT @limitPlusOne
+          AND allocation.player_id = @playerId
+        LIMIT 2
       `);
+    allocationOfferEventStatement =
+      database.prepare(`
+        SELECT event.*
+        FROM free_agent_draft_allocation_events AS event
+        JOIN free_agent_draft_player_allocations AS allocation
+          ON allocation.league_id = event.league_id
+         AND allocation.id = event.allocation_id
+         AND allocation.version = event.allocation_version
+        WHERE event.league_id = @leagueId
+          AND event.fad_id = @fadId
+          AND event.allocation_id = @allocationId
+          AND event.snapshot_entry_id = @snapshotEntryId
+          AND event.event_kind = 'offer_considered'
+        LIMIT 2
+      `);
+    restrictedParticipantStatement = database.prepare(`
+      SELECT 1 AS eligible
+      FROM free_agent_draft_auction_participants
+      WHERE league_id = @leagueId
+        AND fad_id = @fadId
+        AND auction_id = @auctionId
+        AND team_id = @teamId
+        AND status = 'active'
+      LIMIT 2
+    `);
+    actionableTieAuctionStatement = database.prepare(`
+      SELECT auction.id AS auction_id
+      FROM auction_contexts AS context
+      JOIN auctions AS auction
+        ON auction.league_id = context.league_id
+       AND auction.id = context.auction_id
+      WHERE context.league_id = @leagueId
+        AND context.fad_id = @fadId
+        AND context.fad_allocation_id = @allocationId
+        AND context.auction_id = @auctionId
+        AND auction.player_id = @playerId
+        AND auction.status = 'open'
+        AND auction.opened_at_ms <= @nowMs
+        AND @nowMs < auction.resolves_at_ms
+        AND context.source_kind = 'fad_restricted'
+        AND EXISTS (
+          SELECT 1
+          FROM free_agent_draft_auction_participants AS participant
+          WHERE participant.league_id = context.league_id
+            AND participant.fad_id = context.fad_id
+            AND participant.allocation_id = context.fad_allocation_id
+            AND participant.auction_id = context.auction_id
+            AND participant.team_id = @teamId
+            AND participant.status = 'active'
+            AND participant.active_improvement_bid_id IS NULL
+        )
+      LIMIT 2
+    `);
     allocationOffersStatement =
       database.prepare(`
         SELECT
@@ -2366,7 +2295,18 @@ function createSqliteFreeAgentDraftReadRepository({
           team.logo_reference,
           event.offer_valid,
           event.rank_position,
-          event.offer_outcome_code
+          event.offer_outcome_code,
+          CASE WHEN EXISTS (
+            SELECT 1
+            FROM team_manager_assignments AS viewer_assignment
+            WHERE viewer_assignment.league_id = offer.league_id
+              AND viewer_assignment.team_id = offer.team_id
+              AND viewer_assignment.user_id = @viewerUserId
+              AND viewer_assignment.membership_id = @viewerMembershipId
+              AND viewer_assignment.status = 'accepted'
+              AND viewer_assignment.accepted_at_ms IS NOT NULL
+              AND viewer_assignment.ended_at_ms IS NULL
+          ) THEN 1 ELSE 0 END AS viewer_manages_team
         FROM candidate_card_snapshot_entries AS offer
         JOIN candidate_card_snapshots AS snapshot
           ON snapshot.league_id = offer.league_id
@@ -2423,7 +2363,18 @@ function createSqliteFreeAgentDraftReadRepository({
           ownership.player_id AS ownership_player_id,
           ownership.team_id AS ownership_team_id,
           ownership.season_id AS ownership_season_id,
-          ownership.ownership_kind
+          ownership.ownership_kind,
+          CASE WHEN EXISTS (
+            SELECT 1
+            FROM team_manager_assignments AS viewer_assignment
+            WHERE viewer_assignment.league_id = allocation.league_id
+              AND viewer_assignment.team_id = allocation.winning_team_id
+              AND viewer_assignment.user_id = @viewerUserId
+              AND viewer_assignment.membership_id = @viewerMembershipId
+              AND viewer_assignment.status = 'accepted'
+              AND viewer_assignment.accepted_at_ms IS NOT NULL
+              AND viewer_assignment.ended_at_ms IS NULL
+          ) THEN 1 ELSE 0 END AS viewer_manages_team
         FROM free_agent_draft_player_allocations AS allocation
         LEFT JOIN candidate_card_snapshot_entries AS snapshot_offer
           ON snapshot_offer.league_id = allocation.league_id
@@ -2446,6 +2397,7 @@ function createSqliteFreeAgentDraftReadRepository({
           context.fad_origin,
           auction.id AS auction_id,
           auction.status AS auction_status,
+          auction.resolves_at_ms AS auction_resolves_at_ms,
           resolution.winning_bid_id,
           resolution.contract_id AS resolution_contract_id,
           resolution.ownership_id AS resolution_ownership_id,
@@ -3957,7 +3909,7 @@ function createSqliteFreeAgentDraftReadRepository({
     );
   }
 
-  function publishedCandidateOutcome(row) {
+  function publishedCandidateOutcome(row, scope) {
     if (row.occupant_kind === "carryover") {
       return freeze({
         code: "carryover",
@@ -3968,11 +3920,11 @@ function createSqliteFreeAgentDraftReadRepository({
     if (row.occupant_kind !== "candidate") {
       return null;
     }
-    if (
+    const incompleteOffer =
       row.proposed_total_value_cents === null ||
       row.proposed_term_years === null ||
-      row.proposed_aav_cents === null
-    ) {
+      row.proposed_aav_cents === null;
+    if (incompleteOffer) {
       if (
         row.eligibility_status !== "invalid" ||
         row.validation_code !==
@@ -3982,11 +3934,6 @@ function createSqliteFreeAgentDraftReadRepository({
           "A partial published Candidate offer is noncanonical."
         );
       }
-      return freeze({
-        code: "invalid_offer",
-        allocationId: null,
-        auctionId: null,
-      });
     }
     const allocation = unique(
       allocationByPlayerStatement,
@@ -3997,6 +3944,36 @@ function createSqliteFreeAgentDraftReadRepository({
       },
       "The published Candidate allocation"
     );
+    if (allocation?.status === "pending") {
+      const event = offerEventFor(allocation, row.id);
+      if (event !== null) {
+        incompatible(
+          "A pending allocation has premature offer evidence."
+        );
+      }
+      return null;
+    }
+    if (allocation?.status === "correction_required") {
+      return null;
+    }
+    if (
+      allocation?.status === "fallback_open_resolved" &&
+      allocation.winning_team_id === row.team_id
+    ) {
+      winnerProjection(allocation, scope, true);
+      return freeze({
+        code: "fallback_win",
+        allocationId: allocation.id,
+        auctionId: allocation.fallback_open_auction_id,
+      });
+    }
+    if (incompleteOffer) {
+      return freeze({
+        code: "invalid_offer",
+        allocationId: allocation?.id ?? null,
+        auctionId: null,
+      });
+    }
     if (!allocation) {
       incompatible(
         "A published Candidate offer has no allocation."
@@ -4006,18 +3983,7 @@ function createSqliteFreeAgentDraftReadRepository({
       allocation,
       row.id
     );
-    if (allocation.status === "pending") {
-      if (event !== null) {
-        incompatible(
-          "A pending allocation has premature offer evidence."
-        );
-      }
-      return null;
-    }
     if (event === null) {
-      if (allocation.status === "correction_required") {
-        return null;
-      }
       incompatible(
         "A processed Candidate allocation is missing offer evidence."
       );
@@ -4104,24 +4070,33 @@ function createSqliteFreeAgentDraftReadRepository({
       allocation.status === "fallback_open_resolved"
     ) {
       if (
-        event.offer_outcome_code !==
-        "restricted_tied"
+        allocation.winning_team_id === row.team_id
       ) {
-        code = "automatic_loss";
+        code = "fallback_win";
       } else if (
         allocation.decision_code ===
-        "fallback_open_no_winner"
+          "fallback_open_no_winner" &&
+        event.offer_outcome_code === "restricted_tied"
       ) {
         code = "fallback_no_winner";
       } else {
         code =
-          allocation.winning_team_id === row.team_id
-            ? "fallback_win"
-            : "fallback_loss";
+          event.offer_outcome_code === "restricted_tied"
+            ? "fallback_loss"
+            : "automatic_loss";
       }
       auctionId = allocation.fallback_open_auction_id;
     } else {
       return null;
+    }
+    if (
+      [
+        "automatic_win",
+        "restricted_win",
+        "fallback_win",
+      ].includes(code)
+    ) {
+      winnerProjection(allocation, scope, true);
     }
     return freeze({
       code,
@@ -4130,160 +4105,170 @@ function createSqliteFreeAgentDraftReadRepository({
     });
   }
 
-  function completenessProjection(snapshot) {
+  function viewerManagesTeam(row) {
+    if (![0, 1].includes(row.viewer_manages_team)) {
+      incompatible(
+        "Published FAD viewer-manager evidence is noncanonical."
+      );
+    }
+    return row.viewer_manages_team === 1;
+  }
+
+  function selectedTeamResultStatus(outcome) {
+    if (
+      [
+        "automatic_win",
+        "restricted_win",
+        "fallback_win",
+      ].includes(outcome.code)
+    ) {
+      return "signed";
+    }
+    if (outcome.code === "restricted_pending") {
+      return "tied";
+    }
+    if (
+      [
+        "automatic_loss",
+        "restricted_loss",
+        "fallback_loss",
+        "fallback_pending",
+        "fallback_no_winner",
+        "invalid_offer",
+      ].includes(outcome.code)
+    ) {
+      return "not_won";
+    }
+    incompatible(
+      "A published Candidate result status is noncanonical."
+    );
+  }
+
+  function selectedTeamResultProjection(
+    row,
+    outcome,
+    { offerDetailsVisible, nowMs }
+  ) {
+    const status = selectedTeamResultStatus(outcome);
+    const completeOffer = [
+      row.proposed_total_value_cents,
+      row.proposed_term_years,
+      row.proposed_aav_cents,
+    ].every(Number.isSafeInteger);
+    let tieAuctionId = null;
+    if (
+      offerDetailsVisible &&
+      status === "tied" &&
+      outcome.auctionId !== null
+    ) {
+      const actionable = unique(
+        actionableTieAuctionStatement,
+        {
+          allocationId: outcome.allocationId,
+          auctionId: outcome.auctionId,
+          fadId: row.fad_id,
+          leagueId: row.league_id,
+          nowMs,
+          playerId: row.player_id,
+          teamId: row.team_id,
+        },
+        "The actionable selected-team FAD tie auction"
+      );
+      tieAuctionId = actionable?.auction_id ?? null;
+    }
     return freeze({
-      code: snapshot.completeness_code,
-      filledMandatoryCount:
-        snapshot.filled_mandatory_count,
-      missingMandatoryCount:
-        snapshot.missing_mandatory_count,
-      filledBenchCount:
-        snapshot.filled_bench_count,
-      emptyBenchCount:
-        snapshot.empty_bench_count,
-      blockingValidationCount:
-        snapshot.blocking_validation_count,
-      structuralConflictCount:
-        snapshot.structural_conflict_count,
-      carriedRosterStructuralConflictCount:
-        snapshot
-          .carried_roster_structural_conflict_count,
+      player: snapshotPlayerProjection(row),
+      status,
+      offer:
+        offerDetailsVisible && completeOffer
+          ? freeze({
+              totalValueCents:
+                row.proposed_total_value_cents,
+              aavCents: row.proposed_aav_cents,
+              termYears: row.proposed_term_years,
+            })
+          : null,
+      tieAuctionId,
     });
   }
 
-  function interventionProjection(snapshot) {
-    return publishedInterventionsStatement
-      .all({
-        leagueId: snapshot.league_id,
-        seasonId: snapshot.season_id,
-        fadId: snapshot.fad_id,
-        cardId: snapshot.card_id,
-        teamId: snapshot.team_id,
-      })
-      .map((row) => {
-        if (
-          !UUID_PATTERN.test(row.actor_user_id || "") ||
-          typeof row.display_name !== "string"
-        ) {
-          incompatible(
-            "Published Candidate intervention evidence is invalid."
-          );
-        }
-        return freeze({
-          revisionId: row.id,
-          entryId: row.affected_entry_id,
-          action: row.action,
-          actorUserId: row.actor_user_id,
-          actorDisplayName: row.display_name,
-          authority: row.actor_authority,
-          occurredAtMs: row.occurred_at_ms,
-        });
-      });
-  }
-
-  function outcomeCounts(rows) {
-    const counts = {
-      automaticWins: 0,
-      restrictedPending: 0,
-      restrictedWins: 0,
-      fallbackPending: 0,
-      fallbackWins: 0,
-      fallbackNoWinner: 0,
-      losses: 0,
-      invalidOffers: 0,
-    };
-    for (const row of rows) {
-      if (row.occupant_kind !== "candidate") {
-        continue;
-      }
-      const outcome = publishedCandidateOutcome(row);
+  function selectedTeamResults(snapshot, scope) {
+    const offerDetailsVisible = viewerManagesTeam(snapshot);
+    const results = [];
+    for (const row of publishedSnapshotRows(snapshot)) {
+      if (row.occupant_kind !== "candidate") continue;
+      const outcome = publishedCandidateOutcome(row, scope);
       if (outcome === null) continue;
-      const key = {
-        automatic_win: "automaticWins",
-        restricted_pending: "restrictedPending",
-        restricted_win: "restrictedWins",
-        fallback_pending: "fallbackPending",
-        fallback_win: "fallbackWins",
-        fallback_no_winner: "fallbackNoWinner",
-        invalid_offer: "invalidOffers",
-      }[outcome.code];
-      if (key) {
-        counts[key] += 1;
-      } else if (
-        [
-          "automatic_loss",
-          "restricted_loss",
-          "fallback_loss",
-        ].includes(outcome.code)
-      ) {
-        counts.losses += 1;
-      }
+      results.push(
+        selectedTeamResultProjection(row, outcome, {
+          offerDetailsVisible,
+          nowMs: scope.nowMs,
+        })
+      );
     }
-    return freeze(counts);
+    const playerIds = results.map(
+      ({ player }) => player.playerId
+    );
+    if (new Set(playerIds).size !== results.length) {
+      incompatible(
+        "A selected-team FAD result player is duplicated."
+      );
+    }
+    return results.sort((left, right) => {
+      const leftName = normalizeCandidateEligiblePlayerName(
+        left.player.fullName
+      );
+      const rightName = normalizeCandidateEligiblePlayerName(
+        right.player.fullName
+      );
+      if (leftName !== rightName) {
+        return leftName < rightName ? -1 : 1;
+      }
+      if (left.player.playerId === right.player.playerId) {
+        return 0;
+      }
+      return left.player.playerId < right.player.playerId
+        ? -1
+        : 1;
+    });
   }
 
-  function publishedSummaryProjection(snapshot) {
+  function requirePublishedSnapshot(scope) {
+    const snapshot = unique(
+      publishedSnapshotStatement,
+      scope,
+      "The published selected-team Candidate result"
+    );
+    if (!snapshot) {
+      throw repositoryError(
+        FREE_AGENT_DRAFT_READ_REPOSITORY_CODES
+          .candidateCardNotFound,
+        "The published selected-team Candidate result was not found."
+      );
+    }
+    return snapshot;
+  }
+
+  function publishedSummaryProjection(snapshot, scope) {
     const rows = publishedSnapshotRows(snapshot);
-    const conflicts = rows.filter(
-      (row) => row.row_kind === "conflict"
-    );
-    const slots = rows.filter(
-      (row) => row.row_kind === "slot"
-    );
-    const interventions =
-      interventionProjection(snapshot);
+    const counts = { signed: 0, notWon: 0, tied: 0 };
+    for (const row of rows) {
+      if (row.occupant_kind !== "candidate") continue;
+      const outcome = publishedCandidateOutcome(row, scope);
+      if (outcome === null) continue;
+      const status = selectedTeamResultStatus(outcome);
+      counts[
+        status === "not_won" ? "notWon" : status
+      ] += 1;
+    }
     return freeze({
       leagueId: snapshot.league_id,
       seasonId: snapshot.season_id,
       fadId: snapshot.fad_id,
       teamId: snapshot.team_id,
       team: teamProjection(snapshot),
-      snapshotId: snapshot.id,
-      lockedCardVersion:
-        snapshot.locked_card_version,
       lifecycleStatus: snapshot.locked_status,
-      completeness:
-        completenessProjection(snapshot),
-      capStatus: snapshot.cap_status,
-      allocationEligibility:
-        snapshot.allocation_eligibility,
-      allocationExclusionReason:
-        snapshot.allocation_exclusion_reason,
-      maximumPossibleCapCents:
-        snapshot.maximum_possible_cap_cents,
-      carriedCapUsageCents:
-        snapshot.carried_cap_usage_cents,
-      counts: freeze({
-        carryovers: rows.filter(
-          (row) =>
-            row.occupant_kind === "carryover"
-        ).length,
-        candidates: rows.filter(
-          (row) =>
-            row.occupant_kind === "candidate"
-        ).length,
-        emptyMandatory: slots.filter(
-          (row) =>
-            ["F", "D"].includes(row.slot_group) &&
-            row.occupant_kind === "empty"
-        ).length,
-        emptyBench: slots.filter(
-          (row) =>
-            row.slot_group === "B" &&
-            row.occupant_kind === "empty"
-        ).length,
-        conflicts: conflicts.length,
-      }),
-      outcomeCounts: outcomeCounts(rows),
-      commissionerInterventionCount:
-        interventions.length,
-      historyDescriptor: freeze({
-        mode: "published_card",
-        seasonId: snapshot.season_id,
-        fadId: snapshot.fad_id,
-        teamId: snapshot.team_id,
-        cardId: snapshot.card_id,
-      }),
+      outcomeCounts: freeze(counts),
     });
   }
 
@@ -4336,7 +4321,8 @@ function createSqliteFreeAgentDraftReadRepository({
           : null;
       return deepFreeze({
         data: pageRows.map(
-          publishedSummaryProjection
+          (snapshot) =>
+            publishedSummaryProjection(snapshot, scope)
         ),
         page: {
           nextCursor:
@@ -4360,88 +4346,6 @@ function createSqliteFreeAgentDraftReadRepository({
     }
   }
 
-  function publishedSlotProjection(row) {
-    const empty = row.occupant_kind === "empty";
-    const carryover =
-      row.occupant_kind === "carryover";
-    if (
-      !["empty", "carryover", "candidate"].includes(
-        row.occupant_kind
-      )
-    ) {
-      incompatible(
-        "A published Candidate slot occupant is invalid."
-      );
-    }
-    return freeze({
-      slotKey: candidateSlotKey(
-        row.slot_group,
-        row.slot_number
-      ),
-      slotGroup: row.slot_group,
-      required: ["F", "D"].includes(
-        row.slot_group
-      ),
-      occupantKind: row.occupant_kind,
-      entryId: empty ? null : row.source_entry_id,
-      entryVersion: empty
-        ? null
-        : row.source_entry_version,
-      player: empty
-        ? null
-        : snapshotPlayerProjection(row),
-      authoritativeRosterCategory: carryover
-        ? row.source_roster_category
-        : null,
-      locked: carryover,
-      totalValueCents: carryover
-        ? row.carryover_original_total_value_cents
-        : row.proposed_total_value_cents,
-      termYears: carryover
-        ? row.carryover_original_term_years
-        : row.proposed_term_years,
-      aavCents: carryover
-        ? row.carryover_aav_cents
-        : row.proposed_aav_cents,
-      remainingYears: carryover
-        ? row.remaining_years
-        : null,
-      validation: publishedValidation(row),
-      outcome: empty
-        ? null
-        : publishedCandidateOutcome(row),
-      lastEditedAtMs: empty
-        ? null
-        : row.last_edited_at_ms,
-      lastEditedBy: publishedLastEditor(row),
-      capabilities: publishedSlotCapabilities(),
-    });
-  }
-
-  function publishedConflictProjection(row) {
-    if (
-      row.row_kind !== "conflict" ||
-      row.occupant_kind === "empty" ||
-      row.conflict_code === null
-    ) {
-      incompatible(
-        "A published Candidate conflict is invalid."
-      );
-    }
-    return freeze({
-      entryId: row.source_entry_id,
-      entryVersion: row.source_entry_version,
-      player: snapshotPlayerProjection(row),
-      intendedSlotKey: candidateSlotKey(
-        row.slot_group,
-        row.slot_number
-      ),
-      conflictCode: row.conflict_code,
-      validation: publishedValidation(row),
-      lastEditedBy: publishedLastEditor(row),
-    });
-  }
-
   function readPublishedCardHistory(input) {
     const scope = normalizePublishedHistoryInput(
       input
@@ -4449,92 +4353,14 @@ function createSqliteFreeAgentDraftReadRepository({
     try {
       requireViewerAuthority(scope);
       requirePublishedFad(scope);
-      const snapshot = unique(
-        publishedSnapshotStatement,
-        scope,
-        "The published Candidate Card history"
-      );
-      if (!snapshot) {
-        throw repositoryError(
-          FREE_AGENT_DRAFT_READ_REPOSITORY_CODES
-            .candidateCardNotFound,
-          "The published Candidate Card was not found."
-        );
-      }
-      const rows = publishedSnapshotRows(snapshot);
-      const slots = rows
-        .filter((row) => row.row_kind === "slot")
-        .map(publishedSlotProjection);
-      const conflicts = rows
-        .filter(
-          (row) => row.row_kind === "conflict"
-        )
-        .map(publishedConflictProjection);
-      const phase = viewerPhase(
-        {
-          status: snapshot.fad_status,
-          opened_at_ms: snapshot.opened_at_ms,
-          help_opens_at_ms:
-            snapshot.help_opens_at_ms,
-          candidate_deadline_at_ms:
-            snapshot.candidate_deadline_at_ms,
-        },
-        scope.nowMs
-      );
+      const snapshot = requirePublishedSnapshot(scope);
       return deepFreeze({
         leagueId: snapshot.league_id,
         seasonId: snapshot.season_id,
         fadId: snapshot.fad_id,
         teamId: snapshot.team_id,
-        cardId: snapshot.card_id,
-        cardVersion:
-          snapshot.locked_card_version,
-        phase,
-        visibilityMode: "published_history",
-        accessReason:
-          "published_league_history",
-        authorizationEvidence: null,
-        lifecycleStatus: snapshot.locked_status,
-        completeness:
-          completenessProjection(snapshot),
-        capProjection: freeze({
-          capLimitCents: snapshot.cap_limit_cents,
-          carriedActivePlayerAmountCents:
-            snapshot
-              .carried_active_player_amount_cents,
-          retentionObligationCents:
-            snapshot.retention_obligation_cents,
-          buyoutPenaltyCents:
-            snapshot.buyout_penalty_cents,
-          carriedCapUsageCents:
-            snapshot.carried_cap_usage_cents,
-          proposedCandidateAavCents:
-            snapshot.proposed_candidate_aav_cents,
-          maximumPossibleCapCents:
-            snapshot.maximum_possible_cap_cents,
-          maximumCapSpaceCents:
-            snapshot.maximum_cap_space_cents,
-        }),
-        capStatus: snapshot.cap_status,
-        allocationEligibility:
-          snapshot.allocation_eligibility,
-        allocationExclusionReason:
-          snapshot.allocation_exclusion_reason,
-        slots,
-        conflicts,
-        helpContext: null,
-        commissionerInterventions:
-          interventionProjection(snapshot),
-        capabilities: freeze({
-          editCard: blockedCapability(
-            "PHASE_CLOSED"
-          ),
-          requestHelp: blockedCapability(
-            "PHASE_CLOSED"
-          ),
-          viewPublishedHistory:
-            allowedCapability(),
-        }),
+        team: teamProjection(snapshot),
+        results: selectedTeamResults(snapshot, scope),
       });
     } catch (error) {
       throw mapRepositoryError(error, {
@@ -4547,7 +4373,8 @@ function createSqliteFreeAgentDraftReadRepository({
 
   function rankedOfferProjection(
     row,
-    allocation
+    allocation,
+    forceFullEvidence = false
   ) {
     const pending = allocation.status === "pending";
     if (
@@ -4610,6 +4437,8 @@ function createSqliteFreeAgentDraftReadRepository({
     const validationCode =
       row.allocation_exclusion_reason ??
       row.validation_code;
+    const offerDetailsVisible =
+      forceFullEvidence || viewerManagesTeam(row);
     return freeze({
       snapshotEntryId: row.id,
       teamId: row.team_id,
@@ -4619,9 +4448,15 @@ function createSqliteFreeAgentDraftReadRepository({
         row.slot_number
       ),
       totalValueCents:
-        row.proposed_total_value_cents,
-      termYears: row.proposed_term_years,
-      aavCents: row.proposed_aav_cents,
+        offerDetailsVisible
+          ? row.proposed_total_value_cents
+          : null,
+      termYears: offerDetailsVisible
+        ? row.proposed_term_years
+        : null,
+      aavCents: offerDetailsVisible
+        ? row.proposed_aav_cents
+        : null,
       valid,
       validationCode,
       rank: pending ? null : row.rank_position,
@@ -4629,7 +4464,11 @@ function createSqliteFreeAgentDraftReadRepository({
     });
   }
 
-  function winnerProjection(allocation) {
+  function winnerProjection(
+    allocation,
+    viewer,
+    forceFullEvidence = false
+  ) {
     if (allocation.winning_team_id === null) {
       return null;
     }
@@ -4639,6 +4478,9 @@ function createSqliteFreeAgentDraftReadRepository({
         leagueId: allocation.league_id,
         fadId: allocation.fad_id,
         allocationId: allocation.id,
+        viewerUserId: viewer.viewerUserId,
+        viewerMembershipId:
+          viewer.viewerMembershipId,
       },
       "The FAD allocation winner"
     );
@@ -4705,6 +4547,8 @@ function createSqliteFreeAgentDraftReadRepository({
         row.ownership_slot_number
       );
     }
+    const offerDetailsVisible =
+      forceFullEvidence || viewerManagesTeam(row);
     return freeze({
       teamId: row.winning_team_id,
       snapshotEntryId:
@@ -4713,9 +4557,15 @@ function createSqliteFreeAgentDraftReadRepository({
       ownershipId: row.ownership_id,
       slotKey,
       totalValueCents:
-        row.original_total_value_cents,
-      termYears: row.original_term_years,
-      aavCents: row.aav_cents,
+        offerDetailsVisible
+          ? row.original_total_value_cents
+          : null,
+      termYears: offerDetailsVisible
+        ? row.original_term_years
+        : null,
+      aavCents: offerDetailsVisible
+        ? row.aav_cents
+        : null,
     });
   }
 
@@ -4759,7 +4609,10 @@ function createSqliteFreeAgentDraftReadRepository({
     return "failed";
   }
 
-  function auctionProjections(allocation) {
+  function auctionProjections(
+    allocation,
+    restrictedMinimumVisible
+  ) {
     const rows = allocationAuctionsStatement.all({
       leagueId: allocation.league_id,
       fadId: allocation.fad_id,
@@ -4855,14 +4708,20 @@ function createSqliteFreeAgentDraftReadRepository({
           participantTeamIds
         ),
         minimumTotalValueCents:
-          allocation
-            .restricted_minimum_total_cents,
+          restrictedMinimumVisible
+            ? allocation
+                .restricted_minimum_total_cents
+            : null,
         minimumTermYears:
-          allocation
-            .restricted_minimum_term_years,
+          restrictedMinimumVisible
+            ? allocation
+                .restricted_minimum_term_years
+            : null,
         minimumAavCents:
-          allocation
-            .restricted_minimum_aav_cents,
+          restrictedMinimumVisible
+            ? allocation
+                .restricted_minimum_aav_cents
+            : null,
       });
     }
     const fallback =
@@ -4873,8 +4732,10 @@ function createSqliteFreeAgentDraftReadRepository({
             status:
               terminalAuctionStatus(fallbackAuction),
             minimumTotalValueCents:
-              allocation
-                .restricted_minimum_total_cents,
+              restrictedMinimumVisible
+                ? allocation
+                    .restricted_minimum_total_cents
+                : null,
             winningBidId:
               fallbackAuction.winning_bid_id,
             contractId:
@@ -5039,7 +4900,11 @@ function createSqliteFreeAgentDraftReadRepository({
     });
   }
 
-  function allocationResultProjection(allocation) {
+  function allocationResultProjection(
+    allocation,
+    viewer,
+    { forceFullEvidence = false } = {}
+  ) {
     if (
       !ALLOCATION_STATUSES.includes(
         allocation.status
@@ -5075,6 +4940,9 @@ function createSqliteFreeAgentDraftReadRepository({
       allocationId: allocation.id,
       allocationVersion: allocation.version,
       playerId: allocation.player_id,
+      viewerUserId: viewer.viewerUserId,
+      viewerMembershipId:
+        viewer.viewerMembershipId,
     });
     if (offerRows.length < 1) {
       incompatible(
@@ -5082,10 +4950,29 @@ function createSqliteFreeAgentDraftReadRepository({
       );
     }
     const rankedOffers = offerRows.map((row) =>
-      rankedOfferProjection(row, allocation)
+      rankedOfferProjection(
+        row,
+        allocation,
+        forceFullEvidence
+      )
     );
+    const restrictedMinimumVisible =
+      forceFullEvidence ||
+      offerRows.some(
+        (row) =>
+          viewerManagesTeam(row) &&
+          row.proposed_total_value_cents ===
+            allocation.restricted_minimum_total_cents &&
+          row.proposed_term_years ===
+            allocation.restricted_minimum_term_years &&
+          row.proposed_aav_cents ===
+            allocation.restricted_minimum_aav_cents
+      );
     const { restricted, fallback, auctionRows } =
-      auctionProjections(allocation);
+      auctionProjections(
+        allocation,
+        restrictedMinimumVisible
+      );
     const drawRows = allocationDrawsStatement.all({
         leagueId: allocation.league_id,
         fadId: allocation.fad_id,
@@ -5161,13 +5048,48 @@ function createSqliteFreeAgentDraftReadRepository({
       status: allocation.status,
       decisionCode: allocation.decision_code,
       rankedOffers: freeze(rankedOffers),
-      winner: winnerProjection(allocation),
+      winner: winnerProjection(
+        allocation,
+        viewer,
+        forceFullEvidence
+      ),
       restricted,
       fallback,
       draws: freeze(draws),
       recoveryStatus: recovery?.status ?? null,
       resolvedAtMs: allocation.accounted_at_ms,
     });
+  }
+
+  function readInternalAllocationResult(input) {
+    const scope = normalizeInternalAllocationResultInput(input);
+    try {
+      requirePublishedFad(scope);
+      const allocation = unique(
+        allocationByPlayerStatement,
+        scope,
+        "The protected FAD allocation result"
+      );
+      if (
+        !allocation ||
+        allocation.id !== scope.allocationId
+      ) {
+        incompatible(
+          "The exact protected FAD allocation result is unavailable."
+        );
+      }
+      return deepFreeze(
+        allocationResultProjection(allocation, scope, {
+          forceFullEvidence: true,
+        })
+      );
+    } catch (error) {
+      throw mapRepositoryError(error, {
+        operation: "readInternalFadAllocationResult",
+        tableName:
+          "free_agent_draft_player_allocations",
+      });
+    }
   }
 
   function readAllocationResults(input) {
@@ -5177,52 +5099,46 @@ function createSqliteFreeAgentDraftReadRepository({
     try {
       requireViewerAuthority(scope);
       requirePublishedFad(scope);
-      const rows = allocationResultPageStatement.all({
-        leagueId: scope.leagueId,
-        fadId: scope.fadId,
-        q: scope.query.q,
-        status: scope.query.status,
-        cursorSortName:
-          scope.query.cursor?.sortName ?? null,
-        cursorPlayerId:
-          scope.query.cursor?.playerId ?? null,
-        limitPlusOne: scope.query.limit + 1,
+      const snapshot = requirePublishedSnapshot({
+        ...scope,
+        teamId: scope.query.teamId,
       });
-      const hasMore =
-        rows.length > scope.query.limit;
-      const pageRows = rows.slice(
-        0,
-        scope.query.limit
-      );
-      for (const row of pageRows) {
-        if (
-          typeof row.player_sort_name !== "string" ||
-          normalizeCandidateEligiblePlayerName(
-            row.player_full_name
-          ) !== row.player_sort_name
-        ) {
-          incompatible(
-            "FAD result player ordering evidence is invalid."
-          );
-        }
-      }
+      const cursor = scope.query.cursor;
+      const rows = selectedTeamResults(snapshot, scope)
+        .map((result) => ({
+          result,
+          sortName: normalizeCandidateEligiblePlayerName(
+            result.player.fullName
+          ),
+        }))
+        .filter(
+          ({ result, sortName }) =>
+            (scope.query.q === "" ||
+              sortName.includes(scope.query.q)) &&
+            (scope.query.status === null ||
+              result.status === scope.query.status) &&
+            (cursor === null ||
+              sortName > cursor.sortName ||
+              (sortName === cursor.sortName &&
+                result.player.playerId > cursor.playerId))
+        );
+      const hasMore = rows.length > scope.query.limit;
+      const pageRows = rows.slice(0, scope.query.limit);
       const last =
         hasMore && pageRows.length > 0
           ? pageRows.at(-1)
           : null;
       return deepFreeze({
-        data: pageRows.map(
-          allocationResultProjection
-        ),
+        data: pageRows.map(({ result }) => result),
         page: {
           nextCursor:
             last === null
               ? null
               : encodePublishedCursor(
                   scope.query.filter,
-                  last.player_sort_name,
+                  last.sortName,
                   "playerId",
-                  last.player_id
+                  last.result.player.playerId
                 ),
           hasMore,
         },
@@ -5234,6 +5150,10 @@ function createSqliteFreeAgentDraftReadRepository({
           "free_agent_draft_player_allocations",
       });
     }
+  }
+
+  if (internalOnly) {
+    return Object.freeze({ readInternalAllocationResult });
   }
 
   const repository = {
@@ -5264,4 +5184,12 @@ module.exports = {
   FREE_AGENT_DRAFT_READ_REPOSITORY_CODES,
   FREE_AGENT_DRAFT_READ_REPOSITORY_METHODS,
   createSqliteFreeAgentDraftReadRepository,
+  createSqliteFreeAgentDraftInternalReadRepository(
+    options
+  ) {
+    return createSqliteFreeAgentDraftReadRepository({
+      ...options,
+      internalOnly: true,
+    });
+  },
 };

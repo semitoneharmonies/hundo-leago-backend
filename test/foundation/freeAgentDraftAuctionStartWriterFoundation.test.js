@@ -1347,7 +1347,7 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
         id: replacementCommissionerMembership,
         league_id: PRIMARY.league,
         user_id: replacementCommissionerUser,
-        permission_category: "commissioner",
+        permission_category: "member",
         status: "active",
         joined_at_ms: 1,
         ended_at_ms: null,
@@ -1376,6 +1376,26 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
         granted_at_ms: 1,
         ended_at_ms: null,
         version: 1,
+      });
+      fixture.database.prepare(`
+        UPDATE league_memberships
+        SET permission_category = 'member',
+            updated_at_ms = @updatedAtMs,
+            version = version + 1
+        WHERE id = @membershipId
+      `).run({
+        membershipId: PRIMARY.commissionerMembership,
+        updatedAtMs: CREATION_CUTOFF_AT_MS - 1,
+      });
+      fixture.database.prepare(`
+        UPDATE league_memberships
+        SET permission_category = 'commissioner',
+            updated_at_ms = @updatedAtMs,
+            version = version + 1
+        WHERE id = @membershipId
+      `).run({
+        membershipId: replacementCommissionerMembership,
+        updatedAtMs: CREATION_CUTOFF_AT_MS - 1,
       });
       fixture.database.prepare(`
         UPDATE leagues
@@ -1443,6 +1463,26 @@ describe("FAD-13 SQLite auction start/queue writer", () => {
       `).run({
         endedAtMs: CREATION_CUTOFF_AT_MS + 1,
         roleId: administratorRole,
+      });
+      fixture.database.prepare(`
+        UPDATE league_memberships
+        SET permission_category = 'member',
+            updated_at_ms = @updatedAtMs,
+            version = version + 1
+        WHERE id = @membershipId
+      `).run({
+        membershipId: replacementCommissionerMembership,
+        updatedAtMs: CREATION_CUTOFF_AT_MS + 1,
+      });
+      fixture.database.prepare(`
+        UPDATE league_memberships
+        SET permission_category = 'commissioner',
+            updated_at_ms = @updatedAtMs,
+            version = version + 1
+        WHERE id = @membershipId
+      `).run({
+        membershipId: PRIMARY.commissionerMembership,
+        updatedAtMs: CREATION_CUTOFF_AT_MS + 1,
       });
       fixture.database.prepare(`
         UPDATE leagues

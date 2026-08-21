@@ -912,6 +912,7 @@ const TARGET_ENDPOINTS = Object.freeze([
     "/api/v1/notifications/:notificationId/read",
     "activityNotification",
   ],
+  ["POST", "/api/v1/notifications/read-batch", "activityNotification"],
   ["POST", "/api/v1/notifications/read-all", "activityNotification"],
   ["GET", "/api/v1/leagues/:leagueId/auctions", "auction"],
   [
@@ -997,6 +998,11 @@ const TARGET_ENDPOINTS = Object.freeze([
   [
     "POST",
     "/api/v1/leagues/:leagueId/trades/:tradeId/accept",
+    "trade",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/trades/:tradeId/approve",
     "trade",
   ],
   [
@@ -1117,6 +1123,21 @@ const TARGET_ENDPOINTS = Object.freeze([
   [
     "POST",
     "/api/v1/leagues/:leagueId/teams/:teamId/contracts/:contractId/buyout",
+    "rosterAction",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/teams/:teamId/prospects/:playerId/sign",
+    "rosterAction",
+  ],
+  [
+    "POST",
+    "/api/v1/leagues/:leagueId/teams/:teamId/prospects/:playerId/decline",
+    "rosterAction",
+  ],
+  [
+    "DELETE",
+    "/api/v1/leagues/:leagueId/teams/:teamId/prospect-rights/:playerId",
     "rosterAction",
   ],
   [
@@ -1748,11 +1769,13 @@ function createTargetRepositories({
     prospectDecisions: createSqliteProspectDecisionRepository({
       database,
       candidateCardSummerSynchronizer,
+      leagueOutboxWriter,
     }),
     rateLimits: createSqliteAuthenticationRateLimitRepository({ database }),
     rosterMovements: createSqliteRosterMovementRepository({
       database,
       candidateCardSummerSynchronizer,
+      leagueOutboxWriter,
     }),
     retentions: createSqliteRetentionRepository({
       database,
@@ -2805,6 +2828,8 @@ function createTargetServices({
       teamAuthorization,
       workspaceRepository: repositories.teamWorkspace,
       rosterMovementRepository: repositories.rosterMovements,
+      prospectDecisionRepository: repositories.prospectDecisions,
+      seasonRepository: repositories.context.repositories.seasons,
       buyoutRepository: repositories.buyouts,
       lateLockCoordinator,
       clock,

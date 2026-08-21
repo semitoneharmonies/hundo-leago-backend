@@ -35,8 +35,8 @@ const {
   adaptVerifiedSourceBundle,
 } = require("./sourceShapeAdapters");
 
-const REQUIRED_APPLICATION_TABLE_COUNT = 132;
-const REQUIRED_SCHEMA_VERSION = 52;
+const REQUIRED_APPLICATION_TABLE_COUNT = 133;
+const REQUIRED_SCHEMA_VERSION = 54;
 const STAGING_VERIFICATION_VERSION = 1;
 const STAGING_VERIFICATION_ERROR_CODES = Object.freeze({
   argumentInvalid: "STAGING_VERIFY_ARGUMENT_INVALID",

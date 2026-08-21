@@ -61,31 +61,16 @@ function createPreviewTradeAcceptanceService({
   repository,
   clock,
 } = {}) {
-  for (const method of ["requireActiveMembership", "requireCommissioner"]) {
-    assertMethod(
-      leagueAuthorization,
-      method,
-      "league membership and commissioner authorization"
-    );
-  }
+  assertMethod(
+    leagueAuthorization,
+    "requireActiveMembership",
+    "league membership authorization"
+  );
   assertMethod(teamAuthorization, "requireManager", "team-manager authorization");
   for (const method of ["findLifecycleParticipants", "previewAcceptance"]) {
     assertMethod(repository, method, "a read-only trade preview repository");
   }
   assertMethod(clock, "nowMs", "a clock");
-
-  function authority(authenticated, leagueId, receivingTeamId) {
-    try {
-      return leagueAuthorization.requireCommissioner(authenticated, leagueId);
-    } catch (error) {
-      if (error?.code !== "LEAGUE_COMMISSIONER_REQUIRED") throw error;
-    }
-    return teamAuthorization.requireManager(
-      authenticated,
-      leagueId,
-      receivingTeamId
-    );
-  }
 
   function preview({ leagueId, input, authenticated } = {}) {
     const body = validateTradeAcceptancePreviewInput(input);
@@ -100,7 +85,7 @@ function createPreviewTradeAcceptanceService({
     if (!Number.isSafeInteger(proposal.effective_deadline_at_ms)) {
       throw new TradeLifecyclePolicyError(TRADE_LIFECYCLE_CODES.stateInvalid);
     }
-    const actor = authority(
+    const actor = teamAuthorization.requireManager(
       authenticated,
       proposal.league_id,
       proposal.receiving_team_id

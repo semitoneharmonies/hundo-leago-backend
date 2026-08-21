@@ -95,6 +95,11 @@ function player(row, nowMs) {
     slotNumber: row.slot_number,
     displayOrder: row.display_order,
     onTradeBlock: row.trade_blocked === 1,
+    nhlTeamAbbreviation:
+      typeof row.nhl_team_abbreviation === "string" &&
+      row.nhl_team_abbreviation.length > 0
+        ? row.nhl_team_abbreviation
+        : null,
     injuredReserveEligible: injuredReserveEligible(row.source_payload_json),
     age: age(row.birth_date, nowMs),
     contract:
@@ -147,8 +152,9 @@ function evaluateTeamRosterLegality(record, categoryOverride = null) {
     if (moved) {
       const netAavCents = Math.max(
         0,
-        Number(moved.aav_cents || 0) -
-          Number(moved.retained_aav_cents || 0)
+        Number(
+          categoryOverride.contractAavCents ?? moved.aav_cents ?? 0
+        ) - Number(moved.retained_aav_cents || 0)
       );
       const wasActive = moved.roster_category === "Active";
       const becomesActive = categoryOverride.destinationCategory === "Active";
@@ -166,7 +172,11 @@ function evaluateTeamRosterLegality(record, categoryOverride = null) {
   for (const row of players) {
     if (
       ["Active", "Bench", "Injured Reserve"].includes(row.roster_category) &&
-      row.contract_id === null
+      row.contract_id === null &&
+      !(
+        categoryOverride?.ownershipId === row.ownership_id &&
+        categoryOverride.hasActiveContract === true
+      )
     ) {
       reasons.push({
         code: "ACTIVE_CONTRACT_MISSING",

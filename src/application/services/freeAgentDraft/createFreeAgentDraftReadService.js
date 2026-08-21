@@ -9,17 +9,10 @@ const MAXIMUM_CURSOR_CODE_POINTS = 1_024;
 const MAXIMUM_SEARCH_CODE_POINTS = 200;
 const DEFAULT_PAGE_SIZE = 50;
 const MAXIMUM_PAGE_SIZE = 100;
-const ALLOCATION_STATUSES = Object.freeze([
-  "pending",
-  "automatic_award",
-  "restricted_scheduled",
-  "restricted_active",
-  "restricted_fallback_open",
-  "restricted_resolved",
-  "fallback_open_resolved",
-  "no_valid_offer",
-  "invalid",
-  "correction_required",
+const RESULT_STATUSES = Object.freeze([
+  "signed",
+  "not_won",
+  "tied",
 ]);
 
 function invalid(message) {
@@ -188,19 +181,25 @@ function allocationQuery(value = {}) {
     "limit",
     "q",
     "status",
+    "teamId",
   ]);
+  if (!("teamId" in value)) {
+    invalid("The selected FAD result team is required.");
+  }
+  const teamId = stableId(value.teamId);
   const status = value.status ?? null;
   if (
     status !== null &&
-    !ALLOCATION_STATUSES.includes(status)
+    !RESULT_STATUSES.includes(status)
   ) {
-    invalid("The FAD allocation status is invalid.");
+    invalid("The FAD result status is invalid.");
   }
   return Object.freeze({
     cursor: cursor(value.cursor),
     limit: pageLimit(value.limit),
     q: searchText(value.q),
     status,
+    teamId,
   });
 }
 

@@ -1283,12 +1283,12 @@ function installedTargetEndpoints(routers) {
 }
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 118 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 118);
+  test("declares 123 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 123);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      118
+      123
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -1547,7 +1547,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const options = runtimeOptions(database);
     const runtime = createTargetRuntime(options);
     assert.equal(runtime.migrationState.status, "exact");
-    assert.equal(runtime.migrationState.userVersion, 52);
+    assert.equal(runtime.migrationState.userVersion, 54);
     assert.equal(
       typeof runtime.services.league.auctionResolution.resolveDue,
       "function"
@@ -2482,7 +2482,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 118);
+    assert.equal(TARGET_ENDPOINTS.length, 123);
   });
 
   test("runs FAD readiness through the composed target runtime and opens every Candidate Card atomically", async (t) => {
@@ -3742,17 +3742,23 @@ describe("M3-19 exact-schema target dependency composition", () => {
         leagueId: scenario.leagueId,
         fadId: lifecycleDraft.id,
         authenticated: commissioner,
-        query: {},
+        query: { teamId: scenario.teamIds[0] },
       });
     assert.equal(publishedResults.data.length, 1);
     assert.equal(
       publishedResults.data[0].status,
-      "automatic_award"
+      "signed"
     );
-    assert.equal(
-      publishedResults.data[0].winner.teamId,
-      scenario.teamIds[0]
-    );
+    assert.deepEqual(publishedResults.data[0], {
+      player: {
+        playerId,
+        fullName: "Candidate Runtime",
+        positionGroup: "F",
+      },
+      status: "signed",
+      offer: null,
+      tieAuctionId: null,
+    });
   });
 
   test("commits and exactly replays one Candidate help request through the composed target runtime", async (t) => {

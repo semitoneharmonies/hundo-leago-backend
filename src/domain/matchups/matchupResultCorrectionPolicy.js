@@ -108,13 +108,34 @@ function validateMatchupResultCorrectionIdempotencyKey(
 }
 
 function validateMatchupResultCorrectionPreviewInput(value) {
+  if (hasExactKeys(value, ["confirmed"]) && value.confirmed === false) {
+    return Object.freeze({ confirmed: false });
+  }
+  if (!isPlainObject(value) || value.confirmed !== false) {
+    fail("preview_body_invalid");
+  }
+  const hasWrittenReason = Object.prototype.hasOwnProperty.call(
+    value,
+    "reason"
+  );
   if (
-    !hasExactKeys(value, ["confirmed"]) ||
-    value.confirmed !== false
+    !hasExactKeys(value, [
+      "confirmed",
+      "homeScoreHundredths",
+      "awayScoreHundredths",
+      ...(hasWrittenReason ? ["reason"] : []),
+    ])
   ) {
     fail("preview_body_invalid");
   }
-  return Object.freeze({ confirmed: false });
+  const correction = validateMatchupResultCorrectionInput({
+    ...value,
+    confirmed: true,
+  });
+  return Object.freeze({
+    ...correction,
+    confirmed: false,
+  });
 }
 
 function validateMatchupResultCorrectionInput(value) {

@@ -52,6 +52,8 @@ function safeTeam(row) {
             assignmentId: row.manager_assignment_id,
             userId: row.manager_user_id,
             displayName: row.manager_display_name,
+            isProtectedPlatformAdministrator:
+              row.manager_is_platform_administrator === 1,
             acceptedAtMs: row.manager_accepted_at_ms,
             version: row.manager_assignment_version,
           }),

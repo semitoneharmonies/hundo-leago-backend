@@ -181,13 +181,26 @@ function existingPathComponents(value) {
 }
 
 function fileIdentity(stat) {
+  if (
+    typeof stat?.dev !== "bigint" ||
+    typeof stat.ino !== "bigint" ||
+    typeof stat.birthtimeNs !== "bigint" ||
+    typeof stat.size !== "bigint" ||
+    stat.size < 0n ||
+    typeof stat.mtimeNs !== "bigint" ||
+    typeof stat.ctimeNs !== "bigint"
+  ) {
+    throw new TypeError(
+      "File identity requires exact BigInt filesystem metadata."
+    );
+  }
   return Object.freeze({
     dev: stat.dev,
     ino: stat.ino,
-    birthtimeMs: stat.birthtimeMs,
+    birthtimeNs: stat.birthtimeNs,
     size: stat.size,
-    mtimeMs: stat.mtimeMs,
-    ctimeMs: stat.ctimeMs,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
   });
 }
 
@@ -197,10 +210,10 @@ function sameFileIdentity(left, right) {
     right &&
     left.dev === right.dev &&
     left.ino === right.ino &&
-    (left.ino !== 0 || left.birthtimeMs === right.birthtimeMs) &&
+    (left.ino !== 0n || left.birthtimeNs === right.birthtimeNs) &&
     left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.ctimeMs === right.ctimeMs
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
   );
 }
 
@@ -216,7 +229,7 @@ function assertDatabaseFileIdentity({
   let stat;
   let physicalPath;
   try {
-    stat = fsModule.lstatSync(databasePath);
+    stat = fsModule.lstatSync(databasePath, { bigint: true });
     physicalPath = fsModule.realpathSync.native(databasePath);
   } catch {
     fail(errorCode);
@@ -260,7 +273,9 @@ function validateDatabasePath({
       }
     }
     const rootStat = fsModule.lstatSync(persistentRoot);
-    const databaseStat = fsModule.lstatSync(databasePath);
+    const databaseStat = fsModule.lstatSync(databasePath, {
+      bigint: true,
+    });
     const physicalRoot = fsModule.realpathSync.native(persistentRoot);
     const physicalDatabase = fsModule.realpathSync.native(databasePath);
     if (
@@ -339,7 +354,9 @@ function hashGuardedFile({
     if (
       !sameFileIdentity(
         expectedIdentity,
-        fileIdentity(fsModule.fstatSync(descriptor))
+        fileIdentity(
+          fsModule.fstatSync(descriptor, { bigint: true })
+        )
       )
     ) {
       operationFailed = true;
@@ -544,7 +561,9 @@ function createDiscoverySnapshot({
       fsModule,
     });
 
-    const snapshotStat = fsModule.lstatSync(snapshotPath);
+    const snapshotStat = fsModule.lstatSync(snapshotPath, {
+      bigint: true,
+    });
     const physicalSnapshot = fsModule.realpathSync.native(snapshotPath);
     if (
       !snapshotStat.isFile() ||

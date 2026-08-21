@@ -368,6 +368,95 @@ function publicationEntries(reportRoot) {
     );
 }
 
+function statWithOverrides(stat, overrides) {
+  return Object.create(
+    stat,
+    Object.fromEntries(
+      Object.entries(overrides).map(
+        ([key, value]) => [
+          key,
+          {
+            configurable: true,
+            enumerable: true,
+            value,
+          },
+        ]
+      )
+    )
+  );
+}
+
+function publishWithReleaseStatOverrides(
+  t,
+  suffix,
+  {
+    ownerOverrides,
+    linkedOverrides = ownerOverrides,
+    quarantineOverrides,
+  }
+) {
+  const runtime = fixture(t, suffix);
+  const observed = {
+    descriptorOptions: [],
+    descriptorModeTypes: [],
+    linkedOptions: [],
+    linkedModeTypes: [],
+    quarantineOptions: [],
+    quarantineModeTypes: [],
+  };
+  const identityFs = Object.create(fs);
+  identityFs.fstatSync = (descriptor, options) => {
+    const stat = fs.fstatSync(descriptor, options);
+    observed.descriptorOptions.push(options);
+    observed.descriptorModeTypes.push(typeof stat.mode);
+    return statWithOverrides(
+      stat,
+      ownerOverrides(stat, options)
+    );
+  };
+  identityFs.lstatSync = (filePath, options) => {
+    const stat = fs.lstatSync(filePath, options);
+    if (filePath.endsWith(".publish.lock")) {
+      observed.linkedOptions.push(options);
+      observed.linkedModeTypes.push(typeof stat.mode);
+      return statWithOverrides(
+        stat,
+        linkedOverrides(stat, options)
+      );
+    }
+    if (
+      filePath.includes(".publish.lock.release-")
+    ) {
+      observed.quarantineOptions.push(options);
+      observed.quarantineModeTypes.push(
+        typeof stat.mode
+      );
+      return statWithOverrides(
+        stat,
+        quarantineOverrides(stat, options)
+      );
+    }
+    return stat;
+  };
+
+  const created = publishResetImportVerificationArtifact({
+    ...runtime.options,
+    fsModule: identityFs,
+  });
+  const lockPath = path.join(
+    runtime.reportsRoot,
+    `.${path.basename(
+      created.artifactDirectory
+    )}.publish.lock`
+  );
+  return {
+    created,
+    lockPath,
+    observed,
+    runtime,
+  };
+}
+
 function readArtifact(runtime, artifactDirectory) {
   return readResetImportVerificationArtifact({
     ...runtime.options,
@@ -1391,6 +1480,42 @@ describe("FAD-04 pristine reset verification artifact", () => {
     );
   });
 
+  test("a post-write identity refresh failure removes the owned partial lock", (t) => {
+    const runtime = fixture(
+      t,
+      "lock-identity-refresh-failure"
+    );
+    let fstatCalls = 0;
+    const failingFs = Object.create(fs);
+    failingFs.fstatSync = (descriptor, options) => {
+      fstatCalls += 1;
+      assert.deepEqual(options, { bigint: true });
+      if (fstatCalls === 2) {
+        throw new Error(
+          "synthetic identity refresh failure"
+        );
+      }
+      return fs.fstatSync(descriptor, options);
+    };
+
+    assert.throws(
+      () =>
+        publishResetImportVerificationArtifact({
+          ...runtime.options,
+          fsModule: failingFs,
+        }),
+      artifactCode(
+        RESET_IMPORT_ARTIFACT_ERROR_CODES
+          .publicationFailed
+      )
+    );
+    assert.equal(fstatCalls, 2);
+    assert.deepEqual(
+      publicationEntries(runtime.reportsRoot),
+      []
+    );
+  });
+
   test("an exclusive-lock race never replaces a nonexact final directory", (t) => {
     const runtime = fixture(t, "race");
     let racedArtifactDirectory = null;
@@ -1581,6 +1706,195 @@ describe("FAD-04 pristine reset verification artifact", () => {
       publicationEntries(runtime.reportsRoot),
       [path.basename(created.artifactDirectory)]
     );
+  });
+
+  test("publication lock release preserves distinct BigInt inodes that collide as Numbers", (t) => {
+    const roundedIdentity = 9_007_199_254_740_992n;
+    const distinctIdentity = roundedIdentity + 1n;
+    assert.equal(
+      Number(roundedIdentity),
+      Number(distinctIdentity)
+    );
+    const exactOrRounded = (value, options) =>
+      options?.bigint === true ? value : Number(value);
+
+    const result = publishWithReleaseStatOverrides(
+      t,
+      "inode-precision-collision",
+      {
+        ownerOverrides(_stat, options) {
+          return {
+            dev: exactOrRounded(1n, options),
+            ino: exactOrRounded(
+              roundedIdentity,
+              options
+            ),
+          };
+        },
+        quarantineOverrides(_stat, options) {
+          return {
+            dev: exactOrRounded(1n, options),
+            ino: exactOrRounded(
+              distinctIdentity,
+              options
+            ),
+          };
+        },
+      }
+    );
+
+    assert.equal(result.created.replayed, false);
+    assert.deepEqual(
+      result.observed.descriptorOptions,
+      [
+        { bigint: true },
+        { bigint: true },
+      ]
+    );
+    assert.deepEqual(
+      result.observed.linkedOptions,
+      [{ bigint: true }]
+    );
+    assert.deepEqual(
+      result.observed.quarantineOptions,
+      [{ bigint: true }]
+    );
+    assert.deepEqual(
+      result.observed.descriptorModeTypes,
+      ["bigint", "bigint"]
+    );
+    assert.deepEqual(
+      result.observed.linkedModeTypes,
+      ["bigint"]
+    );
+    assert.deepEqual(
+      result.observed.quarantineModeTypes,
+      ["bigint"]
+    );
+    assert.equal(fs.existsSync(result.lockPath), true);
+    assert.deepEqual(
+      publicationEntries(result.runtime.reportsRoot)
+        .sort(),
+      [
+        path.basename(result.created.artifactDirectory),
+        path.basename(result.lockPath),
+      ].sort()
+    );
+  });
+
+  test("zero-inode lock identity falls back to exact nanosecond birth time", (t) => {
+    const roundedBirthtimeNs =
+      9_007_199_254_740_992n;
+    const distinctBirthtimeNs =
+      roundedBirthtimeNs + 1n;
+    assert.equal(
+      Number(roundedBirthtimeNs),
+      Number(distinctBirthtimeNs)
+    );
+    const exactOrRounded = (value, options) =>
+      options?.bigint === true ? value : Number(value);
+
+    const result = publishWithReleaseStatOverrides(
+      t,
+      "zero-inode-birthtime-precision",
+      {
+        ownerOverrides(_stat, options) {
+          return {
+            dev: exactOrRounded(1n, options),
+            ino: exactOrRounded(0n, options),
+            birthtimeNs: exactOrRounded(
+              roundedBirthtimeNs,
+              options
+            ),
+          };
+        },
+        quarantineOverrides(_stat, options) {
+          return {
+            dev: exactOrRounded(1n, options),
+            ino: exactOrRounded(0n, options),
+            birthtimeNs: exactOrRounded(
+              distinctBirthtimeNs,
+              options
+            ),
+          };
+        },
+      }
+    );
+
+    assert.equal(result.created.replayed, false);
+    assert.deepEqual(
+      result.observed.descriptorOptions,
+      [
+        { bigint: true },
+        { bigint: true },
+      ]
+    );
+    assert.deepEqual(
+      result.observed.linkedOptions,
+      [{ bigint: true }]
+    );
+    assert.deepEqual(
+      result.observed.quarantineOptions,
+      [{ bigint: true }]
+    );
+    assert.equal(fs.existsSync(result.lockPath), true);
+  });
+
+  test("completed lock release preserves a nanosecond stability change hidden by Number rounding", (t) => {
+    const roundedChangeTimeNs =
+      9_007_199_254_740_992n;
+    const distinctChangeTimeNs =
+      roundedChangeTimeNs + 1n;
+    assert.equal(
+      Number(roundedChangeTimeNs),
+      Number(distinctChangeTimeNs)
+    );
+    const exactOrRounded = (value, options) =>
+      options?.bigint === true ? value : Number(value);
+
+    const result = publishWithReleaseStatOverrides(
+      t,
+      "ctime-precision-collision",
+      {
+        ownerOverrides(_stat, options) {
+          return {
+            ctimeNs: exactOrRounded(
+              roundedChangeTimeNs,
+              options
+            ),
+          };
+        },
+        linkedOverrides(_stat, options) {
+          return {
+            ctimeNs: exactOrRounded(
+              distinctChangeTimeNs,
+              options
+            ),
+          };
+        },
+        quarantineOverrides() {
+          return {};
+        },
+      }
+    );
+
+    assert.equal(result.created.replayed, false);
+    assert.deepEqual(
+      result.observed.descriptorOptions,
+      [
+        { bigint: true },
+        { bigint: true },
+      ]
+    );
+    assert.deepEqual(
+      result.observed.linkedOptions,
+      [{ bigint: true }]
+    );
+    assert.deepEqual(
+      result.observed.quarantineOptions,
+      []
+    );
+    assert.equal(fs.existsSync(result.lockPath), true);
   });
 
   test("a delayed owner never removes a replacement publication lock", (t) => {
@@ -2103,7 +2417,7 @@ describe("FAD-04 reset original-league bootstrap service", () => {
           code:
             "RESET_ORIGINAL_LEAGUE_BOOTSTRAPPED",
           leagueId: created.leagueId,
-          schemaVersion: 52,
+          schemaVersion: 54,
           seasonId: created.seasonId,
           stateHash: created.stateHash,
         });

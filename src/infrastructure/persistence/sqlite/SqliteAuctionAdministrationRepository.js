@@ -33,6 +33,12 @@ const {
   "../../../domain/freeAgentDraft/freeAgentDraftActivityContracts"
 );
 const {
+  FreeAgentDraftCorrectionPolicyError,
+  projectFreeAgentDraftAllocationResultForPublic,
+} = require(
+  "../../../domain/freeAgentDraft/freeAgentDraftCorrectionPolicy"
+);
+const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
   repositoryError,
@@ -41,7 +47,7 @@ const {
   createSqliteAuctionReadRepository,
 } = require("./SqliteAuctionReadRepository");
 const {
-  createSqliteFreeAgentDraftReadRepository,
+  createSqliteFreeAgentDraftInternalReadRepository,
 } = require("./SqliteFreeAgentDraftReadRepository");
 const {
   resolveSqliteLeagueOutboxWriter,
@@ -49,11 +55,6 @@ const {
 const {
   resolveSqliteNotificationWriter,
 } = require("./SqliteNotificationWriter");
-const {
-  normalizeCandidateEligiblePlayerName,
-} = require(
-  "../../../domain/freeAgentDraft/candidateEligiblePlayerSearchPolicy"
-);
 
 const JOB_TYPE = "auction.resolve.target";
 const RESULT_TYPE = "auction_administration_command_result";
@@ -440,6 +441,35 @@ function storedResultRecord(row) {
   });
 }
 
+function publicStoredResultData(stored) {
+  if (
+    stored.action !== "cancel_auction" ||
+    stored.data.fadAllocation === null ||
+    stored.data.fadAllocation === undefined
+  ) {
+    return stored.data;
+  }
+  try {
+    return deepFreeze({
+      ...stored.data,
+      fadAllocation:
+        projectFreeAgentDraftAllocationResultForPublic(
+          stored.data.fadAllocation
+        ),
+    });
+  } catch (error) {
+    if (
+      error instanceof FreeAgentDraftCorrectionPolicyError
+    ) {
+      throw repositoryError(
+        REPOSITORY_ERROR_CODES.schemaIncompatible,
+        "The stored FAD auction cancellation allocation cannot be safely projected."
+      );
+    }
+    throw error;
+  }
+}
+
 function safeResult(row, replayed) {
   const stored = storedResultRecord(row);
   return deepFreeze({
@@ -447,7 +477,7 @@ function safeResult(row, replayed) {
     action: stored.action,
     actorAuthority: stored.actorAuthority,
     httpStatus: stored.responseHttpStatus,
-    data: stored.data,
+    data: publicStoredResultData(stored),
     evidence: {
       resultId: stored.id,
       idempotencyRequestId:
@@ -540,8 +570,8 @@ function createSqliteAuctionAdministrationRepository({
   let transaction;
   const auctionReadRepository =
     createSqliteAuctionReadRepository({ database });
-  const freeAgentDraftReadRepository =
-    createSqliteFreeAgentDraftReadRepository({
+  const freeAgentDraftInternalReadRepository =
+    createSqliteFreeAgentDraftInternalReadRepository({
       database,
     });
   const outboxWriter = resolveSqliteLeagueOutboxWriter({
@@ -1617,47 +1647,16 @@ function createSqliteAuctionAdministrationRepository({
   }
 
   function projectFadAllocation(command, auction) {
-    let cursor = null;
-    for (let page = 0; page < 100; page += 1) {
-      const result =
-        freeAgentDraftReadRepository.readAllocationResults({
-          leagueId: auction.league_id,
-          fadId: auction.fad_id,
-          viewerUserId: command.actorUserId,
-          viewerMembershipId:
-            command.actorMembershipId,
-          nowMs: command.occurredAtMs,
-          query: {
-            q: normalizeCandidateEligiblePlayerName(
-              auction.player_full_name
-            ),
-            status: null,
-            limit: 100,
-            cursor,
-          },
-        });
-      const allocation = result.data.find(
-        (item) =>
-          item.allocationId ===
-          auction.fad_allocation_id
-      );
-      if (allocation) return allocation;
-      if (!result.page.hasMore) break;
-      if (
-        typeof result.page.nextCursor !== "string" ||
-        result.page.nextCursor === cursor
-      ) {
-        throw repositoryError(
-          REPOSITORY_ERROR_CODES.schemaIncompatible,
-          "The administered FAD allocation cursor is invalid."
-        );
-      }
-      cursor = result.page.nextCursor;
-    }
-    throw repositoryError(
-      REPOSITORY_ERROR_CODES.schemaIncompatible,
-      "The administered FAD allocation result is unavailable."
-    );
+    return freeAgentDraftInternalReadRepository
+      .readInternalAllocationResult({
+        allocationId: auction.fad_allocation_id,
+        fadId: auction.fad_id,
+        leagueId: auction.league_id,
+        nowMs: command.occurredAtMs,
+        playerId: auction.player_id,
+        viewerMembershipId: command.actorMembershipId,
+        viewerUserId: command.actorUserId,
+      });
   }
 
   function restrictedCancellationContext(
@@ -2845,7 +2844,10 @@ function createSqliteAuctionAdministrationRepository({
     }
     const responseData = deepFreeze({
       auction: auctionProjection,
-      fadAllocation: allocationProjection,
+      fadAllocation:
+        projectFreeAgentDraftAllocationResultForPublic(
+          allocationProjection
+        ),
       recoveryId,
     });
     return persistResult({

@@ -1785,6 +1785,22 @@ function retryBlockedReadiness(database, {
 }
 
 function changeCommissioner(database) {
+  assert.equal(
+    database.prepare(`
+      UPDATE league_memberships
+      SET permission_category = 'manager',
+          updated_at_ms = updated_at_ms + 1,
+          version = version + 1
+      WHERE league_id = ?
+        AND id = ?
+        AND status = 'active'
+        AND permission_category = 'commissioner'
+    `).run(
+      IDS.league,
+      IDS.membership
+    ).changes,
+    1
+  );
   database.prepare(`
     INSERT INTO users (
       id,

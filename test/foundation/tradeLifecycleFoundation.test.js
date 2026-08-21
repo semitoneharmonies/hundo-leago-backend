@@ -76,6 +76,8 @@ function context(overrides = {}) {
     assignment_status: "accepted",
     assignment_accepted_at_ms: 500,
     assignment_ended_at_ms: null,
+    is_platform_administrator: 0,
+    has_future_considerations: 1,
     ...overrides,
   };
 }
@@ -150,21 +152,36 @@ describe("M5-07 trade lifecycle policy", () => {
     );
   });
 
-  test("allows explicit commissioner authority during a freeze", () => {
+  test("denies commissioner decline and cancellation authority", () => {
     const commissioner = command({ actorAuthority: "commissioner" });
-    assert.equal(
-      assertTradeLifecycleState({
-        command: commissioner,
-        context: context({
-          league_status: "frozen",
-          commissioner_membership_id: IDS.membership,
-          membership_permission: "commissioner",
-          assignment_team_id: null,
-          assignment_status: null,
-          assignment_accepted_at_ms: null,
+    assertReason(
+      () =>
+        assertTradeLifecycleState({
+          command: commissioner,
+          context: context({
+            commissioner_membership_id: IDS.membership,
+            membership_permission: "commissioner",
+          }),
         }),
-      }),
-      true
+      TRADE_LIFECYCLE_CODES.roleDenied
+    );
+    assertReason(
+      () =>
+        assertTradeLifecycleState({
+          command: command({
+            action: "cancel",
+            actorAuthority: "commissioner",
+          }),
+          context: context({
+            league_status: "frozen",
+            commissioner_membership_id: IDS.membership,
+            membership_permission: "commissioner",
+            assignment_team_id: null,
+            assignment_status: null,
+            assignment_accepted_at_ms: null,
+          }),
+        }),
+      TRADE_LIFECYCLE_CODES.roleDenied
     );
     assertReason(
       () =>
@@ -177,6 +194,15 @@ describe("M5-07 trade lifecycle policy", () => {
   });
 
   test("rejects terminal proposals and the exact effective deadline", () => {
+    assert.equal(
+      assertTradeLifecycleState({
+        command: command(),
+        context: context({
+          trade_status: "awaiting_commissioner_approval",
+        }),
+      }),
+      true
+    );
     assertReason(
       () =>
         assertTradeLifecycleState({
@@ -215,6 +241,15 @@ describe("M5-07 trade lifecycle policy", () => {
       assertTradeExpiryState({ command: expiry, context: context() }),
       true
     );
+    assert.equal(
+      assertTradeExpiryState({
+        command: expiry,
+        context: context({
+          trade_status: "awaiting_commissioner_approval",
+        }),
+      }),
+      true
+    );
     assertReason(
       () =>
         validateTradeExpiryCommand({
@@ -225,7 +260,7 @@ describe("M5-07 trade lifecycle policy", () => {
     );
   });
 
-  test("limits acceptance preview to the receiver or explicit commissioner", () => {
+  test("limits executable acceptance preview to the receiving manager", () => {
     assert.deepEqual(validateTradeAcceptancePreviewInput({ tradeId: IDS.trade }), {
       tradeId: IDS.trade,
     });
@@ -244,17 +279,21 @@ describe("M5-07 trade lifecycle policy", () => {
         }),
       TRADE_LIFECYCLE_CODES.roleDenied
     );
+    assertReason(
+      () =>
+        assertTradeAcceptancePreviewState({
+          command: acceptanceCommand({ actorAuthority: "commissioner" }),
+          context: context({
+            commissioner_membership_id: IDS.membership,
+            membership_permission: "commissioner",
+          }),
+        }),
+      TRADE_LIFECYCLE_CODES.roleDenied
+    );
     assert.equal(
       assertTradeAcceptancePreviewState({
-        command: acceptanceCommand({ actorAuthority: "commissioner" }),
-        context: context({
-          league_status: "frozen",
-          commissioner_membership_id: IDS.membership,
-          membership_permission: "commissioner",
-          assignment_team_id: null,
-          assignment_status: null,
-          assignment_accepted_at_ms: null,
-        }),
+        command: acceptanceCommand(),
+        context: context({ membership_permission: "commissioner" }),
       }),
       true
     );

@@ -414,7 +414,9 @@ test("replays exact bytes deterministically without replacing the file or foreig
   const store = runtime.createStore();
   const artifact = runtime.artifacts[0];
   store.publish(publicationInput(runtime, artifact));
-  const before = fs.statSync(runtime.artifactPath);
+  const before = fs.statSync(runtime.artifactPath, {
+    bigint: true,
+  });
   const foreignLock = "foreign-active-lock";
   fs.writeFileSync(runtime.lockPath, foreignLock, {
     mode: SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_FILE_MODE,
@@ -423,7 +425,9 @@ test("replays exact bytes deterministically without replacing the file or foreig
   const replay = store.publish(
     publicationInput(runtime, artifact)
   );
-  const after = fs.statSync(runtime.artifactPath);
+  const after = fs.statSync(runtime.artifactPath, {
+    bigint: true,
+  });
 
   assert.equal(replay.status, "replayed");
   assert.equal(before.dev, after.dev);
@@ -435,12 +439,16 @@ test("atomically replaces one valid artifact and leaves no owned temporary state
   const runtime = fixture(t);
   const store = runtime.createStore();
   store.publish(publicationInput(runtime, runtime.artifacts[0]));
-  const prior = fs.statSync(runtime.artifactPath);
+  const prior = fs.statSync(runtime.artifactPath, {
+    bigint: true,
+  });
 
   const replaced = store.publish(
     publicationInput(runtime, runtime.artifacts[1])
   );
-  const current = fs.statSync(runtime.artifactPath);
+  const current = fs.statSync(runtime.artifactPath, {
+    bigint: true,
+  });
 
   assert.equal(replaced.status, "replaced");
   assert.notEqual(prior.ino, current.ino);
@@ -449,6 +457,106 @@ test("atomically replaces one valid artifact and leaves no owned temporary state
     runtime.artifacts[1].evidenceSha256
   );
   assert.deepEqual(artifactLeftovers(runtime), []);
+});
+
+test("rejects distinct BigInt identities that collapse to the same Number", (t) => {
+  const runtime = fixture(t);
+  const baseStore = runtime.createStore();
+  baseStore.publish(
+    publicationInput(runtime, runtime.artifacts[0])
+  );
+  const roundedIdentity = 9_007_199_254_740_992n;
+  const distinctIdentity = roundedIdentity + 1n;
+  assert.equal(
+    Number(roundedIdentity),
+    Number(distinctIdentity)
+  );
+
+  const collisionFs = Object.create(fs);
+  let exactPathStats = 0;
+  let exactDescriptorStats = 0;
+  collisionFs.lstatSync = (filePath, options) => {
+    const stat = fs.lstatSync(filePath, options);
+    if (
+      filePath === runtime.artifactPath &&
+      options?.bigint === true
+    ) {
+      exactPathStats += 1;
+      return Object.create(stat, {
+        dev: { value: 1n },
+        ino: { value: roundedIdentity },
+      });
+    }
+    return stat;
+  };
+  collisionFs.fstatSync = (descriptor, options) => {
+    const stat = fs.fstatSync(descriptor, options);
+    if (options?.bigint === true) {
+      exactDescriptorStats += 1;
+      return Object.create(stat, {
+        dev: { value: 1n },
+        ino: { value: distinctIdentity },
+      });
+    }
+    return stat;
+  };
+  const collisionStore = runtime.createStore({
+    fsModule: collisionFs,
+  });
+
+  assertArtifactError(
+    () => collisionStore.readAndVerify(readInput(runtime)),
+    SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_ERROR_CODES
+      .verificationFailed
+  );
+  assert.equal(exactPathStats, 1);
+  assert.equal(exactDescriptorStats, 1);
+});
+
+test("rejects nanosecond timestamp drift hidden by Number rounding", (t) => {
+  const runtime = fixture(t);
+  const baseStore = runtime.createStore();
+  baseStore.publish(
+    publicationInput(runtime, runtime.artifacts[0])
+  );
+  const roundedTimestamp = 9_007_199_254_740_992n;
+  const distinctTimestamp = roundedTimestamp + 1n;
+  assert.equal(
+    Number(roundedTimestamp),
+    Number(distinctTimestamp)
+  );
+
+  const driftingFs = Object.create(fs);
+  driftingFs.lstatSync = (filePath, options) => {
+    const stat = fs.lstatSync(filePath, options);
+    if (
+      filePath === runtime.artifactPath &&
+      options?.bigint === true
+    ) {
+      return Object.create(stat, {
+        mtimeNs: { value: roundedTimestamp },
+      });
+    }
+    return stat;
+  };
+  driftingFs.fstatSync = (descriptor, options) => {
+    const stat = fs.fstatSync(descriptor, options);
+    if (options?.bigint === true) {
+      return Object.create(stat, {
+        mtimeNs: { value: distinctTimestamp },
+      });
+    }
+    return stat;
+  };
+  const driftingStore = runtime.createStore({
+    fsModule: driftingFs,
+  });
+
+  assertArtifactError(
+    () => driftingStore.readAndVerify(readInput(runtime)),
+    SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_ERROR_CODES
+      .verificationFailed
+  );
 });
 
 test("every publication failure seam removes a new artifact and only owned files", async (t) => {
@@ -486,7 +594,9 @@ test("every publication failure seam preserves the prior valid artifact byte-for
         publicationInput(runtime, runtime.artifacts[0])
       );
       const priorRaw = fs.readFileSync(runtime.artifactPath);
-      const priorStat = fs.statSync(runtime.artifactPath);
+      const priorStat = fs.statSync(runtime.artifactPath, {
+        bigint: true,
+      });
       const failingStore = runtime.createStore({
         failureInjector(step) {
           if (step === seam) throw new Error("private injected failure");
@@ -516,7 +626,12 @@ test("every publication failure seam preserves the prior valid artifact byte-for
         "directory_fsynced",
         "final_reread_verified",
       ].includes(seam)) {
-        assert.equal(fs.statSync(runtime.artifactPath).ino, priorStat.ino);
+        assert.equal(
+          fs.statSync(runtime.artifactPath, {
+            bigint: true,
+          }).ino,
+          priorStat.ino
+        );
       }
       assert.deepEqual(artifactLeftovers(runtime), []);
     });
@@ -763,8 +878,8 @@ test("simulated reparse metadata fails closed when host symlink privileges are u
     mode: SPORTS_DATA_IO_LIVE_CAPABILITY_ARTIFACT_DIRECTORY_MODE,
   });
   const parentReparseFs = Object.create(fs);
-  parentReparseFs.lstatSync = (filePath) => {
-    const stat = fs.lstatSync(filePath);
+  parentReparseFs.lstatSync = (filePath, options) => {
+    const stat = fs.lstatSync(filePath, options);
     if (filePath === runtime.artifactDirectory) {
       return Object.create(stat, {
         isSymbolicLink: {
@@ -785,8 +900,8 @@ test("simulated reparse metadata fails closed when host symlink privileges are u
     publicationInput(runtime, runtime.artifacts[0])
   );
   const targetReparseFs = Object.create(fs);
-  targetReparseFs.lstatSync = (filePath) => {
-    const stat = fs.lstatSync(filePath);
+  targetReparseFs.lstatSync = (filePath, options) => {
+    const stat = fs.lstatSync(filePath, options);
     if (filePath === runtime.artifactPath) {
       return Object.create(stat, {
         isSymbolicLink: {

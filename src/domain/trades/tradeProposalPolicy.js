@@ -141,7 +141,6 @@ function assertTradeProposalFoundationState({ command, context } = {}) {
     command.actorAuthority === "manager" &&
     context.league_status === "active" &&
     context.membership_status === "active" &&
-    context.membership_permission === "manager" &&
     context.assignment_status === "accepted" &&
     context.assignment_ended_at_ms === null;
   const commissionerAuthorized =
@@ -175,6 +174,13 @@ function assertTradeProposalFoundationState({ command, context } = {}) {
   return true;
 }
 
+function assertNewTradeProposalCreationAuthority(command) {
+  if (!command || command.actorAuthority !== "manager") {
+    fail(TRADE_PROPOSAL_FOUNDATION_CODES.authorizationDenied);
+  }
+  return true;
+}
+
 function deriveTradeProposalTiming({ createdAtMs, tradeDeadlineAtMs } = {}) {
   const created = safeTimestamp(createdAtMs);
   const tradeDeadline = safeTimestamp(tradeDeadlineAtMs);
@@ -196,6 +202,7 @@ function deriveTradeProposalTiming({ createdAtMs, tradeDeadlineAtMs } = {}) {
 
 const STATUS_LABELS = Object.freeze({
   proposed: "Pending",
+  awaiting_commissioner_approval: "Awaiting Commissioner Approval",
   accepted: "Accepted",
   declined: "Rejected",
   cancelled: "Cancelled",
@@ -259,6 +266,7 @@ module.exports = {
   TRADE_PROPOSAL_FOUNDATION_CODES,
   TRADE_PROPOSAL_LIFETIME_MS,
   TradeProposalFoundationPolicyError,
+  assertNewTradeProposalCreationAuthority,
   assertTradeProposalFoundationState,
   deriveTradeProposalTiming,
   projectTradeProposalRow,

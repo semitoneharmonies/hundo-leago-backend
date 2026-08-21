@@ -113,6 +113,21 @@ function validPreview(overrides = {}) {
   });
 }
 
+function prematurelyRedactedPreview() {
+  const preview = structuredClone(validPreview());
+  for (const decisionValue of [
+    preview.currentDecision,
+    preview.recomputedDecision,
+  ]) {
+    for (const offer of decisionValue.rankedOffers) {
+      offer.totalValueCents = null;
+      offer.termYears = null;
+      offer.aavCents = null;
+    }
+  }
+  return preview;
+}
+
 function input(overrides = {}) {
   return {
     allocationId: IDS.allocation,
@@ -172,12 +187,48 @@ describe("Free Agent Draft correction-preview service foundation", () => {
     );
   });
 
-  test("authorizes and returns the exact canonical read-only preview", () => {
-    const harness = createHarness();
+  test("strictly validates full evidence before returning a deeply frozen money-null preview", () => {
+    const fullPreview = validPreview();
+    const harness = createHarness({
+      repositoryResult: fullPreview,
+    });
     const result = harness.service.preview(input());
 
-    assert.deepEqual(result, validPreview());
+    assert.equal(
+      result.previewFingerprint,
+      fullPreview.previewFingerprint
+    );
+    for (const decisionValue of [
+      result.currentDecision,
+      result.recomputedDecision,
+    ]) {
+      assert.deepEqual(
+        decisionValue.rankedOffers.map(
+          ({ totalValueCents, termYears, aavCents }) => ({
+            totalValueCents,
+            termYears,
+            aavCents,
+          })
+        ),
+        [
+          {
+            totalValueCents: null,
+            termYears: null,
+            aavCents: null,
+          },
+        ]
+      );
+    }
+    assert.equal(
+      fullPreview.currentDecision.rankedOffers[0]
+        .totalValueCents,
+      600
+    );
     assert.equal(Object.isFrozen(result), true);
+    assert.equal(
+      Object.isFrozen(result.currentDecision.rankedOffers[0]),
+      true
+    );
     assert.deepEqual(harness.calls, [
       ["authorize", input().authenticated, IDS.league],
       [
@@ -199,10 +250,19 @@ describe("Free Agent Draft correction-preview service foundation", () => {
     const harness = createHarness({
       authority: "platform_administrator",
     });
-    harness.service.preview(input());
+    const result = harness.service.preview(input());
     assert.equal(
       harness.calls[1][1].actorAuthority,
       "platform_administrator_as_commissioner"
+    );
+    assert.deepEqual(
+      [
+        result.currentDecision.rankedOffers[0]
+          .totalValueCents,
+        result.currentDecision.rankedOffers[0].termYears,
+        result.currentDecision.rankedOffers[0].aavCents,
+      ],
+      [null, null, null]
     );
   });
 
@@ -248,6 +308,7 @@ describe("Free Agent Draft correction-preview service foundation", () => {
       validPreview({ allocationId: uuid(99) }),
       { ...validPreview(), previewFingerprint: "0".repeat(64) },
       { ...validPreview(), control: "leak" },
+      prematurelyRedactedPreview(),
     ];
     for (const repositoryResult of cases) {
       const harness = createHarness({ repositoryResult });

@@ -123,6 +123,16 @@ const FINAL_MIGRATION_0052 = Object.freeze({
   sha256:
     "b1907952dff9b7aa54cadd8f3635ea48961ed47c0fd4a611b35cd9eea965a2dc",
 });
+const FINAL_MIGRATION_0053 = Object.freeze({
+  byteLength: 1_695,
+  sha256:
+    "8a12d79d50bf61cbf31017108c43a85a338b0a30d95ebd0801f1c215dad9c6ec",
+});
+const FINAL_MIGRATION_0054 = Object.freeze({
+  byteLength: 2_511,
+  sha256:
+    "6bf3386f725fe01557904c8804df04571e6385a452e4855a2f6492370dcc7108",
+});
 const FROZEN_MIGRATIONS_0023_THROUGH_0029 = Object.freeze([
   Object.freeze({
     id: 23,
@@ -309,6 +319,7 @@ const EXPECTED_TABLES = [
   "teams",
   "trade_assets",
   "trade_events",
+  "trade_future_consideration_acceptances",
   "trades",
   "user_credentials",
   "users",
@@ -716,7 +727,7 @@ describe("M2-04 initial relational schema", () => {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     });
 
-    assert.equal(migrations.length, 52);
+    assert.equal(migrations.length, 54);
     assert.equal(migrations[0].id, 1);
     assert.equal(migrations[0].fileName, "0001_initial.sql");
     assert.equal(migrations[1].id, 2);
@@ -1142,6 +1153,32 @@ describe("M2-04 initial relational schema", () => {
       migrations[51].checksum,
       FINAL_MIGRATION_0052.sha256
     );
+    assert.equal(migrations[52].id, 53);
+    assert.equal(
+      migrations[52].fileName,
+      "0053_add_trade_commissioner_approval.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[52].filePath).size,
+      FINAL_MIGRATION_0053.byteLength
+    );
+    assert.equal(
+      migrations[52].checksum,
+      FINAL_MIGRATION_0053.sha256
+    );
+    assert.equal(migrations[53].id, 54);
+    assert.equal(
+      migrations[53].fileName,
+      "0054_enforce_league_authority_invariants.sql"
+    );
+    assert.equal(
+      fs.statSync(migrations[53].filePath).size,
+      FINAL_MIGRATION_0054.byteLength
+    );
+    assert.equal(
+      migrations[53].checksum,
+      FINAL_MIGRATION_0054.sha256
+    );
     for (const expected of FROZEN_MIGRATIONS_0023_THROUGH_0029) {
       const migration = migrations[expected.id - 1];
       assert.equal(migration.id, expected.id);
@@ -1153,12 +1190,12 @@ describe("M2-04 initial relational schema", () => {
       assert.equal(migration.checksum, expected.sha256);
     }
     assert.equal(migrationResult.status, "exact");
-    assert.equal(database.pragma("user_version", { simple: true }), 52);
+    assert.equal(database.pragma("user_version", { simple: true }), 54);
 
     const ledgerBefore = database
       .prepare("SELECT * FROM schema_migrations")
       .all();
-    assert.equal(ledgerBefore.length, 52);
+    assert.equal(ledgerBefore.length, 54);
     assert.equal(ledgerBefore[0].checksum, migrations[0].checksum);
     assert.equal(ledgerBefore[1].checksum, migrations[1].checksum);
     assert.equal(ledgerBefore[2].checksum, migrations[2].checksum);
@@ -1316,6 +1353,24 @@ describe("M2-04 initial relational schema", () => {
       ledgerBefore[51].checksum,
       FINAL_MIGRATION_0052.sha256
     );
+    assert.equal(ledgerBefore[52].migration_id, 53);
+    assert.equal(
+      ledgerBefore[52].file_name,
+      "0053_add_trade_commissioner_approval.sql"
+    );
+    assert.equal(
+      ledgerBefore[52].checksum,
+      FINAL_MIGRATION_0053.sha256
+    );
+    assert.equal(ledgerBefore[53].migration_id, 54);
+    assert.equal(
+      ledgerBefore[53].file_name,
+      "0054_enforce_league_authority_invariants.sql"
+    );
+    assert.equal(
+      ledgerBefore[53].checksum,
+      FINAL_MIGRATION_0054.sha256
+    );
 
     const rerun = migrateDatabase({
       database,
@@ -1335,13 +1390,13 @@ describe("M2-04 initial relational schema", () => {
       )
       .all("table", "sqlite_%")
       .map(({ name }) => name);
-    assert.equal(EXPECTED_TABLES.length, 133);
+    assert.equal(EXPECTED_TABLES.length, 134);
     assert.equal(
       EXPECTED_TABLES.filter(
         (tableName) =>
           tableName !== "schema_migrations"
       ).length,
-      132
+      133
     );
     assert.deepEqual(tables, EXPECTED_TABLES);
 
@@ -1424,7 +1479,7 @@ describe("M2-04 initial relational schema", () => {
         },
       {
         metadata_key: "data_model_version",
-        metadata_value: "52",
+        metadata_value: "54",
       },
       ]
     );

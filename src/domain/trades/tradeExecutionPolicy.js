@@ -2,6 +2,11 @@ const UUID_PATTERN =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
 const MAX_TIMESTAMP_MS = 8_640_000_000_000_000;
+const EXECUTION_AUTHORITIES = Object.freeze([
+  "manager",
+  "commissioner",
+  "platform_administrator",
+]);
 
 const TRADE_EXECUTION_CODES = Object.freeze({
   inputInvalid: "TRADE_EXECUTION_INPUT_INVALID",
@@ -65,7 +70,7 @@ function validateTradeExecutionInput(input) {
   return Object.freeze({ tradeId: stableId(input.tradeId) });
 }
 
-function validateTradeExecutionCommand(input) {
+function validateExecutionCommand(input, allowedAuthorities) {
   exactObject(input, [
     "tradeId",
     "eventId",
@@ -83,7 +88,7 @@ function validateTradeExecutionCommand(input) {
     "idempotencyKey",
     "idempotencyExpiresAtMs",
   ]);
-  if (!["manager", "commissioner"].includes(input.actorAuthority)) {
+  if (!allowedAuthorities.includes(input.actorAuthority)) {
     fail(TRADE_EXECUTION_CODES.authorityInvalid);
   }
   if (!Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 1) {
@@ -124,7 +129,34 @@ function validateTradeExecutionCommand(input) {
   return Object.freeze(command);
 }
 
-function assertTradeExecutionState({ command, context } = {}) {
+function validateTradeExecutionCommand(input) {
+  return validateExecutionCommand(input, EXECUTION_AUTHORITIES);
+}
+
+function validateTradeApprovalCommand(input) {
+  return validateExecutionCommand(input, [
+    "commissioner",
+    "platform_administrator",
+  ]);
+}
+
+function commissionerAuthorized(command, context) {
+  const currentCommissioner =
+    command.actorAuthority === "commissioner" &&
+    context.commissioner_membership_id === command.actorMembershipId &&
+    context.membership_permission === "commissioner";
+  const inheritedPlatformAdministrator =
+    command.actorAuthority === "platform_administrator" &&
+    context.is_platform_administrator === 1;
+  return (
+    ["active", "frozen"].includes(context.league_status) &&
+    context.membership_user_id === command.actorUserId &&
+    context.membership_status === "active" &&
+    (currentCommissioner || inheritedPlatformAdministrator)
+  );
+}
+
+function assertSharedExecutionState({ command, context, expectedStatus }) {
   if (!context) fail(TRADE_EXECUTION_CODES.notFound);
   if (
     context.trade_id !== command.tradeId ||
@@ -136,7 +168,7 @@ function assertTradeExecutionState({ command, context } = {}) {
   ) {
     fail(TRADE_EXECUTION_CODES.stateInvalid);
   }
-  if (context.trade_status !== "proposed") {
+  if (context.trade_status !== expectedStatus) {
     fail(TRADE_EXECUTION_CODES.notPending);
   }
   if (
@@ -151,33 +183,51 @@ function assertTradeExecutionState({ command, context } = {}) {
   ) {
     fail(TRADE_EXECUTION_CODES.windowClosed);
   }
-  const commissionerAuthorized =
-    command.actorAuthority === "commissioner" &&
-    ["active", "frozen"].includes(context.league_status) &&
-    context.commissioner_membership_id === command.actorMembershipId &&
-    context.membership_user_id === command.actorUserId &&
-    context.membership_status === "active" &&
-    context.membership_permission === "commissioner";
+}
+
+function assertTradeExecutionState({ command, context } = {}) {
+  assertSharedExecutionState({
+    command,
+    context,
+    expectedStatus: "proposed",
+  });
   const managerAuthorized =
     command.actorAuthority === "manager" &&
     context.league_status === "active" &&
     context.membership_user_id === command.actorUserId &&
     context.membership_status === "active" &&
-    context.membership_permission === "manager" &&
     context.assignment_team_id === command.receivingTeamId &&
     context.assignment_status === "accepted" &&
     context.assignment_accepted_at_ms !== null &&
     context.assignment_ended_at_ms === null;
-  if (!commissionerAuthorized && !managerAuthorized) {
+  if (!managerAuthorized) {
+    fail(TRADE_EXECUTION_CODES.roleDenied);
+  }
+  return true;
+}
+
+function assertTradeApprovalState({ command, context } = {}) {
+  assertSharedExecutionState({
+    command,
+    context,
+    expectedStatus: "awaiting_commissioner_approval",
+  });
+  if (
+    context.has_future_considerations !== 1 ||
+    !commissionerAuthorized(command, context)
+  ) {
     fail(TRADE_EXECUTION_CODES.roleDenied);
   }
   return true;
 }
 
 module.exports = {
+  EXECUTION_AUTHORITIES,
   TRADE_EXECUTION_CODES,
   TradeExecutionPolicyError,
+  assertTradeApprovalState,
   assertTradeExecutionState,
+  validateTradeApprovalCommand,
   validateTradeExecutionCommand,
   validateTradeExecutionInput,
 };

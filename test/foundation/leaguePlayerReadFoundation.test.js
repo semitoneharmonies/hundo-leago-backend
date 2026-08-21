@@ -334,6 +334,14 @@ function createRuntime(t) {
       '2025-last-season', NULL, ?, NULL, ?)
   `).run(uuid(600), PLAYER_ONE_ID, NOW_MS, NOW_MS);
   connection.database.prepare(`
+    INSERT INTO player_source_state (
+      id, player_id, provider, source_position, normalized_position,
+      nhl_team_abbreviation, active, source_version, source_payload_json,
+      effective_at_ms, ended_at_ms, created_at_ms
+    ) VALUES (?, ?, 'sportsdataio-discovery-lab', 'D', 'D', 'EDM', 1,
+      '2025-last-season', NULL, ?, NULL, ?)
+  `).run(uuid(604), PLAYER_TWO_ID, NOW_MS, NOW_MS);
+  connection.database.prepare(`
     INSERT INTO stat_sources (
       id, provider, status, created_at_ms, updated_at_ms, version
     ) VALUES (?, 'sportsdataio-discovery-lab', 'active', ?, ?, 1)
@@ -357,6 +365,20 @@ function createRuntime(t) {
     uuid(601),
     uuid(602),
     PLAYER_ONE_ID,
+    NOW_MS,
+    NOW_MS
+  );
+  connection.database.prepare(`
+    INSERT INTO player_stat_totals (
+      id, stat_source_id, refresh_id, nhl_season_key, player_id,
+      games_played, goals, assists, nhl_points,
+      fantasy_points_hundredths, source_updated_at_ms, created_at_ms
+    ) VALUES (?, ?, ?, '20252026', ?, 40, 10, 20, 30, 4000, ?, ?)
+  `).run(
+    uuid(605),
+    uuid(601),
+    uuid(602),
+    PLAYER_TWO_ID,
     NOW_MS,
     NOW_MS
   );
@@ -598,22 +620,42 @@ describe("league-scoped player read service", () => {
     assert.equal(result.page.hasMore, false);
   });
 
+  test("applies catalog filters before the page limit without writing", (t) => {
+    const runtime = createRuntime(t);
+    const before = runtime.database.serialize();
+    const result = runtime.service.list({
+      authenticated: authenticated(USER_A_ID),
+      leagueId: LEAGUE_A_ID,
+      position: "D",
+      nhlTeam: "EDM",
+      ownership: "free",
+      minimumGames: 25,
+      limit: 1,
+      sort: "fantasyPoints",
+    });
+
+    assert.deepEqual(
+      result.players.map(({ id }) => id),
+      [PLAYER_TWO_ID]
+    );
+    assert.equal(result.players[0].provider.nhlTeamAbbreviation, "EDM");
+    assert.equal(result.players[0].statistics.gamesPlayed, 40);
+    assert.equal(result.players[0].league.ownership, null);
+    assert.equal(result.page.hasMore, false);
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
   test("orders cursor pages by fantasy points when requested", (t) => {
     const runtime = createRuntime(t);
     runtime.database.prepare(`
-      INSERT INTO player_stat_totals (
-        id, stat_source_id, refresh_id, nhl_season_key, player_id,
-        games_played, goals, assists, nhl_points,
-        fantasy_points_hundredths, source_updated_at_ms, created_at_ms
-      ) VALUES (?, ?, ?, '20252026', ?, 82, 40, 50, 90, 12000, ?, ?)
-    `).run(
-      uuid(604),
-      uuid(601),
-      uuid(602),
-      PLAYER_TWO_ID,
-      NOW_MS,
-      NOW_MS
-    );
+      UPDATE player_stat_totals
+      SET games_played = 82,
+          goals = 40,
+          assists = 50,
+          nhl_points = 90,
+          fantasy_points_hundredths = 12000
+      WHERE refresh_id = ? AND player_id = ?
+    `).run(uuid(602), PLAYER_TWO_ID);
     const before = runtime.database.serialize();
     const first = runtime.service.list({
       authenticated: authenticated(USER_A_ID),
@@ -671,6 +713,20 @@ describe("league-scoped player HTTP routes", () => {
     );
     assert.equal(sortedList.status, 200);
     assert.equal((await sortedList.json()).data[0].id, PLAYER_ONE_ID);
+
+    const filteredList = await fetch(
+      `${api.baseUrl}/api/v1/leagues/${LEAGUE_A_ID}/players?` +
+        "limit=1&sort=fantasyPoints&position=D&nhlTeam=EDM&" +
+        "ownership=free&minimumGames=25",
+      { headers: headers(api, SESSION_A) }
+    );
+    assert.equal(filteredList.status, 200);
+    const filteredBody = await filteredList.json();
+    assert.deepEqual(
+      filteredBody.data.map(({ id }) => id),
+      [PLAYER_TWO_ID]
+    );
+    assert.equal(filteredBody.page.hasMore, false);
 
     const invalidSort = await fetch(
       `${api.baseUrl}/api/v1/leagues/${LEAGUE_A_ID}/players?sort=salary`,

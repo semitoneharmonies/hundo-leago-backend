@@ -51,6 +51,8 @@ const RESET_IMPORT_ARTIFACT_PUBLICATION_LOCK_GRACE_MS =
 const RESET_IMPORT_ARTIFACT_PUBLICATION_LOCK_MAX_BYTES =
   2 * 1024;
 const RESET_IMPORT_ARTIFACT_PUBLICATION_LOCK_ATTEMPTS = 3;
+const BIGINT_STAT_OPTIONS = Object.freeze({ bigint: true });
+const NANOSECONDS_PER_MILLISECOND = 1_000_000n;
 const VALIDATED_RESET_IMPORT_ARTIFACTS =
   new WeakSet();
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
@@ -1146,9 +1148,53 @@ function sameFileIdentity(left, right) {
     left !== undefined &&
     right !== null &&
     right !== undefined &&
+    typeof left.dev === "bigint" &&
+    typeof right.dev === "bigint" &&
+    typeof left.ino === "bigint" &&
+    typeof right.ino === "bigint" &&
     left.dev === right.dev &&
-    left.ino === right.ino
+    left.ino === right.ino &&
+    (
+      left.ino !== 0n ||
+      (
+        typeof left.birthtimeNs === "bigint" &&
+        typeof right.birthtimeNs === "bigint" &&
+        left.birthtimeNs === right.birthtimeNs
+      )
+    )
   );
+}
+
+function sameFileContentSnapshot(left, right) {
+  return (
+    sameFileIdentity(left, right) &&
+    typeof left.size === "bigint" &&
+    typeof right.size === "bigint" &&
+    typeof left.mtimeNs === "bigint" &&
+    typeof right.mtimeNs === "bigint" &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs
+  );
+}
+
+function sameFileSnapshot(left, right) {
+  return (
+    sameFileContentSnapshot(left, right) &&
+    typeof left.ctimeNs === "bigint" &&
+    typeof right.ctimeNs === "bigint" &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function boundedBigIntSize(value, maximum) {
+  if (
+    typeof value !== "bigint" ||
+    value < 0n ||
+    value > BigInt(maximum)
+  ) {
+    return null;
+  }
+  return Number(value);
 }
 
 function exactPublicationLockRecord({
@@ -1214,7 +1260,10 @@ function inspectPublicationLock({
 }) {
   let stat;
   try {
-    stat = fsModule.lstatSync(lockPath);
+    stat = fsModule.lstatSync(
+      lockPath,
+      BIGINT_STAT_OPTIONS
+    );
   } catch (error) {
     if (error?.code === "ENOENT") {
       return Object.freeze({ status: "missing" });
@@ -1225,13 +1274,15 @@ function inspectPublicationLock({
       { cause: error }
     );
   }
+  const lockSize = boundedBigIntSize(
+    stat.size,
+    RESET_IMPORT_ARTIFACT_PUBLICATION_LOCK_MAX_BYTES
+  );
   if (
     !stat.isFile() ||
     stat.isSymbolicLink() ||
-    !Number.isFinite(stat.mtimeMs) ||
-    !Number.isSafeInteger(stat.size) ||
-    stat.size >
-      RESET_IMPORT_ARTIFACT_PUBLICATION_LOCK_MAX_BYTES
+    typeof stat.mtimeNs !== "bigint" ||
+    lockSize === null
   ) {
     return Object.freeze({ status: "held" });
   }
@@ -1257,12 +1308,20 @@ function inspectPublicationLock({
   }
 
   const nowMs = Date.now();
-  const mtimeAgeMs = nowMs - stat.mtimeMs;
+  const mtimeAgeNs =
+    BigInt(nowMs) * NANOSECONDS_PER_MILLISECOND -
+    stat.mtimeNs;
+  const graceNs =
+    BigInt(
+      RESET_IMPORT_ARTIFACT_PUBLICATION_LOCK_GRACE_MS
+    ) * NANOSECONDS_PER_MILLISECOND;
+  const leaseNs =
+    BigInt(
+      RESET_IMPORT_ARTIFACT_PUBLICATION_LOCK_LEASE_MS
+    ) * NANOSECONDS_PER_MILLISECOND;
   let stale = false;
   if (record === null) {
-    stale =
-      mtimeAgeMs >=
-      RESET_IMPORT_ARTIFACT_PUBLICATION_LOCK_GRACE_MS;
+    stale = mtimeAgeNs >= graceNs;
   } else {
     const sameHost =
       record.hostname ===
@@ -1271,11 +1330,9 @@ function inspectPublicationLock({
       !sameHost &&
       nowMs - record.createdAtMs >=
         RESET_IMPORT_ARTIFACT_PUBLICATION_LOCK_LEASE_MS &&
-      mtimeAgeMs >=
-        RESET_IMPORT_ARTIFACT_PUBLICATION_LOCK_LEASE_MS;
+      mtimeAgeNs >= leaseNs;
     const deadOwner =
-      mtimeAgeMs >=
-        RESET_IMPORT_ARTIFACT_PUBLICATION_LOCK_GRACE_MS &&
+      mtimeAgeNs >= graceNs &&
       publicationLockProcessIsDefinitelyDead(record);
     stale = leaseExpired || deadOwner;
   }
@@ -1304,6 +1361,36 @@ function reclaimStalePublicationLock({
   snapshot,
   fsModule,
 }) {
+  let currentStat;
+  let currentRaw;
+  try {
+    currentStat = fsModule.lstatSync(
+      lockPath,
+      BIGINT_STAT_OPTIONS
+    );
+    currentRaw = fsModule.readFileSync(lockPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return;
+    }
+    fail(
+      RESET_IMPORT_ARTIFACT_ERROR_CODES
+        .publicationFailed,
+      { cause: error }
+    );
+  }
+  if (
+    !currentStat.isFile() ||
+    currentStat.isSymbolicLink() ||
+    !sameFileSnapshot(snapshot.stat, currentStat) ||
+    currentRaw !== snapshot.raw
+  ) {
+    fail(
+      RESET_IMPORT_ARTIFACT_ERROR_CODES
+        .publicationFailed
+    );
+  }
+
   const quarantinePath =
     `${lockPath}.stale-${crypto.randomUUID()}`;
   try {
@@ -1321,7 +1408,10 @@ function reclaimStalePublicationLock({
 
   try {
     const quarantinedStat =
-      fsModule.lstatSync(quarantinePath);
+      fsModule.lstatSync(
+        quarantinePath,
+        BIGINT_STAT_OPTIONS
+      );
     const quarantinedRaw = fsModule.readFileSync(
       quarantinePath,
       "utf8"
@@ -1329,7 +1419,10 @@ function reclaimStalePublicationLock({
     if (
       !quarantinedStat.isFile() ||
       quarantinedStat.isSymbolicLink() ||
-      !sameFileIdentity(snapshot.stat, quarantinedStat) ||
+      !sameFileContentSnapshot(
+        currentStat,
+        quarantinedStat
+      ) ||
       quarantinedRaw !== snapshot.raw
     ) {
       restoreUnexpectedQuarantinedLock({
@@ -1379,6 +1472,33 @@ function releaseOwnedPublicationLock({
   if (owner.identity === null) {
     return;
   }
+  let linkedStat;
+  try {
+    linkedStat = fsModule.lstatSync(
+      lockPath,
+      BIGINT_STAT_OPTIONS
+    );
+    if (
+      !linkedStat.isFile() ||
+      linkedStat.isSymbolicLink() ||
+      !sameFileIdentity(owner.identity, linkedStat) ||
+      (
+        owner.recordComplete &&
+        (
+          !sameFileSnapshot(
+            owner.identity,
+            linkedStat
+          ) ||
+          fsModule.readFileSync(lockPath, "utf8") !==
+            owner.raw
+        )
+      )
+    ) {
+      return;
+    }
+  } catch {
+    return;
+  }
   const quarantinePath =
     `${lockPath}.release-${crypto.randomUUID()}`;
   try {
@@ -1388,13 +1508,23 @@ function releaseOwnedPublicationLock({
   }
   try {
     const quarantinedStat =
-      fsModule.lstatSync(quarantinePath);
+      fsModule.lstatSync(
+        quarantinePath,
+        BIGINT_STAT_OPTIONS
+      );
     if (
       !quarantinedStat.isFile() ||
       quarantinedStat.isSymbolicLink() ||
-      !sameFileIdentity(
-        owner.identity,
-        quarantinedStat
+      !(
+        owner.recordComplete
+          ? sameFileContentSnapshot(
+            linkedStat,
+            quarantinedStat
+          )
+          : sameFileIdentity(
+            linkedStat,
+            quarantinedStat
+          )
       )
     ) {
       restoreUnexpectedQuarantinedLock({
@@ -1512,13 +1642,21 @@ function acquirePublicationLock({
     };
     try {
       owner.identity =
-        fsModule.fstatSync(fileDescriptor);
+        fsModule.fstatSync(
+          fileDescriptor,
+          BIGINT_STAT_OPTIONS
+        );
       fsModule.writeFileSync(
         fileDescriptor,
         raw,
         "utf8"
       );
       fsModule.fsyncSync(fileDescriptor);
+      owner.identity =
+        fsModule.fstatSync(
+          fileDescriptor,
+          BIGINT_STAT_OPTIONS
+        );
       owner.recordComplete = true;
       return Object.freeze({
         status: "acquired",

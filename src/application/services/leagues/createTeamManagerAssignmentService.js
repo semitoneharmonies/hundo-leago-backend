@@ -368,6 +368,8 @@ function createTeamManagerAssignmentService({
           !proposedUser ||
           proposedUser.status !== "active" ||
           !membership ||
+          membership.is_platform_administrator === 1 ||
+          current?.is_platform_administrator === 1 ||
           !["manager", "commissioner"].includes(
             membership.permission_category
           ) ||
@@ -377,7 +379,12 @@ function createTeamManagerAssignmentService({
             teamId: canonicalTeamId,
           })
         ) {
-          throw new TeamManagerAssignmentConflictError();
+          throw new TeamManagerAssignmentConflictError(
+            membership?.is_platform_administrator === 1 ||
+              current?.is_platform_administrator === 1
+              ? "PLATFORM_ADMINISTRATOR_TEAM_ACCESS_PROTECTED"
+              : "TEAM_MANAGER_ASSIGNMENT_CONFLICT"
+          );
         }
 
         startIdempotency({
@@ -528,6 +535,11 @@ function createTeamManagerAssignmentService({
         ) {
           throw new TeamManagerAssignmentConflictError();
         }
+        if (row.proposed_user_is_platform_administrator === 1) {
+          throw new TeamManagerAssignmentConflictError(
+            "PLATFORM_ADMINISTRATOR_TEAM_ACCESS_PROTECTED"
+          );
+        }
         const current = assignmentRepository.findCurrentAssignment({
           leagueId: row.league_id,
           teamId: row.team_id,
@@ -540,6 +552,14 @@ function createTeamManagerAssignmentService({
         ) {
           throw new TeamManagerAssignmentConflictError(
             "TEAM_MANAGER_TRANSFER_STALE"
+          );
+        }
+        if (
+          action === "accept" &&
+          current?.is_platform_administrator === 1
+        ) {
+          throw new TeamManagerAssignmentConflictError(
+            "PLATFORM_ADMINISTRATOR_TEAM_ACCESS_PROTECTED"
           );
         }
 
@@ -691,6 +711,11 @@ function createTeamManagerAssignmentService({
               currentVersion: current?.version ?? null,
               refetch: true,
             }
+          );
+        }
+        if (current.is_platform_administrator === 1) {
+          throw new TeamManagerAssignmentConflictError(
+            "PLATFORM_ADMINISTRATOR_TEAM_ACCESS_PROTECTED"
           );
         }
         const row = assignmentRepository.findAssignmentAggregate(current.id);

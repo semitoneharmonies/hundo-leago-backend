@@ -45,7 +45,7 @@ function createActivityNotificationRouter({
     assertMethod(requestSecurity, method, "the request-security boundary");
   }
   assertMethod(leagueActivityService, "list", "a League Activity service");
-  for (const method of ["list", "markAllRead", "markRead"]) {
+  for (const method of ["list", "markAllRead", "markBatchRead", "markRead"]) {
     assertMethod(notificationService, method, "a notification service");
   }
 
@@ -97,6 +97,21 @@ function createActivityNotificationRouter({
     next();
   }
 
+  function requireNotificationBatchBody(request, response, next) {
+    if (
+      !request.body ||
+      typeof request.body !== "object" ||
+      Array.isArray(request.body) ||
+      Object.keys(request.body).length !== 1 ||
+      !Object.hasOwn(request.body, "notificationIds") ||
+      !Array.isArray(request.body.notificationIds)
+    ) {
+      error(request, response, 400, "ACTIVITY_REQUEST_INVALID");
+      return;
+    }
+    next();
+  }
+
   const router = express.Router();
   router.use(requestSecurity.assignRequestId);
   router.use(requestSecurity.securityHeaders);
@@ -104,7 +119,7 @@ function createActivityNotificationRouter({
   router.use(requestSecurity.requireAllowedOrigin);
   router.use(requestSecurity.requireJson);
   router.use(requestSecurity.requireCompatibleFetchMetadata);
-  router.use(express.json({ limit: "1kb", strict: true }));
+  router.use(express.json({ limit: "8kb", strict: true }));
 
   router.get(
     "/api/v1/leagues/:leagueId/activity",
@@ -136,6 +151,25 @@ function createActivityNotificationRouter({
           notificationService.list({
             query: request.query,
             authenticated: requestSecurity.getSessionBootstrap(request),
+          })
+        );
+      } catch (caught) {
+        return mapError(request, response, caught);
+      }
+    }
+  );
+  router.post(
+    "/api/v1/notifications/read-batch",
+    requestSecurity.authenticateUnsafe,
+    requireNotificationBatchBody,
+    (request, response) => {
+      try {
+        return success(
+          request,
+          response,
+          notificationService.markBatchRead({
+            notificationIds: request.body.notificationIds,
+            authenticated: requestSecurity.getAuthenticatedSession(request),
           })
         );
       } catch (caught) {

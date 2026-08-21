@@ -40,7 +40,7 @@ const {
   "../../src/infrastructure/persistence/sqlite/SqliteFreeAgentDraftCorrectionPreviewRepository"
 );
 const {
-  createSqliteFreeAgentDraftReadRepository,
+  createSqliteFreeAgentDraftInternalReadRepository,
 } = require(
   "../../src/infrastructure/persistence/sqlite/SqliteFreeAgentDraftReadRepository"
 );
@@ -945,22 +945,18 @@ function commissionerInput(overrides = {}) {
   };
 }
 
-function t140Decision(database) {
-  const result = createSqliteFreeAgentDraftReadRepository({
+function internalDecision(database) {
+  const result = createSqliteFreeAgentDraftInternalReadRepository({
     database,
-  }).readAllocationResults({
+  }).readInternalAllocationResult({
+    allocationId: IDS.allocation,
     leagueId: IDS.league,
     fadId: IDS.fad,
+    playerId: IDS.player,
     viewerUserId: IDS.commissionerUser,
     viewerMembershipId: IDS.commissionerMembership,
     nowMs: DEADLINE_AT_MS + 1_000,
-    query: {
-      q: "preview player",
-      status: null,
-      limit: 10,
-      cursor: null,
-    },
-  }).data[0];
+  });
   return Object.freeze({
     status: result.status,
     decisionCode: result.decisionCode,
@@ -970,6 +966,7 @@ function t140Decision(database) {
     recoveryStatus: result.recoveryStatus,
   });
 }
+
 
 function seedIrreversibleDrift(database) {
   database
@@ -1070,7 +1067,7 @@ before(() => {
   suiteRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "hundo-fad-t143-")
   );
-  templatePath = path.join(suiteRoot, "schema52.sqlite3");
+  templatePath = path.join(suiteRoot, "schema54.sqlite3");
   const connection = openDatabase({
     databasePath: templatePath,
     environment: "test",
@@ -1085,7 +1082,7 @@ before(() => {
     connection.database.pragma("user_version", {
       simple: true,
     }),
-    52
+    54
   );
   connection.database.pragma("wal_checkpoint(TRUNCATE)");
   connection.database.close();
@@ -1098,19 +1095,45 @@ after(() => {
 describe(
   "Free Agent Draft allocation-correction preview repository foundation",
   () => {
-    test("recomputes a wrong completed result, reuses the exact T-140 current decision, and remains byte-for-byte read-only", (t) => {
+    test("recomputes from full current evidence while T-140 stays redacted and the preview remains byte-for-byte read-only", (t) => {
       const runtime = createRuntime(
         t,
         seedWrongCompletedResult
       );
-      const exactT140 = t140Decision(runtime.database);
+      const exactInternalDecision = internalDecision(
+        runtime.database
+      );
       const before = noWriteSnapshot(runtime);
       const preview =
         runtime.repository.previewAllocationCorrection(
           commissionerInput()
         );
 
-      assert.deepEqual(preview.currentDecision, exactT140);
+      assert.deepEqual(
+        preview.currentDecision,
+        exactInternalDecision
+      );
+      assert.deepEqual(
+        preview.currentDecision.rankedOffers.map(
+          ({ totalValueCents, termYears, aavCents }) => [
+            totalValueCents,
+            termYears,
+            aavCents,
+          ]
+        ),
+        [
+          [500, 1, 500],
+          [600, 2, 300],
+        ]
+      );
+      assert.deepEqual(
+        [
+          preview.currentDecision.winner.totalValueCents,
+          preview.currentDecision.winner.termYears,
+          preview.currentDecision.winner.aavCents,
+        ],
+        [500, 1, 500]
+      );
       assert.equal(preview.reversible, true);
       assert.equal(
         preview.currentDecision.winner.teamId,
@@ -1353,14 +1376,32 @@ describe(
         t,
         seedExactTieCorrectionRequired
       );
-      const exactT140 = t140Decision(runtime.database);
+      const exactInternalDecision = internalDecision(
+        runtime.database
+      );
       const before = noWriteSnapshot(runtime);
       const preview =
         runtime.repository.previewAllocationCorrection(
           commissionerInput()
         );
 
-      assert.deepEqual(preview.currentDecision, exactT140);
+      assert.deepEqual(
+        preview.currentDecision,
+        exactInternalDecision
+      );
+      assert.deepEqual(
+        preview.currentDecision.rankedOffers.map(
+          ({ totalValueCents, termYears, aavCents }) => [
+            totalValueCents,
+            termYears,
+            aavCents,
+          ]
+        ),
+        [
+          [600, 2, 300],
+          [600, 2, 300],
+        ]
+      );
       assert.equal(
         preview.currentDecision.status,
         "correction_required"

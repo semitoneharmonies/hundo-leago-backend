@@ -2546,7 +2546,7 @@ describe(
           leagueId: runtime.ids.league,
           userId: replacementUserId,
           permissionCategory:
-            "commissioner",
+            "member",
         });
         runtime.database
           .prepare(`
@@ -2558,7 +2558,31 @@ describe(
           `)
           .run(
             HELP_AT_MS + 1,
-            runtime.ids.commissionerUser
+           runtime.ids.commissionerUser
+          );
+        runtime.database
+          .prepare(`
+            UPDATE league_memberships
+            SET permission_category = 'member',
+                updated_at_ms = ?,
+                version = version + 1
+            WHERE id = ?
+          `)
+          .run(
+            HELP_AT_MS + 2,
+            runtime.ids.commissionerMembership
+          );
+        runtime.database
+          .prepare(`
+            UPDATE league_memberships
+            SET permission_category = 'commissioner',
+                updated_at_ms = ?,
+                version = version + 1
+            WHERE id = ?
+          `)
+          .run(
+            HELP_AT_MS + 2,
+            replacementMembershipId
           );
         runtime.database
           .prepare(`

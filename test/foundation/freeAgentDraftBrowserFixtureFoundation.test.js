@@ -346,7 +346,7 @@ test(
 );
 
 test(
-  "FAD browser fixture rejects anything except an open schema-52 release-QA runtime",
+  "FAD browser fixture rejects anything except an open schema-54 release-QA runtime",
   async () => {
     const source = fs.readFileSync(
       path.join(
@@ -1056,55 +1056,130 @@ test(
         })
     );
     for (const history of histories) {
-      assert.equal(history.visibilityMode, "published_history");
-      assert.equal(history.slots.length, 22);
-      const outcomeCodes = history.slots
-        .map(({ outcome }) => outcome?.code ?? null)
-        .filter(Boolean);
+      assert.deepEqual(
+        Object.keys(history).sort(),
+        [
+          "fadId",
+          "leagueId",
+          "results",
+          "seasonId",
+          "team",
+          "teamId",
+        ]
+      );
       assert.equal(
-        outcomeCodes.some((code) => code.endsWith("_win")),
+        history.results.some(
+          ({ status }) => status === "signed"
+        ),
         true
       );
       assert.equal(
-        outcomeCodes.some((code) => code.endsWith("_loss")),
+        history.results.some(
+          ({ status }) => status === "not_won"
+        ),
         true
       );
-      assert.deepEqual(history.capabilities.editCard, {
-        allowed: false,
-        reasonCode: "PHASE_CLOSED",
-      });
+      for (const result of history.results) {
+        assert.deepEqual(
+          Object.keys(result).sort(),
+          [
+            "offer",
+            "player",
+            "status",
+            "tieAuctionId",
+          ]
+        );
+      }
     }
     const winningHistory = histories.find(
       ({ teamId }) =>
         teamId ===
         gamma.sentinels.thirtyDollarThreeYearWinner.teamId
     );
-    const thirtyDollarSlot = winningHistory.slots.find(
+    const thirtyDollarResult = winningHistory.results.find(
       ({ player }) =>
-        player?.playerId ===
+        player.playerId ===
         gamma.sentinels.thirtyDollarThreeYearWinner.playerId
     );
-    assert.deepEqual(
-      {
-        totalValueCents: thirtyDollarSlot.totalValueCents,
-        termYears: thirtyDollarSlot.termYears,
-        aavCents: thirtyDollarSlot.aavCents,
-        outcomeCode: thirtyDollarSlot.outcome.code,
-      },
-      {
+    assert.deepEqual(thirtyDollarResult, {
+      player: thirtyDollarResult.player,
+      status: "signed",
+      offer: {
         totalValueCents: 3_000,
         termYears: 3,
         aavCents: 1_000,
-        outcomeCode: "automatic_win",
+      },
+      tieAuctionId: null,
+    });
+
+    const firstTeamId = gamma.teams[0].teamId;
+    const firstCard = database.prepare(`
+      SELECT id, version
+      FROM candidate_cards
+      WHERE league_id = ? AND fad_id = ? AND team_id = ?
+    `).get(gamma.leagueId, gamma.fadId, firstTeamId);
+    const currentEntries = database.prepare(`
+      SELECT id, player_id, entry_kind,
+             requested_slot_group, requested_slot_number,
+             proposed_aav_cents, proposed_term_years
+      FROM candidate_card_entries
+      WHERE league_id = ? AND fad_id = ? AND team_id = ?
+        AND placement_state = 'placed'
+      ORDER BY requested_slot_group, requested_slot_number, id
+    `).all(gamma.leagueId, gamma.fadId, firstTeamId);
+    const slotCoordinates = [
+      ...Array.from(
+        { length: 12 },
+        (_, index) => ["F", index + 1]
+      ),
+      ...Array.from(
+        { length: 6 },
+        (_, index) => ["D", index + 1]
+      ),
+      ...Array.from(
+        { length: 4 },
+        (_, index) => ["B", index + 1]
+      ),
+    ];
+    const entryBySlot = new Map(
+      currentEntries
+        .filter(({ entry_kind: kind }) => kind === "candidate")
+        .map((entry) => [
+          entry.requested_slot_group +
+            String(entry.requested_slot_number).padStart(2, "0"),
+          entry,
+        ])
+    );
+    const privateSlots = slotCoordinates.map(
+      ([slotGroup, slotNumber]) => {
+        const slotKey =
+          slotGroup + String(slotNumber).padStart(2, "0");
+        const entry = entryBySlot.get(slotKey) ?? null;
+        return {
+          slotGroup,
+          slotKey,
+          candidate:
+            entry === null
+              ? null
+              : {
+                  playerId: entry.player_id,
+                  aavCents: entry.proposed_aav_cents,
+                  termYears: entry.proposed_term_years,
+                },
+        };
       }
     );
-
-    const firstHistory = histories[0];
-    const firstCandidate = firstHistory.slots.find(
-      ({ occupantKind }) => occupantKind === "candidate"
+    const firstCandidateEntry = currentEntries.find(
+      ({ entry_kind: kind }) => kind === "candidate"
     );
-    const firstEmpty = firstHistory.slots.find(
-      ({ occupantKind }) => occupantKind === "empty"
+    const firstCandidate = {
+      entryId: firstCandidateEntry.id,
+      player: {
+        playerId: firstCandidateEntry.player_id,
+      },
+    };
+    const firstEmpty = privateSlots.find(
+      ({ candidate }) => candidate === null
     );
     const unusedPlayer = database.prepare(`
       SELECT player.id
@@ -1122,7 +1197,11 @@ test(
         )
       ORDER BY lower(player.full_name), player.id
       LIMIT 1
-    `).get(firstEmpty.slotGroup === "D" ? "D" : "F", gamma.leagueId, gamma.fadId);
+    `).get(
+      firstEmpty.slotGroup === "D" ? "D" : "F",
+      gamma.leagueId,
+      gamma.fadId
+    );
     const mutationRevisionCount = database.prepare(`
       SELECT COUNT(*) AS count
       FROM candidate_card_revisions
@@ -1133,63 +1212,57 @@ test(
         authenticated: gammaMember,
         leagueId: gamma.leagueId,
         fadId: gamma.fadId,
-        teamId: firstHistory.teamId,
+        teamId: firstTeamId,
         slotKey: firstEmpty.slotKey,
         input: {
           playerId: unusedPlayer.id,
           aavCents: 100,
           termYears: 1,
         },
-        expectedCardVersion: firstHistory.cardVersion,
+        expectedCardVersion: firstCard.version,
         idempotencyKey: "gamma-completed-add-denied",
       })],
       ["edit", () => started.runtime.services.league.candidateCards.editCandidate({
         authenticated: gammaMember,
         leagueId: gamma.leagueId,
         fadId: gamma.fadId,
-        teamId: firstHistory.teamId,
+        teamId: firstTeamId,
         entryId: firstCandidate.entryId,
         input: { aavCents: 100, termYears: 2 },
-        expectedCardVersion: firstHistory.cardVersion,
+        expectedCardVersion: firstCard.version,
         idempotencyKey: "gamma-completed-edit-denied",
       })],
       ["move", () => started.runtime.services.league.candidateCards.moveEntry({
         authenticated: gammaMember,
         leagueId: gamma.leagueId,
         fadId: gamma.fadId,
-        teamId: firstHistory.teamId,
+        teamId: firstTeamId,
         entryId: firstCandidate.entryId,
         input: { slotKey: firstEmpty.slotKey },
-        expectedCardVersion: firstHistory.cardVersion,
+        expectedCardVersion: firstCard.version,
         idempotencyKey: "gamma-completed-move-denied",
       })],
       ["remove", () => started.runtime.services.league.candidateCards.removeCandidate({
         authenticated: gammaMember,
         leagueId: gamma.leagueId,
         fadId: gamma.fadId,
-        teamId: firstHistory.teamId,
+        teamId: firstTeamId,
         entryId: firstCandidate.entryId,
-        expectedCardVersion: firstHistory.cardVersion,
+        expectedCardVersion: firstCard.version,
         idempotencyKey: "gamma-completed-remove-denied",
       })],
       ["save", () => started.runtime.services.league.candidateCards.saveCard({
         authenticated: gammaMember,
         leagueId: gamma.leagueId,
         fadId: gamma.fadId,
-        teamId: firstHistory.teamId,
+        teamId: firstTeamId,
         input: {
-          slots: firstHistory.slots.map((slot) => ({
+          slots: privateSlots.map((slot) => ({
             slotKey: slot.slotKey,
-            candidate: slot.occupantKind === "candidate"
-              ? {
-                  playerId: slot.player.playerId,
-                  aavCents: slot.aavCents,
-                  termYears: slot.termYears,
-                }
-              : null,
+            candidate: slot.candidate,
           })),
         },
-        expectedCardVersion: firstHistory.cardVersion,
+        expectedCardVersion: firstCard.version,
         idempotencyKey: "gamma-completed-save-denied",
       })],
     ];

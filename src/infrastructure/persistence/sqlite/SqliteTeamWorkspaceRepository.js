@@ -9,6 +9,7 @@ const {
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const SPORTSDATAIO_PROVIDER = "sportsdataio-discovery-lab";
 
 function stableId(value) {
   if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
@@ -95,7 +96,10 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
           source.*,
           ROW_NUMBER() OVER (
             PARTITION BY source.player_id
-            ORDER BY source.effective_at_ms DESC,
+            ORDER BY
+              (source.provider = '${SPORTSDATAIO_PROVIDER}') DESC,
+              source.effective_at_ms DESC,
+              source.provider ASC,
               source.created_at_ms DESC,
               source.id DESC
           ) AS recency
@@ -143,6 +147,7 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
         stats.assists,
         stats.nhl_points,
         stats.fantasy_points_hundredths,
+        source.nhl_team_abbreviation,
         source.source_payload_json,
         display_entry.display_order
       FROM player_ownerships AS ownership

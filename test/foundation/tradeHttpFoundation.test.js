@@ -63,7 +63,10 @@ function services(calls, overrides = {}) {
     tradeAcceptancePreviewService: {
       preview: record("acceptancePreview", "TRADE_ACCEPTANCE_PREVIEWED"),
     },
-    tradeAcceptanceService: { accept: record("accept", "TRADE_ACCEPTED") },
+    tradeAcceptanceService: {
+      accept: record("accept", "TRADE_ACCEPTED"),
+      approve: record("approve", "TRADE_APPROVED"),
+    },
     ...overrides,
   };
 }
@@ -95,7 +98,7 @@ function headers(extra = {}) {
 }
 
 describe("M5-11 isolated trade HTTP contract", () => {
-  test("routes all seven list, detail, proposal, preview, and lifecycle operations", async (t) => {
+  test("routes all eight list, detail, proposal, preview, and lifecycle operations", async (t) => {
     const calls = [];
     const securityCalls = [];
     const baseUrl = await startApi(t, services(calls), securityCalls);
@@ -120,6 +123,7 @@ describe("M5-11 isolated trade HTTP contract", () => {
     }));
     for (const [path, key] of [
       ["accept", "accept-1"],
+      ["approve", "approve-1"],
       ["decline", "decline-1"],
       ["cancel", "cancel-1"],
     ]) {
@@ -130,22 +134,28 @@ describe("M5-11 isolated trade HTTP contract", () => {
       }));
     }
 
-    assert.deepEqual(responses.map(({ status }) => status), [200, 201, 200, 200, 200, 200, 200]);
+    assert.deepEqual(
+      responses.map(({ status }) => status),
+      [200, 201, 200, 200, 200, 200, 200, 200]
+    );
     assert.deepEqual(calls.map(({ method }) => method), [
-      "list", "create", "read", "acceptancePreview", "accept", "respond", "respond",
+      "list", "create", "read", "acceptancePreview", "accept", "approve",
+      "respond", "respond",
     ]);
     assert.deepEqual(calls[1].input.input, proposal);
     assert.equal(calls[1].input.idempotencyKey, "create-1");
     assert.equal(calls[2].input.tradeId, TRADE_ID);
     assert.deepEqual(calls[3].input.input, { tradeId: TRADE_ID });
     assert.deepEqual(calls[4].input.input, { tradeId: TRADE_ID });
-    assert.deepEqual(calls[5].input.input, { tradeId: TRADE_ID, action: "reject" });
-    assert.deepEqual(calls[6].input.input, { tradeId: TRADE_ID, action: "cancel" });
+    assert.deepEqual(calls[5].input.input, { tradeId: TRADE_ID });
+    assert.deepEqual(calls[6].input.input, { tradeId: TRADE_ID, action: "reject" });
+    assert.deepEqual(calls[7].input.input, { tradeId: TRADE_ID, action: "cancel" });
     assert.deepEqual(securityCalls, [
       "authenticateBootstrap",
       "authenticateUnsafe",
       "authenticateBootstrap",
       "authenticateBootstrap",
+      "authenticateUnsafe",
       "authenticateUnsafe",
       "authenticateUnsafe",
       "authenticateUnsafe",
@@ -165,6 +175,103 @@ describe("M5-11 isolated trade HTTP contract", () => {
     assert.equal(unauthenticated.status, 401);
     assert.equal(noCsrf.status, 403);
     assert.equal(calls.length, 0);
+  });
+
+  test("maps manager-only write denials and unsupported new retention safely", async (t) => {
+    const deniedCalls = [];
+    function denied(method) {
+      return () => {
+        deniedCalls.push(method);
+        throw Object.assign(new Error("private authority detail"), {
+          code: "TEAM_MANAGER_REQUIRED",
+        });
+      };
+    }
+    const baseUrl = await startApi(
+      t,
+      services([], {
+        tradeCreationService: { create: denied("create") },
+        tradeLifecycleService: { respond: denied("respond") },
+        tradeAcceptanceService: {
+          accept: denied("accept"),
+          approve() {
+            throw new Error("approval was not in scope");
+          },
+        },
+      })
+    );
+    const collection = `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/trades`;
+    const detail = `${collection}/${TRADE_ID}`;
+    const responses = [
+      await fetch(collection, {
+        method: "POST",
+        headers: headers({ "idempotency-key": "denied-create" }),
+        body: JSON.stringify({
+          proposingTeamId: LEAGUE_ID,
+          receivingTeamId: TRADE_ID,
+          proposingAssets: [{ type: "draft_pick", draftPickId: TRADE_ID }],
+          receivingAssets: [{ type: "draft_pick", draftPickId: LEAGUE_ID }],
+        }),
+      }),
+      await fetch(`${detail}/accept`, {
+        method: "POST",
+        headers: headers({ "idempotency-key": "denied-accept" }),
+        body: "{}",
+      }),
+      await fetch(`${detail}/decline`, {
+        method: "POST",
+        headers: headers({ "idempotency-key": "denied-decline" }),
+        body: "{}",
+      }),
+      await fetch(`${detail}/cancel`, {
+        method: "POST",
+        headers: headers({ "idempotency-key": "denied-cancel" }),
+        body: "{}",
+      }),
+    ];
+    assert.deepEqual(responses.map(({ status }) => status), [403, 403, 403, 403]);
+    assert.deepEqual(deniedCalls, ["create", "accept", "respond", "respond"]);
+    for (const response of responses) {
+      assert.equal(
+        (await response.json()).error.code,
+        "TRADE_AUTHORIZATION_DENIED"
+      );
+    }
+
+    const retentionBaseUrl = await startApi(
+      t,
+      services([], {
+        tradeCreationService: {
+          create() {
+            throw Object.assign(new Error("private retention detail"), {
+              code: "TRADE_ASSET_INPUT_INVALID",
+              reasonCode: "TRADE_ASSET_TYPE_UNSUPPORTED",
+            });
+          },
+        },
+      })
+    );
+    const retentionResponse = await fetch(
+      `${retentionBaseUrl}/api/v1/leagues/${LEAGUE_ID}/trades`,
+      {
+        method: "POST",
+        headers: headers({ "idempotency-key": "unsupported-retention" }),
+        body: JSON.stringify({
+          proposingTeamId: LEAGUE_ID,
+          receivingTeamId: TRADE_ID,
+          proposingAssets: [{ type: "draft_pick", draftPickId: TRADE_ID }],
+          receivingAssets: [{
+            type: "retention_obligation",
+            retentionObligationId: LEAGUE_ID,
+          }],
+        }),
+      }
+    );
+    assert.equal(retentionResponse.status, 400);
+    assert.equal(
+      (await retentionResponse.json()).error.code,
+      "TRADE_INPUT_INVALID"
+    );
   });
 
   test("rejects non-empty lifecycle bodies before a service call", async (t) => {

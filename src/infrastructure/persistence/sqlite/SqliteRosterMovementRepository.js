@@ -1,3 +1,5 @@
+const crypto = require("node:crypto");
+
 const {
   RosterMovementPolicyError,
   assertCurrentOwnershipForMove,
@@ -14,6 +16,21 @@ const {
 const {
   getRepositoryDefinition,
 } = require("./repositoryCatalog");
+const {
+  resolveSqliteTradeProposalCancellationWriter,
+} = require("./SqliteTradeProposalCancellationWriter");
+
+function deterministicUuid(value) {
+  const hex = crypto
+    .createHash("sha256")
+    .update(value, "utf8")
+    .digest("hex");
+  return (
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-` +
+    `4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-` +
+    hex.slice(20, 32)
+  );
+}
 
 function freezeRow(row) {
   return row ? Object.freeze({ ...row }) : null;
@@ -22,6 +39,9 @@ function freezeRow(row) {
 function createSqliteRosterMovementRepository({
   database,
   candidateCardSummerSynchronizer,
+  leagueOutboxWriter,
+  tradePublicationWriter,
+  tradeProposalCancellationWriter,
 } = {}) {
   if (
     !candidateCardSummerSynchronizer ||
@@ -47,6 +67,8 @@ function createSqliteRosterMovementRepository({
   let findOwnershipStatement;
   let findUnplacedSourceOwnershipStatement;
   let placeSourceOwnershipStatement;
+  let listPendingProspectTradesStatement;
+  let cancellationWriter;
   let moveTransaction;
   try {
     findOwnershipStatement = database.prepare(
@@ -79,6 +101,64 @@ function createSqliteRosterMovementRepository({
         AND slot_number IS NULL
       RETURNING *
     `);
+    listPendingProspectTradesStatement = database.prepare(`
+      SELECT DISTINCT
+        trades.id AS trade_id,
+        trades.season_id AS season_id,
+        CASE
+          WHEN EXISTS (
+            SELECT 1
+            FROM trade_future_consideration_acceptances AS acceptance
+            WHERE acceptance.league_id = trades.league_id
+              AND acceptance.trade_id = trades.id
+          ) THEN 'awaiting_commissioner_approval'
+          ELSE 'proposed'
+        END AS trade_status,
+        trades.version AS version
+      FROM trades
+      JOIN trade_assets
+        ON trade_assets.league_id = trades.league_id
+       AND trade_assets.trade_id = trades.id
+      WHERE trades.league_id = @leagueId
+        AND trades.status = 'proposed'
+        AND trade_assets.asset_type = 'prospect_right'
+        AND trade_assets.player_id = @playerId
+      ORDER BY trades.id
+    `);
+    cancellationWriter = resolveSqliteTradeProposalCancellationWriter({
+      database,
+      leagueOutboxWriter,
+      tradePublicationWriter,
+      tradeProposalCancellationWriter,
+    });
+
+    function cancelPendingProspectTrades(move) {
+      const automaticallyCancelledTradeIds = [];
+      for (const trade of listPendingProspectTradesStatement.all(move)) {
+        const eventId = deterministicUuid(
+          `${move.ownershipEventId}:auto-cancel:${trade.trade_id}`
+        );
+        const cancelled = cancellationWriter.cancelPending({
+          eventId,
+          leagueId: move.leagueId,
+          seasonId: trade.season_id,
+          tradeId: trade.trade_id,
+          expectedVersion: trade.version,
+          fromStatus: trade.trade_status,
+          reasonCode: "prospect_right_converted",
+          sourceMetadata: {
+            rosterMovementId: move.ownershipEventId,
+            playerId: move.playerId,
+          },
+          occurredAtMs: move.occurredAtMs,
+        });
+        if (cancelled) {
+          automaticallyCancelledTradeIds.push(trade.trade_id);
+        }
+      }
+      return Object.freeze(automaticallyCancelledTradeIds);
+    }
+
     moveTransaction = database.transaction((move) => {
       const rows = findOwnershipStatement.all({
         leagueId: move.leagueId,
@@ -98,12 +178,16 @@ function createSqliteRosterMovementRepository({
       }
       const current = freezeRow(rows[0]);
       assertCurrentOwnershipForMove({ current, move });
+      const activatingProspect = current.roster_category === "Prospect";
       const updated = freezeRow(
         ownerships.updateVersioned({
           key: current.id,
           leagueId: move.leagueId,
           expectedVersion: move.expectedVersion,
           changes: {
+            ...(activatingProspect
+              ? { ownership_kind: "Rostered" }
+              : {}),
             roster_category: move.destinationCategory,
             position_group: move.destinationPositionGroup,
             slot_number: move.destinationSlotNumber,
@@ -136,12 +220,18 @@ function createSqliteRosterMovementRepository({
         }
       }
       const beforeMetadata = JSON.stringify({
+        ...(activatingProspect
+          ? { ownershipKind: current.ownership_kind }
+          : {}),
         rosterCategory: current.roster_category,
         positionGroup: current.position_group,
         slotNumber: current.slot_number,
         version: current.version,
       });
       const afterMetadata = JSON.stringify({
+        ...(activatingProspect
+          ? { ownershipKind: updated.ownership_kind }
+          : {}),
         rosterCategory: updated.roster_category,
         positionGroup: updated.position_group,
         slotNumber: updated.slot_number,
@@ -188,6 +278,9 @@ function createSqliteRosterMovementRepository({
           occurred_at_ms: move.occurredAtMs,
         })
       );
+      const automaticallyCancelledTradeIds = activatingProspect
+        ? cancelPendingProspectTrades(move)
+        : Object.freeze([]);
       candidateCardSummerSynchronizer.synchronize({
         leagueId: move.leagueId,
         affectedTeamIds: [move.teamId],
@@ -212,6 +305,7 @@ function createSqliteRosterMovementRepository({
         ),
         ownershipEvent: event,
         activity: activityRow,
+        automaticallyCancelledTradeIds,
       });
     });
   } catch (error) {

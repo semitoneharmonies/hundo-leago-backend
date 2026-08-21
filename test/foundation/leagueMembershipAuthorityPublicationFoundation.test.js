@@ -342,6 +342,29 @@ function assignmentRows(database) {
 }
 
 describe("FAD-14 membership authority-change publications", () => {
+  test("protects an active platform administrator membership from commissioner removal", (t) => {
+    const runtime = createRuntime(t);
+    runtime.context.repositories.platform_roles.insert({
+      id: uuid(899),
+      user_id: MANAGER_ID,
+      role: "platform_administrator",
+      status: "active",
+      granted_by_user_id: COMMISSIONER_ID,
+      granted_at_ms: NOW_MS,
+      ended_at_ms: null,
+      version: 1,
+    });
+    const before = runtime.database.serialize();
+
+    assert.throws(
+      () => createService(runtime).remove(removeCommand()),
+      (error) =>
+        error instanceof LeagueMembershipConflictError &&
+        error.code === "PLATFORM_ADMINISTRATOR_MEMBERSHIP_PROTECTED"
+    );
+    assert(before.equals(runtime.database.serialize()));
+  });
+
   test("publishes one exact membership event with no assignments and rejects retry or stale CAS without duplicates", (t) => {
     const runtime = createRuntime(t);
     const service = createService(runtime);

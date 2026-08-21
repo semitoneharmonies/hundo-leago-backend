@@ -15,6 +15,15 @@ const SAFE_MESSAGES = Object.freeze({
     "Current league-commissioner authority is required.",
   PLAYER_NOT_IR_ELIGIBLE:
     "This player is not currently listed as injured-reserve eligible.",
+  PROSPECT_DESTINATION_ILLEGAL:
+    "That destination would create an illegal roster.",
+  PROSPECT_ELC_SCHEDULE_UNAVAILABLE:
+    "The three-season ELC schedule is not available yet.",
+  PROSPECT_NOT_FOUND: "That prospect is not owned by this team.",
+  PROSPECT_SIGNED_ELC_REQUIRED:
+    "This prospect needs a signed fantasy ELC before activation.",
+  PROSPECT_UNSIGNED_RIGHT_REQUIRED:
+    "This action requires a current unsigned prospect right.",
   ROSTER_ACTION_CONFLICT:
     "The roster changed before this action could be completed.",
   ROSTER_ACTION_INVALID: "The roster action request is invalid.",
@@ -49,8 +58,11 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
   }
   for (const method of [
     "buyOutContract",
+    "declineProspectElc",
     "moveRosterPlayer",
     "moveToInjuredReserve",
+    "releaseProspectRights",
+    "signProspect",
   ]) {
     assertMethod(rosterActionService, method, "a roster-action service");
   }
@@ -86,6 +98,11 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
                 "BENCH_AAV_LIMIT_EXCEEDED",
                 "INJURED_RESERVE_FULL",
                 "PLAYER_NOT_IR_ELIGIBLE",
+                "PROSPECT_DESTINATION_ILLEGAL",
+                "PROSPECT_ELC_SCHEDULE_UNAVAILABLE",
+                "PROSPECT_NOT_FOUND",
+                "PROSPECT_SIGNED_ELC_REQUIRED",
+                "PROSPECT_UNSIGNED_RIGHT_REQUIRED",
                 "ROSTER_ILLEGAL_CONFIRMATION_REQUIRED",
                 "ROSTER_OWNERSHIP_NOT_FOUND",
               ].includes(error?.code)
@@ -94,6 +111,12 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
     if (
       error?.name === "RosterActionConflictError" ||
       error?.code === "REPOSITORY_VERSION_CONFLICT" ||
+      (error?.name === "ProspectDecisionPolicyError" &&
+        [
+          "PROSPECT_DECISION_OWNERSHIP_INVALID",
+          "PROSPECT_DECISION_SCOPE_MISMATCH",
+          "PROSPECT_DECISION_VERSION_CONFLICT",
+        ].includes(error?.reasonCode)) ||
       error?.reasonCode === "BUYOUT_LOCK_ACTIVE" ||
       error?.reasonCode === "BUYOUT_PENDING_TRADE_EXISTS"
     ) {
@@ -111,6 +134,7 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
         "TEAM_ID_INVALID",
         "ROSTER_ACTION_INPUT_INVALID",
         "BUYOUT_INPUT_INVALID",
+        "PROSPECT_DECISION_INPUT_INVALID",
         "ROSTER_MOVEMENT_INPUT_INVALID",
       ].includes(error?.code)
     ) {
@@ -200,6 +224,72 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
             leagueId: request.params.leagueId,
             teamId: request.params.teamId,
             contractId: request.params.contractId,
+            input: request.body,
+          })
+        );
+      } catch (error) {
+        return mapError(request, response, error);
+      }
+    }
+  );
+
+  router.post(
+    "/api/v1/leagues/:leagueId/teams/:teamId/prospects/:playerId/sign",
+    requestSecurity.authenticateUnsafe,
+    async (request, response) => {
+      try {
+        return successResponse(
+          request,
+          response,
+          await rosterActionService.signProspect({
+            authenticated: requestSecurity.getAuthenticatedSession(request),
+            leagueId: request.params.leagueId,
+            teamId: request.params.teamId,
+            playerId: request.params.playerId,
+            input: request.body,
+          })
+        );
+      } catch (error) {
+        return mapError(request, response, error);
+      }
+    }
+  );
+
+  router.post(
+    "/api/v1/leagues/:leagueId/teams/:teamId/prospects/:playerId/decline",
+    requestSecurity.authenticateUnsafe,
+    async (request, response) => {
+      try {
+        return successResponse(
+          request,
+          response,
+          await rosterActionService.declineProspectElc({
+            authenticated: requestSecurity.getAuthenticatedSession(request),
+            leagueId: request.params.leagueId,
+            teamId: request.params.teamId,
+            playerId: request.params.playerId,
+            input: request.body,
+          })
+        );
+      } catch (error) {
+        return mapError(request, response, error);
+      }
+    }
+  );
+
+  router.delete(
+    "/api/v1/leagues/:leagueId/teams/:teamId/prospect-rights/:playerId",
+    requestSecurity.authenticateUnsafe,
+    async (request, response) => {
+      try {
+        return successResponse(
+          request,
+          response,
+          await rosterActionService.releaseProspectRights({
+            authenticated: requestSecurity.getAuthenticatedSession(request),
+            leagueId: request.params.leagueId,
+            teamId: request.params.teamId,
+            playerId: request.params.playerId,
             input: request.body,
           })
         );

@@ -165,6 +165,10 @@ function createSqlitePlayerRepository({ database } = {}) {
         `${currentSourceJoin} ${currentStatisticsJoin} ` +
         "WHERE (@status = 'all' OR players.status = @status) " +
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
+        "AND (@providerActive IS NULL OR source.active IS NULL OR source.active = 1) " +
+        "AND (@providerPosition IS NULL OR source.normalized_position = @providerPosition) " +
+        "AND (@nhlTeam IS NULL OR source.nhl_team_abbreviation = @nhlTeam) " +
+        "AND COALESCE(statistics.games_played, 0) >= @minimumGames " +
         "AND (@ownershipTeamId IS NULL OR EXISTS (" +
         "SELECT 1 FROM leagues AS ownership_league " +
         "JOIN player_ownerships AS team_ownership " +
@@ -174,6 +178,24 @@ function createSqlitePlayerRepository({ database } = {}) {
         "AND team_ownership.player_id = players.id " +
         "AND team_ownership.team_id = @ownershipTeamId" +
         ")) " +
+        "AND (@ownershipFilter = 'all' OR " +
+        "(@ownershipFilter = 'free' AND NOT EXISTS (" +
+        "SELECT 1 FROM leagues AS free_league " +
+        "JOIN player_ownerships AS free_ownership " +
+        "ON free_ownership.league_id = free_league.id " +
+        "AND free_ownership.season_id = free_league.current_season_id " +
+        "WHERE free_league.id = @leagueId " +
+        "AND free_ownership.player_id = players.id" +
+        ")) OR (@ownershipFilter = 'prospects' AND EXISTS (" +
+        "SELECT 1 FROM leagues AS prospect_league " +
+        "JOIN player_ownerships AS prospect_ownership " +
+        "ON prospect_ownership.league_id = prospect_league.id " +
+        "AND prospect_ownership.season_id = prospect_league.current_season_id " +
+        "WHERE prospect_league.id = @leagueId " +
+        "AND prospect_ownership.player_id = players.id " +
+        "AND (prospect_ownership.roster_category = 'Prospect' " +
+        "OR prospect_ownership.ownership_kind = 'Prospect Right')" +
+        "))) " +
         "AND (@auctionEligible = 0 OR (" +
         "players.status = 'active' " +
         "AND (" +
@@ -230,6 +252,10 @@ function createSqlitePlayerRepository({ database } = {}) {
         `${currentSourceJoin} ${currentStatisticsJoin} ` +
         "WHERE (@status = 'all' OR players.status = @status) " +
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
+        "AND (@providerActive IS NULL OR source.active IS NULL OR source.active = 1) " +
+        "AND (@providerPosition IS NULL OR source.normalized_position = @providerPosition) " +
+        "AND (@nhlTeam IS NULL OR source.nhl_team_abbreviation = @nhlTeam) " +
+        "AND COALESCE(statistics.games_played, 0) >= @minimumGames " +
         "AND (@ownershipTeamId IS NULL OR EXISTS (" +
         "SELECT 1 FROM leagues AS ownership_league " +
         "JOIN player_ownerships AS team_ownership " +
@@ -239,6 +265,24 @@ function createSqlitePlayerRepository({ database } = {}) {
         "AND team_ownership.player_id = players.id " +
         "AND team_ownership.team_id = @ownershipTeamId" +
         ")) " +
+        "AND (@ownershipFilter = 'all' OR " +
+        "(@ownershipFilter = 'free' AND NOT EXISTS (" +
+        "SELECT 1 FROM leagues AS free_league " +
+        "JOIN player_ownerships AS free_ownership " +
+        "ON free_ownership.league_id = free_league.id " +
+        "AND free_ownership.season_id = free_league.current_season_id " +
+        "WHERE free_league.id = @leagueId " +
+        "AND free_ownership.player_id = players.id" +
+        ")) OR (@ownershipFilter = 'prospects' AND EXISTS (" +
+        "SELECT 1 FROM leagues AS prospect_league " +
+        "JOIN player_ownerships AS prospect_ownership " +
+        "ON prospect_ownership.league_id = prospect_league.id " +
+        "AND prospect_ownership.season_id = prospect_league.current_season_id " +
+        "WHERE prospect_league.id = @leagueId " +
+        "AND prospect_ownership.player_id = players.id " +
+        "AND (prospect_ownership.roster_category = 'Prospect' " +
+        "OR prospect_ownership.ownership_kind = 'Prospect Right')" +
+        "))) " +
         "AND (@auctionEligible = 0 OR (" +
         "players.status = 'active' " +
         "AND (" +
@@ -414,6 +458,11 @@ function createSqlitePlayerRepository({ database } = {}) {
           "cursorFantasyPoints",
           "leagueId",
           "ownershipTeamId",
+          "providerPosition",
+          "providerActive",
+          "nhlTeam",
+          "ownershipFilter",
+          "minimumGames",
           "auctionEligible",
           "sort",
         ],
@@ -426,6 +475,21 @@ function createSqlitePlayerRepository({ database } = {}) {
         options.limit < 1 ||
         options.limit > 101 ||
         !PLAYER_PAGE_SORTS.has(options.sort) ||
+        !(
+          options.providerPosition === null ||
+          options.providerPosition === "F" ||
+          options.providerPosition === "D"
+        ) ||
+        !(options.providerActive === null || options.providerActive === true) ||
+        !(
+          options.nhlTeam === null ||
+          (typeof options.nhlTeam === "string" &&
+            /^[A-Z]{2,4}$/.test(options.nhlTeam))
+        ) ||
+        !["all", "free", "prospects"].includes(options.ownershipFilter) ||
+        !Number.isSafeInteger(options.minimumGames) ||
+        options.minimumGames < 0 ||
+        options.minimumGames > 200 ||
         !(
           (options.cursorName === null && options.cursorId === null) ||
           (
@@ -452,14 +516,23 @@ function createSqlitePlayerRepository({ database } = {}) {
           (
             options.auctionEligible === false &&
             options.leagueId === null &&
-            options.ownershipTeamId === null
+            options.ownershipTeamId === null &&
+            options.ownershipFilter === "all"
           ) ||
           (
             options.auctionEligible === false &&
             typeof options.leagueId === "string" &&
             CANONICAL_UUID_PATTERN.test(options.leagueId) &&
             typeof options.ownershipTeamId === "string" &&
-            CANONICAL_UUID_PATTERN.test(options.ownershipTeamId)
+            CANONICAL_UUID_PATTERN.test(options.ownershipTeamId) &&
+            options.ownershipFilter === "all"
+          ) ||
+          (
+            options.auctionEligible === false &&
+            typeof options.leagueId === "string" &&
+            CANONICAL_UUID_PATTERN.test(options.leagueId) &&
+            options.ownershipTeamId === null &&
+            ["free", "prospects"].includes(options.ownershipFilter)
           ) ||
           (
             options.auctionEligible === true &&
@@ -495,6 +568,11 @@ function createSqlitePlayerRepository({ database } = {}) {
             limit: options.limit,
             leagueId: options.leagueId,
             ownershipTeamId: options.ownershipTeamId,
+            providerPosition: options.providerPosition,
+            providerActive: options.providerActive === true ? 1 : null,
+            nhlTeam: options.nhlTeam,
+            ownershipFilter: options.ownershipFilter,
+            minimumGames: options.minimumGames,
             auctionEligible: options.auctionEligible ? 1 : 0,
           })
         );

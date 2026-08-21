@@ -1,3 +1,5 @@
+const crypto = require("node:crypto");
+
 const {
   ContractPolicyError,
   createFantasyElcAggregate,
@@ -19,6 +21,21 @@ const {
 const {
   getRepositoryDefinition,
 } = require("./repositoryCatalog");
+const {
+  resolveSqliteTradeProposalCancellationWriter,
+} = require("./SqliteTradeProposalCancellationWriter");
+
+function deterministicUuid(value) {
+  const hex = crypto
+    .createHash("sha256")
+    .update(value, "utf8")
+    .digest("hex");
+  return (
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-` +
+    `4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-` +
+    hex.slice(20, 32)
+  );
+}
 
 function freezeRow(row) {
   return row ? Object.freeze({ ...row }) : null;
@@ -31,6 +48,9 @@ function freezeRows(rows) {
 function createSqliteProspectDecisionRepository({
   database,
   candidateCardSummerSynchronizer,
+  leagueOutboxWriter,
+  tradePublicationWriter,
+  tradeProposalCancellationWriter,
 } = {}) {
   if (
     !candidateCardSummerSynchronizer ||
@@ -67,6 +87,8 @@ function createSqliteProspectDecisionRepository({
 
   let findOwnershipStatement;
   let deleteOwnershipStatement;
+  let listPendingProspectTradesStatement;
+  let cancellationWriter;
   let signTransaction;
   let releaseTransaction;
   try {
@@ -79,6 +101,36 @@ function createSqliteProspectDecisionRepository({
         "WHERE id = @ownershipId AND league_id = @leagueId " +
         "AND version = @expectedOwnershipVersion"
     );
+    listPendingProspectTradesStatement = database.prepare(`
+      SELECT DISTINCT
+        trades.id AS trade_id,
+        trades.season_id AS season_id,
+        CASE
+          WHEN EXISTS (
+            SELECT 1
+            FROM trade_future_consideration_acceptances AS acceptance
+            WHERE acceptance.league_id = trades.league_id
+              AND acceptance.trade_id = trades.id
+          ) THEN 'awaiting_commissioner_approval'
+          ELSE 'proposed'
+        END AS trade_status,
+        trades.version AS version
+      FROM trades
+      JOIN trade_assets
+        ON trade_assets.league_id = trades.league_id
+       AND trade_assets.trade_id = trades.id
+      WHERE trades.league_id = @leagueId
+        AND trades.status = 'proposed'
+        AND trade_assets.asset_type = 'prospect_right'
+        AND trade_assets.player_id = @playerId
+      ORDER BY trades.id
+    `);
+    cancellationWriter = resolveSqliteTradeProposalCancellationWriter({
+      database,
+      leagueOutboxWriter,
+      tradePublicationWriter,
+      tradeProposalCancellationWriter,
+    });
 
     function currentOwnership(decision) {
       const rows = findOwnershipStatement.all(decision);
@@ -99,6 +151,33 @@ function createSqliteProspectDecisionRepository({
       return current;
     }
 
+    function cancelPendingProspectTrades(decision, reasonCode) {
+      const automaticallyCancelledTradeIds = [];
+      for (const trade of listPendingProspectTradesStatement.all(decision)) {
+        const eventId = deterministicUuid(
+          `${decision.ownershipEventId}:auto-cancel:${trade.trade_id}`
+        );
+        const cancelled = cancellationWriter.cancelPending({
+          eventId,
+          leagueId: decision.leagueId,
+          seasonId: trade.season_id,
+          tradeId: trade.trade_id,
+          expectedVersion: trade.version,
+          fromStatus: trade.trade_status,
+          reasonCode,
+          sourceMetadata: {
+            prospectDecisionId: decision.ownershipEventId,
+            playerId: decision.playerId,
+          },
+          occurredAtMs: decision.occurredAtMs,
+        });
+        if (cancelled) {
+          automaticallyCancelledTradeIds.push(trade.trade_id);
+        }
+      }
+      return Object.freeze(automaticallyCancelledTradeIds);
+    }
+
     signTransaction = database.transaction(({ decision, aggregate }) => {
       const current = currentOwnership(decision);
       const ownership = freezeRow(
@@ -107,7 +186,13 @@ function createSqliteProspectDecisionRepository({
           leagueId: decision.leagueId,
           expectedVersion: decision.expectedOwnershipVersion,
           changes: {
-            ownership_kind: "Rostered",
+            ownership_kind:
+              decision.destinationCategory === "Prospect"
+                ? "Prospect Right"
+                : "Rostered",
+            roster_category: decision.destinationCategory,
+            position_group: decision.destinationPositionGroup,
+            slot_number: decision.destinationSlotNumber,
             updated_at_ms: decision.occurredAtMs,
           },
         })
@@ -139,6 +224,8 @@ function createSqliteProspectDecisionRepository({
           after_metadata_json: JSON.stringify({
             ownershipKind: ownership.ownership_kind,
             rosterCategory: ownership.roster_category,
+            positionGroup: ownership.position_group,
+            slotNumber: ownership.slot_number,
             version: ownership.version,
           }),
           reason: null,
@@ -162,11 +249,16 @@ function createSqliteProspectDecisionRepository({
           metadata_json: JSON.stringify({
             ownershipId: decision.ownershipId,
             contractId: decision.contractId,
-            rosterCategory: "Prospect",
+            rosterCategory: ownership.roster_category,
           }),
           occurred_at_ms: decision.occurredAtMs,
         })
       );
+      const automaticallyCancelledTradeIds =
+        cancelPendingProspectTrades(
+          decision,
+          "prospect_right_converted"
+        );
       candidateCardSummerSynchronizer.synchronize({
         leagueId: decision.leagueId,
         affectedTeamIds: [decision.teamId],
@@ -182,6 +274,7 @@ function createSqliteProspectDecisionRepository({
         contractEvent,
         ownershipEvent,
         activity: activityRow,
+        automaticallyCancelledTradeIds,
       });
     });
 
@@ -244,6 +337,11 @@ function createSqliteProspectDecisionRepository({
           "The prospect right changed before release."
         );
       }
+      const automaticallyCancelledTradeIds =
+        cancelPendingProspectTrades(
+          decision,
+          "prospect_right_released"
+        );
       candidateCardSummerSynchronizer.synchronize({
         leagueId: decision.leagueId,
         affectedTeamIds: [decision.teamId],
@@ -256,6 +354,7 @@ function createSqliteProspectDecisionRepository({
         releasedOwnership: current,
         ownershipEvent,
         activity: activityRow,
+        automaticallyCancelledTradeIds,
       });
     });
   } catch (error) {

@@ -128,6 +128,8 @@ function safeMembership(row) {
       displayName: row.display_name,
     }),
     permissionCategory: row.permission_category,
+    isProtectedPlatformAdministrator:
+      row.is_platform_administrator === 1,
     status: row.membership_status,
     joinedAtMs: row.joined_at_ms,
     endedAtMs: row.ended_at_ms,

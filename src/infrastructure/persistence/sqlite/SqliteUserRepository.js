@@ -69,7 +69,15 @@ function createSqliteUserRepository({
         "WHERE display_name_normalized = @value"
     );
     listSafeUsersStatement = database.prepare(
-      `SELECT ${USER_SELECT_SQL} FROM users ` +
+      `SELECT ${USER_SELECT_SQL}, ` +
+        "EXISTS (" +
+        "SELECT 1 FROM platform_roles " +
+        "WHERE platform_roles.user_id = users.id " +
+        "AND platform_roles.role = 'platform_administrator' " +
+        "AND platform_roles.status = 'active' " +
+        "AND platform_roles.ended_at_ms IS NULL" +
+        ") AS is_platform_administrator " +
+        "FROM users " +
         "WHERE status IN ('active', 'pending_credential_setup') " +
         "ORDER BY display_name_normalized ASC, id ASC"
     );

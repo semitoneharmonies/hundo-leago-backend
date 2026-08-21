@@ -98,12 +98,19 @@ function createSqliteMatchupReadRepository({ database } = {}) {
   const resultScopeStatement = database.prepare(
     "SELECT matchup_results.id AS result_id, matchup_results.version AS result_version, " +
       "matchups.matchup_week_id AS week_id, matchups.id AS matchup_id, " +
+      "matchup_weeks.sequence AS week_sequence, " +
+      "matchup_weeks.starts_at_ms AS week_starts_at_ms, " +
+      "matchup_weeks.ends_at_ms AS week_ends_at_ms, " +
+      "matchups.home_team_id, matchups.away_team_id, " +
+      "matchups.home_team_name, matchups.away_team_name, " +
       "matchup_result_versions.id AS result_version_id, " +
       "matchup_result_versions.version_number, " +
       "matchup_result_versions.home_score_hundredths, " +
       "matchup_result_versions.away_score_hundredths, matchup_result_versions.outcome " +
       "FROM matchup_results JOIN matchups ON matchups.league_id = matchup_results.league_id " +
       "AND matchups.id = matchup_results.matchup_id " +
+      "JOIN matchup_weeks ON matchup_weeks.league_id = matchups.league_id " +
+      "AND matchup_weeks.id = matchups.matchup_week_id " +
       "JOIN matchup_result_versions " +
       "ON matchup_result_versions.league_id = matchup_results.league_id " +
       "AND matchup_result_versions.id = matchup_results.current_version_id " +

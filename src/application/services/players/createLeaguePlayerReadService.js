@@ -38,6 +38,45 @@ function normalizeTeamId(value) {
   return value;
 }
 
+function normalizePosition(value) {
+  if (value === undefined) return null;
+  if (value === "F" || value === "D") return value;
+  failInput();
+}
+
+function normalizeNhlTeam(value) {
+  if (value === undefined) return null;
+  if (typeof value !== "string" || !/^[A-Z]{2,4}$/.test(value)) {
+    failInput();
+  }
+  return value;
+}
+
+function normalizeOwnership(value) {
+  if (value === undefined || value === "all") return "all";
+  if (value === "free" || value === "prospects") return value;
+  failInput();
+}
+
+function normalizeMinimumGames(value) {
+  if (value === undefined) return 0;
+  const stringValue =
+    typeof value === "number" && Number.isSafeInteger(value)
+      ? String(value)
+      : value;
+  if (
+    typeof stringValue !== "string" ||
+    !/^(0|[1-9]\d*)$/.test(stringValue)
+  ) {
+    failInput();
+  }
+  const minimumGames = Number(stringValue);
+  if (!Number.isSafeInteger(minimumGames) || minimumGames > 200) {
+    failInput();
+  }
+  return minimumGames;
+}
+
 function safeExternalId(row) {
   return Object.freeze({
     provider: row.provider,
@@ -117,12 +156,23 @@ function createLeaguePlayerReadService({
     cursor,
     sort,
     teamId,
+    position,
+    nhlTeam,
+    ownership,
+    minimumGames,
   } = {}) {
     const authority = authorize(authenticated, leagueId);
     const canonicalQuery = normalizeQuery(query);
     const canonicalStatus = normalizeStatus(status);
     const canonicalSort = normalizeSort(sort);
     const canonicalTeamId = normalizeTeamId(teamId);
+    const canonicalPosition = normalizePosition(position);
+    const canonicalNhlTeam = normalizeNhlTeam(nhlTeam);
+    const canonicalOwnership = normalizeOwnership(ownership);
+    const canonicalMinimumGames = normalizeMinimumGames(minimumGames);
+    if (canonicalTeamId !== null && canonicalOwnership !== "all") {
+      failInput();
+    }
     const pageSize = normalizeLimit(limit);
     const cursorId = normalizeCursor(cursor);
     const cursorRow =
@@ -146,8 +196,15 @@ function createLeaguePlayerReadService({
           ? cursorRow.sort_fantasy_points_hundredths
           : null,
       leagueId:
-        canonicalTeamId === null ? null : authority.leagueId,
+        canonicalTeamId === null && canonicalOwnership === "all"
+          ? null
+          : authority.leagueId,
       ownershipTeamId: canonicalTeamId,
+      providerPosition: canonicalPosition,
+      providerActive: true,
+      nhlTeam: canonicalNhlTeam,
+      ownershipFilter: canonicalOwnership,
+      minimumGames: canonicalMinimumGames,
       auctionEligible: false,
       sort: canonicalSort,
     });
@@ -210,6 +267,10 @@ function createLeaguePlayerReadService({
 
 module.exports = {
   createLeaguePlayerReadService,
+  normalizeMinimumGames,
+  normalizeNhlTeam,
+  normalizeOwnership,
+  normalizePosition,
   normalizeSort,
   normalizeTeamId,
   safeLeagueContext,

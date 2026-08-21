@@ -98,6 +98,10 @@ function createSqliteLeagueCreationRepository({ database } = {}) {
     database,
     definition: getRepositoryDefinition("seasons"),
   });
+  const memberships = createSqliteRecordRepository({
+    database,
+    definition: getRepositoryDefinition("league_memberships"),
+  });
   const activity = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("league_activity"),
@@ -112,6 +116,7 @@ function createSqliteLeagueCreationRepository({ database } = {}) {
   let findIdempotencyByScope;
   let findIdempotencyById;
   let completeIdempotencyStatement;
+  let listActivePlatformAdministratorsStatement;
   try {
     findLeagueByName = database.prepare(
       "SELECT * FROM leagues WHERE name_normalized = @nameNormalized"
@@ -166,6 +171,16 @@ function createSqliteLeagueCreationRepository({ database } = {}) {
         "completed_at_ms = @completedAtMs " +
         "WHERE id = @id AND league_id IS NULL AND status = 'started'"
     );
+    listActivePlatformAdministratorsStatement = database.prepare(`
+      SELECT users.id AS user_id
+      FROM platform_roles
+      JOIN users ON users.id = platform_roles.user_id
+      WHERE platform_roles.role = 'platform_administrator'
+        AND platform_roles.status = 'active'
+        AND platform_roles.ended_at_ms IS NULL
+        AND users.status = 'active'
+      ORDER BY users.id
+    `);
   } catch (error) {
     throw mapRepositoryError(error, {
       operation: "prepareLeagueCreationRepository",
@@ -235,6 +250,42 @@ function createSqliteLeagueCreationRepository({ database } = {}) {
           tableName: "leagues",
         });
       }
+    },
+    listActivePlatformAdministrators() {
+      try {
+        return Object.freeze(
+          listActivePlatformAdministratorsStatement
+            .all()
+            .map((row) => Object.freeze({ ...row }))
+        );
+      } catch (error) {
+        throw mapRepositoryError(error, {
+          operation: "listLeagueCreationPlatformAdministrators",
+          tableName: "platform_roles",
+        });
+      }
+    },
+    insertProtectedAdministratorMembership(options) {
+      exactObject(
+        options,
+        ["id", "leagueId", "userId", "nowMs"],
+        "An exact protected administrator membership is required."
+      );
+      const nowMs = safeTimestamp(options.nowMs);
+      return freezeRow(
+        memberships.insert({
+          id: stableId(options.id),
+          league_id: stableId(options.leagueId),
+          user_id: stableId(options.userId),
+          permission_category: "member",
+          status: "active",
+          joined_at_ms: nowMs,
+          ended_at_ms: null,
+          created_at_ms: nowMs,
+          updated_at_ms: nowMs,
+          version: 1,
+        })
+      );
     },
     insertSetupLeague(options) {
       exactObject(

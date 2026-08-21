@@ -6,6 +6,7 @@ const {
   TRADE_ASSET_CODES,
   TRADE_ASSET_TYPES,
   TradeAssetPolicyError,
+  assertNewTradeProposalAssetTypes,
   boundedIdempotencyKey,
   createTradeAssetCommands,
   validateTradeAssetInput,
@@ -77,7 +78,7 @@ function assertReason(action, reasonCode) {
 }
 
 describe("M5-06 typed trade-asset policy", () => {
-  test("accepts exactly every approved typed asset and canonicalizes its shape", () => {
+  test("keeps historical typed assets parseable but rejects standalone retention in a new proposal", () => {
     const normalized = validateTradeProposalCreationInput(assetInput());
     assert.deepEqual(
       normalized.proposingAssets.map(({ inputType }) => inputType),
@@ -102,6 +103,28 @@ describe("M5-06 typed trade-asset policy", () => {
       "future_consideration_instruction",
       "requested_retention",
     ]);
+    const assets = createTradeAssetCommands({
+      input: normalized,
+      assetIds: Array.from(
+        {
+          length:
+            normalized.proposingAssets.length +
+            normalized.receivingAssets.length,
+        },
+        (_, index) => uuid(100 + index)
+      ),
+      createdAtMs: NOW_MS,
+    });
+    assertReason(
+      () => assertNewTradeProposalAssetTypes(assets),
+      TRADE_ASSET_CODES.typeUnsupported
+    );
+    assert.equal(
+      assertNewTradeProposalAssetTypes(
+        assets.filter((asset) => asset.inputType !== "retention_obligation")
+      ),
+      true
+    );
   });
 
   test("requires exact shapes, stable IDs, safe descriptions, and bounded counts", () => {

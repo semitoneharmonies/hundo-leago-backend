@@ -76,17 +76,11 @@ function projectResult(result) {
 }
 
 function createTradeProposalService({
-  leagueAuthorization,
   teamAuthorization,
   repository,
   clock,
   secureRandom,
 } = {}) {
-  assertMethod(
-    leagueAuthorization,
-    "requireCommissioner",
-    "league commissioner authorization"
-  );
   assertMethod(teamAuthorization, "requireManager", "team-manager authorization");
   for (const method of ["loadFoundationState", "createProposal"]) {
     assertMethod(repository, method, "an atomic trade proposal repository");
@@ -94,23 +88,10 @@ function createTradeProposalService({
   assertMethod(clock, "nowMs", "a clock");
   assertMethod(secureRandom, "id", "secure identifiers");
 
-  function proposalAuthority(authenticated, leagueId, proposingTeamId) {
-    try {
-      return leagueAuthorization.requireCommissioner(authenticated, leagueId);
-    } catch (error) {
-      if (error?.code !== "LEAGUE_COMMISSIONER_REQUIRED") throw error;
-    }
-    return teamAuthorization.requireManager(
-      authenticated,
-      leagueId,
-      proposingTeamId
-    );
-  }
-
   function create({ leagueId, input, idempotencyKey, authenticated } = {}) {
     const body = validateTradeProposalCreationInput(input);
     const canonicalIdempotencyKey = boundedIdempotencyKey(idempotencyKey);
-    const authority = proposalAuthority(
+    const authority = teamAuthorization.requireManager(
       authenticated,
       leagueId,
       body.proposingTeamId

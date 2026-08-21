@@ -12,6 +12,7 @@ const LATE_LOCK_STATUSES = new Set([
   "still_illegal",
 ]);
 const AWAITING_DATA_LATE_LOCK = Object.freeze({ status: "awaiting_data" });
+const FANTASY_ELC_AAV_CENTS = 100;
 
 class RosterActionInputError extends Error {
   constructor() {
@@ -146,6 +147,8 @@ function createRosterActionService({
   teamAuthorization,
   workspaceRepository,
   rosterMovementRepository,
+  prospectDecisionRepository,
+  seasonRepository,
   buyoutRepository,
   lateLockCoordinator,
   clock,
@@ -242,6 +245,10 @@ function createRosterActionService({
     return value.authority === "manager" ? "manager" : "commissioner";
   }
 
+  function managerAuthority(authenticated, leagueId, teamId) {
+    return teamAuthorization.requireManager(authenticated, leagueId, teamId);
+  }
+
   function record(leagueId, teamId) {
     const result = workspaceRepository.read({ leagueId, teamId });
     if (!result) {
@@ -261,6 +268,80 @@ function createRosterActionService({
       throw new RosterActionConflictError("ROSTER_OWNERSHIP_NOT_FOUND");
     }
     return player;
+  }
+
+  function prospectByPlayer(result, playerId) {
+    if (!CANONICAL_UUID_PATTERN.test(playerId || "")) failInput();
+    const player = result.players.find(
+      (candidate) => candidate.player_id === playerId
+    );
+    if (!player || player.roster_category !== "Prospect") {
+      throw new RosterActionConflictError("PROSPECT_NOT_FOUND");
+    }
+    return player;
+  }
+
+  function destinationSlotNumber(workspace, player, destinationCategory) {
+    if (destinationCategory === "Prospect") return null;
+    const occupied = new Set(
+      workspace.players
+        .filter(
+          (candidate) =>
+            candidate.roster_category === destinationCategory &&
+            (destinationCategory !== "Active" ||
+              candidate.position_group === player.position_group)
+        )
+        .map((candidate) => candidate.slot_number)
+    );
+    const maximum =
+      destinationCategory === "Active"
+        ? player.position_group === "F"
+          ? 12
+          : 6
+        : 4;
+    return (
+      Array.from({ length: maximum }, (_, index) => index + 1).find(
+        (slot) => !occupied.has(slot)
+      ) || null
+    );
+  }
+
+  function sourceStatus(player) {
+    if (typeof player.source_payload_json !== "string") return "";
+    try {
+      const source = JSON.parse(player.source_payload_json);
+      return String(source?.Status || source?.status || "")
+        .trim()
+        .toLowerCase();
+    } catch {
+      return "";
+    }
+  }
+
+  function signingSeasonIds(leagueId, currentSeasonId) {
+    assertMethod(seasonRepository, "listByLeague", "a season repository");
+    const seasons = seasonRepository
+      .listByLeague({ leagueId })
+      .filter(({ nhl_season_key: key }) => /^\d{8}$/.test(key || ""))
+      .sort(
+        (left, right) =>
+          left.nhl_season_key.localeCompare(right.nhl_season_key) ||
+          left.id.localeCompare(right.id)
+      );
+    const currentIndex = seasons.findIndex(
+      ({ id }) => id === currentSeasonId
+    );
+    const selected = seasons.slice(currentIndex, currentIndex + 3);
+    if (
+      currentIndex < 0 ||
+      selected.length !== 3 ||
+      new Set(selected.map(({ nhl_season_key: key }) => key)).size !== 3
+    ) {
+      throw new RosterActionConflictError(
+        "PROSPECT_ELC_SCHEDULE_UNAVAILABLE"
+      );
+    }
+    return Object.freeze(selected.map(({ id }) => id));
   }
 
   async function moveToInjuredReserve({
@@ -312,11 +393,12 @@ function createRosterActionService({
     const actor = authority(authenticated, leagueId, teamId);
     const workspace = record(leagueId, teamId);
     const player = playerByOwnership(workspace, ownershipId);
+    const prospectActivation = player.roster_category === "Prospect";
     if (
       player.ownership_version !== expectedVersion ||
-      player.roster_category === "Prospect" ||
       player.roster_category === submitted.destinationCategory ||
-      (player.roster_category !== "Active" &&
+      (!prospectActivation &&
+        player.roster_category !== "Active" &&
         submitted.destinationCategory !== "Active")
     ) {
       throw new RosterActionConflictError("ROSTER_ACTION_STALE");
@@ -325,25 +407,21 @@ function createRosterActionService({
       throw new RosterActionConflictError("ACTIVE_CONTRACT_MISSING");
     }
     if (
+      prospectActivation &&
+      (player.ownership_kind !== "Prospect Right" ||
+        player.contract_type !== "fantasy_elc")
+    ) {
+      throw new RosterActionConflictError("PROSPECT_SIGNED_ELC_REQUIRED");
+    }
+    if (
       submitted.destinationCategory === "Bench" &&
       Number(player.aav_cents) > 400
     ) {
       throw new RosterActionConflictError("BENCH_AAV_LIMIT_EXCEEDED");
     }
-    let source = null;
-    if (typeof player.source_payload_json === "string") {
-      try {
-        source = JSON.parse(player.source_payload_json);
-      } catch {
-        source = null;
-      }
-    }
-    const sourceStatus = String(source?.Status || source?.status || "")
-      .trim()
-      .toLowerCase();
     if (
       submitted.destinationCategory === "Injured Reserve" &&
-      sourceStatus !== "injured reserve"
+      sourceStatus(player) !== "injured reserve"
     ) {
       throw new RosterActionConflictError("PLAYER_NOT_IR_ELIGIBLE");
     }
@@ -351,32 +429,23 @@ function createRosterActionService({
       ownershipId,
       destinationCategory: submitted.destinationCategory,
     });
+    if (!legality.legal && prospectActivation) {
+      throw new RosterActionConflictError(
+        "PROSPECT_DESTINATION_ILLEGAL",
+        { legality }
+      );
+    }
     if (!legality.legal && submitted.confirmedIllegal !== true) {
       throw new RosterActionConflictError(
         "ROSTER_ILLEGAL_CONFIRMATION_REQUIRED",
         { legality }
       );
     }
-    const occupied = new Set(
-      workspace.players
-        .filter(
-          (candidate) =>
-            candidate.roster_category === submitted.destinationCategory &&
-            (submitted.destinationCategory !== "Active" ||
-              candidate.position_group === player.position_group)
-        )
-        .map((candidate) => candidate.slot_number)
+    const destinationSlot = destinationSlotNumber(
+      workspace,
+      player,
+      submitted.destinationCategory
     );
-    const maximum =
-      submitted.destinationCategory === "Active"
-        ? player.position_group === "F"
-          ? 12
-          : 6
-        : 4;
-    const destinationSlotNumber =
-      Array.from({ length: maximum }, (_, index) => index + 1).find(
-        (slot) => !occupied.has(slot)
-      ) || null;
     const moved = rosterMovementRepository.move({
       leagueId: workspace.scope.league_id,
       seasonId: workspace.scope.season_id,
@@ -386,7 +455,7 @@ function createRosterActionService({
       expectedSourceCategory: player.roster_category,
       destinationCategory: submitted.destinationCategory,
       destinationPositionGroup: player.position_group,
-      destinationSlotNumber,
+      destinationSlotNumber: destinationSlot,
       actorUserId: actor.actorUserId,
       actorAuthority: actorAuthority(actor),
       ownershipEventId: secureRandom.id(),
@@ -396,7 +465,9 @@ function createRosterActionService({
     });
     const lateLock = await coordinateMovementAfterCommit({
       mutationKind:
-        submitted.destinationCategory === "Injured Reserve"
+        prospectActivation
+          ? "prospect_activation"
+          : submitted.destinationCategory === "Injured Reserve"
           ? "injured_reserve_move"
           : "roster_move",
       workspace,
@@ -411,7 +482,201 @@ function createRosterActionService({
         rosterCategory: moved.ownership.roster_category,
         slotNumber: moved.ownership.slot_number,
       }),
+      automaticallyCancelledTradeIds:
+        moved.automaticallyCancelledTradeIds ?? Object.freeze([]),
       lateLock,
+    });
+  }
+
+  async function signProspect({
+    authenticated,
+    leagueId,
+    teamId,
+    playerId,
+    input,
+  } = {}) {
+    assertMethod(
+      prospectDecisionRepository,
+      "signFantasyElc",
+      "a prospect-decision repository"
+    );
+    const submitted = exactObject(input, [
+      "destinationCategory",
+      "expectedVersion",
+    ]);
+    const expectedVersion = positiveVersion(submitted.expectedVersion);
+    if (
+      !["Prospect", "Active", "Bench", "Injured Reserve"].includes(
+        submitted.destinationCategory
+      )
+    ) {
+      failInput();
+    }
+    const actor = managerAuthority(authenticated, leagueId, teamId);
+    const workspace = record(leagueId, teamId);
+    const player = prospectByPlayer(workspace, playerId);
+    if (
+      player.ownership_version !== expectedVersion ||
+      player.ownership_kind !== "Prospect Right" ||
+      player.contract_id !== null
+    ) {
+      throw new RosterActionConflictError(
+        "PROSPECT_UNSIGNED_RIGHT_REQUIRED"
+      );
+    }
+    if (
+      submitted.destinationCategory === "Injured Reserve" &&
+      sourceStatus(player) !== "injured reserve"
+    ) {
+      throw new RosterActionConflictError("PLAYER_NOT_IR_ELIGIBLE");
+    }
+    const legality = evaluateTeamRosterLegality(workspace, {
+      ownershipId: player.ownership_id,
+      destinationCategory: submitted.destinationCategory,
+      contractAavCents: FANTASY_ELC_AAV_CENTS,
+      hasActiveContract: true,
+    });
+    if (
+      submitted.destinationCategory !== "Prospect" &&
+      !legality.legal
+    ) {
+      throw new RosterActionConflictError(
+        "PROSPECT_DESTINATION_ILLEGAL",
+        { legality }
+      );
+    }
+    const occurredAtMs = clock.nowMs();
+    const signed = prospectDecisionRepository.signFantasyElc({
+      leagueId: workspace.scope.league_id,
+      seasonId: workspace.scope.season_id,
+      teamId: workspace.scope.team_id,
+      playerId: player.player_id,
+      ownershipId: player.ownership_id,
+      expectedOwnershipVersion: expectedVersion,
+      contractId: secureRandom.id(),
+      contractYearIds: [
+        secureRandom.id(),
+        secureRandom.id(),
+        secureRandom.id(),
+      ],
+      contractEventId: secureRandom.id(),
+      seasonIds: signingSeasonIds(
+        workspace.scope.league_id,
+        workspace.scope.season_id
+      ),
+      ownershipEventId: secureRandom.id(),
+      activityId: secureRandom.id(),
+      actorUserId: actor.actorUserId,
+      actorAuthority: "manager",
+      destinationCategory: submitted.destinationCategory,
+      destinationPositionGroup: player.position_group,
+      destinationSlotNumber: destinationSlotNumber(
+        workspace,
+        player,
+        submitted.destinationCategory
+      ),
+      occurredAtMs,
+    });
+    const lateLock = await coordinateMovementAfterCommit({
+      mutationKind: "prospect_signing",
+      workspace,
+      moved: Object.freeze({
+        ownership: signed.ownership,
+        affectedOwnerships: Object.freeze([signed.ownership]),
+      }),
+    });
+    return Object.freeze({
+      code: "PROSPECT_FANTASY_ELC_SIGNED",
+      legality,
+      ownership: Object.freeze({
+        id: signed.ownership.id,
+        version: signed.ownership.version,
+        rosterCategory: signed.ownership.roster_category,
+        slotNumber: signed.ownership.slot_number,
+      }),
+      contract: Object.freeze({
+        id: signed.contract.id,
+        version: signed.contract.version,
+        type: signed.contract.contract_type,
+        aavCents: signed.contract.aav_cents,
+        termYears: signed.contract.original_term_years,
+      }),
+      automaticallyCancelledTradeIds:
+        signed.automaticallyCancelledTradeIds ?? Object.freeze([]),
+      lateLock,
+    });
+  }
+
+  async function releaseUnsignedProspect({
+    authenticated,
+    leagueId,
+    teamId,
+    playerId,
+    input,
+    decision,
+  } = {}) {
+    assertMethod(
+      prospectDecisionRepository,
+      "releaseUnsignedRights",
+      "a prospect-decision repository"
+    );
+    const submitted = exactObject(input, ["confirmed", "expectedVersion"]);
+    if (submitted.confirmed !== true) failInput();
+    const expectedVersion = positiveVersion(submitted.expectedVersion);
+    const actor = managerAuthority(authenticated, leagueId, teamId);
+    const workspace = record(leagueId, teamId);
+    const player = prospectByPlayer(workspace, playerId);
+    if (
+      player.ownership_version !== expectedVersion ||
+      player.ownership_kind !== "Prospect Right" ||
+      player.contract_id !== null
+    ) {
+      throw new RosterActionConflictError(
+        "PROSPECT_UNSIGNED_RIGHT_REQUIRED"
+      );
+    }
+    const released = prospectDecisionRepository.releaseUnsignedRights({
+      leagueId: workspace.scope.league_id,
+      seasonId: workspace.scope.season_id,
+      teamId: workspace.scope.team_id,
+      playerId: player.player_id,
+      ownershipId: player.ownership_id,
+      expectedOwnershipVersion: expectedVersion,
+      decision,
+      confirmed: true,
+      ownershipEventId: secureRandom.id(),
+      activityId: secureRandom.id(),
+      actorUserId: actor.actorUserId,
+      actorAuthority: "manager",
+      reason: null,
+      occurredAtMs: clock.nowMs(),
+    });
+    const lateLock = await coordinateDeletionAfterCommit({
+      mutationKind: "prospect_release",
+      workspace,
+      releasedOwnership: released.releasedOwnership,
+    });
+    return Object.freeze({
+      code:
+        decision === "decline_elc"
+          ? "PROSPECT_FANTASY_ELC_DECLINED"
+          : "PROSPECT_RIGHTS_RELEASED",
+      playerId: player.player_id,
+      released: true,
+      automaticallyCancelledTradeIds:
+        released.automaticallyCancelledTradeIds ?? Object.freeze([]),
+      lateLock,
+    });
+  }
+
+  function declineProspectElc(input) {
+    return releaseUnsignedProspect({ ...input, decision: "decline_elc" });
+  }
+
+  function releaseProspectRights(input) {
+    return releaseUnsignedProspect({
+      ...input,
+      decision: "release_unsigned_rights",
     });
   }
 
@@ -494,8 +759,11 @@ function createRosterActionService({
 
   return Object.freeze({
     buyOutContract,
+    declineProspectElc,
     moveRosterPlayer,
     moveToInjuredReserve,
+    releaseProspectRights,
+    signProspect,
   });
 }
 

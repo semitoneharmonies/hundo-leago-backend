@@ -173,6 +173,7 @@ function createPersistenceRuntime(t, { withAdministrator = false } = {}) {
       platformRoleRepository,
     }),
     repository: leagueCreationRepository,
+    userRepository,
   };
 }
 
@@ -192,6 +193,7 @@ function createLeagueService(
     platformAuthorization: runtime.platformAuthorization,
     leagueCreationRepository:
       leagueCreationRepository || runtime.repository,
+    userRepository: runtime.userRepository,
     auditRepository: auditRepository || runtime.auditRepository,
     clock: { nowMs: () => NOW_MS },
     secureRandom: { id: () => uuid(nextId++) },
@@ -553,6 +555,26 @@ describe("M3-10 specialized league-creation persistence", () => {
 });
 
 describe("M3-10 administrative league-creation policy and service", () => {
+  test("marks platform administrators in the safe administrative user projection", (t) => {
+    const runtime = createPersistenceRuntime(t, {
+      withAdministrator: true,
+    });
+    const result = createLeagueService(runtime).listUsers({
+      authenticated: authenticated(),
+    });
+
+    assert.equal(result.code, "ADMIN_USERS_FOUND");
+    assert.deepEqual(result.users, [
+      {
+        id: USER_ID,
+        displayName: "League Admin",
+        email: "admin@example.test",
+        status: "active",
+        isPlatformAdministrator: true,
+      },
+    ]);
+  });
+
   test("validates only the approved name and opaque idempotency key", () => {
     assert.deepEqual(
       validateLeagueCreationInput({
@@ -626,8 +648,19 @@ describe("M3-10 administrative league-creation policy and service", () => {
     assert.equal(tableCount(runtime.database, "league_activity"), 1);
     assert.equal(tableCount(runtime.database, "security_audit_events"), 1);
     assert.equal(tableCount(runtime.database, "idempotency_requests"), 1);
+    assert.equal(tableCount(runtime.database, "league_memberships"), 1);
+    assert.deepEqual(
+      runtime.database.prepare(`
+        SELECT user_id, permission_category, status
+        FROM league_memberships
+      `).get(),
+      {
+        user_id: USER_ID,
+        permission_category: "member",
+        status: "active",
+      }
+    );
     for (const table of [
-      "league_memberships",
       "league_invitations",
       "teams",
       "team_manager_assignments",

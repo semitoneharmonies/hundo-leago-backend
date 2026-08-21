@@ -2,6 +2,7 @@
 
 const {
   FREE_AGENT_DRAFT_CORRECTION_CODES,
+  projectFreeAgentDraftCorrectionPreviewForPublic,
   validateFreeAgentDraftCorrectionPreview,
   validateFreeAgentDraftCorrectionPreviewCommand,
 } = require(
@@ -100,7 +101,7 @@ function canonicalPreview(command, value) {
       "The FAD allocation-correction preview does not match its request."
     );
   }
-  return preview;
+  return projectFreeAgentDraftCorrectionPreviewForPublic(preview);
 }
 
 function createFreeAgentDraftCorrectionPreviewService({

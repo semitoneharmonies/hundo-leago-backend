@@ -547,8 +547,23 @@ function canonicalContract(
   termYears,
   aavCents,
   failWith,
-  reasonCode
+  reasonCode,
+  { allowRedactedMoney = false } = {}
 ) {
+  const money = [totalValueCents, termYears, aavCents];
+  if (money.every((value) => value === null)) {
+    if (!allowRedactedMoney) {
+      failWith(reasonCode);
+    }
+    return Object.freeze({
+      totalValueCents: null,
+      termYears: null,
+      aavCents: null,
+    });
+  }
+  if (money.some((value) => value === null)) {
+    failWith(reasonCode);
+  }
   if (
     !Number.isSafeInteger(termYears) ||
     termYears < 1 ||
@@ -818,7 +833,12 @@ function hashFreeAgentDraftCorrectionApplyRequest(input) {
   );
 }
 
-function validateRankedOffer(value, failWith, reasonCode) {
+function validateRankedOffer(
+  value,
+  failWith,
+  reasonCode,
+  { allowRedactedMoney = false } = {}
+) {
   exactObject(
     value,
     RANKED_OFFER_FIELDS,
@@ -846,7 +866,8 @@ function validateRankedOffer(value, failWith, reasonCode) {
     value.termYears,
     value.aavCents,
     failWith,
-    reasonCode
+    reasonCode,
+    { allowRedactedMoney }
   );
   return Object.freeze({
     snapshotEntryId: stableId(
@@ -875,7 +896,13 @@ function validateRankedOffer(value, failWith, reasonCode) {
   });
 }
 
-function validateWinner(value, status, failWith, reasonCode) {
+function validateWinner(
+  value,
+  status,
+  failWith,
+  reasonCode,
+  { allowRedactedMoney = false } = {}
+) {
   if (value === null) return null;
   exactObject(value, WINNER_FIELDS, failWith, reasonCode);
   if (!SLOT_KEY_PATTERN.test(value.slotKey || "")) {
@@ -915,12 +942,18 @@ function validateWinner(value, status, failWith, reasonCode) {
       value.termYears,
       value.aavCents,
       failWith,
-      reasonCode
+      reasonCode,
+      { allowRedactedMoney }
     ),
   });
 }
 
-function validateRestricted(value, failWith, reasonCode) {
+function validateRestricted(
+  value,
+  failWith,
+  reasonCode,
+  { allowRedactedMoney = false } = {}
+) {
   if (value === null) return null;
   exactObject(
     value,
@@ -963,7 +996,8 @@ function validateRestricted(value, failWith, reasonCode) {
     value.minimumTermYears,
     value.minimumAavCents,
     failWith,
-    reasonCode
+    reasonCode,
+    { allowRedactedMoney }
   );
   return Object.freeze({
     auctionId,
@@ -976,7 +1010,12 @@ function validateRestricted(value, failWith, reasonCode) {
   });
 }
 
-function normalizeDecision(value, failWith, reasonCode) {
+function normalizeDecision(
+  value,
+  failWith,
+  reasonCode,
+  { allowRedactedMoney = false } = {}
+) {
   exactObject(value, DECISION_FIELDS, failWith, reasonCode);
   if (!ALLOCATION_STATUSES.includes(value.status)) {
     failWith(reasonCode);
@@ -993,7 +1032,9 @@ function normalizeDecision(value, failWith, reasonCode) {
     reasonCode,
     MAX_COLLECTION_SIZE
   ).map((offer) =>
-    validateRankedOffer(offer, failWith, reasonCode)
+    validateRankedOffer(offer, failWith, reasonCode, {
+      allowRedactedMoney,
+    })
   );
   if (rankedOffers.length < 1) {
     failWith(reasonCode);
@@ -1012,12 +1053,14 @@ function normalizeDecision(value, failWith, reasonCode) {
     value.winner,
     value.status,
     failWith,
-    reasonCode
+    reasonCode,
+    { allowRedactedMoney }
   );
   const restricted = validateRestricted(
     value.restricted,
     failWith,
-    reasonCode
+    reasonCode,
+    { allowRedactedMoney }
   );
   const recoveryStatus =
     value.recoveryStatus === null
@@ -1340,7 +1383,8 @@ function validateFreeAgentDraftCorrectionDelta(
 function normalizePreview(
   value,
   failWith,
-  reasonCode
+  reasonCode,
+  { allowRedactedMoney = false } = {}
 ) {
   exactObject(value, PREVIEW_FIELDS, failWith, reasonCode);
   if (typeof value.reversible !== "boolean") {
@@ -1393,12 +1437,14 @@ function normalizePreview(
     currentDecision: normalizeDecision(
       value.currentDecision,
       failWith,
-      reasonCode
+      reasonCode,
+      { allowRedactedMoney }
     ),
     recomputedDecision: normalizeDecision(
       value.recomputedDecision,
       failWith,
-      reasonCode
+      reasonCode,
+      { allowRedactedMoney }
     ),
     deltas: Object.freeze(deltas),
     warnings,
@@ -1545,6 +1591,172 @@ function validateFreeAgentDraftCorrectionPreview(input = {}) {
   return preview;
 }
 
+function validateFreeAgentDraftCorrectionPublicPreview(value) {
+  const preview = normalizePreview(
+    value,
+    failPreview,
+    "preview_invalid",
+    { allowRedactedMoney: true }
+  );
+  assertPublicDecisionMoneyRedacted(
+    preview.currentDecision,
+    failPreview,
+    "public_preview_money_not_redacted"
+  );
+  assertPublicDecisionMoneyRedacted(
+    preview.recomputedDecision,
+    failPreview,
+    "public_preview_money_not_redacted"
+  );
+  if (
+    preview.deltas.some((delta) =>
+      [
+        delta.afterSummary.totalValueCents,
+        delta.afterSummary.termYears,
+        delta.afterSummary.aavCents,
+      ].some((item) => item !== null)
+    )
+  ) {
+    failPreview("public_preview_money_not_redacted");
+  }
+  return preview;
+}
+
+function assertPublicDecisionMoneyRedacted(
+  decision,
+  failWith,
+  reasonCode
+) {
+  if (
+    decision.rankedOffers.some((offer) =>
+      [
+        offer.totalValueCents,
+        offer.termYears,
+        offer.aavCents,
+      ].some((item) => item !== null)
+    ) ||
+    (decision.winner !== null &&
+      [
+        decision.winner.totalValueCents,
+        decision.winner.termYears,
+        decision.winner.aavCents,
+      ].some((item) => item !== null)) ||
+    (decision.restricted !== null &&
+      [
+        decision.restricted.minimumTotalValueCents,
+        decision.restricted.minimumTermYears,
+        decision.restricted.minimumAavCents,
+      ].some((item) => item !== null))
+  ) {
+    failWith(reasonCode);
+  }
+}
+
+function redactDecisionMoney(decision) {
+  return {
+    ...decision,
+    rankedOffers: decision.rankedOffers.map((offer) => ({
+      ...offer,
+      totalValueCents: null,
+      termYears: null,
+      aavCents: null,
+    })),
+    winner:
+      decision.winner === null
+        ? null
+        : {
+            ...decision.winner,
+            totalValueCents: null,
+            termYears: null,
+            aavCents: null,
+          },
+    restricted:
+      decision.restricted === null
+        ? null
+        : {
+            ...decision.restricted,
+            minimumTotalValueCents: null,
+            minimumTermYears: null,
+            minimumAavCents: null,
+          },
+  };
+}
+
+function redactAfterSummaryMoney(delta) {
+  return {
+    ...delta,
+    afterSummary: {
+      ...delta.afterSummary,
+      totalValueCents: null,
+      termYears: null,
+      aavCents: null,
+    },
+  };
+}
+
+function redactAllocationResultMoney(allocation) {
+  const decision = redactDecisionMoney(allocation);
+  return {
+    ...allocation,
+    rankedOffers: decision.rankedOffers,
+    winner: decision.winner,
+    restricted: decision.restricted,
+    fallback:
+      allocation.fallback === null
+        ? null
+        : {
+            ...allocation.fallback,
+            minimumTotalValueCents: null,
+          },
+  };
+}
+
+function validateFreeAgentDraftPublicAllocationResultProjection(
+  value
+) {
+  const allocation =
+    validateFreeAgentDraftAllocationResultProjection(value);
+  assertPublicDecisionMoneyRedacted(
+    allocation,
+    failResult,
+    "public_allocation_money_not_redacted"
+  );
+  if (
+    allocation.fallback !== null &&
+    allocation.fallback.minimumTotalValueCents !== null
+  ) {
+    failResult("public_allocation_money_not_redacted");
+  }
+  return allocation;
+}
+
+function projectFreeAgentDraftAllocationResultForPublic(value) {
+  const allocation =
+    validateFreeAgentDraftAllocationResultProjection(value);
+  return validateFreeAgentDraftPublicAllocationResultProjection(
+    redactAllocationResultMoney(allocation)
+  );
+}
+
+function projectFreeAgentDraftCorrectionPreviewForPublic(value) {
+  const preview = normalizePreview(
+    value,
+    failPreview,
+    "preview_invalid",
+    { allowRedactedMoney: true }
+  );
+  return validateFreeAgentDraftCorrectionPublicPreview({
+    ...preview,
+    currentDecision: redactDecisionMoney(
+      preview.currentDecision
+    ),
+    recomputedDecision: redactDecisionMoney(
+      preview.recomputedDecision
+    ),
+    deltas: preview.deltas.map(redactAfterSummaryMoney),
+  });
+}
+
 function compareFreeAgentDraftCorrectionPreviewFingerprints(
   left,
   right
@@ -1608,7 +1820,12 @@ function compareFreeAgentDraftCorrectionDecisions(left, right) {
   );
 }
 
-function validateFallback(value, failWith, reasonCode) {
+function validateFallback(
+  value,
+  failWith,
+  reasonCode,
+  { allowRedactedMoney = false } = {}
+) {
   if (value === null) return null;
   exactObject(value, FALLBACK_FIELDS, failWith, reasonCode);
   if (!FALLBACK_RESULT_STATUSES.includes(value.status)) {
@@ -1649,12 +1866,19 @@ function validateFallback(value, failWith, reasonCode) {
       reasonCode
     ),
     status: value.status,
-    minimumTotalValueCents: integer(
-      value.minimumTotalValueCents,
-      1,
-      failWith,
-      reasonCode
-    ),
+    minimumTotalValueCents: allowRedactedMoney
+      ? nullableInteger(
+          value.minimumTotalValueCents,
+          1,
+          failWith,
+          reasonCode
+        )
+      : integer(
+          value.minimumTotalValueCents,
+          1,
+          failWith,
+          reasonCode
+        ),
     winningBidId,
     contractId,
     ownershipId,
@@ -1809,12 +2033,14 @@ function validateFreeAgentDraftAllocationResultProjection(
       recoveryStatus: value.recoveryStatus,
     },
     failResult,
-    "allocation_result_invalid"
+    "allocation_result_invalid",
+    { allowRedactedMoney: true }
   );
   const fallback = validateFallback(
     value.fallback,
     failResult,
-    "allocation_result_invalid"
+    "allocation_result_invalid",
+    { allowRedactedMoney: true }
   );
   const draws = exactArray(
     value.draws,
@@ -1958,6 +2184,51 @@ function validateFreeAgentDraftCorrectionApplyResult(value) {
   });
 }
 
+function validateFreeAgentDraftCorrectionPublicApplyResult(
+  value
+) {
+  const result = validateFreeAgentDraftCorrectionApplyResult(
+    value
+  );
+  assertPublicDecisionMoneyRedacted(
+    result.allocation,
+    failResult,
+    "public_apply_money_not_redacted"
+  );
+  if (
+    (result.allocation.fallback !== null &&
+      result.allocation.fallback
+        .minimumTotalValueCents !== null) ||
+    result.appliedDeltas.some((delta) =>
+      [
+        delta.afterSummary.totalValueCents,
+        delta.afterSummary.termYears,
+        delta.afterSummary.aavCents,
+      ].some((item) => item !== null)
+    )
+  ) {
+    failResult("public_apply_money_not_redacted");
+  }
+  return result;
+}
+
+function projectFreeAgentDraftCorrectionApplyResultForPublic(
+  value
+) {
+  const result = validateFreeAgentDraftCorrectionApplyResult(
+    value
+  );
+  return validateFreeAgentDraftCorrectionPublicApplyResult({
+    ...result,
+    allocation: redactAllocationResultMoney(
+      result.allocation
+    ),
+    appliedDeltas: result.appliedDeltas.map(
+      redactAfterSummaryMoney
+    ),
+  });
+}
+
 module.exports = {
   AFTER_SUMMARY_STATUSES,
   ALLOCATION_DECISION_CODES,
@@ -1984,19 +2255,25 @@ module.exports = {
   hasFreeAgentDraftCorrectionPreviewFingerprintDrift,
   hashFreeAgentDraftCorrectionApplyRequest,
   hashFreeAgentDraftCorrectionPreview,
+  projectFreeAgentDraftAllocationResultForPublic,
+  projectFreeAgentDraftCorrectionApplyResultForPublic,
+  projectFreeAgentDraftCorrectionPreviewForPublic,
   serializeFreeAgentDraftCorrectionApplyRequest,
   serializeFreeAgentDraftCorrectionPreviewFingerprint,
   validateFreeAgentDraftAllocationResultProjection,
+  validateFreeAgentDraftPublicAllocationResultProjection,
   validateFreeAgentDraftCorrectionAfterSummary,
   validateFreeAgentDraftCorrectionApplyBody,
   validateFreeAgentDraftCorrectionApplyCommand,
   validateFreeAgentDraftCorrectionApplyResult,
+  validateFreeAgentDraftCorrectionPublicApplyResult,
   validateFreeAgentDraftCorrectionDecision,
   validateFreeAgentDraftCorrectionDelta,
   validateFreeAgentDraftCorrectionDiagnostic,
   validateFreeAgentDraftCorrectionExpectedAllocationVersion,
   validateFreeAgentDraftCorrectionIdempotencyKey,
   validateFreeAgentDraftCorrectionPreview,
+  validateFreeAgentDraftCorrectionPublicPreview,
   validateFreeAgentDraftCorrectionPreviewBody,
   validateFreeAgentDraftCorrectionPreviewCommand,
 };

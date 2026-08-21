@@ -19,11 +19,6 @@ const {
   "../../../domain/freeAgentDraft/freeAgentDraftCorrectionResourceIdentityPolicy"
 );
 const {
-  normalizeCandidateEligiblePlayerName,
-} = require(
-  "../../../domain/freeAgentDraft/candidateEligiblePlayerSearchPolicy"
-);
-const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
   repositoryError,
@@ -31,9 +26,6 @@ const {
 const {
   createSqliteCapReadRepository,
 } = require("./SqliteCapReadRepository");
-const {
-  createSqliteFreeAgentDraftReadRepository,
-} = require("./SqliteFreeAgentDraftReadRepository");
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -572,8 +564,6 @@ function createSqliteFreeAgentDraftCorrectionPreviewRepository({
     });
   }
 
-  const publishedReadRepository =
-    createSqliteFreeAgentDraftReadRepository({ database });
   const capReadRepository = createSqliteCapReadRepository({
     database,
   });
@@ -691,46 +681,6 @@ function createSqliteFreeAgentDraftCorrectionPreviewRepository({
       offers: Object.freeze(offers),
       decision,
     });
-  }
-
-  function readPublishedResult(scope, allocation) {
-    const query = {
-      q: normalizeCandidateEligiblePlayerName(
-        allocation.player_full_name
-      ),
-      status: null,
-      limit: 100,
-      cursor: null,
-    };
-    const seen = new Set();
-    while (true) {
-      const page =
-        publishedReadRepository.readAllocationResults({
-          leagueId: scope.leagueId,
-          fadId: scope.fadId,
-          viewerUserId: scope.actorUserId,
-          viewerMembershipId: scope.actorMembershipId,
-          nowMs: allocation.updated_at_ms,
-          query,
-        });
-      const result = page.data.find(
-        (candidate) =>
-          candidate.allocationId === scope.allocationId
-      );
-      if (result) return result;
-      if (!page.page.hasMore || !page.page.nextCursor) {
-        incompatible(
-          "The exact published FAD allocation projection is unavailable."
-        );
-      }
-      if (seen.has(page.page.nextCursor)) {
-        incompatible(
-          "The published FAD allocation cursor did not advance."
-        );
-      }
-      seen.add(page.page.nextCursor);
-      query.cursor = page.page.nextCursor;
-    }
   }
 
   function linkedAuctionStatus(row) {
@@ -1343,7 +1293,7 @@ function createSqliteFreeAgentDraftCorrectionPreviewRepository({
           blockers.push(
             diagnostic(
               "FAD_CORRECTION_CONTRACT_YEAR_DRIFT",
-              `Linked contract has ${years.length} current/future year records for a ${currentContract.original_term_years}-year term.`,
+              "The linked contract year schedule is inconsistent with the contract.",
               currentContract.id
             )
           );
@@ -1626,7 +1576,7 @@ function createSqliteFreeAgentDraftCorrectionPreviewRepository({
           warnings.push(
             diagnostic(
               "FAD_CORRECTION_RESULTING_TEAM_OVER_CAP",
-              `The corrected roster projects ${projectedUsage} cents against a ${cap.capLimitCents}-cent cap.`,
+              "The corrected roster would exceed the league salary cap.",
               expectedWinner.teamId
             )
           );
@@ -1945,101 +1895,72 @@ function createSqliteFreeAgentDraftCorrectionPreviewRepository({
 
   const previewTransaction = database.transaction((scope) => {
     requireAuthority(scope);
-      const allocation = readAllocation(scope);
-      const snapshot = readSnapshot(scope, allocation);
-      const state = readState(scope, allocation);
-      let publishedResult = null;
-      let publishedReadError = null;
-      try {
-        publishedResult = readPublishedResult(
-          scope,
-          allocation
+    const allocation = readAllocation(scope);
+    const snapshot = readSnapshot(scope, allocation);
+    const state = readState(scope, allocation);
+    const currentDecision = fallbackCurrentProjection(
+      scope,
+      allocation,
+      snapshot,
+      state
+    );
+    const player = Object.freeze({
+      playerId: allocation.player_id,
+      fullName: allocation.player_full_name,
+      positionGroup: (() => {
+        const positions = new Set(
+          snapshot.rows.map(
+            (row) => row.effective_position_group
+          )
         );
-      } catch (error) {
-        publishedReadError = error;
-      }
-      const fallbackDecision = fallbackCurrentProjection(
-        scope,
-        allocation,
-        snapshot,
-        state
-      );
-      const currentDecision = publishedResult
-        ? Object.freeze({
-            status: publishedResult.status,
-            decisionCode: publishedResult.decisionCode,
-            rankedOffers: publishedResult.rankedOffers,
-            winner: publishedResult.winner,
-            restricted: publishedResult.restricted,
-            recoveryStatus:
-              publishedResult.recoveryStatus,
-          })
-        : fallbackDecision;
-      const player = publishedResult?.player ??
-        Object.freeze({
-          playerId: allocation.player_id,
-          fullName: allocation.player_full_name,
-          positionGroup: (() => {
-            const positions = new Set(
-              snapshot.rows.map(
-                (row) => row.effective_position_group
-              )
-            );
-            if (
-              positions.size !== 1 ||
-              !["F", "D"].includes([...positions][0])
-            ) {
-              incompatible(
-                "A safe FAD player position projection is unavailable."
-              );
-            }
-            return [...positions][0];
-          })(),
-        });
-      const recomputedDecision = createRecomputedDecision({
-        scope,
-        allocation,
-        snapshot,
-        state,
-        currentDecision,
-      });
-      const inspection = inspectDownstream({
-        scope,
-        allocation,
-        snapshot,
-        state,
-        currentDecision,
-        recomputedDecision,
-        player,
-      });
-      if (
-        publishedReadError &&
-        inspection.blockers.length === 0 &&
-        allocation.status !== "restricted_scheduled"
-      ) {
-        throw publishedReadError;
-      }
-      const deltas = createDeltas({
-        allocation,
-        state,
-        currentDecision,
-        recomputedDecision,
-        snapshot,
-        player,
-        blockers: inspection.blockers,
-      });
-      return createFreeAgentDraftCorrectionPreview({
-        leagueId: scope.leagueId,
-        fadId: scope.fadId,
-        allocationId: allocation.id,
-        allocationVersion: allocation.version,
-        reversible: inspection.blockers.length === 0,
-        currentDecision,
-        recomputedDecision,
-        deltas,
-        warnings: inspection.warnings,
-        blockers: inspection.blockers,
-      });
+        if (
+          positions.size !== 1 ||
+          !["F", "D"].includes([...positions][0])
+        ) {
+          incompatible(
+            "A safe FAD player position projection is unavailable."
+          );
+        }
+        return [...positions][0];
+      })(),
+    });
+    const recomputedDecision = createRecomputedDecision({
+      scope,
+      allocation,
+      snapshot,
+      state,
+      currentDecision,
+    });
+    const inspection = inspectDownstream({
+      scope,
+      allocation,
+      snapshot,
+      state,
+      currentDecision,
+      recomputedDecision,
+      player,
+    });
+    const deltas = createDeltas({
+      allocation,
+      state,
+      currentDecision,
+      recomputedDecision,
+      snapshot,
+      player,
+      blockers: inspection.blockers,
+    });
+    return createFreeAgentDraftCorrectionPreview({
+      leagueId: scope.leagueId,
+      fadId: scope.fadId,
+      allocationId: allocation.id,
+      allocationVersion: allocation.version,
+      reversible: inspection.blockers.length === 0,
+      currentDecision,
+      recomputedDecision,
+      deltas,
+      warnings: inspection.warnings,
+      blockers: inspection.blockers,
+    });
   });
 
   function previewAllocationCorrection(input = {}) {

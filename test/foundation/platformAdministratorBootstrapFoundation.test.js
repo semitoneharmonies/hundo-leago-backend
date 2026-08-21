@@ -347,6 +347,39 @@ describe("M3-09 first platform-administrator bootstrap", () => {
     }
   });
 
+  test("provisions protected active member access when bootstrap follows an existing setup league", (t) => {
+    const runtime = createRuntime(t, "hundo-m3-09-existing-league-");
+    const leagueId = uuid(90);
+    runtime.context.repositories.leagues.insert({
+      id: leagueId,
+      name: "Existing Setup League",
+      name_normalized: "existing setup league",
+      status: "setup",
+      timezone: "America/Vancouver",
+      commissioner_membership_id: null,
+      current_season_id: null,
+      created_at_ms: NOW_MS,
+      updated_at_ms: NOW_MS,
+      version: 1,
+    });
+
+    const result = runtime
+      .createBootstrapService()
+      .bootstrap(identity());
+    assert.deepEqual(
+      runtime.database.prepare(`
+        SELECT league_id, user_id, permission_category, status
+        FROM league_memberships
+      `).get(),
+      {
+        league_id: leagueId,
+        user_id: result.userId,
+        permission_category: "member",
+        status: "active",
+      }
+    );
+  });
+
   test("permanently refuses active or ended administrator history", (t) => {
     const runtime = createRuntime(t, "hundo-m3-09-refuse-");
     const first = runtime

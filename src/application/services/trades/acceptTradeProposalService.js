@@ -160,11 +160,21 @@ function committedBatch(result) {
   });
 }
 
-function projectResult(result, lateLock) {
+function projectResult(result, lateLock, action = "accept") {
+  const awaitingCommissionerApproval =
+    result.trade.status === "awaiting_commissioner_approval";
   return Object.freeze({
-    code: result.replayed
-      ? "TRADE_ACCEPTANCE_REPLAYED"
-      : "TRADE_ACCEPTED",
+    code: awaitingCommissionerApproval
+      ? result.replayed
+        ? "TRADE_ACCEPTANCE_REPLAYED"
+        : "TRADE_AWAITING_COMMISSIONER_APPROVAL"
+      : result.replayed
+        ? action === "approve"
+          ? "TRADE_APPROVAL_REPLAYED"
+          : "TRADE_ACCEPTANCE_REPLAYED"
+        : action === "approve"
+          ? "TRADE_APPROVED"
+          : "TRADE_ACCEPTED",
     replayed: result.replayed,
     proposal: Object.freeze({
       id: result.trade.id,
@@ -172,7 +182,9 @@ function projectResult(result, lateLock) {
       seasonId: result.trade.season_id,
       proposingTeamId: result.trade.proposing_team_id,
       receivingTeamId: result.trade.receiving_team_id,
-      status: "Accepted",
+      status: awaitingCommissionerApproval
+        ? "Awaiting Commissioner Approval"
+        : "Accepted",
       storageStatus: result.trade.status,
       respondedAtMs: result.trade.responded_at_ms,
       completedAtMs: result.trade.completed_at_ms,
@@ -213,25 +225,17 @@ function createAcceptTradeProposalService({
     assertMethod(repository, method, "an atomic trade-execution repository");
   }
   assertMethod(
+    repository,
+    "executeApproval",
+    "an atomic trade-approval repository"
+  );
+  assertMethod(
     lateLockCoordinator,
     "coordinateCommittedRoster",
     "a late-lock coordinator"
   );
   assertMethod(clock, "nowMs", "a clock");
   assertMethod(secureRandom, "id", "secure identifiers");
-
-  function authority(authenticated, leagueId, receivingTeamId) {
-    try {
-      return leagueAuthorization.requireCommissioner(authenticated, leagueId);
-    } catch (error) {
-      if (error?.code !== "LEAGUE_COMMISSIONER_REQUIRED") throw error;
-    }
-    return teamAuthorization.requireManager(
-      authenticated,
-      leagueId,
-      receivingTeamId
-    );
-  }
 
   async function accept({ leagueId, input, idempotencyKey, authenticated } = {}) {
     const body = validateTradeExecutionInput(input);
@@ -246,7 +250,7 @@ function createAcceptTradeProposalService({
     if (!Number.isSafeInteger(proposal.effective_deadline_at_ms)) {
       throw new TradeExecutionPolicyError(TRADE_EXECUTION_CODES.stateInvalid);
     }
-    const actor = authority(
+    const actor = teamAuthorization.requireManager(
       authenticated,
       proposal.league_id,
       proposal.receiving_team_id
@@ -269,6 +273,12 @@ function createAcceptTradeProposalService({
         idempotencyKey: canonicalIdempotencyKey(idempotencyKey),
         idempotencyExpiresAtMs: occurredAtMs + IDEMPOTENCY_LIFETIME_MS,
       });
+    if (result.trade.status === "awaiting_commissioner_approval") {
+      return projectResult(
+        result,
+        Object.freeze({ status: "not_applicable" })
+      );
+    }
     let lateLock = AWAITING_DATA_LATE_LOCK;
     try {
       const batch = committedBatch(result);
@@ -281,7 +291,55 @@ function createAcceptTradeProposalService({
     return projectResult(result, lateLock);
   }
 
-  return Object.freeze({ accept });
+  async function approve({ leagueId, input, idempotencyKey, authenticated } = {}) {
+    const body = validateTradeExecutionInput(input);
+    leagueAuthorization.requireActiveMembership(authenticated, leagueId);
+    const proposal = repository.findLifecycleParticipants({
+      leagueId,
+      tradeId: body.tradeId,
+    });
+    if (!proposal) {
+      throw new TradeExecutionPolicyError(TRADE_EXECUTION_CODES.notFound);
+    }
+    if (!Number.isSafeInteger(proposal.effective_deadline_at_ms)) {
+      throw new TradeExecutionPolicyError(TRADE_EXECUTION_CODES.stateInvalid);
+    }
+    const actor = leagueAuthorization.requireCommissioner(
+      authenticated,
+      proposal.league_id
+    );
+    const occurredAtMs = safeNow(clock);
+    const result = repository.executeApproval({
+      tradeId: proposal.trade_id,
+      eventId: secureRandom.id(),
+      idempotencyRequestId: secureRandom.id(),
+      leagueId: proposal.league_id,
+      seasonId: proposal.season_id,
+      proposingTeamId: proposal.proposing_team_id,
+      receivingTeamId: proposal.receiving_team_id,
+      expectedVersion: proposal.version,
+      actorUserId: actor.actorUserId,
+      actorMembershipId: actor.membershipId,
+      actorAuthority: actor.authority,
+      occurredAtMs,
+      effectiveDeadlineAtMs: proposal.effective_deadline_at_ms,
+      idempotencyKey: canonicalIdempotencyKey(idempotencyKey),
+      idempotencyExpiresAtMs: occurredAtMs + IDEMPOTENCY_LIFETIME_MS,
+    });
+    let lateLock = AWAITING_DATA_LATE_LOCK;
+    try {
+      lateLock = safeLateLockProjection(
+        await lateLockCoordinator.coordinateCommittedRoster(
+          committedBatch(result)
+        )
+      );
+    } catch {
+      lateLock = AWAITING_DATA_LATE_LOCK;
+    }
+    return projectResult(result, lateLock, "approve");
+  }
+
+  return Object.freeze({ accept, approve });
 }
 
 module.exports = {

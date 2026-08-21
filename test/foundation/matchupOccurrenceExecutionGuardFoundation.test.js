@@ -516,7 +516,7 @@ function createRuntime(t) {
       SELECT MAX(migration_id) AS migration_id
       FROM schema_migrations
     `).get().migration_id,
-    52
+    54
   );
   seedLeague(connection.database);
   seedSchedule(connection.database);

@@ -58,6 +58,47 @@ test("authenticated team workspace projects current-season stats, cap, picks, as
     ORDER BY player_id
     LIMIT 1
   `).get(leagueId, seasonId, teamId).player_id;
+  const isolatedPlayerId = connection.database.prepare(`
+    SELECT player_id
+    FROM player_ownerships
+    WHERE league_id = ? AND season_id = ? AND team_id <> ?
+    ORDER BY player_id
+    LIMIT 1
+  `).get(leagueId, seasonId, teamId).player_id;
+  const insertSource = connection.database.prepare(`
+    INSERT INTO player_source_state (
+      id, player_id, provider, source_position, normalized_position,
+      nhl_team_abbreviation, active, source_version, source_payload_json,
+      effective_at_ms, ended_at_ms, created_at_ms
+    ) VALUES (?, ?, ?, 'C', 'F', ?, 1, ?, '{}', ?, NULL, ?)
+  `);
+  insertSource.run(
+    fixtureId("player-source:team-workspace:authoritative"),
+    decoyPlayerId,
+    "sportsdataio-discovery-lab",
+    "MTL",
+    "team-workspace-authoritative",
+    FIXTURE_NOW_MS,
+    FIXTURE_NOW_MS
+  );
+  insertSource.run(
+    fixtureId("player-source:team-workspace:newer-decoy"),
+    decoyPlayerId,
+    "non-authoritative-test-provider",
+    "TOR",
+    "team-workspace-newer-decoy",
+    FIXTURE_NOW_MS + 300_000,
+    FIXTURE_NOW_MS + 300_000
+  );
+  insertSource.run(
+    fixtureId("player-source:team-workspace:isolated"),
+    isolatedPlayerId,
+    "sportsdataio-discovery-lab",
+    "VAN",
+    "team-workspace-isolated",
+    FIXTURE_NOW_MS,
+    FIXTURE_NOW_MS
+  );
   const decoySourceId = fixtureId("stat-source:prior-season-team-audit");
   const decoyRefreshId = fixtureId("stat-refresh:prior-season-team-audit");
   connection.database.prepare(`
@@ -119,11 +160,18 @@ test("authenticated team workspace projects current-season stats, cap, picks, as
     secureRandom: { id: () => crypto.randomUUID() },
   });
 
+  const changesBeforeRead = connection.database
+    .prepare("SELECT total_changes() AS total")
+    .get().total;
   const workspace = service.read({
     authenticated: {},
     leagueId,
     teamId,
   });
+  assert.equal(
+    connection.database.prepare("SELECT total_changes() AS total").get().total,
+    changesBeforeRead
+  );
   assert.equal(workspace.code, "TEAM_WORKSPACE_FOUND");
   assert.equal(workspace.canManage, true);
   assert.equal(workspace.cap.activePlayerCents, 4050);
@@ -157,6 +205,21 @@ test("authenticated team workspace projects current-season stats, cap, picks, as
     ).length
   );
   assert.equal(workspace.orderVersion, 0);
+  assert.equal(
+    workspace.players.find(({ playerId }) => playerId === decoyPlayerId)
+      .nhlTeamAbbreviation,
+    "MTL"
+  );
+  assert.equal(
+    workspace.players.every((player) =>
+      Object.hasOwn(player, "nhlTeamAbbreviation")
+    ),
+    true
+  );
+  assert.equal(
+    workspace.players.some(({ playerId }) => playerId === isolatedPlayerId),
+    false
+  );
   assert.notEqual(
     workspace.players.find(
       ({ playerId }) => playerId === decoyPlayerId

@@ -416,6 +416,34 @@ describe("M3-17 team-manager assignment policy", () => {
 });
 
 describe("M3-17 active-member manager assignment", () => {
+  test("protects a platform administrator from commissioner-managed team assignment", (t) => {
+    const runtime = createRuntime(t, { withCurrent: false });
+    runtime.context.repositories.platform_roles.insert({
+      id: uuid(39),
+      user_id: MANAGER_B_ID,
+      role: "platform_administrator",
+      status: "active",
+      granted_by_user_id: COMMISSIONER_ID,
+      granted_at_ms: NOW_MS,
+      ended_at_ms: null,
+      version: 1,
+    });
+
+    assert.throws(
+      () => createService(runtime).propose(proposalCommand()),
+      (error) =>
+        error?.code ===
+        "PLATFORM_ADMINISTRATOR_TEAM_ACCESS_PROTECTED"
+    );
+    assert.deepEqual(writeCounts(runtime.database), {
+      team_manager_assignments: 0,
+      notifications: 0,
+      league_activity: 0,
+      security_audit_events: 0,
+      idempotency_requests: 0,
+    });
+  });
+
   test("proposes, privately reads, accepts, and replays an unassigned team atomically", (t) => {
     const runtime = createRuntime(t, { withCurrent: false });
     const service = createService(runtime);

@@ -29,6 +29,7 @@ const {
   ActivityPolicyError,
   decodeCursor,
   encodeCursor,
+  validateActivityPageInput,
   validatePageInput,
 } = require("../../src/domain/activity/activityPolicy");
 const {
@@ -199,6 +200,22 @@ function createRuntime(t) {
     });
   }
   context.repositories.league_activity.insert({
+    id: uuid(209),
+    league_id: LEAGUE_A,
+    season_id: null,
+    event_type: "roster_moved",
+    actor_user_id: USER_A,
+    actor_authority: "manager",
+    team_id: null,
+    player_id: null,
+    related_type: "player_ownership",
+    related_id: uuid(399),
+    display_summary: "Routine Active to Bench move.",
+    reason: null,
+    metadata_json: JSON.stringify({ schemaVersion: 1 }),
+    occurred_at_ms: NOW_MS + 9,
+  });
+  context.repositories.league_activity.insert({
     id: uuid(210),
     league_id: LEAGUE_B,
     season_id: null,
@@ -317,6 +334,15 @@ describe("M5-09 activity and notification policy", () => {
       ActivityPolicyError
     );
     assert.throws(() => decodeCursor("not-a-cursor"), ActivityPolicyError);
+    assert.deepEqual(validateActivityPageInput({ category: "trade" }), {
+      limit: 25,
+      cursor: null,
+      category: "trade",
+    });
+    assert.throws(
+      () => validateActivityPageInput({ category: "raw_internal" }),
+      ActivityPolicyError
+    );
   });
 });
 
@@ -333,6 +359,13 @@ describe("M5-09 authenticated League Activity", () => {
       "Trade 3 completed.",
       "Trade 2 completed.",
     ]);
+    assert.equal(first.activity[0].actor.displayName, "Alpha");
+    assert.equal(
+      runtime.database
+        .prepare("SELECT COUNT(*) AS count FROM league_activity WHERE event_type = 'roster_moved'")
+        .get().count,
+      1
+    );
     assert.ok(first.page.nextCursor);
     const second = runtime.activity.list({
       leagueId: LEAGUE_A,
@@ -343,9 +376,47 @@ describe("M5-09 authenticated League Activity", () => {
       "Trade 1 completed.",
     ]);
     assert.equal(second.page.nextCursor, null);
+    const tradeOnly = runtime.activity.list({
+      leagueId: LEAGUE_A,
+      query: { category: "trade", limit: 10 },
+      authenticated: authenticated(USER_A),
+    });
+    assert.equal(tradeOnly.activity.length, 3);
     assert.equal(
       runtime.database.prepare("SELECT total_changes() AS n").get().n,
       before
+    );
+    runtime.context.repositories.league_activity.insert({
+      id: uuid(211),
+      league_id: LEAGUE_A,
+      season_id: null,
+      event_type: "fad_allocation_player_acquired",
+      actor_user_id: null,
+      actor_authority: "system",
+      team_id: null,
+      player_id: null,
+      related_type: "free_agent_draft",
+      related_id: uuid(311),
+      display_summary: "Free Agent Draft signing completed.",
+      reason: null,
+      metadata_json: null,
+      occurred_at_ms: NOW_MS + 11,
+    });
+    const beforeCompetitionRead = runtime.database
+      .prepare("SELECT total_changes() AS n")
+      .get().n;
+    const competitionOnly = runtime.activity.list({
+      leagueId: LEAGUE_A,
+      query: { category: "competition", limit: 10 },
+      authenticated: authenticated(USER_A),
+    });
+    assert.deepEqual(
+      competitionOnly.activity.map(({ type }) => type),
+      ["fad_allocation_player_acquired"]
+    );
+    assert.equal(
+      runtime.database.prepare("SELECT total_changes() AS n").get().n,
+      beforeCompetitionRead
     );
     assert.throws(
       () =>
@@ -412,6 +483,71 @@ describe("M5-09 owner-only notification acknowledgement", () => {
       authenticated: authenticated(USER_A),
     });
     assert.equal(allReplay.changedCount, 0);
+    assert.equal(
+      runtime.database
+        .prepare("SELECT read_at_ms FROM notifications WHERE id = ?")
+        .get(uuid(403)).read_at_ms,
+      null
+    );
+  });
+
+  test("filters by read state and acknowledges exactly one owned batch", (t) => {
+    const runtime = createRuntime(t);
+    const unread = runtime.notifications.list({
+      query: { readStatus: "unread" },
+      authenticated: authenticated(USER_A),
+    });
+    assert.deepEqual(
+      unread.notifications.map(({ id }) => id),
+      [uuid(402), uuid(401)]
+    );
+
+    const batch = runtime.notifications.markBatchRead({
+      notificationIds: [uuid(402), uuid(401)],
+      authenticated: authenticated(USER_A),
+    });
+    assert.equal(batch.changedCount, 2);
+    assert.equal(batch.readAtMs, NOW_MS + 100);
+    assert.deepEqual(batch.notificationIds, [uuid(402), uuid(401)]);
+    assert.deepEqual(
+      runtime.notifications.list({
+        query: { readStatus: "unread" },
+        authenticated: authenticated(USER_A),
+      }).notifications,
+      []
+    );
+    assert.deepEqual(
+      runtime.notifications
+        .list({
+          query: { readStatus: "read" },
+          authenticated: authenticated(USER_A),
+        })
+        .notifications.map(({ id }) => id),
+      [uuid(402), uuid(401)]
+    );
+    assert.equal(
+      runtime.notifications.markBatchRead({
+        notificationIds: [uuid(402), uuid(401)],
+        authenticated: authenticated(USER_A),
+      }).changedCount,
+      0
+    );
+
+    const beforeCrossOwner = runtime.database
+      .prepare("SELECT total_changes() AS n")
+      .get().n;
+    assert.throws(
+      () =>
+        runtime.notifications.markBatchRead({
+          notificationIds: [uuid(401), uuid(403)],
+          authenticated: authenticated(USER_A),
+        }),
+      ({ code }) => code === "NOTIFICATION_NOT_FOUND"
+    );
+    assert.equal(
+      runtime.database.prepare("SELECT total_changes() AS n").get().n,
+      beforeCrossOwner
+    );
     assert.equal(
       runtime.database
         .prepare("SELECT read_at_ms FROM notifications WHERE id = ?")
@@ -655,6 +791,10 @@ describe("M5-09 activity and notification HTTP boundary", () => {
           calls.push({ method: "markRead", input });
           return { code: "NOTIFICATION_READ" };
         },
+        markBatchRead(input) {
+          calls.push({ method: "markBatchRead", input });
+          return { code: "NOTIFICATIONS_READ", changedCount: 2 };
+        },
         markAllRead(input) {
           calls.push({ method: "markAllRead", input });
           return { code: "NOTIFICATIONS_READ", changedCount: 0 };
@@ -684,6 +824,15 @@ describe("M5-09 activity and notification HTTP boundary", () => {
       }
     );
     assert.equal(denied.status, 403);
+    const batch = await fetch(`${baseUrl}/api/v1/notifications/read-batch`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-csrf-token": "valid",
+      },
+      body: JSON.stringify({ notificationIds: [uuid(401), uuid(402)] }),
+    });
+    assert.equal(batch.status, 200);
     const marked = await fetch(
       `${baseUrl}/api/v1/notifications/${uuid(401)}/read`,
       {
@@ -707,7 +856,7 @@ describe("M5-09 activity and notification HTTP boundary", () => {
     assert.equal(invalidBody.status, 400);
     assert.deepEqual(
       calls.map(({ method }) => method),
-      ["activity", "notifications", "markRead"]
+      ["activity", "notifications", "markBatchRead", "markRead"]
     );
   });
 });

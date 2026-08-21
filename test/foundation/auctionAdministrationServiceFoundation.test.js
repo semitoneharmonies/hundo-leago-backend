@@ -48,6 +48,9 @@ const IDS = Object.freeze({
   job: uuid(11),
   allocation: uuid(12),
   recovery: uuid(13),
+  player: uuid(14),
+  snapshotEntry: uuid(15),
+  secondTeam: uuid(16),
 });
 const AUTHENTICATED = Object.freeze({
   valid: true,
@@ -218,8 +221,50 @@ function restrictedCancellationData(overrides = {}) {
     },
     fadAllocation: {
       allocationId: IDS.allocation,
+      allocationVersion: 2,
+      player: {
+        playerId: IDS.player,
+        fullName: "Alex Example",
+        positionGroup: "F",
+      },
       status: "correction_required",
+      decisionCode: "exact_total_and_term_tie",
+      rankedOffers: [
+        {
+          snapshotEntryId: IDS.snapshotEntry,
+          teamId: IDS.team,
+          team: {
+            teamId: IDS.team,
+            name: "Alpha",
+            primaryColour: "#112233",
+            secondaryColour: "#ddeeff",
+            tertiaryColour: null,
+            patternTemplate: "even-two",
+            logoReference: null,
+          },
+          slotKey: "F01",
+          totalValueCents: null,
+          termYears: null,
+          aavCents: null,
+          valid: true,
+          validationCode: null,
+          rank: 1,
+          outcomeCode: "restricted_tied",
+        },
+      ],
+      winner: null,
+      restricted: {
+        auctionId: IDS.auction,
+        status: "cancelled",
+        participantTeamIds: [IDS.team, IDS.secondTeam],
+        minimumTotalValueCents: null,
+        minimumTermYears: null,
+        minimumAavCents: null,
+      },
+      fallback: null,
+      draws: [],
       recoveryStatus: "correction_required",
+      resolvedAtMs: null,
     },
     recoveryId: IDS.recovery,
     ...overrides,
@@ -1212,6 +1257,55 @@ describe(
             harness.repositoryCalls.length,
             1,
             scenario.label
+          );
+        }
+      }
+    );
+
+    test(
+      "rejects full or partial FAD money before a T-082 result can cross the service boundary",
+      () => {
+        const fullMoney = restrictedCancellationData();
+        Object.assign(
+          fullMoney.fadAllocation.rankedOffers[0],
+          {
+            totalValueCents: 500,
+            termYears: 2,
+            aavCents: 250,
+          }
+        );
+        Object.assign(
+          fullMoney.fadAllocation.restricted,
+          {
+            minimumTotalValueCents: 500,
+            minimumTermYears: 2,
+            minimumAavCents: 250,
+          }
+        );
+        const partialMoney =
+          restrictedCancellationData();
+        partialMoney.fadAllocation.rankedOffers[0]
+          .termYears = 2;
+
+        for (const data of [fullMoney, partialMoney]) {
+          const harness = createHarness({
+            administer(command) {
+              return resultFor(command, { data });
+            },
+          });
+          assert.throws(
+            () =>
+              harness.service.cancelAuction(
+                methodOptions("cancel_auction")
+              ),
+            (error) =>
+              error instanceof
+                AuctionAdministrationPolicyError &&
+              error.code ===
+                AUCTION_ADMINISTRATION_CODES
+                  .resultInvalid &&
+              error.reasonCode ===
+                "service_cancellation_context_invalid"
           );
         }
       }

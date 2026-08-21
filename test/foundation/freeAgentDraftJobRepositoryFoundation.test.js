@@ -3762,6 +3762,23 @@ describe(
           IDS.league,
           IDS.administratorMembership
         );
+      assert.equal(
+        database.prepare(`
+          UPDATE league_memberships
+          SET permission_category = 'member',
+              updated_at_ms = ?,
+              version = version + 1
+          WHERE league_id = ?
+            AND id = ?
+            AND status = 'active'
+            AND permission_category = 'commissioner'
+        `).run(
+          READINESS_RETRY_AT_MS + 1,
+          IDS.league,
+          IDS.commissionerMembership
+        ).changes,
+        1
+      );
       insertRow(database, "league_memberships", {
         id:
           IDS.administratorReplacementMembership,

@@ -7,6 +7,12 @@ const RELEASE_DECISIONS = Object.freeze([
   "decline_elc",
   "release_unsigned_rights",
 ]);
+const SIGNING_DESTINATIONS = Object.freeze([
+  "Prospect",
+  "Active",
+  "Bench",
+  "Injured Reserve",
+]);
 
 const PROSPECT_DECISION_CODES = Object.freeze({
   inputInvalid: "PROSPECT_DECISION_INPUT_INVALID",
@@ -113,6 +119,28 @@ function validateThreeYearIds(values, firstId) {
   return Object.freeze(ids);
 }
 
+function signingDestination(category, positionGroup, slotNumber) {
+  if (!SIGNING_DESTINATIONS.includes(category)) {
+    fail(PROSPECT_DECISION_CODES.decisionInvalid);
+  }
+  if (!["F", "D"].includes(positionGroup)) {
+    fail(PROSPECT_DECISION_CODES.ownershipInvalid);
+  }
+  if (category === "Prospect") {
+    if (slotNumber !== null) fail(PROSPECT_DECISION_CODES.ownershipInvalid);
+    return Object.freeze({ category, positionGroup, slotNumber: null });
+  }
+  if (!Number.isSafeInteger(slotNumber)) {
+    fail(PROSPECT_DECISION_CODES.ownershipInvalid);
+  }
+  const maximum =
+    category === "Active" ? (positionGroup === "F" ? 12 : 6) : 4;
+  if (slotNumber < 1 || slotNumber > maximum) {
+    fail(PROSPECT_DECISION_CODES.ownershipInvalid);
+  }
+  return Object.freeze({ category, positionGroup, slotNumber });
+}
+
 function validateProspectElcSigning(input) {
   assertExactObject(input, [
     "leagueId",
@@ -129,9 +157,17 @@ function validateProspectElcSigning(input) {
     "activityId",
     "actorUserId",
     "actorAuthority",
+    "destinationCategory",
+    "destinationPositionGroup",
+    "destinationSlotNumber",
     "occurredAtMs",
   ]);
   const seasonId = stableId(input.seasonId);
+  const destination = signingDestination(
+    input.destinationCategory,
+    input.destinationPositionGroup,
+    input.destinationSlotNumber
+  );
   return Object.freeze({
     leagueId: stableId(input.leagueId),
     seasonId,
@@ -149,6 +185,9 @@ function validateProspectElcSigning(input) {
     activityId: stableId(input.activityId),
     actorUserId: stableId(input.actorUserId),
     actorAuthority: actorAuthority(input.actorAuthority),
+    destinationCategory: destination.category,
+    destinationPositionGroup: destination.positionGroup,
+    destinationSlotNumber: destination.slotNumber,
     occurredAtMs: safeTimestamp(input.occurredAtMs),
   });
 }
@@ -229,6 +268,7 @@ module.exports = {
   PROSPECT_DECISION_CODES,
   ProspectDecisionPolicyError,
   RELEASE_DECISIONS,
+  SIGNING_DESTINATIONS,
   assertUnsignedProspectOwnership,
   validateProspectElcSigning,
   validateUnsignedProspectRelease,

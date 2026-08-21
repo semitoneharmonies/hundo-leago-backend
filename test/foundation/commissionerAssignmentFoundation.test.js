@@ -314,6 +314,45 @@ function proposalCounts(database) {
   );
 }
 
+function seedCommissionerTransfer(runtime) {
+  const currentMembershipId = uuid(30);
+  const targetMembershipId = uuid(31);
+  for (const membership of [
+    {
+      id: currentMembershipId,
+      userId: OTHER_ID,
+      permissionCategory: "commissioner",
+    },
+    {
+      id: targetMembershipId,
+      userId: TARGET_ID,
+      permissionCategory: "member",
+    },
+  ]) {
+    runtime.context.repositories.league_memberships.insert({
+      id: membership.id,
+      league_id: LEAGUE_ID,
+      user_id: membership.userId,
+      permission_category: membership.permissionCategory,
+      status: "active",
+      joined_at_ms: NOW_MS,
+      ended_at_ms: null,
+      created_at_ms: NOW_MS,
+      updated_at_ms: NOW_MS,
+      version: 1,
+    });
+  }
+  runtime.context.repositories.leagues.updateVersioned({
+    key: LEAGUE_ID,
+    expectedVersion: 1,
+    changes: {
+      commissioner_membership_id: currentMembershipId,
+      updated_at_ms: NOW_MS,
+    },
+  });
+  return Object.freeze({ currentMembershipId, targetMembershipId });
+}
+
 describe("M3-11 commissioner-assignment policy", () => {
   test("accepts only canonical proposal, decision, ID, and idempotency inputs", () => {
     assert.deepEqual(validateProposalInput({ userId: TARGET_ID }), {
@@ -617,6 +656,107 @@ describe("M3-11 commissioner proposal and safe read", () => {
 });
 
 describe("M3-11 commissioner acceptance and decline", () => {
+  test("transfers commissioner authority atomically and demotes the prior commissioner", (t) => {
+    const runtime = createRuntime(t);
+    const ids = seedCommissionerTransfer(runtime);
+    const service = createService(runtime);
+    const proposed = service.propose(proposalCommand());
+
+    assert.equal(proposed.membership.id, ids.targetMembershipId);
+    assert.equal(proposed.membership.permissionCategory, "member");
+    const accepted = service.accept({
+      assignmentId: proposed.assignment.id,
+      input: {},
+      authenticated: authenticated(TARGET_ID),
+    });
+    assert.equal(accepted.code, "COMMISSIONER_ASSIGNMENT_ACCEPTED");
+    assert.equal(
+      accepted.league.commissionerMembershipId,
+      ids.targetMembershipId
+    );
+
+    const memberships = runtime.database.prepare(`
+      SELECT id, user_id, permission_category, status
+      FROM league_memberships
+      WHERE league_id = ? AND status = 'active'
+      ORDER BY id
+    `).all(LEAGUE_ID);
+    assert.deepEqual(memberships, [
+      {
+        id: ids.currentMembershipId,
+        user_id: OTHER_ID,
+        permission_category: "member",
+        status: "active",
+      },
+      {
+        id: ids.targetMembershipId,
+        user_id: TARGET_ID,
+        permission_category: "commissioner",
+        status: "active",
+      },
+    ]);
+    assert.equal(
+      runtime.database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM league_memberships
+        WHERE league_id = ? AND status = 'active'
+          AND permission_category = 'commissioner'
+      `).get(LEAGUE_ID).count,
+      1
+    );
+  });
+
+  test("declining a commissioner transfer preserves the existing active membership", (t) => {
+    const runtime = createRuntime(t);
+    const ids = seedCommissionerTransfer(runtime);
+    const service = createService(runtime);
+    const proposed = service.propose(proposalCommand());
+    const declined = service.decline({
+      assignmentId: proposed.assignment.id,
+      input: {},
+      authenticated: authenticated(TARGET_ID),
+    });
+
+    assert.equal(declined.code, "COMMISSIONER_ASSIGNMENT_DECLINED");
+    assert.deepEqual(
+      runtime.database.prepare(`
+        SELECT permission_category, status, version
+        FROM league_memberships WHERE id = ?
+      `).get(ids.targetMembershipId),
+      { permission_category: "member", status: "active", version: 1 }
+    );
+    assert.equal(
+      runtime.database.prepare(`
+        SELECT commissioner_membership_id FROM leagues WHERE id = ?
+      `).get(LEAGUE_ID).commissioner_membership_id,
+      ids.currentMembershipId
+    );
+  });
+
+  test("never proposes commissioner authority to an active platform administrator", (t) => {
+    const runtime = createRuntime(t);
+    seedCommissionerTransfer(runtime);
+    runtime.context.repositories.platform_roles.insert({
+      id: uuid(32),
+      user_id: TARGET_ID,
+      role: "platform_administrator",
+      status: "active",
+      granted_by_user_id: ADMIN_ID,
+      granted_at_ms: NOW_MS,
+      ended_at_ms: null,
+      version: 1,
+    });
+
+    assert.throws(
+      () => createService(runtime).propose(proposalCommand()),
+      (error) =>
+        error?.code ===
+        "PLATFORM_ADMINISTRATOR_COMMISSIONER_PROTECTED"
+    );
+    assert.equal(tableCount(runtime.database, "league_invitations"), 0);
+    assert.equal(tableCount(runtime.database, "idempotency_requests"), 0);
+  });
+
   test("accepts atomically, replays without writes, and rejects the opposite action", (t) => {
     const runtime = createRuntime(t);
     const service = createService(runtime);

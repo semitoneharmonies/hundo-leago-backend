@@ -223,7 +223,7 @@ function createMatchupIntegrationService({
       ["correct"],
       "matchup-result correction service",
     ],
-    [standingsService, ["read"], "standings service"],
+    [standingsService, ["previewCorrection", "read"], "standings service"],
     [recoveryService, ["previewStandings", "rebuildStandings"], "recovery service"],
   ];
   for (const [dependency, methods, description] of dependencies) {
@@ -550,9 +550,10 @@ function createMatchupIntegrationService({
   function correctResult(input) {
     if (input.input?.confirmed === false) {
       commissioner(input);
-      validateMatchupResultCorrectionPreviewInput(
-        input.input
-      );
+      const correction =
+        validateMatchupResultCorrectionPreviewInput(
+          input.input
+        );
       const scope =
         readRepository.readResultScope(input);
       if (!scope) {
@@ -561,24 +562,61 @@ function createMatchupIntegrationService({
           "The result was not found."
         );
       }
+      const contextualPreview = {
+        resultId: scope.result_id,
+        expectedVersion: scope.result_version,
+        weekId: scope.week_id,
+        matchupId: scope.matchup_id,
+        currentVersion: Object.freeze({
+          id: scope.result_version_id,
+          versionNumber: scope.version_number,
+          homeScoreHundredths:
+            scope.home_score_hundredths,
+          awayScoreHundredths:
+            scope.away_score_hundredths,
+          outcome: scope.outcome,
+        }),
+      };
+      if (correction.homeScoreHundredths !== undefined) {
+        contextualPreview.week = Object.freeze({
+          id: scope.week_id,
+          sequence: scope.week_sequence,
+          startsAtMs: scope.week_starts_at_ms,
+          endsAtMs: scope.week_ends_at_ms,
+        });
+        contextualPreview.matchup = Object.freeze({
+          id: scope.matchup_id,
+          homeTeam: Object.freeze({
+            id: scope.home_team_id,
+            name: scope.home_team_name,
+          }),
+          awayTeam: Object.freeze({
+            id: scope.away_team_id,
+            name: scope.away_team_name,
+          }),
+        });
+        contextualPreview.proposedVersion = Object.freeze({
+          homeScoreHundredths:
+            correction.homeScoreHundredths,
+          awayScoreHundredths:
+            correction.awayScoreHundredths,
+          outcome: correction.outcome,
+        });
+        contextualPreview.standingsImpact =
+          standingsService.previewCorrection({
+            leagueId: input.leagueId,
+            seasonId: input.seasonId,
+            resultId: input.resultId,
+            homeScoreHundredths:
+              correction.homeScoreHundredths,
+            awayScoreHundredths:
+              correction.awayScoreHundredths,
+          });
+      }
       return Object.freeze({
         code:
           "MATCHUP_RESULT_CORRECTION_PREVIEWED",
-        preview: Object.freeze({
-          resultId: scope.result_id,
-          expectedVersion: scope.result_version,
-          weekId: scope.week_id,
-          matchupId: scope.matchup_id,
-          currentVersion: Object.freeze({
-            id: scope.result_version_id,
-            versionNumber: scope.version_number,
-            homeScoreHundredths:
-              scope.home_score_hundredths,
-            awayScoreHundredths:
-              scope.away_score_hundredths,
-            outcome: scope.outcome,
-          }),
-        }),
+        preview: Object.freeze(contextualPreview),
       });
     }
     return resultCorrectionService.correct({

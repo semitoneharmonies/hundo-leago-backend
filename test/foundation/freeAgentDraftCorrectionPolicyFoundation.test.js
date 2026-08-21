@@ -19,9 +19,13 @@ const {
   hasFreeAgentDraftCorrectionPreviewFingerprintDrift,
   hashFreeAgentDraftCorrectionApplyRequest,
   hashFreeAgentDraftCorrectionPreview,
+  projectFreeAgentDraftAllocationResultForPublic,
+  projectFreeAgentDraftCorrectionApplyResultForPublic,
+  projectFreeAgentDraftCorrectionPreviewForPublic,
   serializeFreeAgentDraftCorrectionApplyRequest,
   serializeFreeAgentDraftCorrectionPreviewFingerprint,
   validateFreeAgentDraftAllocationResultProjection,
+  validateFreeAgentDraftPublicAllocationResultProjection,
   validateFreeAgentDraftCorrectionAfterSummary,
   validateFreeAgentDraftCorrectionApplyBody,
   validateFreeAgentDraftCorrectionApplyCommand,
@@ -34,6 +38,8 @@ const {
   validateFreeAgentDraftCorrectionPreview,
   validateFreeAgentDraftCorrectionPreviewBody,
   validateFreeAgentDraftCorrectionPreviewCommand,
+  validateFreeAgentDraftCorrectionPublicApplyResult,
+  validateFreeAgentDraftCorrectionPublicPreview,
 } = require(
   "../../src/domain/freeAgentDraft/freeAgentDraftCorrectionPolicy"
 );
@@ -165,6 +171,76 @@ function automaticDecision() {
     },
     restricted: null,
     recoveryStatus: null,
+  };
+}
+
+function restrictedDecision() {
+  return {
+    status: "restricted_scheduled",
+    decisionCode: "exact_total_and_term_tie",
+    rankedOffers: [
+      rankedOffer({ outcomeCode: "restricted_tied" }),
+    ],
+    winner: null,
+    restricted: {
+      auctionId: null,
+      status: "scheduled",
+      participantTeamIds: [],
+      minimumTotalValueCents: 600,
+      minimumTermYears: 2,
+      minimumAavCents: 300,
+    },
+    recoveryStatus: null,
+  };
+}
+
+function fallbackAllocation() {
+  return {
+    allocationId: IDS.allocation,
+    allocationVersion: 4,
+    player: safePlayer(),
+    status: "fallback_open_resolved",
+    decisionCode: "fallback_open_result",
+    rankedOffers: [
+      rankedOffer({ outcomeCode: "restricted_tied" }),
+      rankedOffer({
+        snapshotEntryId: IDS.snapshotTwo,
+        teamId: IDS.teamTwo,
+        teamName: "Ice Foxes",
+        slotKey: "F02",
+        outcomeCode: "restricted_tied",
+      }),
+    ],
+    winner: {
+      teamId: IDS.teamThree,
+      snapshotEntryId: null,
+      contractId: IDS.contract,
+      ownershipId: IDS.ownership,
+      slotKey: "F03",
+      totalValueCents: 900,
+      termYears: 3,
+      aavCents: 300,
+    },
+    restricted: {
+      auctionId: IDS.restrictedAuction,
+      status: "no_winner",
+      participantTeamIds: [IDS.teamOne, IDS.teamTwo],
+      minimumTotalValueCents: 600,
+      minimumTermYears: 2,
+      minimumAavCents: 300,
+    },
+    fallback: {
+      auctionId: IDS.fallbackAuction,
+      status: "resolved",
+      minimumTotalValueCents: 600,
+      winningBidId: IDS.bidOne,
+      contractId: IDS.contract,
+      ownershipId: IDS.ownership,
+      noWinnerReason: null,
+    },
+    draws: [],
+    recoveryStatus: "resolved",
+    resolvedAtMs: 1_000_000,
   };
 }
 
@@ -740,7 +816,163 @@ describe("Free Agent Draft correction policy foundation", () => {
     );
   });
 
-  test("validates pending and automatic T-140 allocation result projections", () => {
+  test("projects a fully validated preview to an opaque all-money-null public shape", () => {
+    const fullPreview = createFreeAgentDraftCorrectionPreview(
+      previewCreateInput({
+        currentDecision: automaticDecision(),
+        recomputedDecision: restrictedDecision(),
+        deltas: [
+          {
+            resourceType: "contract",
+            resourceId: IDS.contract,
+            action: "update",
+            beforeVersion: 1,
+            afterSummary: emptyAfterSummary({
+              status: "Active",
+              totalValueCents: 600,
+              termYears: 2,
+              aavCents: 300,
+            }),
+          },
+        ],
+      })
+    );
+    const publicPreview =
+      projectFreeAgentDraftCorrectionPreviewForPublic(
+        fullPreview
+      );
+
+    assert.equal(
+      publicPreview.previewFingerprint,
+      fullPreview.previewFingerprint
+    );
+    assert.deepEqual(
+      publicPreview.currentDecision.rankedOffers.map(
+        ({ totalValueCents, termYears, aavCents }) => ({
+          totalValueCents,
+          termYears,
+          aavCents,
+        })
+      ),
+      [
+        {
+          totalValueCents: null,
+          termYears: null,
+          aavCents: null,
+        },
+      ]
+    );
+    assert.deepEqual(
+      {
+        totalValueCents:
+          publicPreview.currentDecision.winner.totalValueCents,
+        termYears:
+          publicPreview.currentDecision.winner.termYears,
+        aavCents:
+          publicPreview.currentDecision.winner.aavCents,
+      },
+      {
+        totalValueCents: null,
+        termYears: null,
+        aavCents: null,
+      }
+    );
+    assert.deepEqual(
+      {
+        minimumTotalValueCents:
+          publicPreview.recomputedDecision.restricted
+            .minimumTotalValueCents,
+        minimumTermYears:
+          publicPreview.recomputedDecision.restricted
+            .minimumTermYears,
+        minimumAavCents:
+          publicPreview.recomputedDecision.restricted
+            .minimumAavCents,
+      },
+      {
+        minimumTotalValueCents: null,
+        minimumTermYears: null,
+        minimumAavCents: null,
+      }
+    );
+    assert.deepEqual(
+      {
+        totalValueCents:
+          publicPreview.deltas[0].afterSummary
+            .totalValueCents,
+        termYears:
+          publicPreview.deltas[0].afterSummary.termYears,
+        aavCents:
+          publicPreview.deltas[0].afterSummary.aavCents,
+      },
+      {
+        totalValueCents: null,
+        termYears: null,
+        aavCents: null,
+      }
+    );
+    assert.equal(Object.isFrozen(publicPreview), true);
+    assert.equal(
+      Object.isFrozen(publicPreview.currentDecision.rankedOffers[0]),
+      true
+    );
+    assert.equal(
+      Object.isFrozen(publicPreview.deltas[0].afterSummary),
+      true
+    );
+
+    assertPolicyError(
+      () =>
+        validateFreeAgentDraftCorrectionPublicPreview(
+          fullPreview
+        ),
+      FREE_AGENT_DRAFT_CORRECTION_CODES.previewInvalid,
+      "public_preview_money_not_redacted"
+    );
+
+    assertPolicyError(
+      () =>
+        validateFreeAgentDraftCorrectionPreview({
+          leagueId: IDS.league,
+          fadId: IDS.fad,
+          preview: publicPreview,
+        }),
+      FREE_AGENT_DRAFT_CORRECTION_CODES.previewInvalid,
+      "preview_invalid"
+    );
+    const opaqueFingerprint = structuredClone(publicPreview);
+    opaqueFingerprint.previewFingerprint = "f".repeat(64);
+    assert.equal(
+      validateFreeAgentDraftCorrectionPublicPreview(
+        opaqueFingerprint
+      ).previewFingerprint,
+      "f".repeat(64)
+    );
+
+    const partialCases = [];
+    const partialOffer = structuredClone(publicPreview);
+    partialOffer.currentDecision.rankedOffers[0].termYears = 2;
+    partialCases.push(partialOffer);
+    const partialWinner = structuredClone(publicPreview);
+    partialWinner.currentDecision.winner.aavCents = 300;
+    partialCases.push(partialWinner);
+    const partialMinimum = structuredClone(publicPreview);
+    partialMinimum.recomputedDecision.restricted.minimumTermYears = 2;
+    partialCases.push(partialMinimum);
+    const partialDelta = structuredClone(publicPreview);
+    partialDelta.deltas[0].afterSummary.totalValueCents = 600;
+    partialCases.push(partialDelta);
+    for (const partial of partialCases) {
+      assertPolicyError(
+        () =>
+          validateFreeAgentDraftCorrectionPublicPreview(partial),
+        FREE_AGENT_DRAFT_CORRECTION_CODES.previewInvalid,
+        "preview_invalid"
+      );
+    }
+  });
+
+  test("validates pending and automatic protected allocation result projections", () => {
     const pending =
       validateFreeAgentDraftAllocationResultProjection({
         allocationId: IDS.allocation,
@@ -804,7 +1036,7 @@ describe("Free Agent Draft correction policy foundation", () => {
     );
   });
 
-  test("validates the full restricted fallback and draw T-140 nested shapes", () => {
+  test("validates the full protected restricted-fallback and draw shapes", () => {
     const offers = [
       rankedOffer({
         rank: 1,
@@ -1031,6 +1263,180 @@ describe("Free Agent Draft correction policy foundation", () => {
         ),
       FREE_AGENT_DRAFT_CORRECTION_CODES.resultInvalid,
       "apply_result_fields_invalid"
+    );
+  });
+
+  test("projects every T-144 monetary field to null and rejects partial public tuples", () => {
+    const fullResult = {
+      correctionId: IDS.correction,
+      allocation: fallbackAllocation(),
+      appliedDeltas: [
+        {
+          resourceType: "contract",
+          resourceId: IDS.contract,
+          action: "update",
+          beforeVersion: 1,
+          afterSummary: emptyAfterSummary({
+            status: "Active",
+            totalValueCents: 900,
+            termYears: 3,
+            aavCents: 300,
+          }),
+        },
+        {
+          resourceType: "activity",
+          resourceId: IDS.activity,
+          action: "append",
+          beforeVersion: null,
+          afterSummary: emptyAfterSummary({
+            status: "appended",
+          }),
+        },
+      ],
+      activityId: IDS.activity,
+      completedAtMs: 1_000_001,
+    };
+    assertPolicyError(
+      () =>
+        validateFreeAgentDraftCorrectionPublicApplyResult(
+          fullResult
+        ),
+      FREE_AGENT_DRAFT_CORRECTION_CODES.resultInvalid,
+      "public_apply_money_not_redacted"
+    );
+    const publicResult =
+      projectFreeAgentDraftCorrectionApplyResultForPublic({
+        ...fullResult,
+      });
+
+    for (const offer of publicResult.allocation.rankedOffers) {
+      assert.deepEqual(
+        [offer.totalValueCents, offer.termYears, offer.aavCents],
+        [null, null, null]
+      );
+    }
+    assert.deepEqual(
+      [
+        publicResult.allocation.winner.totalValueCents,
+        publicResult.allocation.winner.termYears,
+        publicResult.allocation.winner.aavCents,
+      ],
+      [null, null, null]
+    );
+    assert.deepEqual(
+      [
+        publicResult.allocation.restricted
+          .minimumTotalValueCents,
+        publicResult.allocation.restricted.minimumTermYears,
+        publicResult.allocation.restricted.minimumAavCents,
+      ],
+      [null, null, null]
+    );
+    assert.equal(
+      publicResult.allocation.fallback.minimumTotalValueCents,
+      null
+    );
+    for (const delta of publicResult.appliedDeltas) {
+      assert.deepEqual(
+        [
+          delta.afterSummary.totalValueCents,
+          delta.afterSummary.termYears,
+          delta.afterSummary.aavCents,
+        ],
+        [null, null, null]
+      );
+    }
+    assert.equal(Object.isFrozen(publicResult), true);
+    assert.equal(
+      Object.isFrozen(publicResult.allocation.winner),
+      true
+    );
+    assert.deepEqual(
+      validateFreeAgentDraftCorrectionPublicApplyResult(
+        publicResult
+      ),
+      publicResult
+    );
+
+    const partialAllocation = structuredClone(publicResult);
+    partialAllocation.allocation.winner.termYears = 3;
+    assertPolicyError(
+      () =>
+        validateFreeAgentDraftCorrectionPublicApplyResult(
+          partialAllocation
+        ),
+      FREE_AGENT_DRAFT_CORRECTION_CODES.resultInvalid,
+      "allocation_result_invalid"
+    );
+    const partialDelta = structuredClone(publicResult);
+    partialDelta.appliedDeltas[0].afterSummary.aavCents = 300;
+    assertPolicyError(
+      () =>
+        validateFreeAgentDraftCorrectionPublicApplyResult(
+          partialDelta
+        ),
+      FREE_AGENT_DRAFT_CORRECTION_CODES.resultInvalid,
+      "applied_deltas_invalid"
+    );
+  });
+
+  test("projects standalone public allocation results to all-null money and rejects full or partial tuples", () => {
+    const fullAllocation = fallbackAllocation();
+    assertPolicyError(
+      () =>
+        validateFreeAgentDraftPublicAllocationResultProjection(
+          fullAllocation
+        ),
+      FREE_AGENT_DRAFT_CORRECTION_CODES.resultInvalid,
+      "public_allocation_money_not_redacted"
+    );
+
+    const publicAllocation =
+      projectFreeAgentDraftAllocationResultForPublic(
+        fullAllocation
+      );
+    for (const offer of publicAllocation.rankedOffers) {
+      assert.deepEqual(
+        [offer.totalValueCents, offer.termYears, offer.aavCents],
+        [null, null, null]
+      );
+    }
+    assert.deepEqual(
+      [
+        publicAllocation.winner.totalValueCents,
+        publicAllocation.winner.termYears,
+        publicAllocation.winner.aavCents,
+      ],
+      [null, null, null]
+    );
+    assert.deepEqual(
+      [
+        publicAllocation.restricted.minimumTotalValueCents,
+        publicAllocation.restricted.minimumTermYears,
+        publicAllocation.restricted.minimumAavCents,
+      ],
+      [null, null, null]
+    );
+    assert.equal(
+      publicAllocation.fallback.minimumTotalValueCents,
+      null
+    );
+    assert.deepEqual(
+      validateFreeAgentDraftPublicAllocationResultProjection(
+        publicAllocation
+      ),
+      publicAllocation
+    );
+
+    const partialAllocation = structuredClone(publicAllocation);
+    partialAllocation.rankedOffers[0].termYears = 2;
+    assertPolicyError(
+      () =>
+        validateFreeAgentDraftPublicAllocationResultProjection(
+          partialAllocation
+        ),
+      FREE_AGENT_DRAFT_CORRECTION_CODES.resultInvalid,
+      "allocation_result_invalid"
     );
   });
 });

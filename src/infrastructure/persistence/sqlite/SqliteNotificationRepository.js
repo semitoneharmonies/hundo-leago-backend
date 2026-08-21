@@ -37,6 +37,33 @@ function safeLimit(value) {
   return value;
 }
 
+function safeReadStatus(value) {
+  if (!["all", "read", "unread"].includes(value)) {
+    throw repositoryError(
+      REPOSITORY_ERROR_CODES.argumentInvalid,
+      "A valid notification read-status filter is required."
+    );
+  }
+  return value;
+}
+
+function stableIds(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 100) {
+    throw repositoryError(
+      REPOSITORY_ERROR_CODES.argumentInvalid,
+      "One through 100 notification identifiers are required."
+    );
+  }
+  const ids = value.map(stableId);
+  if (new Set(ids).size !== ids.length) {
+    throw repositoryError(
+      REPOSITORY_ERROR_CODES.argumentInvalid,
+      "Notification identifiers must be unique."
+    );
+  }
+  return ids;
+}
+
 function freezeRow(row) {
   return row ? Object.freeze({ ...row }) : null;
 }
@@ -57,6 +84,11 @@ function createSqliteNotificationRepository({ database } = {}) {
       SELECT ${columns}
       FROM notifications
       WHERE user_id = @userId
+        AND (
+          @readStatus = 'all'
+          OR (@readStatus = 'read' AND read_at_ms IS NOT NULL)
+          OR (@readStatus = 'unread' AND read_at_ms IS NULL)
+        )
       ORDER BY created_at_ms DESC, id DESC
       LIMIT @fetchLimit
     `);
@@ -64,6 +96,11 @@ function createSqliteNotificationRepository({ database } = {}) {
       SELECT ${columns}
       FROM notifications
       WHERE user_id = @userId
+        AND (
+          @readStatus = 'all'
+          OR (@readStatus = 'read' AND read_at_ms IS NOT NULL)
+          OR (@readStatus = 'unread' AND read_at_ms IS NULL)
+        )
         AND (
           created_at_ms < @cursorOccurredAtMs
           OR (
@@ -110,11 +147,36 @@ function createSqliteNotificationRepository({ database } = {}) {
     return freezeRow(rows[0]);
   }
 
+  const markBatchReadTransaction = database.transaction(
+    ({ notificationIds, userId, readAtMs }) => {
+      const rows = notificationIds.map((notificationId) =>
+        findOwned({ notificationId, userId })
+      );
+      if (rows.some((row) => row === null)) return null;
+      let changedCount = 0;
+      for (const row of rows) {
+        if (row.read_at_ms === null) {
+          changedCount += markReadStatement.run({
+            notificationId: row.id,
+            userId,
+            readAtMs,
+          }).changes;
+        }
+      }
+      return Object.freeze({
+        changedCount,
+        notificationIds: Object.freeze([...notificationIds]),
+        readAtMs,
+      });
+    }
+  );
+
   return Object.freeze({
-    listPage({ userId, limit, cursor } = {}) {
+    listPage({ userId, limit, cursor, readStatus = "all" } = {}) {
       const parameters = {
         userId: stableId(userId),
         fetchLimit: safeLimit(limit) + 1,
+        readStatus: safeReadStatus(readStatus),
         ...(cursor
           ? {
               cursorOccurredAtMs: safeTimestamp(cursor.occurredAtMs),
@@ -133,6 +195,21 @@ function createSqliteNotificationRepository({ database } = {}) {
       } catch (error) {
         throw mapRepositoryError(error, {
           operation: "listOwnedNotifications",
+          tableName: "notifications",
+        });
+      }
+    },
+    markBatchRead({ notificationIds, userId, readAtMs } = {}) {
+      const parameters = {
+        notificationIds: stableIds(notificationIds),
+        userId: stableId(userId),
+        readAtMs: safeTimestamp(readAtMs),
+      };
+      try {
+        return markBatchReadTransaction(parameters);
+      } catch (error) {
+        throw mapRepositoryError(error, {
+          operation: "markOwnedNotificationBatchRead",
           tableName: "notifications",
         });
       }

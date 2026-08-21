@@ -222,6 +222,13 @@ function integrationFixture({
         result_version: 3,
         week_id: WEEK_ID,
         matchup_id: MATCHUP_ID,
+        week_sequence: 1,
+        week_starts_at_ms: 1_000,
+        week_ends_at_ms: 20_000,
+        home_team_id: HOME_ID,
+        away_team_id: AWAY_ID,
+        home_team_name: "Home",
+        away_team_name: "Away",
         result_version_id: OPERATION_ID,
         version_number: 3,
         home_score_hundredths: 450,
@@ -323,6 +330,28 @@ function integrationFixture({
         finalizedResultCount: 0,
         sourceResultVersion: 0,
         rows: [],
+      };
+    },
+    previewCorrection(input) {
+      calls.push({ method: "standingsCorrectionPreview", input });
+      return {
+        currentRows: [
+          {
+            teamId: AWAY_ID,
+            teamDisplayName: "Away",
+            rank: 1,
+            standingsPoints: 2,
+          },
+        ],
+        projectedRows: [
+          {
+            teamId: HOME_ID,
+            teamDisplayName: "Home",
+            rank: 1,
+            standingsPoints: 2,
+          },
+        ],
+        changedTeamIds: [HOME_ID, AWAY_ID],
       };
     },
   };
@@ -886,6 +915,63 @@ describe("M6-12 matchup HTTP integration service", () => {
     for (const method of ["scheduleGenerate", "weekAdvance", "correct", "standingsRebuild"]) {
       assert.equal(calls.some((call) => call.method === method), false, method);
     }
+  });
+
+  test("previews a recognizable corrected result and its standings impact without writing", () => {
+    const { calls, service } = integrationFixture();
+    const result = service.correctResult({
+      leagueId: LEAGUE_ID,
+      seasonId: SEASON_ID,
+      resultId: RESULT_ID,
+      authenticated: { valid: true },
+      input: {
+        confirmed: false,
+        homeScoreHundredths: 500,
+        awayScoreHundredths: 400,
+      },
+    });
+
+    assert.equal(
+      result.code,
+      "MATCHUP_RESULT_CORRECTION_PREVIEWED"
+    );
+    assert.deepEqual(result.preview.week, {
+      id: WEEK_ID,
+      sequence: 1,
+      startsAtMs: 1_000,
+      endsAtMs: 20_000,
+    });
+    assert.deepEqual(result.preview.matchup, {
+      id: MATCHUP_ID,
+      homeTeam: { id: HOME_ID, name: "Home" },
+      awayTeam: { id: AWAY_ID, name: "Away" },
+    });
+    assert.deepEqual(result.preview.proposedVersion, {
+      homeScoreHundredths: 500,
+      awayScoreHundredths: 400,
+      outcome: "home_win",
+    });
+    assert.deepEqual(
+      result.preview.standingsImpact.changedTeamIds,
+      [HOME_ID, AWAY_ID]
+    );
+    assert.deepEqual(
+      calls.find(
+        ({ method }) =>
+          method === "standingsCorrectionPreview"
+      ).input,
+      {
+        leagueId: LEAGUE_ID,
+        seasonId: SEASON_ID,
+        resultId: RESULT_ID,
+        homeScoreHundredths: 500,
+        awayScoreHundredths: 400,
+      }
+    );
+    assert.equal(
+      calls.some(({ method }) => method === "correct"),
+      false
+    );
   });
 
   test("propagates inherited platform-administrator authority to matchup commands", () => {

@@ -664,6 +664,16 @@ function createSqliteTradeReversalRepository({
     );
   }
 
+  function validCompletionTransition(metadata) {
+    return (
+      (metadata?.action === "accept" && metadata?.fromStatus === "proposed") ||
+      (
+        metadata?.action === "approve" &&
+        metadata?.fromStatus === "awaiting_commissioner_approval"
+      )
+    );
+  }
+
   function buildEvaluation(command, context) {
     const completionEvent = unique(
       findCompletionEventStatement,
@@ -677,8 +687,7 @@ function createSqliteTradeReversalRepository({
     let acceptanceMetadataValid =
       completionEvent?.occurred_at_ms === context.completed_at_ms &&
       completionMetadata?.schemaVersion === 1 &&
-      completionMetadata?.action === "accept" &&
-      completionMetadata?.fromStatus === "proposed" &&
+      validCompletionTransition(completionMetadata) &&
       completionMetadata?.toStatus === "completed" &&
       Array.isArray(completionMetadata?.transfers) &&
       Array.isArray(completionMetadata?.ownershipTransfers) &&
@@ -1292,8 +1301,7 @@ function createSqliteTradeReversalRepository({
     );
     if (
       completionMetadata.schemaVersion !== 1 ||
-      completionMetadata.action !== "accept" ||
-      completionMetadata.fromStatus !== "proposed" ||
+      !validCompletionTransition(completionMetadata) ||
       completionMetadata.toStatus !== "completed" ||
       !Array.isArray(completionMetadata.transfers) ||
       !Array.isArray(completionMetadata.ownershipTransfers)

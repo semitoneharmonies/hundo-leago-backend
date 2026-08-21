@@ -63,6 +63,11 @@ const {
 } = require(
   "../../src/infrastructure/persistence/sqlite/SqliteFreeAgentDraftCorrectionPreviewRepository"
 );
+const {
+  createSqliteFreeAgentDraftInternalReadRepository,
+} = require(
+  "../../src/infrastructure/persistence/sqlite/SqliteFreeAgentDraftReadRepository"
+);
 
 const MIGRATIONS_DIRECTORY = path.resolve(
   __dirname,
@@ -127,6 +132,7 @@ const IDS = Object.freeze({
   rollover: uuid(37),
   auction: uuid(38),
   draw: uuid(39),
+  commissionerManagerAssignment: uuid(40),
 });
 
 let suiteRoot;
@@ -1080,7 +1086,7 @@ before(() => {
   suiteRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "hundo-fad-t144-")
   );
-  templatePath = path.join(suiteRoot, "schema52.sqlite3");
+  templatePath = path.join(suiteRoot, "schema54.sqlite3");
   const connection = openDatabase({
     databasePath: templatePath,
     environment: "test",
@@ -1095,7 +1101,7 @@ before(() => {
     connection.database.pragma("user_version", {
       simple: true,
     }),
-    52
+    54
   );
   connection.database.pragma("wal_checkpoint(TRUNCATE)");
   connection.database.close();
@@ -1108,8 +1114,22 @@ after(() => {
 describe(
   "Free Agent Draft allocation-correction repository foundation",
   () => {
-    test("atomically replaces a completed wrong winner, preserves history, and replays its exact immutable receipt", (t) => {
+    test("atomically replaces a completed wrong winner and keeps dual-role fresh and replayed receipts money-null", (t) => {
       const runtime = createRuntime(t, seedWrongCompleted);
+      insert(runtime.database, "team_manager_assignments", {
+        id: IDS.commissionerManagerAssignment,
+        league_id: IDS.league,
+        team_id: IDS.teamCorrect,
+        user_id: IDS.commissionerUser,
+        membership_id: IDS.commissionerMembership,
+        assigned_by_user_id: IDS.commissionerUser,
+        replaces_assignment_id: null,
+        status: "accepted",
+        assigned_at_ms: 1,
+        accepted_at_ms: 1,
+        ended_at_ms: null,
+        version: 1,
+      });
       const write = writeInput(runtime);
       const result =
         runtime.repository.applyAllocationCorrection(write);
@@ -1148,6 +1168,30 @@ describe(
         result.data.allocation.winner.ownershipId,
         ownershipId
       );
+      assert.deepEqual(
+        [
+          result.data.allocation.winner.totalValueCents,
+          result.data.allocation.winner.termYears,
+          result.data.allocation.winner.aavCents,
+        ],
+        [null, null, null]
+      );
+      for (const offer of result.data.allocation.rankedOffers) {
+        assert.deepEqual(
+          [offer.totalValueCents, offer.termYears, offer.aavCents],
+          [null, null, null]
+        );
+      }
+      for (const delta of result.data.appliedDeltas) {
+        assert.deepEqual(
+          [
+            delta.afterSummary.totalValueCents,
+            delta.afterSummary.termYears,
+            delta.afterSummary.aavCents,
+          ],
+          [null, null, null]
+        );
+      }
       assert.deepEqual(result.committedRoster, {
         teams: [
           {
@@ -1205,7 +1249,9 @@ describe(
       assert.deepEqual(
         runtime.database
           .prepare(`
-            SELECT status, current_team_id, version
+            SELECT status, current_team_id,
+                   original_total_value_cents,
+                   original_term_years, aav_cents, version
             FROM contracts
             WHERE id = ?
           `)
@@ -1213,6 +1259,9 @@ describe(
         {
           status: "active",
           current_team_id: IDS.teamCorrect,
+          original_total_value_cents: 600,
+          original_term_years: 2,
+          aav_cents: 300,
           version: 1,
         }
       );
@@ -1332,6 +1381,35 @@ describe(
         `)
         .get();
       assert.equal(receipt.id, IDS.result);
+      const storedPreview = JSON.parse(receipt.preview_json);
+      assert.deepEqual(
+        [
+          storedPreview.recomputedDecision.winner
+            .totalValueCents,
+          storedPreview.recomputedDecision.winner.termYears,
+          storedPreview.recomputedDecision.winner.aavCents,
+        ],
+        [600, 2, 300]
+      );
+      const storedResponse = JSON.parse(receipt.response_json);
+      assert.deepEqual(
+        [
+          storedResponse.allocation.winner.totalValueCents,
+          storedResponse.allocation.winner.termYears,
+          storedResponse.allocation.winner.aavCents,
+        ],
+        [null, null, null]
+      );
+      assert.equal(
+        storedResponse.appliedDeltas.every((delta) =>
+          [
+            delta.afterSummary.totalValueCents,
+            delta.afterSummary.termYears,
+            delta.afterSummary.aavCents,
+          ].every((value) => value === null)
+        ),
+        true
+      );
       assert.equal(
         receipt.response_json,
         serializeCanonicalJsonV1(result.data)
@@ -1342,6 +1420,61 @@ describe(
           .update(receipt.response_json, "utf8")
           .digest("hex")
       );
+
+      const fullAllocation =
+        createSqliteFreeAgentDraftInternalReadRepository({
+          database: runtime.database,
+        }).readInternalAllocationResult({
+          allocationId: IDS.allocation,
+          fadId: IDS.fad,
+          leagueId: IDS.league,
+          nowMs: COMPLETED_AT_MS,
+          playerId: IDS.player,
+          viewerMembershipId:
+            IDS.commissionerMembership,
+          viewerUserId: IDS.commissionerUser,
+        });
+      assert.deepEqual(
+        [
+          fullAllocation.winner.totalValueCents,
+          fullAllocation.winner.termYears,
+          fullAllocation.winner.aavCents,
+        ],
+        [600, 2, 300]
+      );
+      const legacyFullMoneyData = {
+        ...result.data,
+        allocation: fullAllocation,
+      };
+      const legacyResponseJson =
+        serializeCanonicalJsonV1(legacyFullMoneyData);
+      const immutableTriggers = captureAndDropTriggers(
+        runtime.database
+      );
+      try {
+        assert.equal(
+          runtime.database
+            .prepare(`
+              UPDATE free_agent_draft_allocation_correction_command_results
+              SET response_json = @responseJson,
+                  response_sha256 = @responseSha256
+              WHERE id = @resultId
+            `)
+            .run({
+              responseJson: legacyResponseJson,
+              responseSha256: createHash("sha256")
+                .update(legacyResponseJson, "utf8")
+                .digest("hex"),
+              resultId: IDS.result,
+            }).changes,
+          1
+        );
+      } finally {
+        restoreTriggers(
+          runtime.database,
+          immutableTriggers
+        );
+      }
 
       const competingConnection = openDatabase({
         databasePath: runtime.databasePath,

@@ -60,6 +60,7 @@ function createTradeRouter({
     "a trade-acceptance-preview service"
   );
   assertMethod(tradeAcceptanceService, "accept", "a trade-acceptance service");
+  assertMethod(tradeAcceptanceService, "approve", "a trade-approval service");
 
   function requestId(request) {
     return requestSecurity.getRequestId(request);
@@ -219,6 +220,29 @@ function createTradeRouter({
           response,
           200,
           await tradeAcceptanceService.accept({
+            leagueId: request.params.leagueId,
+            input: { tradeId: request.params.tradeId },
+            idempotencyKey: request.get("idempotency-key"),
+            authenticated: requestSecurity.getAuthenticatedSession(request),
+          })
+        );
+      } catch (caught) {
+        return mapError(request, response, caught);
+      }
+    }
+  );
+
+  router.post(
+    "/api/v1/leagues/:leagueId/trades/:tradeId/approve",
+    requestSecurity.authenticateUnsafe,
+    requireEmptyBody,
+    async (request, response) => {
+      try {
+        return success(
+          request,
+          response,
+          200,
+          await tradeAcceptanceService.approve({
             leagueId: request.params.leagueId,
             input: { tradeId: request.params.tradeId },
             idempotencyKey: request.get("idempotency-key"),

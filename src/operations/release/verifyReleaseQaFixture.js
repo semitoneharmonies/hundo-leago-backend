@@ -257,11 +257,6 @@ function verifyTradeScenarios(database, alias, leagueId, playerIds) {
     WHERE league_id=? AND id=?
   `).get(leagueId, completedTradeId);
   const expectedSeasonId = fixtureId(`season:${alias}:current`);
-  const expectedCommissionerUserId = fixtureId(
-    `account:${alias === "leagueA"
-      ? "leagueACommissioner"
-      : "leagueBCommissioner"}`
-  );
   const expectedParticipantTeamIds = [
     fixtureId(`team:${alias}:1`),
     fixtureId(`team:${alias}:2`),
@@ -275,6 +270,13 @@ function verifyTradeScenarios(database, alias, leagueId, playerIds) {
     expectedParticipantTeamIds.join(","),
     `${alias} accepted participant scope`
   );
+  const receivingManager = database.prepare(`
+    SELECT user_id, membership_id
+    FROM team_manager_assignments
+    WHERE league_id = ? AND team_id = ? AND status = 'accepted'
+      AND ended_at_ms IS NULL
+    LIMIT 2
+  `).get(leagueId, completed.receiving_team_id);
   assertEqual(
     Number.isSafeInteger(completed?.responded_at_ms),
     true,
@@ -286,9 +288,9 @@ function verifyTradeScenarios(database, alias, leagueId, playerIds) {
     `${alias} accepted completion timestamp`
   );
   assertEqual(
-    typeof completed?.commissioner_completion_reference,
-    "string",
-    `${alias} commissioner completion reference`
+    completed?.commissioner_completion_reference,
+    null,
+    `${alias} completion reference`
   );
   const acceptedEvents = database.prepare(`
     SELECT id, actor_user_id, metadata_json, occurred_at_ms
@@ -302,19 +304,14 @@ function verifyTradeScenarios(database, alias, leagueId, playerIds) {
   );
   const acceptedEvent = acceptedEvents[0];
   assertEqual(
-    acceptedEvent.id,
-    completed.commissioner_completion_reference,
-    `${alias} commissioner completion event identity`
-  );
-  assertEqual(
     acceptedEvent.actor_user_id,
-    expectedCommissionerUserId,
-    `${alias} commissioner completion actor`
+    receivingManager?.user_id,
+    `${alias} receiving-manager completion actor`
   );
   assertEqual(
     acceptedEvent.occurred_at_ms,
     completed.completed_at_ms,
-    `${alias} commissioner completion event timestamp`
+    `${alias} completion event timestamp`
   );
   assertEqual(
     completed.responded_at_ms,
@@ -345,8 +342,8 @@ function verifyTradeScenarios(database, alias, leagueId, playerIds) {
   assertEqual(acceptedMetadata.action, "accept", `${alias} accepted action`);
   assertEqual(
     acceptedMetadata.actorAuthority,
-    "commissioner",
-    `${alias} accepted commissioner authority`
+    "manager",
+    `${alias} accepted manager authority`
   );
   assertEqual(
     acceptedMetadata.fromStatus,
@@ -587,7 +584,7 @@ function verifyTradeScenarios(database, alias, leagueId, playerIds) {
     const expectedEventFields = [
       ["season_id", expectedSeasonId],
       ["player_id", asset.player_id],
-      ["actor_user_id", expectedCommissionerUserId],
+      ["actor_user_id", receivingManager.user_id],
       ["source_type", "trade"],
       ["source_id", completedTradeId],
       ["reason", null],
@@ -799,8 +796,8 @@ function verifyTradeScenarios(database, alias, leagueId, playerIds) {
     );
     assertEqual(
       event.actor_user_id,
-      expectedCommissionerUserId,
-      `${alias} contract history commissioner actor`
+      receivingManager.user_id,
+      `${alias} contract history manager actor`
     );
     assertEqual(event.reason, null, `${alias} contract history reason`);
     assertEqual(
@@ -852,17 +849,17 @@ function verifyTradeScenarios(database, alias, leagueId, playerIds) {
   assertEqual(
     completedActivities.length,
     1,
-    `${alias} commissioner completion activity count`
+    `${alias} manager completion activity count`
   );
   const completedActivity = completedActivities[0];
   assertEqual(
     completedActivity.actor_user_id,
-    expectedCommissionerUserId,
+    receivingManager.user_id,
     `${alias} completion activity actor`
   );
   assertEqual(
     completedActivity.actor_authority,
-    "commissioner",
+    "manager",
     `${alias} completion activity authority`
   );
   assertEqual(completedActivity.team_id, null, `${alias} completion activity team`);
@@ -877,12 +874,12 @@ function verifyTradeScenarios(database, alias, leagueId, playerIds) {
   );
   assertEqual(
     activityMetadata.actorAuthority,
-    "commissioner",
+    "manager",
     `${alias} completion activity metadata authority`
   );
   assertEqual(
     activityMetadata.commissionerCompletionReference,
-    acceptedEvent.id,
+    null,
     `${alias} completion activity commissioner reference`
   );
   assertEqual(
@@ -987,6 +984,13 @@ function verifyTradeScenarios(database, alias, leagueId, playerIds) {
     WHERE league_id=? AND id=?
   `).get(leagueId, invalidCapTradeId);
   assertEqual(invalidCapTrade?.id, invalidCapTradeId, `${alias} invalid-cap trade`);
+  const invalidCapReceivingManager = database.prepare(`
+    SELECT user_id, membership_id
+    FROM team_manager_assignments
+    WHERE league_id = ? AND team_id = ? AND status = 'accepted'
+      AND ended_at_ms IS NULL
+    LIMIT 2
+  `).get(leagueId, invalidCapTrade.receiving_team_id);
   const invalidCapPreview = createSqliteTradeProposalRepository({
     database,
     candidateCardSummerSynchronizer: {
@@ -1003,13 +1007,9 @@ function verifyTradeScenarios(database, alias, leagueId, playerIds) {
     proposingTeamId: invalidCapTrade.proposing_team_id,
     receivingTeamId: invalidCapTrade.receiving_team_id,
     expectedVersion: invalidCapTrade.version,
-    actorUserId: fixtureId(`account:${alias === "leagueA"
-      ? "leagueACommissioner"
-      : "leagueBCommissioner"}`),
-    actorMembershipId: fixtureId(`membership:${alias}:${alias === "leagueA"
-      ? "leagueACommissioner"
-      : "leagueBCommissioner"}`),
-    actorAuthority: "commissioner",
+    actorUserId: invalidCapReceivingManager.user_id,
+    actorMembershipId: invalidCapReceivingManager.membership_id,
+    actorAuthority: "manager",
     occurredAtMs: FIXTURE_NOW_MS + 60_000,
     effectiveDeadlineAtMs: invalidCapTrade.effective_deadline_at_ms,
   });
@@ -1133,6 +1133,7 @@ function verifyLeague(database, alias, playerIds) {
   );
   const commissionerAlias =
     alias === "leagueA" ? "leagueACommissioner" : "leagueBCommissioner";
+  const expectedCommissionerAssignments = alias === "leagueB" ? 1 : 0;
   assertEqual(
     count(
       database,
@@ -1142,8 +1143,10 @@ function verifyLeague(database, alias, playerIds) {
       leagueId,
       fixtureId(`account:${commissionerAlias}`)
     ),
-    0,
-    `${alias} commissioner has no implicit team assignment`
+    expectedCommissionerAssignments,
+    alias === "leagueB"
+      ? `${alias} explicit dual-role commissioner-manager assignment count`
+      : `${alias} commissioner has no implicit team assignment`
   );
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM seasons WHERE league_id=?", leagueId), 4, `${alias} season count`);
   assertEqual(count(database, "SELECT COUNT(*) AS count FROM draft_picks WHERE league_id=? AND status='unused'", leagueId), expected.draftPicks, `${alias} four-season draft-pick count`);
@@ -1554,7 +1557,7 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
   try {
     assertEqual(database.pragma("integrity_check", { simple: true }), "ok", "SQLite integrity");
     assertEqual(database.pragma("foreign_key_check").length, 0, "foreign-key violation count");
-    assertEqual(database.pragma("user_version", { simple: true }), 52, "schema version");
+    assertEqual(database.pragma("user_version", { simple: true }), 54, "schema version");
 
     const metadata = Object.fromEntries(database.prepare(`
       SELECT metadata_key, metadata_value FROM application_metadata
@@ -1643,7 +1646,7 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
       fixtureBuildId: FIXTURE_BUILD_ID,
       fixtureCreatedAt: FIXTURE_CREATED_AT,
       environmentId: FIXTURE_ENVIRONMENT_ID,
-      schemaVersion: 52,
+      schemaVersion: 54,
       accounts,
       leagues: Object.freeze(leagues),
       global: Object.freeze({

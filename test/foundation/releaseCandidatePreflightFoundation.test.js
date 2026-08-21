@@ -381,7 +381,7 @@ test("repository inspection hashes exact inputs and reports status without expos
   assert.equal(calls.length, 3);
 });
 
-test("backend release-source inspection proves schema 22 through 52 and the provider-disabled Blueprint", () => {
+test("backend release-source inspection proves schema 22 through 54 and the provider-disabled Blueprint", () => {
   const facts = inspectBackendReleaseFacts({
     directory: path.resolve(__dirname, "..", ".."),
   });

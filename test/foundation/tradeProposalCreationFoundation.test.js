@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -7,6 +8,8 @@ const { describe, test } = require("node:test");
 const {
   TRADE_ASSET_CODES,
   TradeAssetPolicyError,
+  createTradeAssetCommands,
+  validateTradeProposalCreationInput,
 } = require("../../src/domain/trades/tradeAssetPolicy");
 const {
   TradeLifecyclePolicyError,
@@ -45,6 +48,9 @@ const {
   createLeagueAuthorizationService,
 } = require("../../src/application/services/authorization/requireLeagueAuthority");
 const {
+  createPlatformAuthorizationService,
+} = require("../../src/application/services/authorization/requirePlatformAdministrator");
+const {
   createTeamAuthorizationService,
 } = require("../../src/application/services/authorization/requireTeamManagerAuthority");
 const {
@@ -56,6 +62,9 @@ const {
 const {
   createSqliteLeagueAccessRepository,
 } = require("../../src/infrastructure/persistence/sqlite/SqliteLeagueAccessRepository");
+const {
+  createSqlitePlatformRoleRepository,
+} = require("../../src/infrastructure/persistence/sqlite/SqlitePlatformRoleRepository");
 const {
   createSqliteTeamAuthorityRepository,
 } = require("../../src/infrastructure/persistence/sqlite/SqliteTeamAuthorityRepository");
@@ -91,6 +100,7 @@ const IDS = Object.freeze({
   manager: uuid(1),
   receivingManager: uuid(50),
   commissioner: uuid(51),
+  platformAdministrator: uuid(55),
   league: uuid(2),
   currentSeason: uuid(3),
   futureSeason: uuid(4),
@@ -100,6 +110,7 @@ const IDS = Object.freeze({
   assignment: uuid(8),
   receivingMembership: uuid(52),
   commissionerMembership: uuid(53),
+  platformAdministratorMembership: uuid(56),
   receivingAssignment: uuid(54),
   entryDraft: uuid(9),
   contractPlayer: uuid(10),
@@ -193,6 +204,11 @@ function seed(repositories) {
     [IDS.manager, "manager@example.test", "Manager"],
     [IDS.receivingManager, "receiver@example.test", "Receiver"],
     [IDS.commissioner, "commissioner@example.test", "Commissioner"],
+    [
+      IDS.platformAdministrator,
+      "administrator@example.test",
+      "Administrator",
+    ],
   ]) {
     repositories.users.insert({
       id,
@@ -312,6 +328,18 @@ function seed(repositories) {
     league_id: IDS.league,
     user_id: IDS.commissioner,
     permission_category: "commissioner",
+    status: "active",
+    joined_at_ms: NOW_MS - 20_000,
+    ended_at_ms: null,
+    created_at_ms: NOW_MS - 20_000,
+    updated_at_ms: NOW_MS - 20_000,
+    version: 1,
+  });
+  repositories.league_memberships.insert({
+    id: IDS.platformAdministratorMembership,
+    league_id: IDS.league,
+    user_id: IDS.platformAdministrator,
+    permission_category: "member",
     status: "active",
     joined_at_ms: NOW_MS - 20_000,
     ended_at_ms: null,
@@ -560,10 +588,6 @@ function creationInput(overrides = {}) {
       { type: "draft_pick", draftPickId: IDS.draftPick },
     ],
     receivingAssets: [
-      {
-        type: "retention_obligation",
-        retentionObligationId: IDS.assetRetention,
-      },
       { type: "buyout_obligation", buyoutObligationId: IDS.buyout },
       {
         type: "future_consideration",
@@ -576,6 +600,110 @@ function creationInput(overrides = {}) {
     ],
     ...overrides,
   };
+}
+
+function ordinaryCreationInput(overrides = {}) {
+  const input = creationInput();
+  return {
+    ...input,
+    receivingAssets: input.receivingAssets.filter(
+      ({ type }) => !type.startsWith("future_consideration")
+    ),
+    ...overrides,
+  };
+}
+
+function creationRequestHash(input) {
+  const normalized = validateTradeProposalCreationInput(input);
+  const assets = createTradeAssetCommands({
+    input: normalized,
+    assetIds: Array.from(
+      {
+        length:
+          normalized.proposingAssets.length +
+          normalized.receivingAssets.length,
+      },
+      (_, index) => uuid(980_000 + index)
+    ),
+    createdAtMs: NOW_MS,
+  });
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        leagueId: IDS.league,
+        seasonId: IDS.currentSeason,
+        proposingTeamId: normalized.proposingTeamId,
+        receivingTeamId: normalized.receivingTeamId,
+        actorUserId: IDS.manager,
+        actorMembershipId: IDS.membership,
+        actorAuthority: "manager",
+        assets: assets.map(({ id, createdAtMs, ...asset }) => asset),
+      }),
+      "utf8"
+    )
+    .digest("hex");
+}
+
+function convertCreatedBuyoutToHistoricalRetention(
+  runtime,
+  tradeId,
+  idempotencyKey,
+  historicalInput
+) {
+  const obligation = runtime.database.prepare(`
+    SELECT retention.*, player.full_name AS player_name,
+      contract.aav_cents
+    FROM retention_obligations AS retention
+    JOIN players AS player ON player.id = retention.player_id
+    JOIN contracts AS contract
+      ON contract.league_id = retention.league_id
+     AND contract.id = retention.contract_id
+    WHERE retention.league_id = ? AND retention.id = ?
+  `).get(IDS.league, IDS.assetRetention);
+  const years = runtime.database.prepare(`
+    SELECT * FROM retention_years
+    WHERE league_id = ? AND retention_obligation_id = ?
+    ORDER BY season_id, id
+  `).all(IDS.league, IDS.assetRetention);
+  const snapshot = {
+    schemaVersion: 1,
+    type: "retention_obligation",
+    id: obligation.id,
+    contractId: obligation.contract_id,
+    player: { id: obligation.player_id, name: obligation.player_name },
+    originatingTeamId: obligation.originating_team_id,
+    responsibleTeamId: obligation.responsible_team_id,
+    retainedAavCents: obligation.retained_aav_cents,
+    originalContractAavCents: obligation.aav_cents,
+    creationTradeId: obligation.creation_trade_id,
+    version: obligation.version,
+    years,
+  };
+  runtime.database.prepare(`
+    UPDATE trade_assets
+    SET asset_type = 'retention_obligation',
+      retention_obligation_id = ?, buyout_obligation_id = NULL,
+      proposal_snapshot_json = ?
+    WHERE league_id = ? AND trade_id = ?
+      AND asset_type = 'buyout_obligation'
+  `).run(
+    IDS.assetRetention,
+    JSON.stringify(snapshot),
+    IDS.league,
+    tradeId
+  );
+  runtime.database.prepare(`
+    UPDATE idempotency_requests
+    SET request_hash = ?
+    WHERE league_id = ? AND actor_user_id = ?
+      AND operation = 'trade.propose' AND client_key = ?
+  `).run(
+    creationRequestHash(historicalInput),
+    IDS.league,
+    IDS.manager,
+    idempotencyKey
+  );
 }
 
 function sourceState(database) {
@@ -620,10 +748,19 @@ function createRuntime(
   });
   const context = createSqliteRepositoryContext({ database: connection.database });
   seed(context.repositories);
+  const userRepository = createSqliteUserRepository({
+    database: connection.database,
+  });
   const leagueAuthorization = createLeagueAuthorizationService({
-    userRepository: createSqliteUserRepository({ database: connection.database }),
+    userRepository,
     leagueAccessRepository: createSqliteLeagueAccessRepository({
       database: connection.database,
+    }),
+    platformAuthorization: createPlatformAuthorizationService({
+      userRepository,
+      platformRoleRepository: createSqlitePlatformRoleRepository({
+        database: connection.database,
+      }),
     }),
   });
   const teamAuthorization = createTeamAuthorizationService({
@@ -743,7 +880,7 @@ function createRuntime(
   });
 }
 
-function create(runtime, idempotencyKey, input = creationInput()) {
+function create(runtime, idempotencyKey, input = ordinaryCreationInput()) {
   return runtime.service.create({
     leagueId: IDS.league,
     input,
@@ -781,6 +918,20 @@ function accept(
   userId = IDS.receivingManager
 ) {
   return runtime.acceptanceService.accept({
+    leagueId: IDS.league,
+    input: { tradeId },
+    idempotencyKey,
+    authenticated: authenticated(userId),
+  });
+}
+
+function approve(
+  runtime,
+  tradeId,
+  idempotencyKey,
+  userId = IDS.commissioner
+) {
+  return runtime.acceptanceService.approve({
     leagueId: IDS.league,
     input: { tradeId },
     idempotencyKey,
@@ -857,7 +1008,7 @@ describe("M5-06 atomic pending trade-proposal creation", () => {
     const runtime = createRuntime(t);
     const beforeSources = sourceState(runtime.database);
 
-    const result = create(runtime, "mixed-proposal-1");
+    const result = create(runtime, "mixed-proposal-1", creationInput());
 
     assert.equal(result.code, "TRADE_PROPOSAL_CREATED");
     assert.equal(result.replayed, false);
@@ -871,7 +1022,6 @@ describe("M5-06 atomic pending trade-proposal creation", () => {
         "requested_retention",
         "prospect_right",
         "draft_pick",
-        "retention_obligation",
         "buyout_obligation",
         "future_consideration",
         "future_consideration_instruction",
@@ -884,7 +1034,6 @@ describe("M5-06 atomic pending trade-proposal creation", () => {
         "requested_retention",
         "prospect_right",
         "draft_pick",
-        "retention_obligation",
         "buyout_obligation",
         "future_consideration",
         "future_consideration_instruction",
@@ -896,7 +1045,7 @@ describe("M5-06 atomic pending trade-proposal creation", () => {
     assert.equal(requestedRetention.retentionCeilingCents, 500);
     assert.equal(sourceState(runtime.database), beforeSources);
     assert.equal(count(runtime.database, "trades"), 2);
-    assert.equal(count(runtime.database, "trade_assets"), 8);
+    assert.equal(count(runtime.database, "trade_assets"), 7);
     assert.equal(count(runtime.database, "trade_events"), 1);
     assert.equal(count(runtime.database, "idempotency_requests"), 1);
     assert.equal(count(runtime.database, "league_activity"), 1);
@@ -916,7 +1065,7 @@ describe("M5-06 atomic pending trade-proposal creation", () => {
       .prepare("SELECT * FROM league_activity WHERE related_id = ?")
       .get(result.proposal.id);
     assert.equal(activity.event_type, "trade_proposal_created");
-    assert.equal(JSON.parse(activity.metadata_json).assets.length, 8);
+    assert.equal(JSON.parse(activity.metadata_json).assets.length, 7);
     assert.equal(
       runtime.database
         .prepare("SELECT event_type FROM outbox_events WHERE aggregate_id = ?")
@@ -959,26 +1108,187 @@ describe("M5-06 atomic pending trade-proposal creation", () => {
     assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
   });
 
+  test("requires the proposing manager and treats a dual-role commissioner as manager", (t) => {
+    const runtime = createRuntime(t);
+    const beforeElevatedDenials = runtime.database.serialize();
+    for (const userId of [IDS.commissioner, IDS.platformAdministrator]) {
+      assert.throws(
+        () =>
+          runtime.service.create({
+            leagueId: IDS.league,
+            input: ordinaryCreationInput(),
+            idempotencyKey: `elevated-create-${userId}`,
+            authenticated: authenticated(userId),
+          }),
+        { code: "TEAM_MANAGER_REQUIRED" }
+      );
+    }
+    assert.throws(
+      () =>
+        runtime.service.create({
+          leagueId: uuid(999),
+          input: ordinaryCreationInput(),
+          idempotencyKey: "cross-league-create",
+          authenticated: authenticated(IDS.manager),
+        }),
+      (error) =>
+        ["LEAGUE_NOT_FOUND", "TEAM_NOT_FOUND"].includes(error?.code)
+    );
+    assert.equal(
+      beforeElevatedDenials.equals(runtime.database.serialize()),
+      true
+    );
+
+    runtime.database.prepare(`
+      UPDATE team_manager_assignments
+      SET status = 'ended', ended_at_ms = ?, version = version + 1
+      WHERE id = ?
+    `).run(NOW_MS, IDS.assignment);
+    runtime.repositories.team_manager_assignments.insert({
+      id: uuid(902),
+      league_id: IDS.league,
+      team_id: IDS.teamA,
+      user_id: IDS.commissioner,
+      membership_id: IDS.commissionerMembership,
+      assigned_by_user_id: IDS.commissioner,
+      replaces_assignment_id: IDS.assignment,
+      status: "accepted",
+      assigned_at_ms: NOW_MS,
+      accepted_at_ms: NOW_MS,
+      ended_at_ms: null,
+      version: 1,
+    });
+    const created = runtime.service.create({
+      leagueId: IDS.league,
+      input: ordinaryCreationInput(),
+      idempotencyKey: "dual-role-manager-create",
+      authenticated: authenticated(IDS.commissioner),
+    });
+    assert.equal(created.proposal.creatingActor.authority, "manager");
+  });
+
   test("replays exactly and permits independent simultaneous proposals", (t) => {
     const runtime = createRuntime(t);
-    const first = create(runtime, "same-request");
-    const replay = create(runtime, "same-request");
+    const first = create(runtime, "same-request", creationInput());
+    const replay = create(runtime, "same-request", creationInput());
     assert.equal(replay.code, "TRADE_PROPOSAL_REPLAYED");
     assert.equal(replay.proposal.id, first.proposal.id);
     assert.equal(count(runtime.database, "trades"), 2);
-    assert.equal(count(runtime.database, "trade_assets"), 8);
+    assert.equal(count(runtime.database, "trade_assets"), 7);
     assert.equal(count(runtime.database, "trade_events"), 1);
     assert.equal(count(runtime.database, "league_activity"), 1);
     assert.equal(count(runtime.database, "outbox_events"), 1);
 
-    const simultaneous = create(runtime, "independent-request");
+    const simultaneous = create(
+      runtime,
+      "independent-request",
+      creationInput()
+    );
     assert.notEqual(simultaneous.proposal.id, first.proposal.id);
     assert.equal(count(runtime.database, "trades"), 3);
-    assert.equal(count(runtime.database, "trade_assets"), 16);
+    assert.equal(count(runtime.database, "trade_assets"), 14);
     assert.equal(count(runtime.database, "trade_events"), 2);
     assert.equal(count(runtime.database, "league_activity"), 2);
     assert.equal(count(runtime.database, "outbox_events"), 2);
     assert.equal(sourceState(runtime.database).includes("reserved"), false);
+  });
+
+  test("rejects new standalone retention without writes while replaying and executing historical evidence", async (t) => {
+    const runtime = createRuntime(t);
+    const idempotencyKey = "historical-retention-proposal";
+    const historicalInput = creationInput({
+      proposingAssets: [
+        { type: "draft_pick", draftPickId: IDS.draftPick },
+      ],
+      receivingAssets: [
+        {
+          type: "retention_obligation",
+          retentionObligationId: IDS.assetRetention,
+        },
+      ],
+    });
+    const seeded = create(
+      runtime,
+      idempotencyKey,
+      creationInput({
+        proposingAssets: [
+          { type: "draft_pick", draftPickId: IDS.draftPick },
+        ],
+        receivingAssets: [
+          { type: "buyout_obligation", buyoutObligationId: IDS.buyout },
+        ],
+      })
+    );
+    convertCreatedBuyoutToHistoricalRetention(
+      runtime,
+      seeded.proposal.id,
+      idempotencyKey,
+      historicalInput
+    );
+
+    const beforeReplay = runtime.database.serialize();
+    const replay = create(runtime, idempotencyKey, historicalInput);
+    assert.equal(replay.code, "TRADE_PROPOSAL_REPLAYED");
+    assert.equal(replay.proposal.id, seeded.proposal.id);
+    assert.deepEqual(
+      replay.proposal.assets.map(({ type }) => type),
+      ["draft_pick", "retention_obligation"]
+    );
+    assert.equal(beforeReplay.equals(runtime.database.serialize()), true);
+
+    const beforeRead = runtime.database.serialize();
+    const detail = runtime.readService.read({
+      leagueId: IDS.league,
+      tradeId: seeded.proposal.id,
+      authenticated: authenticated(),
+    });
+    assert.deepEqual(
+      detail.proposal.assets.map(({ type }) => type),
+      ["draft_pick", "retention_obligation"]
+    );
+    assert.equal(beforeRead.equals(runtime.database.serialize()), true);
+
+    const beforeNewDenial = runtime.database.serialize();
+    assertAssetReason(
+      () => create(runtime, "new-standalone-retention", historicalInput),
+      TRADE_ASSET_CODES.typeUnsupported
+    );
+    assert.equal(beforeNewDenial.equals(runtime.database.serialize()), true);
+
+    const accepted = await accept(
+      runtime,
+      seeded.proposal.id,
+      "historical-retention-accept"
+    );
+    assert.equal(accepted.code, "TRADE_ACCEPTED");
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT responsible_team_id FROM retention_obligations WHERE id = ?"
+      ).get(IDS.assetRetention).responsible_team_id,
+      IDS.teamA
+    );
+    const afterAcceptance = runtime.database.serialize();
+    const acceptanceReplay = await accept(
+      runtime,
+      seeded.proposal.id,
+      "historical-retention-accept"
+    );
+    assert.equal(acceptanceReplay.code, "TRADE_ACCEPTANCE_REPLAYED");
+    assert.equal(afterAcceptance.equals(runtime.database.serialize()), true);
+
+    runtime.setNow(TRADE_DEADLINE_MS + 1);
+    const reversed = await reverseTrade(
+      runtime,
+      seeded.proposal.id,
+      "historical-retention-reverse"
+    );
+    assert.equal(reversed.code, "TRADE_REVERSED");
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT responsible_team_id FROM retention_obligations WHERE id = ?"
+      ).get(IDS.assetRetention).responsible_team_id,
+      IDS.teamB
+    );
   });
 
   test("rejects idempotency conflicts without partial writes", (t) => {
@@ -1073,7 +1383,11 @@ describe("M5-06 atomic pending trade-proposal creation", () => {
 describe("M5-07 read-only trade acceptance preview", () => {
   test("revalidates every typed asset and projects a legal result without writes", (t) => {
     const runtime = createRuntime(t);
-    const proposal = create(runtime, "acceptance-preview-legal");
+    const proposal = create(
+      runtime,
+      "acceptance-preview-legal",
+      creationInput()
+    );
     const before = runtime.database.serialize();
 
     const result = preview(runtime, proposal.proposal.id);
@@ -1088,7 +1402,6 @@ describe("M5-07 read-only trade acceptance preview", () => {
         "requested_retention",
         "prospect_right",
         "draft_pick",
-        "retention_obligation",
         "buyout_obligation",
         "future_consideration",
         "future_consideration_instruction",
@@ -1101,10 +1414,10 @@ describe("M5-07 read-only trade acceptance preview", () => {
     assert.equal(result.generallyIllegal, false);
     const proposing = result.teams.find((team) => team.teamId === IDS.teamA);
     const receiving = result.teams.find((team) => team.teamId === IDS.teamB);
-    assert.equal(proposing.cap.usageCents, 575);
-    assert.equal(proposing.retentionSlots, 2);
-    assert.equal(receiving.cap.usageCents, 600);
-    assert.equal(receiving.retentionSlots, 1);
+    assert.equal(proposing.cap.usageCents, 475);
+    assert.equal(proposing.retentionSlots, 1);
+    assert.equal(receiving.cap.usageCents, 700);
+    assert.equal(receiving.retentionSlots, 2);
     assert.equal(before.equals(runtime.database.serialize()), true);
   });
 
@@ -1114,7 +1427,7 @@ describe("M5-07 read-only trade acceptance preview", () => {
     runtime.database
       .prepare(
         `UPDATE league_settings
-         SET salary_cap_cents = 499, updated_at_ms = ?, version = version + 1
+         SET salary_cap_cents = 450, updated_at_ms = ?, version = version + 1
          WHERE league_id = ?`
       )
       .run(NOW_MS, IDS.league);
@@ -1146,7 +1459,7 @@ describe("M5-07 read-only trade acceptance preview", () => {
     assert.equal(before.equals(runtime.database.serialize()), true);
   });
 
-  test("enforces receiving-manager, commissioner, public, and deadline authority", (t) => {
+  test("keeps executable preview receiver-only while preserving commissioner read access", (t) => {
     const runtime = createRuntime(t);
     const proposal = create(runtime, "acceptance-preview-authority");
     assert.throws(
@@ -1162,23 +1475,42 @@ describe("M5-07 read-only trade acceptance preview", () => {
         }),
       (error) => error?.code === "LEAGUE_NOT_FOUND"
     );
+    const beforeCommissionerRead = runtime.database.serialize();
+    assert.equal(
+      runtime.readService.read({
+        leagueId: IDS.league,
+        tradeId: proposal.proposal.id,
+        authenticated: authenticated(IDS.commissioner),
+      }).code,
+      "TRADE_PROPOSAL_FOUND"
+    );
+    assert.equal(
+      beforeCommissionerRead.equals(runtime.database.serialize()),
+      true
+    );
     runtime.database
       .prepare(
         `UPDATE leagues SET status = 'frozen', updated_at_ms = ?,
            version = version + 1 WHERE id = ?`
       )
       .run(NOW_MS, IDS.league);
-    assert.equal(
-      preview(runtime, proposal.proposal.id, IDS.commissioner).code,
-      "TRADE_ACCEPTANCE_PREVIEWED"
+    assert.throws(
+      () => preview(runtime, proposal.proposal.id, IDS.commissioner),
+      (error) => error?.code === "TEAM_MANAGER_REQUIRED"
     );
     assertLifecycleReason(
       () => preview(runtime, proposal.proposal.id, IDS.receivingManager),
       "TRADE_LIFECYCLE_ROLE_DENIED"
     );
+    runtime.database
+      .prepare(
+        `UPDATE leagues SET status = 'active', updated_at_ms = ?,
+           version = version + 1 WHERE id = ?`
+      )
+      .run(NOW_MS, IDS.league);
     runtime.setNow(TRADE_DEADLINE_MS);
     assertLifecycleReason(
-      () => preview(runtime, proposal.proposal.id, IDS.commissioner),
+      () => preview(runtime, proposal.proposal.id, IDS.receivingManager),
       "TRADE_LIFECYCLE_WINDOW_CLOSED"
     );
   });
@@ -1194,9 +1526,6 @@ describe("M5-07 read-only trade acceptance preview", () => {
       ["draft pick", (database) => database.prepare(
         "UPDATE draft_picks SET current_owner_team_id = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
       ).run(IDS.teamB, NOW_MS, IDS.draftPick), TRADE_ASSET_CODES.ineligible],
-      ["retention", (database) => database.prepare(
-        "UPDATE retention_obligations SET responsible_team_id = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
-      ).run(IDS.teamA, NOW_MS, IDS.assetRetention), TRADE_ASSET_CODES.ineligible],
       ["buyout", (database) => database.prepare(
         "UPDATE buyout_obligations SET responsible_team_id = ?, updated_at_ms = ?, version = version + 1 WHERE id = ?"
       ).run(IDS.teamA, NOW_MS, IDS.buyout), TRADE_ASSET_CODES.ineligible],
@@ -1214,7 +1543,11 @@ describe("M5-07 read-only trade acceptance preview", () => {
     ];
     for (const [label, mutate, reasonCode] of cases) {
       const runtime = createRuntime(t);
-      const proposal = create(runtime, `stale-${label}`);
+      const proposal = create(
+        runtime,
+        `stale-${label}`,
+        creationInput()
+      );
       mutate(runtime.database);
       const before = runtime.database.serialize();
       assertAssetReason(
@@ -1329,17 +1662,22 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     runtime.database
       .prepare("UPDATE contracts SET contract_type = 'fantasy_elc' WHERE id = ?")
       .run(IDS.prospectContract);
-    const acceptedProposal = create(runtime, "execution-primary");
-    const conflict = create(runtime, "execution-conflict");
+    const acceptedProposal = create(
+      runtime,
+      "execution-primary",
+      creationInput()
+    );
+    const conflict = create(
+      runtime,
+      "execution-conflict",
+      creationInput()
+    );
     const contractBefore = runtime.database
       .prepare("SELECT * FROM contracts WHERE id = ?")
       .get(IDS.contract);
     const contractYearsBefore = runtime.database
       .prepare("SELECT * FROM contract_years WHERE contract_id = ? ORDER BY id")
       .all(IDS.contract);
-    const retentionBefore = runtime.database
-      .prepare("SELECT * FROM retention_obligations WHERE id = ?")
-      .get(IDS.assetRetention);
     const buyoutBefore = runtime.database
       .prepare("SELECT * FROM buyout_obligations WHERE id = ?")
       .get(IDS.buyout);
@@ -1364,18 +1702,68 @@ describe("M5-08 atomic typed-asset trade execution", () => {
       ) VALUES (?, ?, ?, ?, 'F', 1, ?)
     `).run(uuid(970_002), IDS.league, uuid(970_001), IDS.ownership, NOW_MS);
 
-    const result = await accept(
+    const competingAwaiting = await accept(
+      runtime,
+      conflict.proposal.id,
+      "accept-conflicting-future-trade"
+    );
+    assert.equal(
+      competingAwaiting.proposal.storageStatus,
+      "awaiting_commissioner_approval"
+    );
+    const sourcesBeforeAcceptance = sourceState(runtime.database);
+    const awaiting = await accept(
       runtime,
       acceptedProposal.proposal.id,
       "accept-every-asset"
     );
 
-    assert.equal(result.code, "TRADE_ACCEPTED");
+    assert.equal(awaiting.code, "TRADE_AWAITING_COMMISSIONER_APPROVAL");
+    assert.equal(awaiting.proposal.storageStatus, "awaiting_commissioner_approval");
+    assert.equal(awaiting.proposal.version, 2);
+    assert.deepEqual(awaiting.transfers, []);
+    assert.deepEqual(awaiting.lateLock, { status: "not_applicable" });
+    assert.equal(sourceState(runtime.database), sourcesBeforeAcceptance);
+    assert.equal(runtime.lateLockBatches.length, 0);
+    const awaitingRead = runtime.readService.read({
+      leagueId: IDS.league,
+      tradeId: acceptedProposal.proposal.id,
+      authenticated: authenticated(IDS.receivingManager),
+    });
+    assert.equal(
+      awaitingRead.proposal.status,
+      "Awaiting Commissioner Approval"
+    );
+    assert.equal(
+      awaitingRead.proposal.storageStatus,
+      "awaiting_commissioner_approval"
+    );
+
+    const beforeDeniedApproval = runtime.database.serialize();
+    await assert.rejects(
+      () =>
+        approve(
+          runtime,
+          acceptedProposal.proposal.id,
+          "manager-cannot-approve",
+          IDS.receivingManager
+        ),
+      { code: "LEAGUE_COMMISSIONER_REQUIRED" }
+    );
+    assert.equal(beforeDeniedApproval.equals(runtime.database.serialize()), true);
+
+    const result = await approve(
+      runtime,
+      acceptedProposal.proposal.id,
+      "approve-every-asset"
+    );
+
+    assert.equal(result.code, "TRADE_APPROVED");
     assert.equal(result.replayed, false);
     assert.equal(result.proposal.storageStatus, "completed");
-    assert.equal(result.proposal.version, 2);
+    assert.equal(result.proposal.version, 3);
     assert.equal(result.generallyIllegal, false);
-    assert.equal(result.transfers.length, 8);
+    assert.equal(result.transfers.length, 7);
     assert.deepEqual(result.lateLock, { status: "not_applicable" });
     assert.deepEqual(result.automaticallyCancelledTradeIds, [conflict.proposal.id]);
     const ownership = runtime.database
@@ -1538,12 +1926,6 @@ describe("M5-08 atomic typed-asset trade execution", () => {
         .get(IDS.draftPick).current_owner_team_id,
       IDS.teamB
     );
-    const retentionAfter = runtime.database
-      .prepare("SELECT * FROM retention_obligations WHERE id = ?")
-      .get(IDS.assetRetention);
-    assert.equal(retentionAfter.responsible_team_id, IDS.teamA);
-    assert.equal(retentionAfter.retained_aav_cents, retentionBefore.retained_aav_cents);
-    assert.equal(retentionAfter.contract_id, retentionBefore.contract_id);
     const buyoutAfter = runtime.database
       .prepare("SELECT * FROM buyout_obligations WHERE id = ?")
       .get(IDS.buyout);
@@ -1597,8 +1979,8 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     assert.equal(count(runtime.database, "ownership_events"), 4);
     assert.equal(count(runtime.database, "contract_events"), 2);
     assert.equal(count(runtime.database, "draft_pick_ownership_events"), 1);
-    assert.equal(count(runtime.database, "league_activity"), 4);
-    assert.equal(count(runtime.database, "outbox_events"), 4);
+    assert.equal(count(runtime.database, "league_activity"), 6);
+    assert.equal(count(runtime.database, "outbox_events"), 6);
     const completedActivity = runtime.database
       .prepare(`
         SELECT * FROM league_activity
@@ -1606,7 +1988,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
       `)
       .get(acceptedProposal.proposal.id);
     const completedMetadata = JSON.parse(completedActivity.metadata_json);
-    assert.equal(completedMetadata.assets.length, 8);
+    assert.equal(completedMetadata.assets.length, 7);
     assert.equal(completedMetadata.generallyIllegal, false);
     assert.equal(
       completedMetadata.assets.find(({ assetType }) => assetType === "contract")
@@ -1624,17 +2006,42 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
 
     const bytesAfter = runtime.database.serialize();
-    const replay = await accept(
+    const acceptanceReplay = await accept(
       runtime,
       acceptedProposal.proposal.id,
       "accept-every-asset"
     );
-    assert.equal(replay.code, "TRADE_ACCEPTANCE_REPLAYED");
+    assert.equal(acceptanceReplay.code, "TRADE_ACCEPTANCE_REPLAYED");
+    assert.equal(acceptanceReplay.replayed, true);
+    assert.equal(
+      acceptanceReplay.proposal.storageStatus,
+      "awaiting_commissioner_approval"
+    );
+    assert.deepEqual(acceptanceReplay.transfers, []);
+    assert.equal(runtime.lateLockBatches.length, 1);
+    assert.equal(bytesAfter.equals(runtime.database.serialize()), true);
+
+    const replay = await approve(
+      runtime,
+      acceptedProposal.proposal.id,
+      "approve-every-asset"
+    );
+    assert.equal(replay.code, "TRADE_APPROVAL_REPLAYED");
     assert.equal(replay.replayed, true);
     assert.deepEqual(replay.transfers, result.transfers);
     assert.deepEqual(replay.lateLock, { status: "not_applicable" });
     assert.equal(runtime.lateLockBatches.length, 2);
     assert.deepEqual(runtime.lateLockBatches[1], runtime.lateLockBatches[0]);
+    assert.equal(bytesAfter.equals(runtime.database.serialize()), true);
+    await assertAsyncExecutionReason(
+      () =>
+        approve(
+          runtime,
+          acceptedProposal.proposal.id,
+          "second-approval-command"
+        ),
+      TRADE_EXECUTION_CODES.notPending
+    );
     assert.equal(bytesAfter.equals(runtime.database.serialize()), true);
 
     const retrade = runtime.service.create({
@@ -1747,7 +2154,46 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     assert.equal(bytesAfter.equals(runtime.database.serialize()), true);
   });
 
-  test("returns both participant receipts with no synthetic witnesses for a cap-only trade", (t) => {
+  test("rejects a tampered awaiting-approval replay receipt without writes", async (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(
+      runtime,
+      "awaiting-replay-tamper",
+      creationInput()
+    );
+    await accept(
+      runtime,
+      proposal.proposal.id,
+      "awaiting-replay-tamper-accept"
+    );
+    runtime.database.prepare(`
+      UPDATE trade_events
+      SET metadata_json = json_set(
+        metadata_json,
+        '$.actorAuthority',
+        'commissioner'
+      )
+      WHERE trade_id = ?
+        AND event_type =
+          'proposal_accepted_awaiting_commissioner_approval'
+    `).run(proposal.proposal.id);
+    const beforeReplay = runtime.database.serialize();
+
+    await assert.rejects(
+      () =>
+        accept(
+          runtime,
+          proposal.proposal.id,
+          "awaiting-replay-tamper-accept"
+        ),
+      (error) => error?.code === "REPOSITORY_SCHEMA_INCOMPATIBLE"
+    );
+
+    assert.equal(beforeReplay.equals(runtime.database.serialize()), true);
+    assert.equal(runtime.lateLockBatches.length, 0);
+  });
+
+  test("returns both participant receipts with no synthetic witnesses for a non-roster trade", (t) => {
     const runtime = createRuntime(t);
     const proposal = create(
       runtime,
@@ -1755,14 +2201,14 @@ describe("M5-08 atomic typed-asset trade execution", () => {
       creationInput({
         proposingAssets: [
           {
-            type: "future_consideration_instruction",
-            description: "Cap-only receipt consideration",
+            type: "draft_pick",
+            draftPickId: IDS.draftPick,
           },
         ],
         receivingAssets: [
           {
-            type: "retention_obligation",
-            retentionObligationId: IDS.assetRetention,
+            type: "buyout_obligation",
+            buyoutObligationId: IDS.buyout,
           },
         ],
       })
@@ -1871,7 +2317,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
     assert.equal(count(runtime.database, "ownership_events"), 4);
   });
 
-  test("enforces receiver, commissioner-freeze, terminal, and deadline authority", async (t) => {
+  test("enforces receiver-only acceptance, cross-league isolation, dual-role authority, and deadlines", async (t) => {
     const wrongTeam = createRuntime(t);
     const wrongTeamProposal = create(wrongTeam, "execution-wrong-team");
     await assert.rejects(
@@ -1937,35 +2383,67 @@ describe("M5-08 atomic typed-asset trade execution", () => {
         ),
       TRADE_EXECUTION_CODES.roleDenied
     );
-    assert.equal(
-      (await accept(
-        frozen,
-        frozenProposal.proposal.id,
-        "frozen-commissioner-accept",
-        IDS.commissioner
-      )).code,
-      "TRADE_ACCEPTED"
-    );
-    assert.equal(
-      frozen.database
-        .prepare("SELECT commissioner_completion_reference FROM trades WHERE id = ?")
-        .get(frozenProposal.proposal.id).commissioner_completion_reference,
-      frozen.database
-        .prepare("SELECT id FROM trade_events WHERE trade_id = ? AND event_type = 'proposal_accepted'")
-        .get(frozenProposal.proposal.id).id
-    );
-    const afterComplete = frozen.database.serialize();
-    await assertAsyncExecutionReason(
+    const beforeElevatedDenials = frozen.database.serialize();
+    await assert.rejects(
       () =>
         accept(
           frozen,
           frozenProposal.proposal.id,
-          "second-accept",
+          "frozen-commissioner-accept",
           IDS.commissioner
         ),
-      TRADE_EXECUTION_CODES.notPending
+      (error) => error?.code === "TEAM_MANAGER_REQUIRED"
     );
-    assert.equal(afterComplete.equals(frozen.database.serialize()), true);
+    await assert.rejects(
+      () =>
+        accept(
+          frozen,
+          frozenProposal.proposal.id,
+          "frozen-platform-accept",
+          IDS.platformAdministrator
+        ),
+      (error) => error?.code === "TEAM_MANAGER_REQUIRED"
+    );
+    assert.equal(
+      beforeElevatedDenials.equals(frozen.database.serialize()),
+      true
+    );
+
+    const dualRole = createRuntime(t);
+    dualRole.database.prepare(`
+      UPDATE team_manager_assignments
+      SET status = 'ended', ended_at_ms = ?, version = version + 1
+      WHERE id = ?
+    `).run(NOW_MS, IDS.receivingAssignment);
+    dualRole.repositories.team_manager_assignments.insert({
+      id: uuid(901),
+      league_id: IDS.league,
+      team_id: IDS.teamB,
+      user_id: IDS.commissioner,
+      membership_id: IDS.commissionerMembership,
+      assigned_by_user_id: IDS.commissioner,
+      replaces_assignment_id: IDS.receivingAssignment,
+      status: "accepted",
+      assigned_at_ms: NOW_MS,
+      accepted_at_ms: NOW_MS,
+      ended_at_ms: null,
+      version: 1,
+    });
+    const dualRoleProposal = create(dualRole, "execution-dual-role");
+    const dualRoleResult = await accept(
+      dualRole,
+      dualRoleProposal.proposal.id,
+      "dual-role-manager-accept",
+      IDS.commissioner
+    );
+    assert.equal(dualRoleResult.code, "TRADE_ACCEPTED");
+    assert.equal(
+      JSON.parse(dualRole.database.prepare(
+        `SELECT metadata_json FROM trade_events
+         WHERE trade_id = ? AND event_type = 'proposal_accepted'`
+      ).get(dualRoleProposal.proposal.id).metadata_json).actorAuthority,
+      "manager"
+    );
 
     const deadline = createRuntime(t);
     const deadlineProposal = create(deadline, "execution-deadline");
@@ -2158,12 +2636,150 @@ describe("M5-08 atomic typed-asset trade execution", () => {
       true
     );
   });
+
+  test("reruns authoritative validation when a Future Considerations trade is approved", async (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(
+      runtime,
+      "future-approval-revalidation",
+      creationInput()
+    );
+    const accepted = await accept(
+      runtime,
+      proposal.proposal.id,
+      "future-approval-manager-accept"
+    );
+    assert.equal(
+      accepted.proposal.storageStatus,
+      "awaiting_commissioner_approval"
+    );
+    runtime.database.prepare(
+      `UPDATE draft_picks
+       SET current_owner_team_id = ?, updated_at_ms = ?, version = version + 1
+       WHERE id = ?`
+    ).run(IDS.teamB, NOW_MS + 1, IDS.draftPick);
+    const beforeApproval = runtime.database.serialize();
+
+    await assertAsyncAssetReason(
+      () =>
+        approve(
+          runtime,
+          proposal.proposal.id,
+          "future-approval-stale-state"
+        ),
+      TRADE_ASSET_CODES.ineligible
+    );
+
+    assert.equal(beforeApproval.equals(runtime.database.serialize()), true);
+    assert.equal(
+      runtime.readService.read({
+        leagueId: IDS.league,
+        tradeId: proposal.proposal.id,
+        authenticated: authenticated(IDS.receivingManager),
+      }).proposal.storageStatus,
+      "awaiting_commissioner_approval"
+    );
+    assert.equal(runtime.lateLockBatches.length, 0);
+  });
+
+  test("allows an inherited platform administrator to approve without manager completion authority", async (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(
+      runtime,
+      "platform-approval-proposal",
+      creationInput()
+    );
+    await accept(
+      runtime,
+      proposal.proposal.id,
+      "platform-approval-manager-accept"
+    );
+    runtime.repositories.platform_roles.insert({
+      id: uuid(980_001),
+      user_id: IDS.platformAdministrator,
+      role: "platform_administrator",
+      status: "active",
+      granted_by_user_id: null,
+      granted_at_ms: NOW_MS - 1,
+      ended_at_ms: null,
+      version: 1,
+    });
+
+    const result = await approve(
+      runtime,
+      proposal.proposal.id,
+      "platform-approval-command",
+      IDS.platformAdministrator
+    );
+
+    assert.equal(result.code, "TRADE_APPROVED");
+    assert.equal(result.proposal.storageStatus, "completed");
+    assert.equal(result.event.actorUserId, IDS.platformAdministrator);
+    assert.equal(
+      runtime.database.prepare(
+        "SELECT commissioner_completion_reference FROM trades WHERE id = ?"
+      ).get(proposal.proposal.id).commissioner_completion_reference,
+      result.event.id
+    );
+    assert.equal(
+      runtime.database.prepare(
+        `SELECT actor_authority FROM league_activity
+         WHERE related_id = ? AND event_type = 'trade_completed'`
+      ).get(proposal.proposal.id).actor_authority,
+      "platform_administrator"
+    );
+  });
 });
 
 describe("M5-07 atomic proposal response and cancellation", () => {
+  test("keeps reject and cancel available while commissioner approval is pending", async (t) => {
+    for (const scenario of [
+      {
+        action: "reject",
+        userId: IDS.receivingManager,
+        expectedStatus: "declined",
+      },
+      {
+        action: "cancel",
+        userId: IDS.manager,
+        expectedStatus: "cancelled",
+      },
+    ]) {
+      const runtime = createRuntime(t);
+      const proposal = create(
+        runtime,
+        `awaiting-${scenario.action}`,
+        creationInput()
+      );
+      const beforeSources = sourceState(runtime.database);
+      await accept(
+        runtime,
+        proposal.proposal.id,
+        `awaiting-${scenario.action}-accept`
+      );
+
+      const result = respond(runtime, {
+        userId: scenario.userId,
+        tradeId: proposal.proposal.id,
+        action: scenario.action,
+        idempotencyKey: `awaiting-${scenario.action}-response`,
+      });
+
+      assert.equal(result.proposal.storageStatus, scenario.expectedStatus);
+      assert.equal(result.event.metadata.fromStatus,
+        "awaiting_commissioner_approval");
+      assert.equal(sourceState(runtime.database), beforeSources);
+      assert.equal(runtime.lateLockBatches.length, 0);
+    }
+  });
+
   test("lets only the receiving manager reject and replays exactly", (t) => {
     const runtime = createRuntime(t);
-    const proposal = create(runtime, "proposal-for-rejection");
+    const proposal = create(
+      runtime,
+      "proposal-for-rejection",
+      creationInput()
+    );
     const beforeSources = sourceState(runtime.database);
 
     assert.throws(
@@ -2175,6 +2791,23 @@ describe("M5-07 atomic proposal response and cancellation", () => {
           idempotencyKey: "wrong-rejector",
         }),
       { code: "TEAM_MANAGER_REQUIRED" }
+    );
+    const beforeElevatedDenials = runtime.database.serialize();
+    for (const userId of [IDS.commissioner, IDS.platformAdministrator]) {
+      assert.throws(
+        () =>
+          respond(runtime, {
+            userId,
+            tradeId: proposal.proposal.id,
+            action: "reject",
+            idempotencyKey: `elevated-reject-${userId}`,
+          }),
+        { code: "TEAM_MANAGER_REQUIRED" }
+      );
+    }
+    assert.equal(
+      beforeElevatedDenials.equals(runtime.database.serialize()),
+      true
     );
     const rejected = respond(runtime, {
       userId: IDS.receivingManager,
@@ -2189,7 +2822,7 @@ describe("M5-07 atomic proposal response and cancellation", () => {
     assert.equal(rejected.event.type, "proposal_rejected");
     assert.equal(rejected.event.actorUserId, IDS.receivingManager);
     assert.equal(sourceState(runtime.database), beforeSources);
-    assert.equal(count(runtime.database, "trade_assets"), 8);
+    assert.equal(count(runtime.database, "trade_assets"), 7);
 
     const replay = respond(runtime, {
       userId: IDS.receivingManager,
@@ -2241,7 +2874,7 @@ describe("M5-07 atomic proposal response and cancellation", () => {
     assert.equal(sourceState(runtime.database), beforeSources);
   });
 
-  test("preserves explicit commissioner lifecycle authority during a freeze", (t) => {
+  test("denies commissioner and platform cancellation authority without writes", (t) => {
     const runtime = createRuntime(t);
     const proposal = create(runtime, "proposal-before-freeze");
     runtime.repositories.leagues.updateVersioned({
@@ -2259,14 +2892,23 @@ describe("M5-07 atomic proposal response and cancellation", () => {
         }),
       "TRADE_LIFECYCLE_ROLE_DENIED"
     );
-    const cancelled = respond(runtime, {
-      userId: IDS.commissioner,
-      tradeId: proposal.proposal.id,
-      action: "cancel",
-      idempotencyKey: "frozen-commissioner",
-    });
-    assert.equal(cancelled.proposal.status, "Cancelled");
-    assert.equal(cancelled.event.metadata.actorAuthority, "commissioner");
+    const beforeElevatedDenials = runtime.database.serialize();
+    for (const userId of [IDS.commissioner, IDS.platformAdministrator]) {
+      assert.throws(
+        () =>
+          respond(runtime, {
+            userId,
+            tradeId: proposal.proposal.id,
+            action: "cancel",
+            idempotencyKey: `frozen-elevated-cancel-${userId}`,
+          }),
+        { code: "TEAM_MANAGER_REQUIRED" }
+      );
+    }
+    assert.equal(
+      beforeElevatedDenials.equals(runtime.database.serialize()),
+      true
+    );
   });
 
   test("closes lifecycle actions at the exact effective deadline", (t) => {
@@ -2358,6 +3000,42 @@ describe("M5-07 atomic proposal response and cancellation", () => {
 });
 
 describe("M5-07 durable proposal expiry", () => {
+  test("expires an awaiting-commissioner-approval proposal without transfers", async (t) => {
+    const runtime = createRuntime(t);
+    const proposal = create(
+      runtime,
+      "awaiting-approval-expiry",
+      creationInput()
+    );
+    const beforeSources = sourceState(runtime.database);
+    await accept(
+      runtime,
+      proposal.proposal.id,
+      "awaiting-approval-expiry-accept"
+    );
+    runtime.setNow(TRADE_DEADLINE_MS);
+
+    const result = await runtime.expiryJob.run();
+
+    assert.equal(result.expired, 1);
+    assert.deepEqual(
+      runtime.database.prepare(
+        "SELECT status, version FROM trades WHERE id = ?"
+      ).get(proposal.proposal.id),
+      { status: "expired", version: 3 }
+    );
+    const expiryEvent = runtime.database.prepare(
+      `SELECT metadata_json FROM trade_events
+       WHERE trade_id = ? AND event_type = 'proposal_expired'`
+    ).get(proposal.proposal.id);
+    assert.equal(
+      JSON.parse(expiryEvent.metadata_json).fromStatus,
+      "awaiting_commissioner_approval"
+    );
+    assert.equal(sourceState(runtime.database), beforeSources);
+    assert.equal(runtime.lateLockBatches.length, 0);
+  });
+
   test("never expires early or through an authenticated read", async (t) => {
     const runtime = createRuntime(t);
     const proposal = create(runtime, "proposal-for-expiry-read");
@@ -2510,7 +3188,11 @@ describe("M5-07 durable proposal expiry", () => {
   });
 });
 
-async function createAcceptedRecoveryTrade(runtime, key) {
+async function createAcceptedRecoveryTrade(
+  runtime,
+  key,
+  input = ordinaryCreationInput()
+) {
   insertContract(runtime.repositories, {
     id: IDS.prospectContract,
     yearId: IDS.prospectContractYear,
@@ -2522,9 +3204,17 @@ async function createAcceptedRecoveryTrade(runtime, key) {
   runtime.database
     .prepare("UPDATE contracts SET contract_type = 'fantasy_elc' WHERE id = ?")
     .run(IDS.prospectContract);
-  const proposal = create(runtime, `${key}-proposal`);
+  const proposal = create(runtime, `${key}-proposal`, input);
   const accepted = await accept(runtime, proposal.proposal.id, `${key}-accept`);
-  return Object.freeze({ proposal, accepted });
+  if (accepted.proposal.storageStatus !== "awaiting_commissioner_approval") {
+    return Object.freeze({ proposal, accepted });
+  }
+  const approved = await approve(
+    runtime,
+    proposal.proposal.id,
+    `${key}-approve`
+  );
+  return Object.freeze({ proposal, accepted, approved });
 }
 
 function recoveryPreview(runtime, tradeId, userId = IDS.commissioner) {
@@ -2748,6 +3438,9 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     assert.equal(before.equals(runtime.database.serialize()), true);
 
     runtime.database.prepare(
+      "UPDATE league_memberships SET permission_category = 'member', updated_at_ms = ?, version = version + 1 WHERE id = ?"
+    ).run(NOW_MS, IDS.commissionerMembership);
+    runtime.database.prepare(
       "UPDATE league_memberships SET permission_category = 'commissioner', updated_at_ms = ?, version = version + 1 WHERE id = ?"
     ).run(NOW_MS, IDS.receivingMembership);
     runtime.database.prepare(
@@ -2845,7 +3538,7 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     assert.equal(bytesAfter.equals(runtime.database.serialize()), true);
   });
 
-  test("coordinates both participant teams with empty witnesses for a cap-only reversal", async (t) => {
+  test("coordinates both participant teams with empty witnesses for a non-roster reversal", async (t) => {
     const runtime = createRuntime(t);
     const proposal = create(
       runtime,
@@ -2853,14 +3546,14 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
       creationInput({
         proposingAssets: [
           {
-            type: "future_consideration_instruction",
-            description: "Cap-only reversal consideration",
+            type: "draft_pick",
+            draftPickId: IDS.draftPick,
           },
         ],
         receivingAssets: [
           {
-            type: "retention_obligation",
-            retentionObligationId: IDS.assetRetention,
+            type: "buyout_obligation",
+            buyoutObligationId: IDS.buyout,
           },
         ],
       })
@@ -3029,12 +3722,16 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     }
   });
 
-  test("reverses all eight asset forms after the deadline and replays without writes", async (t) => {
+  test("reverses every new-proposal asset form after the deadline and replays without writes", async (t) => {
     const runtime = createRuntime(t);
     const contractBefore = runtime.database
       .prepare("SELECT * FROM contracts WHERE id = ?")
       .get(IDS.contract);
-    const { proposal } = await createAcceptedRecoveryTrade(runtime, "safe-recovery");
+    const { proposal } = await createAcceptedRecoveryTrade(
+      runtime,
+      "safe-recovery",
+      creationInput()
+    );
     const acceptanceMetadata = JSON.parse(
       runtime.database.prepare(
         "SELECT metadata_json FROM trade_events WHERE trade_id = ? AND event_type = 'proposal_accepted'"
@@ -3085,7 +3782,7 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
       true,
       JSON.stringify(previewed.preview.mismatches)
     );
-    assert.equal(previewed.preview.assets.length, 8);
+    assert.equal(previewed.preview.assets.length, 7);
     assert.equal(beforePreview.equals(runtime.database.serialize()), true);
 
     const beforeWrongRoute = runtime.database.serialize();
@@ -3107,7 +3804,7 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
     );
     assert.equal(reversed.code, "TRADE_REVERSED");
     assert.equal(reversed.trade.storageStatus, "reversed");
-    assert.equal(reversed.trade.version, 3);
+    assert.equal(reversed.trade.version, 4);
     assert.deepEqual(reversed.lateLock, { status: "not_applicable" });
     assert.equal(
       Object.hasOwn(reversed.event.metadata, "ownershipTenureMappings"),
@@ -3288,11 +3985,6 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
       2
     );
     assert.equal(
-      runtime.database.prepare("SELECT responsible_team_id FROM retention_obligations WHERE id = ?")
-        .get(IDS.assetRetention).responsible_team_id,
-      IDS.teamB
-    );
-    assert.equal(
       runtime.database.prepare("SELECT responsible_team_id FROM buyout_obligations WHERE id = ?")
         .get(IDS.buyout).responsible_team_id,
       IDS.teamB
@@ -3436,7 +4128,10 @@ describe("M5-10 commissioner trade reversal and recovery routing", () => {
       const runtime = createRuntime(t);
       const { proposal } = await createAcceptedRecoveryTrade(
         runtime,
-        `unsafe-${reasonCode.toLowerCase()}`
+        `unsafe-${reasonCode.toLowerCase()}`,
+        reasonCode === TRADE_REVERSAL_REASON_CODES.createdObligationMissing
+          ? creationInput()
+          : ordinaryCreationInput()
       );
       mutate(runtime, proposal.proposal.id);
       const before = runtime.database.serialize();

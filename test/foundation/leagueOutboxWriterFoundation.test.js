@@ -643,7 +643,6 @@ describe("FAD-02 shared atomic league outbox writer", () => {
 
     const repositoryPaths = [
       "SqliteAuctionResolutionRepository.js",
-      "SqliteTradeProposalRepository.js",
       "SqliteTradeExpiryRepository.js",
       "SqliteTradeReversalRepository.js",
     ].map((fileName) =>
@@ -662,5 +661,64 @@ describe("FAD-02 shared atomic league outbox writer", () => {
       assert.match(source, /resolveSqliteLeagueOutboxWriter/);
       assert.match(source, /outboxWriter\.write/);
     }
+
+    const tradeProposalSource = fs.readFileSync(
+      path.join(
+        ROOT_DIRECTORY,
+        "src",
+        "infrastructure",
+        "persistence",
+        "sqlite",
+        "SqliteTradeProposalRepository.js"
+      ),
+      "utf8"
+    );
+    assert.doesNotMatch(tradeProposalSource, /outbox_events/);
+    assert.match(
+      tradeProposalSource,
+      /resolveSqliteTradePublicationWriter/
+    );
+    assert.match(tradeProposalSource, /publicationWriter\.publish/);
+    assert.match(
+      tradeProposalSource,
+      /resolveSqliteTradeProposalCancellationWriter/
+    );
+    assert.match(tradeProposalSource, /cancellationWriter\.cancelPending/);
+
+    const tradeCancellationSource = fs.readFileSync(
+      path.join(
+        ROOT_DIRECTORY,
+        "src",
+        "infrastructure",
+        "persistence",
+        "sqlite",
+        "SqliteTradeProposalCancellationWriter.js"
+      ),
+      "utf8"
+    );
+    assert.doesNotMatch(tradeCancellationSource, /outbox_events/);
+    assert.match(
+      tradeCancellationSource,
+      /resolveSqliteTradePublicationWriter/
+    );
+    assert.match(tradeCancellationSource, /publicationWriter\.publish/);
+
+    const tradePublicationSource = fs.readFileSync(
+      path.join(
+        ROOT_DIRECTORY,
+        "src",
+        "infrastructure",
+        "persistence",
+        "sqlite",
+        "SqliteTradePublicationWriter.js"
+      ),
+      "utf8"
+    );
+    assert.doesNotMatch(tradePublicationSource, /outbox_events/);
+    assert.match(
+      tradePublicationSource,
+      /resolveSqliteLeagueOutboxWriter/
+    );
+    assert.match(tradePublicationSource, /outboxWriter\.write/);
   });
 });

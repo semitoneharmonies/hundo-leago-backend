@@ -768,6 +768,7 @@ describe("M5-05 trade proposal SELECT-only foundation", () => {
     assert.deepEqual(Object.keys(runtime.repository).sort(), [
       "createProposal",
       "executeAcceptance",
+      "executeApproval",
       "findLifecycleParticipants",
       "listVisible",
       "loadFoundationState",

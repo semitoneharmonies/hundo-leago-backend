@@ -632,6 +632,10 @@ const DEFINITIONS = [
     REPOSITORY_SCOPES.requiredLeague
   ),
   repositoryDefinition(
+    "trade_future_consideration_acceptances",
+    REPOSITORY_SCOPES.requiredLeague
+  ),
+  repositoryDefinition(
     "trades",
     REPOSITORY_SCOPES.requiredLeague,
     { versioned: true }

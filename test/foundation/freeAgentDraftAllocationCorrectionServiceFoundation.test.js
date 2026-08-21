@@ -95,9 +95,9 @@ function resultData(overrides = {}) {
           teamId: IDS.team,
           team: safeTeam(),
           slotKey: "F01",
-          totalValueCents: 600,
-          termYears: 2,
-          aavCents: 300,
+          totalValueCents: null,
+          termYears: null,
+          aavCents: null,
           valid: true,
           validationCode: null,
           rank: 1,
@@ -110,9 +110,9 @@ function resultData(overrides = {}) {
         contractId: IDS.contract,
         ownershipId: IDS.ownership,
         slotKey: "F01",
-        totalValueCents: 600,
-        termYears: 2,
-        aavCents: 300,
+        totalValueCents: null,
+        termYears: null,
+        aavCents: null,
       },
       restricted: null,
       fallback: null,
@@ -132,9 +132,9 @@ function resultData(overrides = {}) {
           player: safePlayer(),
           contractId: IDS.contract,
           ownershipId: IDS.ownership,
-          totalValueCents: 600,
-          termYears: 2,
-          aavCents: 300,
+          totalValueCents: null,
+          termYears: null,
+          aavCents: null,
           rosterCategory: "Active",
         }),
       },
@@ -271,6 +271,15 @@ describe("Free Agent Draft allocation-correction service foundation", () => {
     assert.equal(result.httpStatus, 200);
     assert.equal(result.replayed, false);
     assert.equal(Object.isFrozen(result), true);
+    assert.deepEqual(
+      [
+        result.data.allocation.rankedOffers[0]
+          .totalValueCents,
+        result.data.allocation.winner.termYears,
+        result.data.appliedDeltas[0].afterSummary.aavCents,
+      ],
+      [null, null, null]
+    );
 
     const applyCall = harness.calls.find(([kind]) => kind === "apply")[1];
     assert.deepEqual(
@@ -305,6 +314,15 @@ describe("Free Agent Draft allocation-correction service foundation", () => {
 
   test("returns an exact immutable replay before consulting clock or randomness", async () => {
     const replayData = resultData({ completedAtMs: 1 });
+    replayData.allocation.rankedOffers[0].totalValueCents = 600;
+    replayData.allocation.rankedOffers[0].termYears = 2;
+    replayData.allocation.rankedOffers[0].aavCents = 300;
+    replayData.allocation.winner.totalValueCents = 600;
+    replayData.allocation.winner.termYears = 2;
+    replayData.allocation.winner.aavCents = 300;
+    replayData.appliedDeltas[0].afterSummary.totalValueCents = 600;
+    replayData.appliedDeltas[0].afterSummary.termYears = 2;
+    replayData.appliedDeltas[0].afterSummary.aavCents = 300;
     const harness = createHarness({
       replay: {
         data: replayData,
@@ -315,8 +333,18 @@ describe("Free Agent Draft allocation-correction service foundation", () => {
       secureIds: [],
     });
     const result = await harness.service.apply(input());
-    assert.deepEqual(result.data, replayData);
+    assert.deepEqual(
+      result.data,
+      resultData({ completedAtMs: 1 })
+    );
     assert.equal(result.replayed, true);
+    assert.deepEqual(
+      [
+        result.data.allocation.winner.totalValueCents,
+        result.data.appliedDeltas[0].afterSummary.termYears,
+      ],
+      [null, null]
+    );
     assert.deepEqual(
       harness.calls.map(([kind]) => kind),
       ["authorize", "replay"]
@@ -365,11 +393,17 @@ describe("Free Agent Draft allocation-correction service foundation", () => {
   });
 
   test("rejects mismatched versions, identities, decision codes, and malformed repository envelopes", async () => {
+    const partialAllocation = resultData();
+    partialAllocation.allocation.winner.termYears = 2;
+    const partialDelta = resultData();
+    partialDelta.appliedDeltas[0].afterSummary.aavCents = 300;
     const cases = [
       { data: resultData({ allocation: { ...resultData().allocation, allocationVersion: 5 } }), httpStatus: 200, replayed: false, committedRoster: null },
       { data: resultData({ allocation: { ...resultData().allocation, allocationId: uuid(99) } }), httpStatus: 200, replayed: false, committedRoster: null },
       { data: resultData({ allocation: { ...resultData().allocation, decisionCode: "sole_valid_offer" } }), httpStatus: 200, replayed: false, committedRoster: null },
       { data: { ...resultData(), control: "leak" }, httpStatus: 200, replayed: false, committedRoster: null },
+      { data: partialAllocation, httpStatus: 200, replayed: false, committedRoster: null },
+      { data: partialDelta, httpStatus: 200, replayed: false, committedRoster: null },
       { data: resultData(), httpStatus: 202, replayed: false, committedRoster: null },
     ];
     for (const applyResult of cases) {

@@ -3,11 +3,13 @@ const crypto = require("node:crypto");
 const {
   TRADE_ASSET_CODES,
   TradeAssetPolicyError,
+  assertNewTradeProposalAssetTypes,
   assertSnapshot,
   validateTradeProposalCreationCommand,
 } = require("../../../domain/trades/tradeAssetPolicy");
 const {
   TradeProposalFoundationPolicyError,
+  assertNewTradeProposalCreationAuthority,
   assertTradeProposalFoundationState,
   projectTradeProposalRow,
 } = require("../../../domain/trades/tradeProposalPolicy");
@@ -23,30 +25,25 @@ const {
 const {
   TRADE_EXECUTION_CODES,
   TradeExecutionPolicyError,
+  assertTradeApprovalState,
   assertTradeExecutionState,
+  validateTradeApprovalCommand,
   validateTradeExecutionCommand,
 } = require("../../../domain/trades/tradeExecutionPolicy");
-const {
-  createEmptySocketRelated,
-  createSocketEventMetadata,
-} = require("../../../domain/leagues/socketInvalidation");
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
   repositoryError,
 } = require("./SqliteRepositoryError");
 const {
-  resolveSqliteLeagueOutboxWriter,
-} = require("./SqliteLeagueOutboxWriter");
+  resolveSqliteTradeProposalCancellationWriter,
+} = require("./SqliteTradeProposalCancellationWriter");
+const {
+  resolveSqliteTradePublicationWriter,
+} = require("./SqliteTradePublicationWriter");
 const {
   resolveSqliteNotificationWriter,
 } = require("./SqliteNotificationWriter");
-const {
-  createSqliteRecordRepository,
-} = require("./createSqliteRecordRepository");
-const {
-  getRepositoryDefinition,
-} = require("./repositoryCatalog");
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -144,6 +141,12 @@ function freezeRow(row) {
   return row ? Object.freeze({ ...row }) : null;
 }
 
+function projectEffectiveTrade(row) {
+  if (!row) return null;
+  const { projected_status: projectedStatus, ...trade } = row;
+  return Object.freeze({ ...trade, status: projectedStatus });
+}
+
 function policyFail(reasonCode) {
   throw new TradeAssetPolicyError(reasonCode);
 }
@@ -214,11 +217,19 @@ function lifecycleEventType(action) {
   return action === "reject" ? "proposal_rejected" : "proposal_cancelled";
 }
 
+function displayStatus(storageStatus) {
+  return storageStatus === "awaiting_commissioner_approval"
+    ? "Awaiting Commissioner Approval"
+    : "Pending";
+}
+
 function createSqliteTradeProposalRepository({
   database,
   candidateCardSummerSynchronizer,
   leagueOutboxWriter,
   notificationWriter,
+  tradePublicationWriter,
+  tradeProposalCancellationWriter,
 } = {}) {
   if (
     !candidateCardSummerSynchronizer ||
@@ -228,9 +239,9 @@ function createSqliteTradeProposalRepository({
       "createSqliteTradeProposalRepository requires a Candidate Card summer synchronizer"
     );
   }
-  let activityRepository;
   let notificationsRepository;
-  let outboxWriter;
+  let publicationWriter;
+  let cancellationWriter;
   let listReceivingManagersStatement;
   let loadFoundationStateStatement;
   let listVisibleStatement;
@@ -262,6 +273,9 @@ function createSqliteTradeProposalRepository({
   let findLifecycleIdempotencyStatement;
   let insertLifecycleIdempotencyStatement;
   let updateLifecycleTradeStatement;
+  let updateAwaitingApprovalTradeStatement;
+  let insertFutureConsiderationAcceptanceStatement;
+  let findFutureConsiderationAcceptanceStatement;
   let insertLifecycleEventStatement;
   let findLifecycleEventStatement;
   let loadAcceptanceSettingsStatement;
@@ -285,23 +299,24 @@ function createSqliteTradeProposalRepository({
   let updateExecutionFutureConsiderationStatement;
   let resolveExecutionFutureConsiderationStatement;
   let listConflictingTradesStatement;
-  let updateConflictingTradeStatement;
-  let insertAutomaticCancellationEventStatement;
   let findExecutionEventStatement;
   let listExecutionOwnershipEventsStatement;
   let findExecutionOwnershipStatement;
   try {
-    activityRepository = createSqliteRecordRepository({
-      database,
-      definition: getRepositoryDefinition("league_activity"),
-    });
     notificationsRepository = resolveSqliteNotificationWriter({
       database,
       notificationWriter,
     });
-    outboxWriter = resolveSqliteLeagueOutboxWriter({
+    publicationWriter = resolveSqliteTradePublicationWriter({
       database,
       leagueOutboxWriter,
+      tradePublicationWriter,
+    });
+    cancellationWriter = resolveSqliteTradeProposalCancellationWriter({
+      database,
+      leagueOutboxWriter,
+      tradePublicationWriter: publicationWriter,
+      tradeProposalCancellationWriter,
     });
     listReceivingManagersStatement = database.prepare(`
       SELECT DISTINCT
@@ -387,7 +402,15 @@ function createSqliteTradeProposalRepository({
         trades.receiving_team_id AS receiving_team_id,
         receiving_team.name AS receiving_team_name,
         trades.proposing_user_id AS proposing_user_id,
-        trades.status AS storage_status,
+        CASE
+          WHEN trades.status = 'proposed' AND EXISTS (
+            SELECT 1
+            FROM trade_future_consideration_acceptances AS acceptance
+            WHERE acceptance.league_id = trades.league_id
+              AND acceptance.trade_id = trades.id
+          ) THEN 'awaiting_commissioner_approval'
+          ELSE trades.status
+        END AS storage_status,
         trades.created_at_ms AS created_at_ms,
         trades.expires_at_ms AS expires_at_ms,
         trades.effective_deadline_at_ms AS persisted_effective_deadline_at_ms,
@@ -431,7 +454,15 @@ function createSqliteTradeProposalRepository({
         trades.receiving_team_id AS receiving_team_id,
         receiving_team.name AS receiving_team_name,
         trades.proposing_user_id AS proposing_user_id,
-        trades.status AS storage_status,
+        CASE
+          WHEN trades.status = 'proposed' AND EXISTS (
+            SELECT 1
+            FROM trade_future_consideration_acceptances AS acceptance
+            WHERE acceptance.league_id = trades.league_id
+              AND acceptance.trade_id = trades.id
+          ) THEN 'awaiting_commissioner_approval'
+          ELSE trades.status
+        END AS storage_status,
         trades.created_at_ms AS created_at_ms,
         trades.expires_at_ms AS expires_at_ms,
         trades.effective_deadline_at_ms AS persisted_effective_deadline_at_ms,
@@ -523,8 +554,19 @@ function createSqliteTradeProposalRepository({
       )
     `);
     findTradeStatement = database.prepare(`
-      SELECT * FROM trades
-      WHERE league_id = @leagueId AND id = @tradeId
+      SELECT
+        trades.*,
+        CASE
+          WHEN trades.status = 'proposed' AND EXISTS (
+            SELECT 1
+            FROM trade_future_consideration_acceptances AS acceptance
+            WHERE acceptance.league_id = trades.league_id
+              AND acceptance.trade_id = trades.id
+          ) THEN 'awaiting_commissioner_approval'
+          ELSE trades.status
+        END AS projected_status
+      FROM trades
+      WHERE trades.league_id = @leagueId AND trades.id = @tradeId
       LIMIT 2
     `);
     listTradeAssetsStatement = database.prepare(`
@@ -708,9 +750,24 @@ function createSqliteTradeProposalRepository({
         season_id,
         proposing_team_id,
         receiving_team_id,
-        status AS trade_status,
+        CASE
+          WHEN status = 'proposed' AND EXISTS (
+            SELECT 1
+            FROM trade_future_consideration_acceptances AS acceptance
+            WHERE acceptance.league_id = trades.league_id
+              AND acceptance.trade_id = trades.id
+          ) THEN 'awaiting_commissioner_approval'
+          ELSE status
+        END AS trade_status,
         effective_deadline_at_ms,
-        version
+        version,
+        CASE WHEN EXISTS (
+          SELECT 1
+          FROM trade_assets
+          WHERE trade_assets.league_id = trades.league_id
+            AND trade_assets.trade_id = trades.id
+            AND trade_assets.asset_type = 'future_consideration'
+        ) THEN 1 ELSE 0 END AS has_future_considerations
       FROM trades
       WHERE league_id = @leagueId
         AND id = @tradeId
@@ -723,7 +780,15 @@ function createSqliteTradeProposalRepository({
         trades.season_id AS season_id,
         trades.proposing_team_id AS proposing_team_id,
         trades.receiving_team_id AS receiving_team_id,
-        trades.status AS trade_status,
+        CASE
+          WHEN trades.status = 'proposed' AND EXISTS (
+            SELECT 1
+            FROM trade_future_consideration_acceptances AS acceptance
+            WHERE acceptance.league_id = trades.league_id
+              AND acceptance.trade_id = trades.id
+          ) THEN 'awaiting_commissioner_approval'
+          ELSE trades.status
+        END AS trade_status,
         trades.effective_deadline_at_ms AS effective_deadline_at_ms,
         trades.version AS trade_version,
         trades.proposal_model_version AS proposal_model_version,
@@ -736,7 +801,22 @@ function createSqliteTradeProposalRepository({
         team_manager_assignments.team_id AS assignment_team_id,
         team_manager_assignments.status AS assignment_status,
         team_manager_assignments.accepted_at_ms AS assignment_accepted_at_ms,
-        team_manager_assignments.ended_at_ms AS assignment_ended_at_ms
+        team_manager_assignments.ended_at_ms AS assignment_ended_at_ms,
+        CASE WHEN EXISTS (
+          SELECT 1
+          FROM platform_roles
+          WHERE platform_roles.user_id = @actorUserId
+            AND platform_roles.role = 'platform_administrator'
+            AND platform_roles.status = 'active'
+            AND platform_roles.ended_at_ms IS NULL
+        ) THEN 1 ELSE 0 END AS is_platform_administrator,
+        CASE WHEN EXISTS (
+          SELECT 1
+          FROM trade_assets
+          WHERE trade_assets.league_id = trades.league_id
+            AND trade_assets.trade_id = trades.id
+            AND trade_assets.asset_type = 'future_consideration'
+        ) THEN 1 ELSE 0 END AS has_future_considerations
       FROM trades
       JOIN leagues ON leagues.id = trades.league_id
       JOIN seasons
@@ -785,7 +865,62 @@ function createSqliteTradeProposalRepository({
       WHERE league_id = @leagueId
         AND id = @tradeId
         AND status = 'proposed'
+        AND (
+          (
+            @currentStatus = 'proposed'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM trade_future_consideration_acceptances AS acceptance
+              WHERE acceptance.league_id = trades.league_id
+                AND acceptance.trade_id = trades.id
+            )
+          )
+          OR (
+            @currentStatus = 'awaiting_commissioner_approval'
+            AND EXISTS (
+              SELECT 1
+              FROM trade_future_consideration_acceptances AS acceptance
+              WHERE acceptance.league_id = trades.league_id
+                AND acceptance.trade_id = trades.id
+            )
+          )
+        )
         AND version = @expectedVersion
+    `);
+    updateAwaitingApprovalTradeStatement = database.prepare(`
+      UPDATE trades
+      SET responded_at_ms = @occurredAtMs,
+        updated_at_ms = @occurredAtMs,
+        version = version + 1
+      WHERE league_id = @leagueId
+        AND id = @tradeId
+        AND status = 'proposed'
+        AND version = @expectedVersion
+        AND EXISTS (
+          SELECT 1
+          FROM trade_assets
+          WHERE trade_assets.league_id = trades.league_id
+            AND trade_assets.trade_id = trades.id
+            AND trade_assets.asset_type = 'future_consideration'
+        )
+    `);
+    insertFutureConsiderationAcceptanceStatement = database.prepare(`
+      INSERT INTO trade_future_consideration_acceptances (
+        id, league_id, season_id, trade_id, accepted_by_user_id,
+        accepted_by_membership_id, accepted_authority, accepted_at_ms,
+        trade_version_after
+      ) VALUES (
+        @eventId, @leagueId, @seasonId, @tradeId, @actorUserId,
+        @actorMembershipId, @actorAuthority, @occurredAtMs,
+        @tradeVersionAfter
+      )
+    `);
+    findFutureConsiderationAcceptanceStatement = database.prepare(`
+      SELECT *
+      FROM trade_future_consideration_acceptances
+      WHERE league_id = @leagueId
+        AND trade_id = @tradeId
+      LIMIT 2
     `);
     insertLifecycleEventStatement = database.prepare(`
       INSERT INTO trade_events (
@@ -896,10 +1031,15 @@ function createSqliteTradeProposalRepository({
     updateExecutionTradeStatement = database.prepare(`
       UPDATE trades
       SET status = 'completed',
-        responded_at_ms = @occurredAtMs,
+        responded_at_ms = CASE
+          WHEN @expectedStatus = 'proposed' THEN @occurredAtMs
+          ELSE responded_at_ms
+        END,
         completed_at_ms = @occurredAtMs,
         commissioner_completion_reference = CASE
-          WHEN @actorAuthority = 'commissioner' THEN @eventId
+          WHEN @actorAuthority IN (
+            'commissioner', 'platform_administrator'
+          ) THEN @eventId
           ELSE NULL
         END,
         updated_at_ms = @occurredAtMs,
@@ -907,6 +1047,26 @@ function createSqliteTradeProposalRepository({
       WHERE league_id = @leagueId
         AND id = @tradeId
         AND status = 'proposed'
+        AND (
+          (
+            @expectedStatus = 'proposed'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM trade_future_consideration_acceptances AS acceptance
+              WHERE acceptance.league_id = trades.league_id
+                AND acceptance.trade_id = trades.id
+            )
+          )
+          OR (
+            @expectedStatus = 'awaiting_commissioner_approval'
+            AND EXISTS (
+              SELECT 1
+              FROM trade_future_consideration_acceptances AS acceptance
+              WHERE acceptance.league_id = trades.league_id
+                AND acceptance.trade_id = trades.id
+            )
+          )
+        )
         AND version = @expectedVersion
     `);
     deleteExecutionRosterDisplayOrderStatement = database.prepare(`
@@ -1069,6 +1229,15 @@ function createSqliteTradeProposalRepository({
       SELECT DISTINCT
         other_trade.id AS trade_id,
         other_trade.season_id AS season_id,
+        CASE
+          WHEN other_trade.status = 'proposed' AND EXISTS (
+            SELECT 1
+            FROM trade_future_consideration_acceptances AS acceptance
+            WHERE acceptance.league_id = other_trade.league_id
+              AND acceptance.trade_id = other_trade.id
+          ) THEN 'awaiting_commissioner_approval'
+          ELSE other_trade.status
+        END AS trade_status,
         other_trade.version AS version
       FROM trades AS other_trade
       JOIN trade_assets AS other_asset
@@ -1123,24 +1292,6 @@ function createSqliteTradeProposalRepository({
         )
       ORDER BY other_trade.id
     `);
-    updateConflictingTradeStatement = database.prepare(`
-      UPDATE trades
-      SET status = 'cancelled', responded_at_ms = @occurredAtMs,
-        updated_at_ms = @occurredAtMs, version = version + 1
-      WHERE league_id = @leagueId
-        AND id = @conflictingTradeId
-        AND status = 'proposed'
-    `);
-    insertAutomaticCancellationEventStatement = database.prepare(`
-      INSERT INTO trade_events (
-        id, league_id, season_id, trade_id, actor_user_id,
-        event_type, reason, metadata_json, occurred_at_ms
-      ) VALUES (
-        @automaticEventId, @leagueId, @seasonId, @conflictingTradeId,
-        NULL, 'proposal_auto_cancelled', 'asset_transferred',
-        @automaticMetadataJson, @occurredAtMs
-      )
-    `);
     findExecutionEventStatement = database.prepare(`
       SELECT * FROM trade_events
       WHERE league_id = @leagueId
@@ -1194,37 +1345,20 @@ function createSqliteTradeProposalRepository({
     occurredAtMs,
     tradeVersion,
   }) {
-    activityRepository.insert({
-      id: deterministicUuid(`activity:${eventId}`),
-      league_id: leagueId,
-      season_id: seasonId,
-      event_type: eventType,
-      actor_user_id: actorUserId,
-      actor_authority: actorAuthority,
-      team_id: teamId,
-      player_id: null,
-      related_type: "trade",
-      related_id: tradeId,
-      display_summary: displaySummary,
-      reason,
-      metadata_json: JSON.stringify(metadata),
-      occurred_at_ms: occurredAtMs,
-    });
-    const payload = createSocketEventMetadata({
-      eventType: "trade.changed",
-      version: tradeVersion,
-      reasonCode: "trade_changed",
-      occurredAtMs,
-      related: createEmptySocketRelated(),
-    });
-    outboxWriter.write({
-      id: deterministicUuid(`outbox:${eventId}:trade.changed`),
+    publicationWriter.publish({
+      eventId,
       leagueId,
-      eventType: "trade.changed",
-      aggregateType: "trade",
-      aggregateId: tradeId,
-      payload,
+      seasonId,
+      tradeId,
+      actorUserId,
+      actorAuthority,
+      teamId,
+      eventType,
+      displaySummary,
+      reason,
+      metadata,
       occurredAtMs,
+      tradeVersion,
     });
   }
 
@@ -2021,7 +2155,7 @@ function createSqliteTradeProposalRepository({
     }
     return Object.freeze({
       replayed,
-      trade: Object.freeze({ ...trade }),
+      trade: projectEffectiveTrade(trade),
       assets: Object.freeze(
         assets.map((asset) =>
           Object.freeze({
@@ -2063,6 +2197,8 @@ function createSqliteTradeProposalRepository({
       });
     }
 
+    assertNewTradeProposalAssetTypes(command.assets);
+    assertNewTradeProposalCreationAuthority(command);
     insertIdempotencyStatement.run({ ...command, requestHash });
     const context = loadFoundationState(command);
     assertTradeProposalFoundationState({ command, context });
@@ -2184,7 +2320,7 @@ function createSqliteTradeProposalRepository({
     }
     return Object.freeze({
       replayed,
-      trade: Object.freeze({ ...trade }),
+      trade: projectEffectiveTrade(trade),
       event: Object.freeze({
         ...event,
         metadata: Object.freeze(JSON.parse(event.metadata_json)),
@@ -2234,7 +2370,11 @@ function createSqliteTradeProposalRepository({
     }
     const nextStatus = lifecycleStorageStatus(command.action);
     if (
-      updateLifecycleTradeStatement.run({ ...command, nextStatus }).changes !== 1
+      updateLifecycleTradeStatement.run({
+        ...command,
+        currentStatus: context.trade_status,
+        nextStatus,
+      }).changes !== 1
     ) {
       throw new TradeLifecyclePolicyError(
         TRADE_LIFECYCLE_CODES.versionConflict
@@ -2245,7 +2385,7 @@ function createSqliteTradeProposalRepository({
       schemaVersion: 1,
       action: command.action,
       actorAuthority: command.actorAuthority,
-      fromStatus: "proposed",
+      fromStatus: context.trade_status,
       toStatus: nextStatus,
     });
     insertLifecycleEventStatement.run({
@@ -2277,7 +2417,7 @@ function createSqliteTradeProposalRepository({
         receivingTeamId: command.receivingTeamId,
         action: command.action,
         actorAuthority: command.actorAuthority,
-        fromStatus: "Pending",
+        fromStatus: displayStatus(context.trade_status),
         toStatus: command.action === "reject" ? "Rejected" : "Cancelled",
       },
       occurredAtMs: command.occurredAtMs,
@@ -2322,8 +2462,12 @@ function createSqliteTradeProposalRepository({
     }
     if (
       metadata.schemaVersion !== 1 ||
-      metadata.action !== "accept" ||
-      metadata.fromStatus !== "proposed" ||
+      !(
+        (metadata.action === "accept" &&
+          metadata.fromStatus === "proposed") ||
+        (metadata.action === "approve" &&
+          metadata.fromStatus === "awaiting_commissioner_approval")
+      ) ||
       metadata.toStatus !== "completed" ||
       !Array.isArray(metadata.transfers) ||
       !Array.isArray(metadata.ownershipTransfers)
@@ -2725,7 +2869,7 @@ function createSqliteTradeProposalRepository({
     });
     const result = {
       replayed,
-      trade: Object.freeze({ ...trade }),
+      trade: projectEffectiveTrade(trade),
       event: Object.freeze({
         ...event,
         metadata: Object.freeze({
@@ -2743,6 +2887,116 @@ function createSqliteTradeProposalRepository({
     return Object.freeze(result);
   }
 
+  function awaitingApprovalAggregate({ command, replayed }) {
+    const trade = unique(
+      findTradeStatement,
+      command,
+      "An awaiting-approval trade was not unique."
+    );
+    const event = unique(
+      findLifecycleEventStatement,
+      {
+        ...command,
+        eventType: "proposal_accepted_awaiting_commissioner_approval",
+      },
+      "A trade awaiting-approval event was not unique."
+    );
+    const acceptance = unique(
+      findFutureConsiderationAcceptanceStatement,
+      command,
+      "A Future Considerations acceptance receipt was not unique."
+    );
+    if (!trade || !event || !acceptance) {
+      throw repositoryError(
+        REPOSITORY_ERROR_CODES.schemaIncompatible,
+        "The awaiting-approval trade aggregate is incomplete."
+      );
+    }
+    const metadata = exactPersistedObject(
+      parsePersistedObject(
+        event.metadata_json,
+        "trade awaiting-approval event metadata"
+      ),
+      [
+        "schemaVersion",
+        "action",
+        "actorAuthority",
+        "fromStatus",
+        "toStatus",
+        "generallyIllegal",
+        "teams",
+        "transfers",
+        "ownershipTransfers",
+        "automaticallyCancelledTradeIds",
+      ],
+      "awaiting-approval event metadata"
+    );
+    if (
+      acceptance.id !== event.id ||
+      acceptance.league_id !== trade.league_id ||
+      acceptance.season_id !== trade.season_id ||
+      acceptance.trade_id !== trade.id ||
+      acceptance.accepted_by_user_id !== event.actor_user_id ||
+      acceptance.accepted_by_membership_id !== command.actorMembershipId ||
+      acceptance.accepted_authority !== command.actorAuthority ||
+      acceptance.accepted_at_ms !== event.occurred_at_ms ||
+      !Number.isSafeInteger(acceptance.trade_version_after) ||
+      acceptance.trade_version_after < 2 ||
+      trade.version < acceptance.trade_version_after ||
+      event.league_id !== trade.league_id ||
+      event.season_id !== trade.season_id ||
+      event.trade_id !== trade.id ||
+      event.reason !== null ||
+      metadata.schemaVersion !== 1 ||
+      metadata.action !== "accept" ||
+      metadata.actorAuthority !== acceptance.accepted_authority ||
+      metadata.fromStatus !== "proposed" ||
+      metadata.toStatus !== "awaiting_commissioner_approval" ||
+      typeof metadata.generallyIllegal !== "boolean" ||
+      !Array.isArray(metadata.teams) ||
+      metadata.teams.length !== 2 ||
+      !Array.isArray(metadata.transfers) ||
+      metadata.transfers.length !== 0 ||
+      !Array.isArray(metadata.ownershipTransfers) ||
+      metadata.ownershipTransfers.length !== 0 ||
+      !Array.isArray(metadata.automaticallyCancelledTradeIds) ||
+      metadata.automaticallyCancelledTradeIds.length !== 0
+    ) {
+      persistedAggregateFail(
+        "The awaiting-approval trade receipt is inconsistent."
+      );
+    }
+    return Object.freeze({
+      replayed,
+      trade: Object.freeze({
+        ...projectEffectiveTrade(trade),
+        status: "awaiting_commissioner_approval",
+        responded_at_ms: acceptance.accepted_at_ms,
+        completed_at_ms: null,
+        commissioner_completion_reference: null,
+        version: acceptance.trade_version_after,
+      }),
+      event: Object.freeze({
+        ...event,
+        metadata: Object.freeze(metadata),
+      }),
+    });
+  }
+
+  function executionOutcomeAggregate({ command, replayed, action }) {
+    if (action === "accept") {
+      const acceptance = unique(
+        findFutureConsiderationAcceptanceStatement,
+        command,
+        "A Future Considerations acceptance receipt was not unique."
+      );
+      if (acceptance) {
+        return awaitingApprovalAggregate({ command, replayed });
+      }
+    }
+    return executionAggregate({ command, replayed });
+  }
+
   function requireExecutionChange(result) {
     if (result.changes !== 1) {
       throw new TradeExecutionPolicyError(
@@ -2751,9 +3005,13 @@ function createSqliteTradeProposalRepository({
     }
   }
 
-  const executionTransaction = database.transaction((rawCommand) => {
-    const command = validateTradeExecutionCommand(rawCommand);
-    const operation = "trade.accept";
+  const executionTransaction = database.transaction((envelope) => {
+    const action = envelope.action;
+    const command =
+      action === "approve"
+        ? validateTradeApprovalCommand(envelope.command)
+        : validateTradeExecutionCommand(envelope.command);
+    const operation = action === "approve" ? "trade.approve" : "trade.accept";
     const requestHash = createExecutionRequestHash(command);
     const existing = unique(
       findLifecycleIdempotencyStatement,
@@ -2771,7 +3029,7 @@ function createSqliteTradeProposalRepository({
           TRADE_EXECUTION_CODES.idempotencyConflict
         );
       }
-      return executionAggregate({ command, replayed: true });
+      return executionOutcomeAggregate({ command, replayed: true, action });
     }
 
     insertLifecycleIdempotencyStatement.run({
@@ -2784,7 +3042,11 @@ function createSqliteTradeProposalRepository({
       { ...command, participantTeamId: command.receivingTeamId },
       "A trade-execution state was not unique."
     );
-    assertTradeExecutionState({ command, context });
+    if (action === "approve") {
+      assertTradeApprovalState({ command, context });
+    } else {
+      assertTradeExecutionState({ command, context });
+    }
     const preview = acceptancePreview({
       tradeId: command.tradeId,
       leagueId: command.leagueId,
@@ -2798,7 +3060,73 @@ function createSqliteTradeProposalRepository({
       occurredAtMs: command.occurredAtMs,
       effectiveDeadlineAtMs: command.effectiveDeadlineAtMs,
     });
-    requireExecutionChange(updateExecutionTradeStatement.run(command));
+    const containsFutureConsiderations = preview.assets.some(
+      (asset) => asset.asset_type === "future_consideration"
+    );
+    if (action === "accept" && containsFutureConsiderations) {
+      requireExecutionChange(updateAwaitingApprovalTradeStatement.run(command));
+      insertFutureConsiderationAcceptanceStatement.run({
+        ...command,
+        tradeVersionAfter: command.expectedVersion + 1,
+      });
+      const eventMetadataJson = JSON.stringify({
+        schemaVersion: 1,
+        action: "accept",
+        actorAuthority: command.actorAuthority,
+        fromStatus: "proposed",
+        toStatus: "awaiting_commissioner_approval",
+        generallyIllegal: preview.generallyIllegal,
+        teams: preview.teams,
+        transfers: [],
+        ownershipTransfers: [],
+        automaticallyCancelledTradeIds: [],
+      });
+      insertLifecycleEventStatement.run({
+        ...command,
+        eventType: "proposal_accepted_awaiting_commissioner_approval",
+        eventMetadataJson,
+      });
+      insertTradePublication({
+        eventId: command.eventId,
+        leagueId: command.leagueId,
+        seasonId: command.seasonId,
+        tradeId: command.tradeId,
+        actorUserId: command.actorUserId,
+        actorAuthority: command.actorAuthority,
+        teamId: command.receivingTeamId,
+        eventType: "trade_awaiting_commissioner_approval",
+        displaySummary: "Trade awaiting commissioner approval.",
+        reason: null,
+        metadata: {
+          schemaVersion: 1,
+          proposalId: command.tradeId,
+          proposingTeamId: command.proposingTeamId,
+          receivingTeamId: command.receivingTeamId,
+          actorAuthority: command.actorAuthority,
+          fromStatus: "Pending",
+          toStatus: "Awaiting Commissioner Approval",
+        },
+        occurredAtMs: command.occurredAtMs,
+        tradeVersion: command.expectedVersion + 1,
+      });
+      if (
+        completeIdempotencyStatement.run({
+          ...command,
+          createdAtMs: command.occurredAtMs,
+        }).changes !== 1
+      ) {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.versionConflict,
+          "The trade-acceptance idempotency result changed concurrently."
+        );
+      }
+      return awaitingApprovalAggregate({ command, replayed: false });
+    }
+    const expectedStatus =
+      action === "approve" ? "awaiting_commissioner_approval" : "proposed";
+    requireExecutionChange(
+      updateExecutionTradeStatement.run({ ...command, expectedStatus })
+    );
 
     const ownershipTenures = new Map();
     for (const asset of preview.assets) {
@@ -3105,58 +3433,32 @@ function createSqliteTradeProposalRepository({
 
     const automaticallyCancelledTradeIds = [];
     for (const conflict of listConflictingTradesStatement.all(command)) {
-      if (
-        updateConflictingTradeStatement.run({
-          ...command,
-          conflictingTradeId: conflict.trade_id,
-        }).changes !== 1
-      ) {
-        continue;
-      }
       const automaticEventId = deterministicUuid(
         `${command.tradeId}:auto-cancel:${conflict.trade_id}`
       );
-      insertAutomaticCancellationEventStatement.run({
-        ...command,
-        seasonId: conflict.season_id,
-        conflictingTradeId: conflict.trade_id,
-        automaticEventId,
-        automaticMetadataJson: JSON.stringify({
-          schemaVersion: 1,
-          acceptedTradeId: command.tradeId,
-          reasonCode: "asset_transferred",
-        }),
-      });
-      insertTradePublication({
+      const cancelled = cancellationWriter.cancelPending({
         eventId: automaticEventId,
         leagueId: command.leagueId,
         seasonId: conflict.season_id,
         tradeId: conflict.trade_id,
-        actorUserId: null,
-        actorAuthority: "system",
-        teamId: null,
-        eventType: "trade_proposal_automatically_cancelled",
-        displaySummary: "Trade proposal automatically cancelled.",
-        reason: "asset_transferred",
-        metadata: {
-          schemaVersion: 1,
-          proposalId: conflict.trade_id,
+        expectedVersion: conflict.version,
+        fromStatus: conflict.trade_status,
+        reasonCode: "asset_transferred",
+        sourceMetadata: {
           acceptedTradeId: command.tradeId,
-          fromStatus: "Pending",
-          toStatus: "Automatically Cancelled",
-          reasonCode: "asset_transferred",
         },
         occurredAtMs: command.occurredAtMs,
-        tradeVersion: conflict.version + 1,
       });
+      if (!cancelled) continue;
       automaticallyCancelledTradeIds.push(conflict.trade_id);
     }
 
     const eventMetadataJson = JSON.stringify({
       schemaVersion: 1,
-      action: "accept",
+      action,
       actorAuthority: command.actorAuthority,
-      fromStatus: "proposed",
+      fromStatus:
+        action === "approve" ? "awaiting_commissioner_approval" : "proposed",
       toStatus: "completed",
       generallyIllegal: preview.generallyIllegal,
       teams: preview.teams,
@@ -3188,7 +3490,11 @@ function createSqliteTradeProposalRepository({
         receivingTeamId: command.receivingTeamId,
         actorAuthority: command.actorAuthority,
         commissionerCompletionReference:
-          command.actorAuthority === "commissioner" ? command.eventId : null,
+          ["commissioner", "platform_administrator"].includes(
+            command.actorAuthority
+          )
+            ? command.eventId
+            : null,
         generallyIllegal: preview.generallyIllegal,
         teams: preview.teams,
         assets: preview.assets.map((asset) => ({
@@ -3263,7 +3569,10 @@ function createSqliteTradeProposalRepository({
     },
     executeAcceptance(rawCommand) {
       try {
-        return executionTransaction.immediate(rawCommand);
+        return executionTransaction.immediate({
+          action: "accept",
+          command: rawCommand,
+        });
       } catch (error) {
         if (
           error instanceof TradeAssetPolicyError ||
@@ -3274,6 +3583,26 @@ function createSqliteTradeProposalRepository({
         }
         throw mapRepositoryError(error, {
           operation: "executeTradeAcceptance",
+          tableName: "trades",
+        });
+      }
+    },
+    executeApproval(rawCommand) {
+      try {
+        return executionTransaction.immediate({
+          action: "approve",
+          command: rawCommand,
+        });
+      } catch (error) {
+        if (
+          error instanceof TradeAssetPolicyError ||
+          error instanceof TradeExecutionPolicyError ||
+          error instanceof TradeLifecyclePolicyError
+        ) {
+          throw error;
+        }
+        throw mapRepositoryError(error, {
+          operation: "executeTradeApproval",
           tableName: "trades",
         });
       }

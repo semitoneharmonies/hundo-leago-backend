@@ -2,6 +2,17 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 25;
+const NOTIFICATION_READ_STATUSES = Object.freeze(["all", "read", "unread"]);
+const ACTIVITY_CATEGORIES = Object.freeze([
+  "all",
+  "auction",
+  "buyout",
+  "commissioner",
+  "competition",
+  "other",
+  "team",
+  "trade",
+]);
 
 const ACTIVITY_CODES = Object.freeze({
   cursorInvalid: "ACTIVITY_CURSOR_INVALID",
@@ -81,17 +92,65 @@ function validatePageInput(input = {}) {
   });
 }
 
+function validateActivityPageInput(input = {}) {
+  const keys = Object.keys(input).sort();
+  if (keys.some((key) => !["category", "cursor", "limit"].includes(key))) {
+    fail(ACTIVITY_CODES.inputInvalid);
+  }
+  const category = input.category ?? "all";
+  if (!ACTIVITY_CATEGORIES.includes(category)) {
+    fail(ACTIVITY_CODES.inputInvalid);
+  }
+  return Object.freeze({
+    limit: pageSize(input.limit),
+    cursor: decodeCursor(input.cursor),
+    category,
+  });
+}
+
+function validateNotificationPageInput(input = {}) {
+  const keys = Object.keys(input).sort();
+  if (keys.some((key) => !["cursor", "limit", "readStatus"].includes(key))) {
+    fail(ACTIVITY_CODES.inputInvalid);
+  }
+  const readStatus = input.readStatus ?? "all";
+  if (!NOTIFICATION_READ_STATUSES.includes(readStatus)) {
+    fail(ACTIVITY_CODES.inputInvalid);
+  }
+  return Object.freeze({
+    limit: pageSize(input.limit),
+    cursor: decodeCursor(input.cursor),
+    readStatus,
+  });
+}
+
+function validateNotificationIds(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_PAGE_SIZE) {
+    fail(ACTIVITY_CODES.inputInvalid);
+  }
+  const ids = value.map(stableId);
+  if (new Set(ids).size !== ids.length) {
+    fail(ACTIVITY_CODES.inputInvalid);
+  }
+  return Object.freeze(ids);
+}
+
 function validateNotificationId(value) {
   return stableId(value);
 }
 
 module.exports = {
   ACTIVITY_CODES,
+  ACTIVITY_CATEGORIES,
   ActivityPolicyError,
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
+  NOTIFICATION_READ_STATUSES,
   decodeCursor,
   encodeCursor,
+  validateActivityPageInput,
   validateNotificationId,
+  validateNotificationIds,
+  validateNotificationPageInput,
   validatePageInput,
 };

@@ -142,6 +142,10 @@ function createPlayerRouter({
             cursor: request.query.cursor,
             sort: request.query.sort,
             teamId: request.query.teamId,
+            position: request.query.position,
+            nhlTeam: request.query.nhlTeam,
+            ownership: request.query.ownership,
+            minimumGames: request.query.minimumGames,
           });
           return response.status(200).json({
             data: result.players,

@@ -4,7 +4,9 @@ const { describe, test } = require("node:test");
 const {
   TRADE_EXECUTION_CODES,
   TradeExecutionPolicyError,
+  assertTradeApprovalState,
   assertTradeExecutionState,
+  validateTradeApprovalCommand,
   validateTradeExecutionCommand,
   validateTradeExecutionInput,
 } = require("../../src/domain/trades/tradeExecutionPolicy");
@@ -67,6 +69,8 @@ function context(overrides = {}) {
     assignment_status: "accepted",
     assignment_accepted_at_ms: 500,
     assignment_ended_at_ms: null,
+    is_platform_administrator: 0,
+    has_future_considerations: 1,
     ...overrides,
   };
 }
@@ -95,7 +99,7 @@ describe("M5-08 trade-execution policy", () => {
     );
   });
 
-  test("permits only the receiving manager or explicit current commissioner", () => {
+  test("permits only the receiving manager, including a manager who is commissioner", () => {
     assert.equal(
       assertTradeExecutionState({ command: command(), context: context() }),
       true
@@ -108,11 +112,47 @@ describe("M5-08 trade-execution policy", () => {
         }),
       TRADE_EXECUTION_CODES.roleDenied
     );
+    assertReason(
+      () =>
+        assertTradeExecutionState({
+          command: command({ actorAuthority: "commissioner" }),
+          context: context({
+            commissioner_membership_id: IDS.membership,
+            membership_permission: "commissioner",
+          }),
+        }),
+      TRADE_EXECUTION_CODES.roleDenied
+    );
+    assertReason(
+      () =>
+        assertTradeExecutionState({
+          command: command({ actorAuthority: "platform_administrator" }),
+          context: context({ is_platform_administrator: 1 }),
+        }),
+      TRADE_EXECUTION_CODES.roleDenied
+    );
     assert.equal(
       assertTradeExecutionState({
-        command: command({ actorAuthority: "commissioner" }),
+        command: command({ actorAuthority: "manager" }),
         context: context({
-          league_status: "frozen",
+          commissioner_membership_id: IDS.membership,
+          membership_permission: "commissioner",
+        }),
+      }),
+      true
+    );
+  });
+
+  test("reserves awaiting approval for the current commissioner or platform administrator", () => {
+    const approval = validateTradeApprovalCommand({
+      ...command({ actorAuthority: "commissioner" }),
+      idempotencyKey: "approve-1",
+    });
+    assert.equal(
+      assertTradeApprovalState({
+        command: approval,
+        context: context({
+          trade_status: "awaiting_commissioner_approval",
           commissioner_membership_id: IDS.membership,
           membership_permission: "commissioner",
           assignment_team_id: null,
@@ -121,6 +161,43 @@ describe("M5-08 trade-execution policy", () => {
         }),
       }),
       true
+    );
+    assertReason(
+      () =>
+        validateTradeApprovalCommand({
+          ...command(),
+          idempotencyKey: "manager-cannot-approve",
+        }),
+      TRADE_EXECUTION_CODES.authorityInvalid
+    );
+    const platformApproval = validateTradeApprovalCommand({
+      ...command({ actorAuthority: "platform_administrator" }),
+      idempotencyKey: "platform-approve-1",
+    });
+    assert.equal(
+      assertTradeApprovalState({
+        command: platformApproval,
+        context: context({
+          trade_status: "awaiting_commissioner_approval",
+          membership_permission: "manager",
+          assignment_team_id: null,
+          assignment_status: null,
+          assignment_accepted_at_ms: null,
+          is_platform_administrator: 1,
+        }),
+      }),
+      true
+    );
+    assertReason(
+      () =>
+        assertTradeApprovalState({
+          command: platformApproval,
+          context: context({
+            trade_status: "awaiting_commissioner_approval",
+            is_platform_administrator: 0,
+          }),
+        }),
+      TRADE_EXECUTION_CODES.roleDenied
     );
   });
 

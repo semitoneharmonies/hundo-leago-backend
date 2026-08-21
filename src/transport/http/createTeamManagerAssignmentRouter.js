@@ -4,6 +4,8 @@ const SAFE_MESSAGES = Object.freeze({
   LEAGUE_COMMISSIONER_REQUIRED:
     "Current league-commissioner authority is required.",
   LEAGUE_NOT_FOUND: "The league was not found.",
+  PLATFORM_ADMINISTRATOR_TEAM_ACCESS_PROTECTED:
+    "Platform-administrator team access is protected and cannot be changed here.",
   TEAM_MANAGER_ASSIGNMENT_CONFLICT:
     "The team-manager assignment cannot be changed in its current state.",
   TEAM_MANAGER_ASSIGNMENT_INVALID:
@@ -159,6 +161,7 @@ function createTeamManagerAssignmentRouter({
         "TEAM_MANAGER_ASSIGNMENT_CONFLICT",
         "TEAM_MANAGER_ASSIGNMENT_RESULT_UNAVAILABLE",
         "TEAM_MANAGER_TRANSFER_STALE",
+        "PLATFORM_ADMINISTRATOR_TEAM_ACCESS_PROTECTED",
         "IDEMPOTENCY_KEY_REUSED",
         "IDEMPOTENCY_REQUEST_UNAVAILABLE",
       ].includes(error?.code)

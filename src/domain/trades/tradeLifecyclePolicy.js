@@ -3,6 +3,10 @@ const UUID_PATTERN =
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
 const MAX_TIMESTAMP_MS = 8_640_000_000_000_000;
 const LIFECYCLE_ACTIONS = Object.freeze(["reject", "cancel"]);
+const OPEN_PROPOSAL_STATUSES = Object.freeze([
+  "proposed",
+  "awaiting_commissioner_approval",
+]);
 
 const TRADE_LIFECYCLE_CODES = Object.freeze({
   inputInvalid: "TRADE_LIFECYCLE_INPUT_INVALID",
@@ -120,7 +124,11 @@ function validateTradeLifecycleCommand(input) {
     "idempotencyKey",
     "idempotencyExpiresAtMs",
   ]);
-  if (!["manager", "commissioner"].includes(input.actorAuthority)) {
+  if (
+    !["manager", "commissioner", "platform_administrator"].includes(
+      input.actorAuthority
+    )
+  ) {
     fail(TRADE_LIFECYCLE_CODES.authorityInvalid);
   }
   const occurredAtMs = safeTimestamp(input.occurredAtMs);
@@ -175,7 +183,7 @@ function assertTradeLifecycleState({ command, context } = {}) {
   ) {
     fail(TRADE_LIFECYCLE_CODES.stateInvalid);
   }
-  if (context.trade_status !== "proposed") {
+  if (!OPEN_PROPOSAL_STATUSES.includes(context.trade_status)) {
     fail(TRADE_LIFECYCLE_CODES.notPending);
   }
   if (
@@ -184,24 +192,16 @@ function assertTradeLifecycleState({ command, context } = {}) {
   ) {
     fail(TRADE_LIFECYCLE_CODES.windowClosed);
   }
-  const commissionerAuthorized =
-    command.actorAuthority === "commissioner" &&
-    ["active", "frozen"].includes(context.league_status) &&
-    context.commissioner_membership_id === command.actorMembershipId &&
-    context.membership_user_id === command.actorUserId &&
-    context.membership_status === "active" &&
-    context.membership_permission === "commissioner";
   const managerAuthorized =
     command.actorAuthority === "manager" &&
     context.league_status === "active" &&
     context.membership_user_id === command.actorUserId &&
     context.membership_status === "active" &&
-    context.membership_permission === "manager" &&
     context.assignment_team_id === expectedManagerTeamId(command) &&
     context.assignment_status === "accepted" &&
     context.assignment_accepted_at_ms !== null &&
     context.assignment_ended_at_ms === null;
-  if (!commissionerAuthorized && !managerAuthorized) {
+  if (!managerAuthorized) {
     fail(TRADE_LIFECYCLE_CODES.roleDenied);
   }
   return true;
@@ -226,7 +226,11 @@ function validateTradeAcceptancePreviewCommand(input) {
     "occurredAtMs",
     "effectiveDeadlineAtMs",
   ]);
-  if (!["manager", "commissioner"].includes(input.actorAuthority)) {
+  if (
+    !["manager", "commissioner", "platform_administrator"].includes(
+      input.actorAuthority
+    )
+  ) {
     fail(TRADE_LIFECYCLE_CODES.authorityInvalid);
   }
   const command = Object.freeze({
@@ -261,7 +265,7 @@ function assertTradeAcceptancePreviewState({ command, context } = {}) {
   ) {
     fail(TRADE_LIFECYCLE_CODES.stateInvalid);
   }
-  if (context.trade_status !== "proposed") {
+  if (!OPEN_PROPOSAL_STATUSES.includes(context.trade_status)) {
     fail(TRADE_LIFECYCLE_CODES.notPending);
   }
   if (
@@ -270,24 +274,26 @@ function assertTradeAcceptancePreviewState({ command, context } = {}) {
   ) {
     fail(TRADE_LIFECYCLE_CODES.windowClosed);
   }
-  const commissionerAuthorized =
-    command.actorAuthority === "commissioner" &&
-    ["active", "frozen"].includes(context.league_status) &&
-    context.commissioner_membership_id === command.actorMembershipId &&
-    context.membership_user_id === command.actorUserId &&
-    context.membership_status === "active" &&
-    context.membership_permission === "commissioner";
   const managerAuthorized =
     command.actorAuthority === "manager" &&
     context.league_status === "active" &&
     context.membership_user_id === command.actorUserId &&
     context.membership_status === "active" &&
-    context.membership_permission === "manager" &&
     context.assignment_team_id === command.receivingTeamId &&
     context.assignment_status === "accepted" &&
     context.assignment_accepted_at_ms !== null &&
     context.assignment_ended_at_ms === null;
-  if (!commissionerAuthorized && !managerAuthorized) {
+  const commissionerApprovalAuthorized =
+    context.trade_status === "awaiting_commissioner_approval" &&
+    ["active", "frozen"].includes(context.league_status) &&
+    context.membership_user_id === command.actorUserId &&
+    context.membership_status === "active" &&
+    ((command.actorAuthority === "commissioner" &&
+      context.commissioner_membership_id === command.actorMembershipId &&
+      context.membership_permission === "commissioner") ||
+      (command.actorAuthority === "platform_administrator" &&
+        context.is_platform_administrator === 1));
+  if (!managerAuthorized && !commissionerApprovalAuthorized) {
     fail(TRADE_LIFECYCLE_CODES.roleDenied);
   }
   return true;
@@ -343,7 +349,7 @@ function assertTradeExpiryState({ command, context } = {}) {
   ) {
     fail(TRADE_LIFECYCLE_CODES.stateInvalid);
   }
-  if (context.trade_status !== "proposed") {
+  if (!OPEN_PROPOSAL_STATUSES.includes(context.trade_status)) {
     fail(TRADE_LIFECYCLE_CODES.notPending);
   }
   if (command.occurredAtMs < context.effective_deadline_at_ms) {
@@ -354,6 +360,7 @@ function assertTradeExpiryState({ command, context } = {}) {
 
 module.exports = {
   LIFECYCLE_ACTIONS,
+  OPEN_PROPOSAL_STATUSES,
   TRADE_LIFECYCLE_CODES,
   TradeLifecyclePolicyError,
   assertTradeAcceptancePreviewState,

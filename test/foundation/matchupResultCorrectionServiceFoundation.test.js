@@ -103,6 +103,21 @@ describe("T097 matchup-result correction policy", () => {
       { confirmed: false }
     );
     assert.deepEqual(
+      validateMatchupResultCorrectionPreviewInput({
+        confirmed: false,
+        homeScoreHundredths: 625,
+        awayScoreHundredths: 475,
+      }),
+      {
+        confirmed: false,
+        homeScoreHundredths: 625,
+        awayScoreHundredths: 475,
+        outcome: "home_win",
+        reason: "Official matchup result correction",
+        writtenReason: null,
+      }
+    );
+    assert.deepEqual(
       validateMatchupResultCorrectionInput({
         confirmed: true,
         homeScoreHundredths: 500,
