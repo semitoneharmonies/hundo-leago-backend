@@ -424,6 +424,10 @@ describe("SQLite migration engine and ledger", () => {
       "0001_cli.sql",
       "CREATE TABLE cli_table (id INTEGER PRIMARY KEY) STRICT;\n"
     );
+    const cliEnvironment = {
+      ...process.env,
+      APP_ENV: "test",
+    };
 
     const success = spawnSync(
       process.execPath,
@@ -438,7 +442,11 @@ describe("SQLite migration engine and ledger", () => {
         "--environment",
         "test",
       ],
-      { cwd: ROOT_DIRECTORY, encoding: "utf8" }
+      {
+        cwd: ROOT_DIRECTORY,
+        encoding: "utf8",
+        env: cliEnvironment,
+      }
     );
     assert.equal(success.status, 0, success.stderr);
     assert.deepEqual(JSON.parse(success.stdout.trim()), {
@@ -467,6 +475,7 @@ describe("SQLite migration engine and ledger", () => {
     const failure = spawnSync(process.execPath, [MIGRATION_SCRIPT], {
       cwd: ROOT_DIRECTORY,
       encoding: "utf8",
+      env: cliEnvironment,
     });
     assert.equal(failure.status, 1);
     assert.equal(
