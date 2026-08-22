@@ -244,6 +244,29 @@ test("wrong key, wrong environment, and encrypted corruption create no target", 
     { code: "RESTORE_PATH_UNSAFE" }
   );
   assert.equal(fs.readFileSync(existing, "utf8"), "preserve me");
+  const sidecarTarget = path.join(
+    state.restoreDirectory,
+    "foreign-sidecar.sqlite3"
+  );
+  fs.writeFileSync(`${sidecarTarget}-wal`, "preserve foreign sidecar");
+  await assert.rejects(
+    restoreEncryptedBackupToCleanPath({
+      manifestObjectKey: result.manifestObjectKey,
+      objectStorage: storage.adapter,
+      keyResolver: async () => KEY,
+      expectedEnvironment: "staging",
+      expectedEnvironmentId: ENVIRONMENT_ID,
+      expectedDatabaseId: DATABASE_ID,
+      targetDatabasePath: sidecarTarget,
+      temporaryRoot: state.root,
+    }),
+    { code: "RESTORE_PATH_UNSAFE" }
+  );
+  assert.equal(fs.existsSync(sidecarTarget), false);
+  assert.equal(
+    fs.readFileSync(`${sidecarTarget}-wal`, "utf8"),
+    "preserve foreign sidecar"
+  );
   const artifact = storage.objects.get(result.storageObjectKey);
   artifact.body[0] ^= 0xff;
   await attempt("corrupt");

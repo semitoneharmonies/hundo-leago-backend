@@ -295,6 +295,20 @@ function createSqliteLeagueOutboxRepository({ database } = {}) {
   });
 
   return Object.freeze({
+    findById({ eventId, leagueId } = {}) {
+      const command = {
+        eventId: stableId(eventId),
+        leagueId: stableId(leagueId),
+      };
+      try {
+        return find(command);
+      } catch (error) {
+        throw mapRepositoryError(error, {
+          operation: "findLeagueOutboxEventById",
+          tableName: "outbox_events",
+        });
+      }
+    },
     claim({ eventId, leagueId, expectedVersion, nowMs } = {}) {
       const command = {
         eventId: stableId(eventId),

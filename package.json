@@ -42,6 +42,11 @@
     "release:qa:start": "node scripts/start-m7-release-qa.js",
     "release:qa:verify": "node scripts/verify-m7-release-qa.js",
     "release:qa:credentials:rotate": "node scripts/rotate-release-qa-credentials.js",
+    "release:qa:fad:privacy-gate:prepare": "node scripts/prepare-release-qa-fad-privacy-gate.js",
+    "release:qa:strict-restore:plan": "node scripts/release-qa-strict-restore-command.js plan",
+    "release:qa:strict-restore:execute": "node scripts/release-qa-strict-restore-command.js execute",
+    "release:qa:strict-restore:abort:plan": "node scripts/release-qa-strict-restore-command.js abort-plan",
+    "release:qa:strict-restore:abort:execute": "node scripts/release-qa-strict-restore-command.js abort-execute",
     "release:qa:fad:staging": "node scripts/create-staging-fad-test-leagues.js",
     "release:candidate:preflight": "node scripts/release-candidate-preflight.js"
   },

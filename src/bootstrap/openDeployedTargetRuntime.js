@@ -49,6 +49,18 @@ const {
   createStagingSportsDataIoImportRouter,
 } = require("../transport/http/createStagingSportsDataIoImportRouter");
 const {
+  createReleaseQaStrictManagerOutboxRouter,
+} = require(
+  "../transport/http/createReleaseQaStrictManagerOutboxRouter"
+);
+const {
+  createReleaseQaStrictManagerOutboxService,
+  runtimeBindingMatches:
+    releaseQaStrictManagerOutboxBindingMatches,
+} = require(
+  "../operations/release/publishReleaseQaStrictManagerOutbox"
+);
+const {
   MINIMUM_LAST_SEASON_STATISTICS_PLAYER_COUNT,
   PROVIDER_NAME,
   createSportsDataIoLastSeasonStatisticsProvider,
@@ -348,6 +360,7 @@ function openDeployedTargetRuntime({
     createSportsDataIoLiveCapabilityAuthenticator,
   createSportsDataIoLiveCapabilityArtifactFunction =
     createSportsDataIoLiveCapabilityArtifact,
+  releaseQaStrictManagerOutboxContract,
 } = {}) {
   assertConfig(config, securityFoundations);
   if (
@@ -447,6 +460,29 @@ function openDeployedTargetRuntime({
         healthService: health,
       })
     );
+    if (
+      releaseQaStrictManagerOutboxBindingMatches({
+        config: runtimeConfig,
+        migrationState,
+        contract: releaseQaStrictManagerOutboxContract,
+      })
+    ) {
+      const strictManagerOutboxService =
+        createReleaseQaStrictManagerOutboxService({
+          database: connection.database,
+          config: runtimeConfig,
+          migrationState,
+          outboxPublicationService:
+            runtime.services.league.outboxPublication,
+          contract: releaseQaStrictManagerOutboxContract,
+        });
+      runtime.app.use(
+        createReleaseQaStrictManagerOutboxRouter({
+          requestSecurity: runtime.transport.requestSecurity,
+          service: strictManagerOutboxService,
+        })
+      );
+    }
     if (
       config.appEnv === "staging" &&
       config.environmentId === FIXTURE_ENVIRONMENT_ID &&

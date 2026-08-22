@@ -33,6 +33,16 @@ function fail(code, message, cause) {
   );
 }
 
+function pathEntryExists(entryPath) {
+  try {
+    fs.lstatSync(entryPath);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 function newCleanPath(targetDatabasePath, temporaryRoot) {
   if (
     typeof targetDatabasePath !== "string" ||
@@ -51,7 +61,9 @@ function newCleanPath(targetDatabasePath, temporaryRoot) {
     relative === ".." ||
     relative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relative) ||
-    fs.existsSync(target)
+    pathEntryExists(target) ||
+    pathEntryExists(`${target}-wal`) ||
+    pathEntryExists(`${target}-shm`)
   ) {
     fail(
       "RESTORE_PATH_UNSAFE",
@@ -102,6 +114,8 @@ async function restoreEncryptedBackupToCleanPath({
     throw new TypeError("encrypted restore requires a versioned key resolver");
   }
   const target = newCleanPath(targetDatabasePath, temporaryRoot);
+  let targetDescriptor = null;
+  let targetOwned = false;
   try {
     const manifestObject = await objectStorage.getPrivateObject({
       objectKey: manifestObjectKey,
@@ -178,7 +192,12 @@ async function restoreEncryptedBackupToCleanPath({
         "The restored plaintext checksum does not match."
       );
     }
-    fs.writeFileSync(target, plaintext, { flag: "wx", mode: 0o600 });
+    targetDescriptor = fs.openSync(target, "wx", 0o600);
+    targetOwned = true;
+    fs.writeFileSync(targetDescriptor, plaintext);
+    fs.fsyncSync(targetDescriptor);
+    fs.closeSync(targetDescriptor);
+    targetDescriptor = null;
     const inspection = inspectDatabase(target);
     if (
       canonicalize(inspection) !== canonicalize(manifest.databaseInspection) ||
@@ -198,7 +217,30 @@ async function restoreEncryptedBackupToCleanPath({
       status: "verified",
     });
   } catch (error) {
-    fs.rmSync(target, { force: true });
+    const cleanupErrors = [];
+    if (targetDescriptor !== null) {
+      try {
+        fs.closeSync(targetDescriptor);
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (targetOwned) {
+      for (const ownedPath of [target, `${target}-wal`, `${target}-shm`]) {
+        try {
+          fs.rmSync(ownedPath, { force: true });
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      fail(
+        "RESTORE_CLEANUP_FAILED",
+        "The encrypted clean restore could not clean its owned target.",
+        new AggregateError([error, ...cleanupErrors])
+      );
+    }
     if (error instanceof EncryptedRestoreError) throw error;
     fail(
       "RESTORE_OFFSITE_OPERATION_FAILED",

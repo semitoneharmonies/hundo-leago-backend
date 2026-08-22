@@ -369,67 +369,96 @@ function createLeagueOutboxPublicationService({
     throw new TypeError("league outbox publication configuration is invalid");
   }
 
+  async function publishCandidate(candidate) {
+    const claimed = repository.claim({
+      eventId: candidate.id,
+      leagueId: candidate.league_id,
+      expectedVersion: candidate.version,
+      nowMs: safeNow(clock),
+    });
+    if (!claimed) return null;
+    try {
+      const audiences = parseAudiences(
+        repository.listAudiences({
+          eventId: claimed.id,
+          leagueId: claimed.league_id,
+        }),
+        claimed
+      );
+      const payload = parsePayload(claimed);
+      await publisher.publish({
+        eventId: claimed.id,
+        eventType: payload.type,
+        leagueId: claimed.league_id,
+        aggregateType: claimed.aggregate_type,
+        aggregateId: claimed.aggregate_id,
+        audiences,
+        authorizeUserAudience({ leagueId, userId }) {
+          return repository.isUserAudienceAuthorized({
+            leagueId,
+            userId,
+            eventType: payload.type,
+            resourceId: payload.resourceId,
+            reasonCode: payload.reasonCode,
+            related: payload.related,
+            nowMs: safeNow(clock),
+          });
+        },
+        payload,
+      });
+      repository.markPublished({
+        eventId: claimed.id,
+        leagueId: claimed.league_id,
+        expectedVersion: claimed.version,
+        publishedAtMs: safeNow(clock),
+      });
+      return Object.freeze({ eventId: claimed.id, outcome: "published" });
+    } catch (error) {
+      const failedAtMs = safeNow(clock);
+      repository.markFailed({
+        eventId: claimed.id,
+        leagueId: claimed.league_id,
+        expectedVersion: claimed.version,
+        failedAtMs,
+        availableAtMs: failedAtMs + retryDelayMs,
+        errorCode: safeErrorCode(error),
+      });
+      return Object.freeze({ eventId: claimed.id, outcome: "failed" });
+    }
+  }
+
   async function publishDue() {
     const due = repository.listDue({ nowMs: safeNow(clock), limit: batchSize });
     const outcomes = [];
     for (const candidate of due) {
-      const claimed = repository.claim({
-        eventId: candidate.id,
-        leagueId: candidate.league_id,
-        expectedVersion: candidate.version,
-        nowMs: safeNow(clock),
-      });
-      if (!claimed) continue;
-      try {
-        const audiences = parseAudiences(
-          repository.listAudiences({
-            eventId: claimed.id,
-            leagueId: claimed.league_id,
-          }),
-          claimed
-        );
-        const payload = parsePayload(claimed);
-        await publisher.publish({
-          eventId: claimed.id,
-          eventType: payload.type,
-          leagueId: claimed.league_id,
-          aggregateType: claimed.aggregate_type,
-          aggregateId: claimed.aggregate_id,
-          audiences,
-          authorizeUserAudience({ leagueId, userId }) {
-            return repository.isUserAudienceAuthorized({
-              leagueId,
-              userId,
-              eventType: payload.type,
-              resourceId: payload.resourceId,
-              reasonCode: payload.reasonCode,
-              related: payload.related,
-              nowMs: safeNow(clock),
-            });
-          },
-          payload,
-        });
-        repository.markPublished({
-          eventId: claimed.id,
-          leagueId: claimed.league_id,
-          expectedVersion: claimed.version,
-          publishedAtMs: safeNow(clock),
-        });
-        outcomes.push(Object.freeze({ eventId: claimed.id, outcome: "published" }));
-      } catch (error) {
-        const failedAtMs = safeNow(clock);
-        repository.markFailed({
-          eventId: claimed.id,
-          leagueId: claimed.league_id,
-          expectedVersion: claimed.version,
-          failedAtMs,
-          availableAtMs: failedAtMs + retryDelayMs,
-          errorCode: safeErrorCode(error),
-        });
-        outcomes.push(Object.freeze({ eventId: claimed.id, outcome: "failed" }));
-      }
+      const outcome = await publishCandidate(candidate);
+      if (outcome) outcomes.push(outcome);
     }
     return Object.freeze(outcomes);
+  }
+
+  async function publishExact({ eventId, leagueId, expectedVersion } = {}) {
+    assertMethod(repository, "findById", "an exact league-outbox lookup");
+    const event = repository.findById({ eventId, leagueId });
+    if (!event || event.version !== expectedVersion) {
+      return Object.freeze({
+        eventId: event?.id || null,
+        outcome: "state_changed",
+      });
+    }
+    if (event.status === "published") {
+      return Object.freeze({ eventId: event.id, outcome: "already_published" });
+    }
+    if (
+      !["pending", "failed"].includes(event.status) ||
+      event.available_at_ms > safeNow(clock)
+    ) {
+      return Object.freeze({ eventId: event.id, outcome: "state_changed" });
+    }
+    return (
+      (await publishCandidate(event)) ||
+      Object.freeze({ eventId: event.id, outcome: "state_changed" })
+    );
   }
 
   function recoverInterrupted({ staleBeforeMs } = {}) {
@@ -440,7 +469,7 @@ function createLeagueOutboxPublicationService({
     });
   }
 
-  return Object.freeze({ publishDue, recoverInterrupted });
+  return Object.freeze({ publishDue, publishExact, recoverInterrupted });
 }
 
 module.exports = {

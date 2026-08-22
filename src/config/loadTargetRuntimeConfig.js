@@ -55,6 +55,11 @@ function exactBoolean(env, field) {
   return value === "true";
 }
 
+function optionalExactBoolean(env, field) {
+  if (env[field] === undefined || env[field] === null) return null;
+  return exactBoolean(env, field);
+}
+
 function exactEnum(env, field, allowed) {
   const value = requiredString(env, field);
   if (!allowed.includes(value)) {
@@ -409,6 +414,11 @@ function loadTargetRuntimeConfig({
   }
 
   const sportsDataIoNhl = sportsDataIoNhlImport(env, security.appEnv);
+  const sportsDataIoNhlImportFieldsAbsent = [
+    "SPORTSDATAIO_NHL_API_KEY",
+    "SPORTSDATAIO_NHL_API_ORIGIN",
+    "SPORTSDATAIO_NHL_LAST_SEASON_START_YEAR",
+  ].every((field) => !isSupplied(env, field));
   const configuredCurrentSeason = currentSeason(env);
   const probeManifestPath =
     resolveSportsDataIoLiveProbeManifestPath(backendRoot);
@@ -429,6 +439,10 @@ function loadTargetRuntimeConfig({
     accountEmailDeliveryEnabled: exactBoolean(
       env,
       "ACCOUNT_EMAIL_DELIVERY_ENABLED"
+    ),
+    backupScheduleEnabled: optionalExactBoolean(
+      env,
+      "BACKUP_SCHEDULE_ENABLED"
     ),
     appEnv: security.appEnv,
     buildId: security.buildId,
@@ -451,9 +465,14 @@ function loadTargetRuntimeConfig({
       env,
       "SCHEDULED_JOBS_ENABLED"
     ),
+    stagingMaintenanceHoldEnabled: optionalExactBoolean(
+      env,
+      "STAGING_MAINTENANCE_HOLD"
+    ),
     security,
     sportsDataIoLiveNhl,
     sportsDataIoNhl,
+    sportsDataIoNhlImportFieldsAbsent,
   });
 }
 
