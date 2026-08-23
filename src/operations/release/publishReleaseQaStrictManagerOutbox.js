@@ -34,27 +34,27 @@ const REQUIRED_SCHEMA_VERSION = 54;
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RECEIPT_REASON_PATTERN =
   /^strict_fad_privacy_gate_v1_[a-f0-9]{16}$/u;
-const RELEASE_ID = "HL-20260821-3";
+const RELEASE_ID = STRICT_RESTORE_CONTRACT.releaseId;
 const PHASES = Object.freeze({
   "team1-to-manager-b": Object.freeze({
     acceptingUserId: fixtureId("account:leagueAManagerTwo"),
     confirmation:
-      "PUBLISH-HL-20260821-3-TEAM1-TO-MANAGER-B",
+      `PUBLISH-${RELEASE_ID}-TEAM1-TO-MANAGER-B`,
     idempotencyKey:
-      "HL-20260821-3-outbox-team1-to-manager-b",
-    proposalKey: "HL-20260821-3-team1-to-b-propose",
-    acceptanceKey: "HL-20260821-3-team1-to-b-accept",
+      `${RELEASE_ID}-outbox-team1-to-manager-b`,
+    proposalKey: `${RELEASE_ID}-team1-to-b-propose`,
+    acceptanceKey: `${RELEASE_ID}-team1-to-b-accept`,
     expectedAssignmentCount: 5,
     expectedPublicationCount: 1,
   }),
   "team1-return-to-manager-a": Object.freeze({
     acceptingUserId: fixtureId("account:leagueAManagerOne"),
     confirmation:
-      "PUBLISH-HL-20260821-3-TEAM1-RETURN-TO-MANAGER-A",
+      `PUBLISH-${RELEASE_ID}-TEAM1-RETURN-TO-MANAGER-A`,
     idempotencyKey:
-      "HL-20260821-3-outbox-team1-return-to-manager-a",
-    proposalKey: "HL-20260821-3-team1-to-a-propose",
-    acceptanceKey: "HL-20260821-3-team1-to-a-accept",
+      `${RELEASE_ID}-outbox-team1-return-to-manager-a`,
+    proposalKey: `${RELEASE_ID}-team1-to-a-propose`,
+    acceptanceKey: `${RELEASE_ID}-team1-to-a-accept`,
     expectedAssignmentCount: 6,
     expectedPublicationCount: 2,
   }),

@@ -83,7 +83,7 @@ const MIGRATIONS_DIRECTORY = path.join(
   "database",
   "migrations"
 );
-const OPERATION_ID = "HL-20260821-3";
+const OPERATION_ID = STRICT_RESTORE_CONTRACT.releaseId;
 const NOW_MS = Date.parse("2026-08-21T18:00:00.000Z");
 
 function seedRealPlayerCatalog(database) {
@@ -533,13 +533,13 @@ test(
       leagueId: SIDE_CAR_IDS.leagueId,
       teamId: SIDE_CAR_IDS.teamIds[0],
       input: { userId: fixtureId("account:leagueAManagerTwo") },
-      idempotencyKey: "HL-20260821-3-team1-to-b-propose",
+      idempotencyKey: `${OPERATION_ID}-team1-to-b-propose`,
       authenticated: administrator,
     });
     service.accept({
       assignmentId: toB.assignment.id,
       input: {},
-      idempotencyKey: "HL-20260821-3-team1-to-b-accept",
+      idempotencyKey: `${OPERATION_ID}-team1-to-b-accept`,
       authenticated: managerB,
     });
 
@@ -704,13 +704,13 @@ test(
       leagueId: SIDE_CAR_IDS.leagueId,
       teamId: SIDE_CAR_IDS.teamIds[0],
       input: { userId: fixtureId("account:leagueAManagerOne") },
-      idempotencyKey: "HL-20260821-3-team1-to-a-propose",
+      idempotencyKey: `${OPERATION_ID}-team1-to-a-propose`,
       authenticated: administrator,
     });
     service.accept({
       assignmentId: toA.assignment.id,
       input: {},
-      idempotencyKey: "HL-20260821-3-team1-to-a-accept",
+      idempotencyKey: `${OPERATION_ID}-team1-to-a-accept`,
       authenticated: managerA,
     });
     const publishedToA = await strictPublisher.publish({

@@ -59,7 +59,7 @@ const EXPECTED_ROTATION_REASON =
   "operator_shared_password_recovery_r9_s0";
 
 const DEFAULT_CONTRACT = Object.freeze({
-  releaseId: "HL-20260821-3",
+  releaseId: "HL-20260822-1",
   serviceId: "srv-d9eo2turnols73ekb830",
   environment: "staging",
   environmentId: FIXTURE_ENVIRONMENT_ID,
@@ -67,32 +67,32 @@ const DEFAULT_CONTRACT = Object.freeze({
   persistentRoot: "/opt/render/project/data/hundo-staging",
   sourceDatabasePath:
     "/opt/render/project/data/hundo-staging/sqlite/" +
-    "hundo-leago-schema51-aav-20260815T082700Z.sqlite3",
+    "hundo-leago-schema54-strict-restore-HL-20260821-3.sqlite3",
   targetDatabasePath:
     "/opt/render/project/data/hundo-staging/sqlite/" +
-    "hundo-leago-schema54-strict-restore-HL-20260821-3.sqlite3",
-  backupId: "adcbbbab-e857-4cae-af71-dbce95553ce5",
+    "hundo-leago-schema54-strict-restore-HL-20260822-1.sqlite3",
+  backupId: "2044fcae-24e8-4392-a1ac-4064d9cd2807",
   manifestObjectKey:
     "staging/backups/" +
-    "hundo-leago_staging_20260822T083634565Z_" +
-    "adcbbbab-e857-4cae-af71-dbce95553ce5.manifest.json",
+    "hundo-leago_staging_20260822T224011048Z_" +
+    "2044fcae-24e8-4392-a1ac-4064d9cd2807.manifest.json",
   storageObjectKey:
     "staging/backups/" +
-    "hundo-leago_staging_20260822T083634565Z_" +
-    "adcbbbab-e857-4cae-af71-dbce95553ce5.sqlite3.gz.enc",
-  backupCreatedAt: "2026-08-22T08:36:34.565Z",
-  backupReason: "pre-bulk-operation",
-  backupBackendBuildId: "fe6047552857376b490756ff63ac593d431ee561",
+    "hundo-leago_staging_20260822T224011048Z_" +
+    "2044fcae-24e8-4392-a1ac-4064d9cd2807.sqlite3.gz.enc",
+  backupCreatedAt: "2026-08-22T22:40:11.048Z",
+  backupReason: "incident-preservation",
+  backupBackendBuildId: "23971a4d66ee6383c6ad54339e769dbc9a76561e",
   encryptedArtifactSha256:
-    "ee3a3b375f7bc86b845efd0f12bad69937732e973c1661353876952b2330e115",
+    "cee039557278c41f59fa9d6a5b09cf4f69f1b9f3589cb3774420ef34be255162",
   manifestChecksum:
-    "24898a9e872477cbe4170bea8dc18a8a94016709202e5fad47bd7ca97126a948",
+    "08e3d3bde81843a683017d9952b30e02dd02978181a8644323cfbd590eca2ac8",
   plaintextSha256:
     "cf3ca07d0500888edf60f2742541ace6f5b7db0e1f2fd9b57f00db56aacacabc",
   migrationChecksumSetId:
     "6032a48eb5126eff1bfa371937c3a086cb629bdbebaddfcb912cb4bb4799ff89",
   schemaVersion: EXPECTED_SCHEMA_VERSION,
-  frontendBuildId: "0e8eee92e2e323dd7f25ec3112988feaf23f96f0",
+  frontendBuildId: "4dfe12d1366314e3d9df722c50771324647743c9",
 });
 
 const RESTORE_MODES = Object.freeze({
@@ -958,7 +958,7 @@ function parseJsonObject(value) {
   }
 }
 
-function classifyAbortSource(database, fixture) {
+function classifyAbortSource(database, fixture, contract) {
   try {
     const managerA = fixtureId("account:leagueAManagerOne");
     const managerB = fixtureId("account:leagueAManagerTwo");
@@ -1086,8 +1086,8 @@ function classifyAbortSource(database, fixture) {
       const operationAccept =
         "league.team_manager_assignment.accept.v1";
       const prefix = direction === "to_b"
-        ? "HL-20260821-3-team1-to-b"
-        : "HL-20260821-3-team1-to-a";
+        ? `${contract.releaseId}-team1-to-b`
+        : `${contract.releaseId}-team1-to-a`;
       const idempotency = database.prepare(`
         SELECT actor_user_id, operation, client_key, request_hash,
                status, result_type, result_id
@@ -1410,7 +1410,7 @@ function classifyAbortSource(database, fixture) {
 
 function abortStrictSmokeEvidence(database, contract) {
   const fixture = abortFixtureRootEvidence(database, contract);
-  const classified = classifyAbortSource(database, fixture);
+  const classified = classifyAbortSource(database, fixture, contract);
   if (classified.classification === "unclassified") {
     fail(ERROR_CODES.sourceInvalid);
   }

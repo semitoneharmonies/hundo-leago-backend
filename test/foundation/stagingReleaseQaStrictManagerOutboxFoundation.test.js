@@ -33,6 +33,7 @@ const {
 );
 const {
   PHASES,
+  RELEASE_ID,
   migrationChecksumSetId,
   runtimeBindingMatches,
 } = require(
@@ -234,7 +235,7 @@ function exactBody(phase) {
     backendBuildId: BACKEND_BUILD_ID,
     confirmation: PHASES[phase].confirmation,
     phase,
-    releaseId: "HL-20260821-3",
+    releaseId: RELEASE_ID,
   };
 }
 
@@ -284,7 +285,7 @@ function successfulService(calls) {
           ].sort().join("|") ||
         input.backendBuildId !== BACKEND_BUILD_ID ||
         input.confirmation !== phase.confirmation ||
-        input.releaseId !== "HL-20260821-3" ||
+        input.releaseId !== RELEASE_ID ||
         idempotencyKey !== phase.idempotencyKey
       ) {
         const error = new Error("invalid");
@@ -299,7 +300,7 @@ function successfulService(calls) {
       return Object.freeze({
         code: "RELEASE_QA_STRICT_MANAGER_OUTBOX_PUBLISHED",
         contractVersion: 1,
-        releaseId: "HL-20260821-3",
+        releaseId: RELEASE_ID,
         phase: input.phase,
         outcome: "published",
         replayed: true,

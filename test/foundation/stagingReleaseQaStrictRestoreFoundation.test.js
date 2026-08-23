@@ -69,6 +69,7 @@ const {
   EVENT_TYPE: STRICT_FIXTURE_EVENT_TYPE,
   SIDE_CAR_IDS,
   prepareReleaseQaFadPrivacyGate,
+  receiptEventId: strictFixtureReceiptId,
 } = require(
   "../../src/operations/release/prepareReleaseQaFadPrivacyGate"
 );
@@ -93,9 +94,9 @@ const {
 
 const ROOT = path.resolve(__dirname, "..", "..");
 const MIGRATIONS = path.join(ROOT, "database", "migrations");
-const BACKUP_ID = "adcbbbab-e857-4cae-af71-dbce95553ce5";
+const BACKUP_ID = "2044fcae-24e8-4392-a1ac-4064d9cd2807";
 const KEY = Buffer.alloc(32, 0x61);
-const FIXED_TIME = Date.parse("2026-08-22T08:36:34.565Z");
+const FIXED_TIME = Date.parse("2026-08-22T22:40:11.048Z");
 const STRICT_FIXTURE_TIME = Date.parse("2026-08-22T09:00:00.000Z");
 const SMOKE_TIME = STRICT_FIXTURE_TIME + 60_000;
 let baseRoot;
@@ -283,7 +284,7 @@ function proposeTransferToB(actors) {
     leagueId: SIDE_CAR_IDS.leagueId,
     teamId: SIDE_CAR_IDS.teamIds[0],
     input: { userId: fixtureId("account:leagueAManagerTwo") },
-    idempotencyKey: "HL-20260821-3-team1-to-b-propose",
+    idempotencyKey: `${DEFAULT_CONTRACT.releaseId}-team1-to-b-propose`,
     authenticated: actors.administrator,
   });
 }
@@ -292,7 +293,7 @@ function acceptTransfer(actors, assignment, alias) {
   return actors.service.accept({
     assignmentId: assignment.id,
     input: {},
-    idempotencyKey: `HL-20260821-3-${alias}-accept`,
+    idempotencyKey: `${DEFAULT_CONTRACT.releaseId}-${alias}-accept`,
     authenticated:
       alias === "team1-to-b" ? actors.managerB : actors.managerA,
   });
@@ -303,7 +304,7 @@ function proposeReturnToA(actors) {
     leagueId: SIDE_CAR_IDS.leagueId,
     teamId: SIDE_CAR_IDS.teamIds[0],
     input: { userId: fixtureId("account:leagueAManagerOne") },
-    idempotencyKey: "HL-20260821-3-team1-to-a-propose",
+    idempotencyKey: `${DEFAULT_CONTRACT.releaseId}-team1-to-a-propose`,
     authenticated: actors.administrator,
   });
 }
@@ -583,7 +584,7 @@ async function runtime(
   );
   const targetDatabasePath = path.join(
     databaseDirectory,
-    "hundo-leago-schema54-strict-restore-HL-20260821-3.sqlite3"
+    "hundo-leago-schema54-strict-restore-HL-20260822-1.sqlite3"
   );
   fs.copyFileSync(baseDatabasePath, sourceDatabasePath);
 
@@ -688,35 +689,35 @@ test("pins the one authorized staging restore handoff and package interfaces", (
     migrationChecksumSetId: DEFAULT_CONTRACT.migrationChecksumSetId,
     schemaVersion: DEFAULT_CONTRACT.schemaVersion,
   }, {
-    releaseId: "HL-20260821-3",
+    releaseId: "HL-20260822-1",
     serviceId: "srv-d9eo2turnols73ekb830",
     environment: "staging",
     environmentId: "test:release-qa",
     databaseId: "m7-release-qa-fixture",
-    frontendBuildId: "0e8eee92e2e323dd7f25ec3112988feaf23f96f0",
+    frontendBuildId: "4dfe12d1366314e3d9df722c50771324647743c9",
     persistentRoot: "/opt/render/project/data/hundo-staging",
     sourceDatabasePath:
       "/opt/render/project/data/hundo-staging/sqlite/" +
-      "hundo-leago-schema51-aav-20260815T082700Z.sqlite3",
+      "hundo-leago-schema54-strict-restore-HL-20260821-3.sqlite3",
     targetDatabasePath:
       "/opt/render/project/data/hundo-staging/sqlite/" +
-      "hundo-leago-schema54-strict-restore-HL-20260821-3.sqlite3",
-    backupId: "adcbbbab-e857-4cae-af71-dbce95553ce5",
+      "hundo-leago-schema54-strict-restore-HL-20260822-1.sqlite3",
+    backupId: "2044fcae-24e8-4392-a1ac-4064d9cd2807",
     manifestObjectKey:
       "staging/backups/" +
-      "hundo-leago_staging_20260822T083634565Z_" +
-      "adcbbbab-e857-4cae-af71-dbce95553ce5.manifest.json",
+      "hundo-leago_staging_20260822T224011048Z_" +
+      "2044fcae-24e8-4392-a1ac-4064d9cd2807.manifest.json",
     storageObjectKey:
       "staging/backups/" +
-      "hundo-leago_staging_20260822T083634565Z_" +
-      "adcbbbab-e857-4cae-af71-dbce95553ce5.sqlite3.gz.enc",
-    backupCreatedAt: "2026-08-22T08:36:34.565Z",
-    backupReason: "pre-bulk-operation",
-    backupBackendBuildId: "fe6047552857376b490756ff63ac593d431ee561",
+      "hundo-leago_staging_20260822T224011048Z_" +
+      "2044fcae-24e8-4392-a1ac-4064d9cd2807.sqlite3.gz.enc",
+    backupCreatedAt: "2026-08-22T22:40:11.048Z",
+    backupReason: "incident-preservation",
+    backupBackendBuildId: "23971a4d66ee6383c6ad54339e769dbc9a76561e",
     encryptedArtifactSha256:
-      "ee3a3b375f7bc86b845efd0f12bad69937732e973c1661353876952b2330e115",
+      "cee039557278c41f59fa9d6a5b09cf4f69f1b9f3589cb3774420ef34be255162",
     manifestChecksum:
-      "24898a9e872477cbe4170bea8dc18a8a94016709202e5fad47bd7ca97126a948",
+      "08e3d3bde81843a683017d9952b30e02dd02978181a8644323cfbd590eca2ac8",
     plaintextSha256:
       "cf3ca07d0500888edf60f2742541ace6f5b7db0e1f2fd9b57f00db56aacacabc",
     migrationChecksumSetId:
@@ -760,6 +761,69 @@ test("pins the one authorized staging restore handoff and package interfaces", (
     ABORT_RECEIPT_KIND,
     "release-qa-strict-restore-abort-activation-handoff"
   );
+});
+
+test("abort classification derives transfer keys from the supplied release contract", () => {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), "hundo-strict-custom-release-")
+  );
+  const databasePath = path.join(root, "source.sqlite3");
+  fs.copyFileSync(
+    strictSourceSnapshots.to_b_accepted_pending,
+    databasePath
+  );
+  const opened = openDatabase({ databasePath, environment: "test" });
+  try {
+    const customReleaseId = "HL-20260822-99";
+    const contract = Object.freeze({
+      ...DEFAULT_CONTRACT,
+      releaseId: customReleaseId,
+    });
+    dropTableTriggers(opened.database, "security_audit_events");
+    dropTableTriggers(opened.database, "idempotency_requests");
+    opened.database.prepare(`
+      UPDATE security_audit_events
+      SET id = ?, request_correlation_id = ?
+      WHERE id = ?
+    `).run(
+      strictFixtureReceiptId(contract.databaseId, customReleaseId),
+      customReleaseId,
+      strictFixtureReceiptId(
+        DEFAULT_CONTRACT.databaseId,
+        DEFAULT_CONTRACT.releaseId
+      )
+    );
+    opened.database.prepare(`
+      UPDATE idempotency_requests
+      SET client_key = replace(client_key, ?, ?)
+      WHERE league_id = ? AND client_key LIKE ?
+    `).run(
+      DEFAULT_CONTRACT.releaseId,
+      customReleaseId,
+      SIDE_CAR_IDS.leagueId,
+      `${DEFAULT_CONTRACT.releaseId}-%`
+    );
+    const evidence = verifyAbortStrictSmokeEvidence(
+      opened.database,
+      contract
+    );
+    assert.equal(
+      evidence.fixtureReceiptId,
+      strictFixtureReceiptId(contract.databaseId, customReleaseId)
+    );
+    assert.equal(evidence.fixtureLeagueId, SIDE_CAR_IDS.leagueId);
+    assert.equal(evidence.classification, "to_b_accepted");
+    assert.equal(evidence.phaseOnePublicationState, "pending");
+    assert.equal(evidence.returnPublicationState, "none");
+    assert.equal(evidence.sourceSemanticChainCompleted, false);
+    assert.equal(evidence.smokeCompleted, false);
+    assert.equal(evidence.hostedSmokeCompleted, false);
+    assert.equal(evidence.releaseBlocked, true);
+    assert.equal(evidence.rollbackOnly, true);
+  } finally {
+    opened.database.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("plans the exact encrypted restore without mutating source or target", async (t) => {
@@ -1173,7 +1237,7 @@ test("binds the exact manifest, backup, encrypted hash, plaintext, key, schema, 
       '00000000-0000-4000-8000-00000000f398',
       'release_qa.invalid_foreign_key', 'success', NULL, NULL,
       '00000000-0000-4000-8000-00000000ffff', NULL,
-      'HL-20260821-3', 'injected', NULL, NULL, NULL, NULL, 30
+      'HL-20260822-1', 'injected', NULL, NULL, NULL, NULL, 30
     )
   `).run();
   foreignKeyConnection.database.close();
@@ -2042,7 +2106,7 @@ test("abort rejects missing, wrong, unclassified, identity, and integrity source
           const assignmentId = firstTransferAssignmentId(database);
           database.prepare(`
             UPDATE idempotency_requests
-            SET client_key = 'HL-20260821-3-wrong-transfer-key'
+            SET client_key = 'HL-20260822-1-wrong-transfer-key'
             WHERE league_id = ? AND result_id = ?
               AND operation = ?
           `).run(
