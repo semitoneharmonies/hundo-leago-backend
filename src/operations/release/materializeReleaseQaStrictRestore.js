@@ -59,7 +59,7 @@ const EXPECTED_ROTATION_REASON =
   "operator_shared_password_recovery_r9_s0";
 
 const DEFAULT_CONTRACT = Object.freeze({
-  releaseId: "HL-20260822-1",
+  releaseId: "HL-20260823-1",
   serviceId: "srv-d9eo2turnols73ekb830",
   environment: "staging",
   environmentId: FIXTURE_ENVIRONMENT_ID,
@@ -67,26 +67,26 @@ const DEFAULT_CONTRACT = Object.freeze({
   persistentRoot: "/opt/render/project/data/hundo-staging",
   sourceDatabasePath:
     "/opt/render/project/data/hundo-staging/sqlite/" +
-    "hundo-leago-schema54-strict-restore-HL-20260821-3.sqlite3",
+    "hundo-leago-schema54-strict-restore-HL-20260822-1.sqlite3",
   targetDatabasePath:
     "/opt/render/project/data/hundo-staging/sqlite/" +
-    "hundo-leago-schema54-strict-restore-HL-20260822-1.sqlite3",
-  backupId: "2044fcae-24e8-4392-a1ac-4064d9cd2807",
+    "hundo-leago-schema54-strict-restore-HL-20260823-1.sqlite3",
+  backupId: "e735e6a4-53d1-479a-bc5e-4b6bcf3d58a6",
   manifestObjectKey:
     "staging/backups/" +
-    "hundo-leago_staging_20260822T224011048Z_" +
-    "2044fcae-24e8-4392-a1ac-4064d9cd2807.manifest.json",
+    "hundo-leago_staging_20260823T225620203Z_" +
+    "e735e6a4-53d1-479a-bc5e-4b6bcf3d58a6.manifest.json",
   storageObjectKey:
     "staging/backups/" +
-    "hundo-leago_staging_20260822T224011048Z_" +
-    "2044fcae-24e8-4392-a1ac-4064d9cd2807.sqlite3.gz.enc",
-  backupCreatedAt: "2026-08-22T22:40:11.048Z",
+    "hundo-leago_staging_20260823T225620203Z_" +
+    "e735e6a4-53d1-479a-bc5e-4b6bcf3d58a6.sqlite3.gz.enc",
+  backupCreatedAt: "2026-08-23T22:56:20.203Z",
   backupReason: "incident-preservation",
-  backupBackendBuildId: "23971a4d66ee6383c6ad54339e769dbc9a76561e",
+  backupBackendBuildId: "8e313902feefcd683b0f5edd746a9dd2a9029a18",
   encryptedArtifactSha256:
-    "cee039557278c41f59fa9d6a5b09cf4f69f1b9f3589cb3774420ef34be255162",
+    "e6c6269ffb6d3726822dd8e9c036e87841335a6f138cfbf7cf929a65684c5448",
   manifestChecksum:
-    "08e3d3bde81843a683017d9952b30e02dd02978181a8644323cfbd590eca2ac8",
+    "54df36b9999204822819989d5d6890bbe544001958825b4025c6ff591e24d155",
   plaintextSha256:
     "cf3ca07d0500888edf60f2742541ace6f5b7db0e1f2fd9b57f00db56aacacabc",
   migrationChecksumSetId:
