@@ -1,0 +1,228 @@
+{
+  "services": [
+    {
+      "type": "web",
+      "runtime": "node",
+      "name": "hundo-leago-backend-staging",
+      "repo": "https://github.com/semitoneharmonies/hundo-leago-backend",
+      "branch": "staging",
+      "plan": "starter",
+      "numInstances": 1,
+      "buildCommand": "npm ci && npm run check && npm test",
+      "startCommand": "npm start",
+      "healthCheckPath": "/api/v1/health/ready",
+      "autoDeployTrigger": "off",
+      "disk": {
+        "name": "hundo-leago-staging-disk",
+        "mountPath": "/opt/render/project/data",
+        "sizeGB": 5
+      },
+      "envVars": [
+        {
+          "key": "APP_ENV",
+          "value": "staging"
+        },
+        {
+          "key": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "key": "STAGING_MAINTENANCE_HOLD",
+          "value": "false"
+        },
+        {
+          "key": "APP_BUILD_ID",
+          "sync": false
+        },
+        {
+          "key": "FRONTEND_BUILD_ID",
+          "sync": false
+        },
+        {
+          "key": "APP_ENVIRONMENT_ID",
+          "value": "test:release-qa"
+        },
+        {
+          "key": "DATABASE_ID",
+          "value": "m7-release-qa-fixture"
+        },
+        {
+          "key": "DATABASE_PATH",
+          "value": "/opt/render/project/data/hundo-staging/sqlite/hundo-leago.sqlite3"
+        },
+        {
+          "key": "PERSISTENT_DATA_ROOT",
+          "value": "/opt/render/project/data/hundo-staging"
+        },
+        {
+          "key": "CURRENT_SEASON_LABEL",
+          "value": "2026"
+        },
+        {
+          "key": "CURRENT_NHL_SEASON_KEY",
+          "value": "20262027"
+        },
+        {
+          "key": "PUBLIC_FRONTEND_ORIGIN",
+          "sync": false
+        },
+        {
+          "key": "FRONTEND_ORIGINS",
+          "sync": false
+        },
+        {
+          "key": "LOG_LEVEL",
+          "value": "info"
+        },
+        {
+          "key": "SESSION_COOKIE_SAME_SITE",
+          "value": "lax"
+        },
+        {
+          "key": "SCHEDULED_JOBS_ENABLED",
+          "value": "false"
+        },
+        {
+          "key": "FREE_AGENT_DRAFT_ROUTES_ENABLED",
+          "value": "false"
+        },
+        {
+          "key": "ACCOUNT_EMAIL_DELIVERY_ENABLED",
+          "value": "false"
+        },
+        {
+          "key": "LEAGUE_WRITE_MODE",
+          "value": "closed"
+        },
+        {
+          "key": "DEBUG_ROUTES_ENABLED",
+          "value": "false"
+        },
+        {
+          "key": "EMAIL_DELIVERY_MODE",
+          "value": "capture"
+        },
+        {
+          "key": "SPORTSDATAIO_NHL_LIVE_MODE",
+          "value": "disabled"
+        },
+        {
+          "key": "RATE_LIMIT_KEY_SECRET",
+          "generateValue": true
+        },
+        {
+          "key": "AUDIT_METADATA_SECRET",
+          "generateValue": true
+        },
+        {
+          "key": "ACTION_TOKEN_DELIVERY_KEY",
+          "generateValue": true
+        },
+        {
+          "key": "BACKUP_LOCAL_DIR",
+          "value": "/opt/render/project/data/hundo-staging/backup-staging"
+        },
+        {
+          "key": "BACKUP_OBJECT_ENDPOINT",
+          "sync": false
+        },
+        {
+          "key": "BACKUP_OBJECT_REGION",
+          "sync": false
+        },
+        {
+          "key": "BACKUP_OBJECT_BUCKET",
+          "sync": false
+        },
+        {
+          "key": "BACKUP_OBJECT_PREFIX",
+          "value": "hundo-leago/staging/"
+        },
+        {
+          "key": "BACKUP_OBJECT_ACCESS_KEY_ID",
+          "sync": false
+        },
+        {
+          "key": "BACKUP_OBJECT_SECRET_ACCESS_KEY",
+          "sync": false
+        },
+        {
+          "key": "BACKUP_ENCRYPTION_KEY_VERSION",
+          "value": "staging-v1"
+        },
+        {
+          "key": "BACKUP_ENCRYPTION_KEY",
+          "sync": false
+        },
+        {
+          "key": "BACKUP_SCHEDULE_ENABLED",
+          "value": "false"
+        },
+        {
+          "key": "DATA_DIR",
+          "value": "/opt/render/project/data/hundo-staging/compatibility"
+        },
+        {
+          "key": "LEAGUE_FILE",
+          "value": "/opt/render/project/data/hundo-staging/compatibility/league-state.json"
+        },
+        {
+          "key": "PLAYERS_FILE",
+          "value": "/opt/render/project/data/hundo-staging/compatibility/players.json"
+        },
+        {
+          "key": "STATS_FILE",
+          "value": "/opt/render/project/data/hundo-staging/compatibility/stats-cache.json"
+        },
+        {
+          "key": "STATS_LOCK_FILE",
+          "value": "/opt/render/project/data/hundo-staging/compatibility/stats-refresh.lock"
+        },
+        {
+          "key": "SNAPSHOT_DIR",
+          "value": "/opt/render/project/data/hundo-staging/snapshots"
+        },
+        {
+          "key": "BACKUPS_DIR",
+          "value": "/opt/render/project/data/hundo-staging/compatibility-backups"
+        },
+        {
+          "key": "MIGRATION_SOURCE_ROOT",
+          "value": "/opt/render/project/data/hundo-staging/migration-sources"
+        },
+        {
+          "key": "MIGRATION_REPORT_ROOT",
+          "value": "/opt/render/project/data/hundo-staging/migration-reports"
+        },
+        {
+          "key": "SQLITE_BACKUP_ROOT",
+          "value": "/opt/render/project/data/hundo-staging/sqlite-backups"
+        },
+        {
+          "key": "MATCHUPS_ENABLED",
+          "value": "false"
+        },
+        {
+          "key": "SNAPSHOTS_ENABLED",
+          "value": "false"
+        },
+        {
+          "key": "AUCTIONS_ENABLED",
+          "value": "false"
+        },
+        {
+          "key": "MATCHUPS_DEBUG",
+          "value": "false"
+        },
+        {
+          "key": "MAX_BACKUPS",
+          "value": "200"
+        },
+        {
+          "key": "STATS_REFRESH_TOKEN",
+          "generateValue": true
+        }
+      ]
+    }
+  ]
+}

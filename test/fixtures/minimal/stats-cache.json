@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "ready": true,
+  "seasonId": "test-season",
+  "lastUpdatedAt": 1700000003000,
+  "byPlayerId": {
+    "1001": {
+      "gamesPlayed": 10,
+      "goals": 3,
+      "assists": 4
+    },
+    "1002": {
+      "gamesPlayed": 10,
+      "goals": 1,
+      "assists": 5
+    }
+  }
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1001,
+    "fullName": "Test Forward",
+    "firstName": "Test",
+    "lastName": "Forward",
+    "position": "C",
+    "teamAbbrev": "TST",
+    "active": true,
+    "birthDate": "2000-01-01"
+  },
+  {
+    "id": 1002,
+    "fullName": "Test Defender",
+    "firstName": "Test",
+    "lastName": "Defender",
+    "position": "D",
+    "teamAbbrev": "TST",
+    "active": true,
+    "birthDate": "2001-01-01"
+  }
+]
