@@ -37,6 +37,7 @@ const {
 } = require("./releaseQaFixtureContract");
 
 const CONTRACT_VERSION = 1;
+const ABORT_CONTRACT_VERSION = 2;
 const PLAN_CODE = "RELEASE_QA_STRICT_RESTORE_PLANNED";
 const EXECUTE_CODE = "RELEASE_QA_STRICT_RESTORE_MATERIALIZED";
 const RECEIPT_KIND = "release-qa-strict-restore-activation-handoff";
@@ -50,6 +51,10 @@ const ABORT_RESTORE_MODE = "aborted-strict-smoke-rollback";
 const WORK_AREA_KIND = "release-qa-strict-restore-private-work-area";
 const WORK_AREA_VERSION = 1;
 const MAX_DATABASE_SIZE_BYTES = 1_099_511_627_776n;
+const SQLITE_WAL_HEADER_SIZE_BYTES = 32;
+const SQLITE_SHM_REGION_SIZE_BYTES = 32_768n;
+const SOURCE_PERSISTENCE_MAIN_ONLY = "main-only";
+const SOURCE_PERSISTENCE_MAIN_WAL = "main-wal";
 const EXPECTED_SCHEMA_VERSION = 54;
 const EXPECTED_ROTATION_RECEIPT_ID =
   "9152f844-d8cd-42f7-b0d5-b12f530ad618";
@@ -97,6 +102,7 @@ const DEFAULT_CONTRACT = Object.freeze({
 
 const RESTORE_MODES = Object.freeze({
   normal: Object.freeze({
+    contractVersion: CONTRACT_VERSION,
     key: NORMAL_RESTORE_MODE,
     operation: "release-qa-strict-restore-materialization",
     planCode: PLAN_CODE,
@@ -107,11 +113,12 @@ const RESTORE_MODES = Object.freeze({
     abort: false,
   }),
   abort: Object.freeze({
+    contractVersion: ABORT_CONTRACT_VERSION,
     key: ABORT_RESTORE_MODE,
     operation: "release-qa-strict-restore-abort-materialization",
     planCode: ABORT_PLAN_CODE,
     executeCode: ABORT_EXECUTE_CODE,
-    planIdPrefix: "release-qa-strict-restore-abort-v1-",
+    planIdPrefix: "release-qa-strict-restore-abort-v2-",
     confirmationPrefix:
       "ABORT-RELEASE-QA-STRICT-SMOKE-AND-MATERIALIZE-ROLLBACK",
     receiptKind: ABORT_RECEIPT_KIND,
@@ -366,10 +373,92 @@ function assertNoSidecars(databasePath, fsModule = fs) {
   }
 }
 
+function inspectAbortSourceFamily({
+  sourceDatabasePath,
+  parentStat,
+  fsModule,
+}) {
+  const walPath = `${sourceDatabasePath}-wal`;
+  const shmPath = `${sourceDatabasePath}-shm`;
+  if (pathEntryExists(`${sourceDatabasePath}-journal`, fsModule)) {
+    fail(ERROR_CODES.pathUnsafe);
+  }
+  const walExists = pathEntryExists(walPath, fsModule);
+  const shmExists = pathEntryExists(shmPath, fsModule);
+  if (!walExists && shmExists) {
+    fail(ERROR_CODES.pathUnsafe);
+  }
+  let wal = null;
+  if (walExists) {
+    const stat = fsModule.lstatSync(walPath, { bigint: true });
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      stat.dev !== parentStat.dev ||
+      stat.size <= BigInt(SQLITE_WAL_HEADER_SIZE_BYTES) ||
+      stat.size > MAX_DATABASE_SIZE_BYTES ||
+      !samePath(fsModule.realpathSync.native(walPath), walPath)
+    ) {
+      fail(ERROR_CODES.pathUnsafe);
+    }
+    wal = Object.freeze({
+      sourceWalPath: walPath,
+      sourceWalDevice: String(stat.dev),
+      sourceWalInode: String(stat.ino),
+      sourceWalSizeBytes: String(stat.size),
+      sourceWalMtimeNs: String(stat.mtimeNs),
+    });
+  }
+  let shm = null;
+  if (shmExists) {
+    const stat = fsModule.lstatSync(shmPath, { bigint: true });
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      stat.dev !== parentStat.dev ||
+      stat.size <= 0n ||
+      stat.size > MAX_DATABASE_SIZE_BYTES ||
+      stat.size % SQLITE_SHM_REGION_SIZE_BYTES !== 0n ||
+      !samePath(fsModule.realpathSync.native(shmPath), shmPath)
+    ) {
+      fail(ERROR_CODES.pathUnsafe);
+    }
+    shm = Object.freeze({
+      sourceShmPath: shmPath,
+      sourceShmDevice: String(stat.dev),
+      sourceShmInode: String(stat.ino),
+      sourceShmSizeBytes: String(stat.size),
+      sourceShmMtimeNs: String(stat.mtimeNs),
+    });
+  }
+  return Object.freeze({
+    sourcePersistenceMode: wal
+      ? SOURCE_PERSISTENCE_MAIN_WAL
+      : SOURCE_PERSISTENCE_MAIN_ONLY,
+    sourceWalPath: wal?.sourceWalPath ?? null,
+    sourceWalDevice: wal?.sourceWalDevice ?? null,
+    sourceWalInode: wal?.sourceWalInode ?? null,
+    sourceWalSizeBytes: wal?.sourceWalSizeBytes ?? null,
+    sourceWalMtimeNs: wal?.sourceWalMtimeNs ?? null,
+    sourceShmObserved: shm !== null,
+    sourceShmPath: shm?.sourceShmPath ?? null,
+    sourceShmDevice: shm?.sourceShmDevice ?? null,
+    sourceShmInode: shm?.sourceShmInode ?? null,
+    sourceShmSizeBytes: shm?.sourceShmSizeBytes ?? null,
+    sourceShmMtimeNs: shm?.sourceShmMtimeNs ?? null,
+  });
+}
+
 function assertPhysicalLayout(
-  { contract, allowPublished, allowWorkArea = false },
+  {
+    contract,
+    allowPublished,
+    allowWorkArea = false,
+    mode = RESTORE_MODES.normal,
+  },
   fsModule = fs
 ) {
+  requireRestoreMode(mode);
   try {
     const rootStat = fsModule.lstatSync(
       contract.persistentRoot,
@@ -409,8 +498,20 @@ function assertPhysicalLayout(
     ) {
       fail(ERROR_CODES.pathUnsafe);
     }
-    assertNoSidecars(physicalSource, fsModule);
+    const sourceFamily = mode.abort
+      ? inspectAbortSourceFamily({
+          sourceDatabasePath: physicalSource,
+          parentStat,
+          fsModule,
+        })
+      : null;
+    if (!mode.abort) assertNoSidecars(physicalSource, fsModule);
     assertNoSidecars(contract.targetDatabasePath, fsModule);
+    if (
+      pathEntryExists(`${contract.targetDatabasePath}-journal`, fsModule)
+    ) {
+      fail(ERROR_CODES.pathUnsafe);
+    }
 
     const targetExists = pathEntryExists(
       contract.targetDatabasePath,
@@ -458,6 +559,20 @@ function assertPhysicalLayout(
       sourceInode: String(sourceStat.ino),
       sourceSizeBytes: String(sourceStat.size),
       sourceMtimeNs: String(sourceStat.mtimeNs),
+      ...(sourceFamily || {
+        sourcePersistenceMode: SOURCE_PERSISTENCE_MAIN_ONLY,
+        sourceWalPath: null,
+        sourceWalDevice: null,
+        sourceWalInode: null,
+        sourceWalSizeBytes: null,
+        sourceWalMtimeNs: null,
+        sourceShmObserved: false,
+        sourceShmPath: null,
+        sourceShmDevice: null,
+        sourceShmInode: null,
+        sourceShmSizeBytes: null,
+        sourceShmMtimeNs: null,
+      }),
     });
   } catch (error) {
     if (error instanceof ReleaseQaStrictRestoreError) throw error;
@@ -1427,10 +1542,13 @@ function abortStrictSmokeEvidence(database, contract) {
 function inspectCopy(
   {
     sourcePath,
+    sourceWalPath = null,
     temporaryPath,
     contract,
     kind,
     mode = RESTORE_MODES.normal,
+    expectedSourceSha256,
+    expectedSourceWalSha256 = null,
   },
   fsModule
 ) {
@@ -1444,8 +1562,33 @@ function inspectCopy(
     );
     copied = true;
     fsModule.chmodSync(temporaryPath, 0o600);
-    if (hashFile(temporaryPath, fsModule) !== hashFile(sourcePath, fsModule)) {
+    const sourceSha256 = expectedSourceSha256 ??
+      hashFile(sourcePath, fsModule);
+    if (
+      hashFile(temporaryPath, fsModule) !== sourceSha256 ||
+      hashFile(sourcePath, fsModule) !== sourceSha256
+    ) {
       fail(ERROR_CODES.sourceChanged);
+    }
+    if (sourceWalPath !== null) {
+      if (!mode.abort || !/^[a-f0-9]{64}$/u.test(
+        expectedSourceWalSha256 || ""
+      )) {
+        fail(ERROR_CODES.sourceInvalid);
+      }
+      fsModule.copyFileSync(
+        sourceWalPath,
+        `${temporaryPath}-wal`,
+        fsModule.constants.COPYFILE_EXCL
+      );
+      fsModule.chmodSync(`${temporaryPath}-wal`, 0o600);
+      if (
+        hashFile(`${temporaryPath}-wal`, fsModule) !==
+          expectedSourceWalSha256 ||
+        hashFile(sourceWalPath, fsModule) !== expectedSourceWalSha256
+      ) {
+        fail(ERROR_CODES.sourceChanged);
+      }
     }
     const inspection = inspectDatabase(temporaryPath);
     const database = openReadonlyDatabase({ databasePath: temporaryPath });
@@ -1480,6 +1623,20 @@ function inspectCopy(
           error
         );
       }
+      if (
+        mode.abort &&
+        sourceWalPath !== null &&
+        (strictSmokeEvidence?.classification !== "to_b_accepted" ||
+          strictSmokeEvidence.phaseOnePublicationState !== "published" ||
+          strictSmokeEvidence.returnPublicationState !== "none" ||
+          strictSmokeEvidence.sourceSemanticChainCompleted !== false ||
+          strictSmokeEvidence.smokeCompleted !== false ||
+          strictSmokeEvidence.hostedSmokeCompleted !== false ||
+          strictSmokeEvidence.releaseBlocked !== true ||
+          strictSmokeEvidence.rollbackOnly !== true)
+      ) {
+        fail(ERROR_CODES.sourceInvalid);
+      }
       const checksumSetId = migrationChecksumSetId(
         inspection.migrations
       );
@@ -1509,6 +1666,17 @@ function inspectCopy(
             : ERROR_CODES.sourceInvalid
         );
       }
+      if (
+        hashFile(temporaryPath, fsModule) !== sourceSha256 ||
+        hashFile(sourcePath, fsModule) !== sourceSha256 ||
+        (sourceWalPath !== null &&
+          (hashFile(`${temporaryPath}-wal`, fsModule) !==
+              expectedSourceWalSha256 ||
+            hashFile(sourceWalPath, fsModule) !==
+              expectedSourceWalSha256))
+      ) {
+        fail(ERROR_CODES.sourceChanged);
+      }
       return Object.freeze({
         inspection,
         inspectionSha256: sha256(Buffer.from(canonicalize(inspection))),
@@ -1531,7 +1699,7 @@ function inspectCopy(
   }
 }
 
-function sourceEvidence({
+function sourceEvidenceUnsafe({
   layout,
   contract,
   work,
@@ -1540,6 +1708,12 @@ function sourceEvidence({
   mode,
 }) {
   const sourceSha256 = hashFile(layout.sourceDatabasePath, fsModule);
+  const sourceWalSha256 = layout.sourceWalPath === null
+    ? null
+    : hashFile(layout.sourceWalPath, fsModule);
+  const sourceShmSha256 = layout.sourceShmPath === null
+    ? null
+    : hashFile(layout.sourceShmPath, fsModule);
   const kind = mode.abort
     ? "source-for-abort"
     : execute
@@ -1548,10 +1722,13 @@ function sourceEvidence({
   const details = inspectCopy(
     {
       sourcePath: layout.sourceDatabasePath,
+      sourceWalPath: layout.sourceWalPath,
       temporaryPath: work.sourceCopyPath,
       contract,
       kind,
       mode,
+      expectedSourceSha256: sourceSha256,
+      expectedSourceWalSha256: sourceWalSha256,
     },
     fsModule
   );
@@ -1561,14 +1738,38 @@ function sourceEvidence({
     sourceMtimeNs: layout.sourceMtimeNs,
     sourceDevice: layout.sourceDevice,
     sourceInode: layout.sourceInode,
+    sourcePersistenceMode: layout.sourcePersistenceMode,
+    sourceWalSha256,
+    sourceWalSizeBytes: layout.sourceWalSizeBytes,
+    sourceWalMtimeNs: layout.sourceWalMtimeNs,
+    sourceWalDevice: layout.sourceWalDevice,
+    sourceWalInode: layout.sourceWalInode,
+    sourceShmObserved: layout.sourceShmObserved,
+    sourceShmSizeBytes: layout.sourceShmSizeBytes,
+    sourceShmMtimeNs: layout.sourceShmMtimeNs,
+    sourceShmDevice: layout.sourceShmDevice,
+    sourceShmInode: layout.sourceShmInode,
+    sourceShmSha256,
     inspectionSha256: details.inspectionSha256,
     strictSmokeEvidence: details.strictSmokeEvidence,
   });
 }
 
-function assertSourceUnchanged({ layout, evidence, contract }, fsModule) {
+function sourceEvidence(input) {
+  try {
+    return sourceEvidenceUnsafe(input);
+  } catch (error) {
+    if (error instanceof ReleaseQaStrictRestoreError) throw error;
+    fail(ERROR_CODES.sourceChanged, error);
+  }
+}
+
+function assertSourceUnchangedUnsafe(
+  { layout, evidence, contract, mode = RESTORE_MODES.normal },
+  fsModule
+) {
   const current = assertPhysicalLayout(
-    { contract, allowPublished: true, allowWorkArea: true },
+    { contract, allowPublished: true, allowWorkArea: true, mode },
     fsModule
   );
   if (
@@ -1577,9 +1778,34 @@ function assertSourceUnchanged({ layout, evidence, contract }, fsModule) {
     current.sourceSizeBytes !== evidence.sourceSizeBytes ||
     current.sourceMtimeNs !== evidence.sourceMtimeNs ||
     hashFile(current.sourceDatabasePath, fsModule) !== evidence.sourceSha256 ||
-    !samePath(current.sourceDatabasePath, layout.sourceDatabasePath)
+    !samePath(current.sourceDatabasePath, layout.sourceDatabasePath) ||
+    current.sourcePersistenceMode !== evidence.sourcePersistenceMode ||
+    current.sourceWalSizeBytes !== evidence.sourceWalSizeBytes ||
+    current.sourceWalMtimeNs !== evidence.sourceWalMtimeNs ||
+    current.sourceWalDevice !== evidence.sourceWalDevice ||
+    current.sourceWalInode !== evidence.sourceWalInode ||
+    (current.sourceWalPath !== null &&
+      hashFile(current.sourceWalPath, fsModule) !==
+        evidence.sourceWalSha256) ||
+    current.sourceShmObserved !== evidence.sourceShmObserved ||
+    current.sourceShmSizeBytes !== evidence.sourceShmSizeBytes ||
+    current.sourceShmMtimeNs !== evidence.sourceShmMtimeNs ||
+    current.sourceShmDevice !== evidence.sourceShmDevice ||
+    current.sourceShmInode !== evidence.sourceShmInode ||
+    (current.sourceShmPath !== null &&
+      hashFile(current.sourceShmPath, fsModule) !==
+        evidence.sourceShmSha256)
   ) {
     fail(ERROR_CODES.sourceChanged);
+  }
+}
+
+function assertSourceUnchanged(input, fsModule) {
+  try {
+    assertSourceUnchangedUnsafe(input, fsModule);
+  } catch (error) {
+    if (error instanceof ReleaseQaStrictRestoreError) throw error;
+    fail(ERROR_CODES.sourceChanged, error);
   }
 }
 
@@ -1717,7 +1943,7 @@ function planPayload({
 }) {
   requireRestoreMode(mode);
   const payload = {
-    contractVersion: CONTRACT_VERSION,
+    contractVersion: mode.contractVersion,
     operation: mode.operation,
     releaseId: contract.releaseId,
     serviceId: contract.serviceId,
@@ -1753,6 +1979,14 @@ function planPayload({
       hostedSmokeCompleted: false,
       releaseBlocked: true,
       rollbackOnly: true,
+      sourcePersistenceMode: source.sourcePersistenceMode,
+      sourceWalSha256: source.sourceWalSha256,
+      sourceWalSizeBytes: source.sourceWalSizeBytes,
+      sourceWalMtimeNs: source.sourceWalMtimeNs,
+      sourceWalDevice: source.sourceWalDevice,
+      sourceWalInode: source.sourceWalInode,
+      sourceShmObserved: source.sourceShmObserved,
+      sourceShmSizeBytes: source.sourceShmSizeBytes,
       sourceAbortEvidence: source.strictSmokeEvidence,
     });
   } else {
@@ -1801,7 +2035,7 @@ function receiptBytes({
 }) {
   requireRestoreMode(mode);
   const receipt = {
-    formatVersion: CONTRACT_VERSION,
+    formatVersion: mode.contractVersion,
     kind: mode.receiptKind,
     planId,
     releaseId: contract.releaseId,
@@ -1842,6 +2076,13 @@ function receiptBytes({
         payload.sourceAbortEvidence.sourceSemanticChainCompleted,
       releaseBlocked: true,
       rollbackOnly: true,
+      sourcePersistenceMode: payload.sourcePersistenceMode,
+      sourceWalSha256: payload.sourceWalSha256,
+      sourceWalIncludedInInspection:
+        payload.sourcePersistenceMode === SOURCE_PERSISTENCE_MAIN_WAL,
+      sourceShmObserved: payload.sourceShmObserved,
+      sourceShmIncludedInInspection: false,
+      sourcePersistentFamilyPreserved: true,
     });
   }
   return Buffer.from(`${canonicalize(receipt)}\n`, "utf8");
@@ -1871,6 +2112,12 @@ function resultBase({
   const verification = mode.abort
     ? Object.freeze({
         ...sharedVerification,
+        sourceSidecarsAbsent:
+          payload.sourcePersistenceMode === SOURCE_PERSISTENCE_MAIN_ONLY,
+        sourceWalIncludedInInspection:
+          payload.sourcePersistenceMode === SOURCE_PERSISTENCE_MAIN_WAL,
+        sourceShmIncludedInInspection: false,
+        sourcePersistentFamilyStable: true,
         sourceFixtureReceiptId:
           payload.sourceAbortEvidence.fixtureReceiptId,
         sourceFixtureLeagueId:
@@ -1902,7 +2149,7 @@ function resultBase({
       });
   const result = {
     code,
-    contractVersion: CONTRACT_VERSION,
+    contractVersion: mode.contractVersion,
     releaseId: contract.releaseId,
     planId,
     serviceId: contract.serviceId,
@@ -1950,6 +2197,14 @@ function resultBase({
         payload.sourceAbortEvidence.returnPublicationState,
       releaseBlocked: true,
       rollbackOnly: true,
+      sourcePersistenceMode: payload.sourcePersistenceMode,
+      sourceWalSha256: payload.sourceWalSha256,
+      sourceWalSizeBytes: payload.sourceWalSizeBytes,
+      sourceShmObserved: payload.sourceShmObserved,
+      sourceWalIncludedInInspection:
+        payload.sourcePersistenceMode === SOURCE_PERSISTENCE_MAIN_WAL,
+      sourceShmIncludedInInspection: false,
+      sourcePersistentFamilyPreserved: true,
       activationHandoff: Object.freeze({
         ...result.activationHandoff,
         releaseBlocked: true,
@@ -1976,7 +2231,7 @@ async function buildPlan({
   assertOptions(options, contract, { execute, mode });
   const runtime = assertEnvironment(options, env, contract);
   const layout = assertPhysicalLayout(
-    { contract, allowPublished: execute },
+    { contract, allowPublished: execute, mode },
     fsModule
   );
   const work = prepareWorkArea({ contract, layout }, fsModule);
@@ -2009,7 +2264,10 @@ async function buildPlan({
     });
     const planId = planIdFor(payload, mode);
     const receipt = receiptBytes({ payload, planId, contract, mode });
-    assertSourceUnchanged({ layout, evidence: source, contract }, fsModule);
+    assertSourceUnchanged(
+      { layout, evidence: source, contract, mode },
+      fsModule
+    );
     return Object.freeze({
       candidate,
       contract,
@@ -2128,6 +2386,65 @@ function isBoundedSourceSize(value) {
     return BigInt(value) <= MAX_DATABASE_SIZE_BYTES;
   } catch {
     return false;
+  }
+}
+
+function replayHashFile(filePath, fsModule) {
+  try {
+    return hashFile(filePath, fsModule);
+  } catch (error) {
+    fail(ERROR_CODES.targetConflict, error);
+  }
+}
+
+function assertReplayAbortPersistence(payload) {
+  const mainOnly = payload.sourcePersistenceMode ===
+    SOURCE_PERSISTENCE_MAIN_ONLY;
+  const mainWal = payload.sourcePersistenceMode ===
+    SOURCE_PERSISTENCE_MAIN_WAL;
+  const walFieldsNull = [
+    payload.sourceWalSha256,
+    payload.sourceWalSizeBytes,
+    payload.sourceWalMtimeNs,
+    payload.sourceWalDevice,
+    payload.sourceWalInode,
+  ].every((value) => value === null);
+  let walSizeValid = false;
+  try {
+    walSizeValid =
+      isBoundedSourceSize(payload.sourceWalSizeBytes) &&
+      BigInt(payload.sourceWalSizeBytes) >
+        BigInt(SQLITE_WAL_HEADER_SIZE_BYTES);
+  } catch {
+    walSizeValid = false;
+  }
+  let shmSizeValid = false;
+  try {
+    shmSizeValid =
+      isBoundedSourceSize(payload.sourceShmSizeBytes) &&
+      BigInt(payload.sourceShmSizeBytes) %
+        SQLITE_SHM_REGION_SIZE_BYTES === 0n;
+  } catch {
+    shmSizeValid = false;
+  }
+  if (
+    (!mainOnly && !mainWal) ||
+    (mainOnly &&
+      (!walFieldsNull ||
+        payload.sourceShmObserved !== false ||
+        payload.sourceShmSizeBytes !== null)) ||
+    (mainWal &&
+      (!/^[a-f0-9]{64}$/u.test(payload.sourceWalSha256 || "") ||
+        !walSizeValid ||
+        !/^\d+$/u.test(payload.sourceWalMtimeNs || "") ||
+        !/^\d+$/u.test(payload.sourceWalDevice || "") ||
+        !/^\d+$/u.test(payload.sourceWalInode || "") ||
+        (payload.sourceShmObserved === false &&
+          payload.sourceShmSizeBytes !== null) ||
+        (payload.sourceShmObserved === true && !shmSizeValid) ||
+        ![true, false].includes(payload.sourceShmObserved)))
+  ) {
+    fail(ERROR_CODES.targetConflict);
   }
 }
 
@@ -2302,6 +2619,14 @@ function verifyReplay(
           "hostedSmokeCompleted",
           "releaseBlocked",
           "rollbackOnly",
+          "sourcePersistenceMode",
+          "sourceWalSha256",
+          "sourceWalSizeBytes",
+          "sourceWalMtimeNs",
+          "sourceWalDevice",
+          "sourceWalInode",
+          "sourceShmObserved",
+          "sourceShmSizeBytes",
           "sourceAbortEvidence",
         ]
       : ["sourceStrictSmokeEvidence"]),
@@ -2309,7 +2634,7 @@ function verifyReplay(
   const payload = receipt?.planPayload;
   if (
     !hasExactKeys(payload, payloadKeys) ||
-    payload.contractVersion !== CONTRACT_VERSION ||
+    payload.contractVersion !== mode.contractVersion ||
     payload.operation !== mode.operation ||
     payload.releaseId !== contract.releaseId ||
     payload.serviceId !== contract.serviceId ||
@@ -2354,7 +2679,18 @@ function verifyReplay(
     fail(ERROR_CODES.targetConflict);
   }
   if (mode.abort) {
+    assertReplayAbortPersistence(payload);
     assertReplayAbortEvidence(payload.sourceAbortEvidence, contract);
+    if (
+      payload.sourcePersistenceMode === SOURCE_PERSISTENCE_MAIN_WAL &&
+      (payload.sourceAbortEvidence.classification !== "to_b_accepted" ||
+        payload.sourceAbortEvidence.phaseOnePublicationState !==
+          "published" ||
+        payload.sourceAbortEvidence.returnPublicationState !== "none" ||
+        payload.sourceAbortEvidence.sourceSemanticChainCompleted !== false)
+    ) {
+      fail(ERROR_CODES.targetConflict);
+    }
   } else {
     assertReplaySmokeEvidence(payload.sourceStrictSmokeEvidence, contract);
   }
@@ -2367,13 +2703,27 @@ function verifyReplay(
   if (!bytes.equals(expectedReceipt)) {
     fail(ERROR_CODES.targetConflict);
   }
+  const sourceFamilyMismatch = mode.abort && (
+    layout.sourcePersistenceMode !== payload.sourcePersistenceMode ||
+    layout.sourceWalSizeBytes !== payload.sourceWalSizeBytes ||
+    layout.sourceWalMtimeNs !== payload.sourceWalMtimeNs ||
+    layout.sourceWalDevice !== payload.sourceWalDevice ||
+    layout.sourceWalInode !== payload.sourceWalInode ||
+    layout.sourceShmObserved !== payload.sourceShmObserved ||
+    layout.sourceShmSizeBytes !== payload.sourceShmSizeBytes ||
+    (layout.sourceWalPath !== null &&
+      replayHashFile(layout.sourceWalPath, fsModule) !==
+        payload.sourceWalSha256)
+  );
   if (
     layout.sourceSizeBytes !== payload.sourceSizeBytes ||
     layout.sourceMtimeNs !== payload.sourceMtimeNs ||
     layout.sourceDevice !== payload.sourceDevice ||
     layout.sourceInode !== payload.sourceInode ||
-    hashFile(layout.sourceDatabasePath, fsModule) !== payload.sourceSha256 ||
-    hashFile(layout.targetDatabasePath, fsModule) !==
+    replayHashFile(layout.sourceDatabasePath, fsModule) !==
+      payload.sourceSha256 ||
+    sourceFamilyMismatch ||
+    replayHashFile(layout.targetDatabasePath, fsModule) !==
       contract.plaintextSha256
   ) {
     fail(ERROR_CODES.targetConflict);
@@ -2492,7 +2842,7 @@ async function executeForMode({
   assertOptions(options, contract, { execute: true, mode });
   const runtime = assertEnvironment(options, env, contract);
   const initialLayout = assertPhysicalLayout(
-    { contract, allowPublished: true },
+    { contract, allowPublished: true, mode },
     fsModule
   );
   if (initialLayout.targetExists && initialLayout.receiptExists) {
@@ -2573,7 +2923,7 @@ async function executeForMode({
     }
     assertNoSidecars(plan.layout.targetDatabasePath, fsModule);
     assertSourceUnchanged(
-      { layout: plan.layout, evidence: plan.source, contract },
+      { layout: plan.layout, evidence: plan.source, contract, mode },
       fsModule
     );
     cleanupWorkArea(plan.work, fsModule);
@@ -2652,6 +3002,7 @@ function abortConfirmationFor({ planId, contract = DEFAULT_CONTRACT } = {}) {
 }
 
 module.exports = {
+  ABORT_CONTRACT_VERSION,
   ABORT_EXECUTE_CODE,
   ABORT_PLAN_CODE,
   ABORT_RECEIPT_KIND,

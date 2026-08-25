@@ -26,6 +26,7 @@ const {
 } = require("../../src/infrastructure/database/databaseIdentity");
 const {
   openDatabase,
+  openReadonlyDatabase,
 } = require("../../src/infrastructure/database/connection");
 const {
   createSqlitePlayerCatalogRepository,
@@ -45,6 +46,7 @@ const {
 const {
   DEFAULT_CONTRACT,
   ERROR_CODES,
+  ABORT_CONTRACT_VERSION,
   ABORT_EXECUTE_CODE,
   ABORT_PLAN_CODE,
   ABORT_RECEIPT_KIND,
@@ -666,6 +668,94 @@ function operationInput(state, overrides = {}) {
   };
 }
 
+function sourceFamilyPaths(contract) {
+  return Object.freeze({
+    main: contract.sourceDatabasePath,
+    wal: `${contract.sourceDatabasePath}-wal`,
+    shm: `${contract.sourceDatabasePath}-shm`,
+  });
+}
+
+function sourceFamilyBytes(contract) {
+  const family = sourceFamilyPaths(contract);
+  return Object.freeze({
+    main: fs.readFileSync(family.main),
+    wal: fs.existsSync(family.wal) ? fs.readFileSync(family.wal) : null,
+    shm: fs.existsSync(family.shm) ? fs.readFileSync(family.shm) : null,
+  });
+}
+
+function assertSourceFamilyBytes(contract, expected) {
+  const family = sourceFamilyPaths(contract);
+  assert.deepEqual(fs.readFileSync(family.main), expected.main);
+  assert.equal(fs.existsSync(family.wal), expected.wal !== null);
+  assert.equal(fs.existsSync(family.shm), expected.shm !== null);
+  if (expected.wal !== null) {
+    assert.deepEqual(fs.readFileSync(family.wal), expected.wal);
+  }
+  if (expected.shm !== null) {
+    assert.deepEqual(fs.readFileSync(family.shm), expected.shm);
+  }
+}
+
+function openPublishedPhaseOneWalWriter(state) {
+  const opened = openDatabase({
+    databasePath: state.contract.sourceDatabasePath,
+    environment: "test",
+  });
+  opened.database.pragma("wal_autocheckpoint = 0");
+  assert.equal(
+    opened.database.pragma("journal_mode", { simple: true }),
+    "wal"
+  );
+  transitionPublication(
+    opened.database,
+    firstTransferAssignmentId(opened.database),
+    "published",
+    SMOKE_TIME + 500
+  );
+  const family = sourceFamilyPaths(state.contract);
+  assert.equal(fs.statSync(family.wal).size > 32, true);
+  assert.equal(fs.statSync(family.shm).size % 32_768, 0);
+  return opened;
+}
+
+function abortEvidenceAt(databasePath, contract) {
+  const database = openReadonlyDatabase({ databasePath });
+  try {
+    database.pragma("query_only = ON");
+    return verifyAbortStrictSmokeEvidence(database, contract);
+  } finally {
+    database.close();
+  }
+}
+
+function driftedBigintStatFs(entryPath, field, values) {
+  const injected = Object.create(fs);
+  let readCount = 0;
+  injected.lstatSync = (candidate, options) => {
+    const stat = fs.lstatSync(candidate, options);
+    if (
+      options?.bigint === true &&
+      path.resolve(candidate) === path.resolve(entryPath)
+    ) {
+      const value = values[Math.min(readCount, values.length - 1)];
+      readCount += 1;
+      return new Proxy(stat, {
+        get(target, property) {
+          if (property === field) return value;
+          const result = Reflect.get(target, property, target);
+          return typeof result === "function"
+            ? result.bind(target)
+            : result;
+        },
+      });
+    }
+    return stat;
+  };
+  return injected;
+}
+
 test("pins the one authorized staging restore handoff and package interfaces", () => {
   assert.deepEqual({
     releaseId: DEFAULT_CONTRACT.releaseId,
@@ -749,6 +839,7 @@ test("pins the one authorized staging restore handoff and package interfaces", (
     ABORT_RESTORE_MODE,
     "aborted-strict-smoke-rollback"
   );
+  assert.equal(ABORT_CONTRACT_VERSION, 2);
   assert.equal(
     ABORT_PLAN_CODE,
     "RELEASE_QA_STRICT_RESTORE_ABORT_PLANNED"
@@ -887,11 +978,17 @@ test("materializes by no-replace publication, preserves source, and replays with
   const state = await runtime(t);
   const sourceBefore = fs.readFileSync(state.contract.sourceDatabasePath);
   const plan = await planReleaseQaStrictRestore(operationInput(state));
+  assert.equal(plan.contractVersion, 1);
+  assert.match(
+    plan.planId,
+    /^release-qa-strict-restore-v1-[a-f0-9]{64}$/u
+  );
   const options = executeOptions(state.contract, plan);
   const first = await executeReleaseQaStrictRestore(operationInput(state, {
     options,
   }));
   assert.equal(first.code, EXECUTE_CODE);
+  assert.equal(first.contractVersion, 1);
   assert.equal(first.replayed, false);
   assert.equal(first.authoritativeDatabaseMutationCount, 0);
   assert.equal(first.durableFilesystemMutationCount, 2);
@@ -910,6 +1007,60 @@ test("materializes by no-replace publication, preserves source, and replays with
     receiptPathFor(state.contract.targetDatabasePath),
     "utf8"
   ));
+  assert.equal(durableReceipt.formatVersion, 1);
+  assert.deepEqual(
+    Object.keys(durableReceipt.planPayload).sort(),
+    [
+      "backupId",
+      "backendBuildId",
+      "candidateInspectionSha256",
+      "contractVersion",
+      "databaseId",
+      "encryptedArtifactSha256",
+      "environment",
+      "environmentId",
+      "frontendBuildId",
+      "manifestChecksum",
+      "manifestObjectKey",
+      "manifestObjectSha256",
+      "migrationChecksumSetId",
+      "operation",
+      "plaintextSha256",
+      "receiptPath",
+      "releaseId",
+      "schemaVersion",
+      "serviceId",
+      "sourceDatabasePath",
+      "sourceDevice",
+      "sourceInode",
+      "sourceInspectionSha256",
+      "sourceMtimeNs",
+      "sourceSha256",
+      "sourceSizeBytes",
+      "sourceStrictSmokeEvidence",
+      "storageObjectKey",
+      "targetDatabasePath",
+    ].sort()
+  );
+  for (const abortFamilyField of [
+    "sourcePersistenceMode",
+    "sourceWalSha256",
+    "sourceWalSizeBytes",
+    "sourceWalIncludedInInspection",
+    "sourceShmObserved",
+    "sourceShmIncludedInInspection",
+    "sourcePersistentFamilyPreserved",
+  ]) {
+    assert.equal(Object.hasOwn(first, abortFamilyField), false);
+    assert.equal(
+      Object.hasOwn(durableReceipt, abortFamilyField),
+      false
+    );
+    assert.equal(
+      Object.hasOwn(durableReceipt.planPayload, abortFamilyField),
+      false
+    );
+  }
   assert.equal(durableReceipt.backendBuildId, state.env.APP_BUILD_ID);
   assert.equal(
     durableReceipt.frontendBuildId,
@@ -1282,6 +1433,19 @@ test("rejects unsafe roots, aliases, sidecars, symlinks, and pre-existing target
     "unsafe"
   );
 
+  const targetJournal = await runtime(t);
+  const targetJournalPath =
+    `${targetJournal.contract.targetDatabasePath}-journal`;
+  fs.writeFileSync(targetJournalPath, "foreign target journal");
+  await assert.rejects(
+    planReleaseQaStrictRestore(operationInput(targetJournal)),
+    { code: ERROR_CODES.pathUnsafe }
+  );
+  assert.equal(
+    fs.readFileSync(targetJournalPath, "utf8"),
+    "foreign target journal"
+  );
+
   const existing = await runtime(t);
   fs.writeFileSync(existing.contract.targetDatabasePath, "foreign");
   await assert.rejects(
@@ -1431,6 +1595,33 @@ test("rolls back receipt and target on partial publication or source drift", asy
   assert.equal(
     fs.existsSync(receiptPathFor(changed.contract.targetDatabasePath)),
     false
+  );
+
+  const lateJournal = await runtime(t);
+  const lateJournalPlan = await planReleaseQaStrictRestore(
+    operationInput(lateJournal)
+  );
+  const lateJournalPath =
+    `${lateJournal.contract.targetDatabasePath}-journal`;
+  await assert.rejects(
+    executeReleaseQaStrictRestore(operationInput(lateJournal, {
+      options: executeOptions(lateJournal.contract, lateJournalPlan),
+      failureHook(stage) {
+        if (stage === "after-target") {
+          fs.writeFileSync(lateJournalPath, "foreign late journal");
+        }
+      },
+    })),
+    { code: ERROR_CODES.pathUnsafe }
+  );
+  assert.equal(fs.existsSync(lateJournal.contract.targetDatabasePath), false);
+  assert.equal(
+    fs.existsSync(receiptPathFor(lateJournal.contract.targetDatabasePath)),
+    false
+  );
+  assert.equal(
+    fs.readFileSync(lateJournalPath, "utf8"),
+    "foreign late journal"
   );
 });
 
@@ -1778,9 +1969,10 @@ test("abort plan recognizes only the finite held strict-smoke states", async (t)
         operationInput(state)
       );
       assert.equal(plan.code, ABORT_PLAN_CODE);
+      assert.equal(plan.contractVersion, 2);
       assert.match(
         plan.planId,
-        /^release-qa-strict-restore-abort-v1-[a-f0-9]{64}$/u
+        /^release-qa-strict-restore-abort-v2-[a-f0-9]{64}$/u
       );
       assert.equal(
         plan.confirmation,
@@ -1794,6 +1986,26 @@ test("abort plan recognizes only the finite held strict-smoke states", async (t)
       assert.equal(plan.hostedSmokeCompleted, false);
       assert.equal(plan.releaseBlocked, true);
       assert.equal(plan.rollbackOnly, true);
+      assert.equal(plan.sourcePersistenceMode, "main-only");
+      assert.equal(plan.sourceWalSha256, null);
+      assert.equal(plan.sourceWalSizeBytes, null);
+      assert.equal(plan.sourceShmObserved, false);
+      assert.equal(plan.sourceWalIncludedInInspection, false);
+      assert.equal(plan.sourceShmIncludedInInspection, false);
+      assert.equal(plan.sourcePersistentFamilyPreserved, true);
+      assert.equal(plan.verification.sourceSidecarsAbsent, true);
+      assert.equal(
+        plan.verification.sourceWalIncludedInInspection,
+        false
+      );
+      assert.equal(
+        plan.verification.sourceShmIncludedInInspection,
+        false
+      );
+      assert.equal(
+        plan.verification.sourcePersistentFamilyStable,
+        true
+      );
       assert.equal(
         plan.sourceStateClassification,
         classification
@@ -1873,12 +2085,28 @@ test("abort execute materializes the exact backup and replays with zero mutation
   const receiptBefore = fs.readFileSync(receiptPath);
   const receipt = JSON.parse(receiptBefore.toString("utf8"));
   assert.equal(receipt.kind, ABORT_RECEIPT_KIND);
+  assert.equal(receipt.formatVersion, 2);
   assert.equal(receipt.restoreMode, ABORT_RESTORE_MODE);
   assert.equal(receipt.smokeCompleted, false);
   assert.equal(receipt.hostedSmokeCompleted, false);
   assert.equal(receipt.sourceSemanticChainCompleted, false);
   assert.equal(receipt.releaseBlocked, true);
   assert.equal(receipt.rollbackOnly, true);
+  assert.equal(receipt.sourcePersistenceMode, "main-only");
+  assert.equal(receipt.sourceWalSha256, null);
+  assert.equal(receipt.sourceWalIncludedInInspection, false);
+  assert.equal(receipt.sourceShmObserved, false);
+  assert.equal(receipt.sourceShmIncludedInInspection, false);
+  assert.equal(receipt.sourcePersistentFamilyPreserved, true);
+  assert.equal(receipt.planPayload.contractVersion, 2);
+  assert.equal(receipt.planPayload.sourcePersistenceMode, "main-only");
+  assert.equal(receipt.planPayload.sourceWalSha256, null);
+  assert.equal(receipt.planPayload.sourceWalSizeBytes, null);
+  assert.equal(receipt.planPayload.sourceWalMtimeNs, null);
+  assert.equal(receipt.planPayload.sourceWalDevice, null);
+  assert.equal(receipt.planPayload.sourceWalInode, null);
+  assert.equal(receipt.planPayload.sourceShmObserved, false);
+  assert.equal(receipt.planPayload.sourceShmSizeBytes, null);
   assert.equal(
     receipt.planPayload.sourceAbortEvidence.classification,
     "prepared_only"
@@ -1951,6 +2179,606 @@ test("abort execute materializes the exact backup and replays with zero mutation
     { code: ERROR_CODES.targetConflict }
   );
   assert.deepEqual(fs.readFileSync(receiptPath), receiptBefore);
+});
+
+test("abort v2 inspects a committed WAL family without touching authoritative SHM", async (t) => {
+  const state = await runtime(t, {
+    sourceSnapshot: strictSourceSnapshots.to_b_accepted_pending,
+  });
+  const writer = openPublishedPhaseOneWalWriter(state);
+  try {
+    const family = sourceFamilyPaths(state.contract);
+    const familyBefore = sourceFamilyBytes(state.contract);
+    const proofRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "hundo-strict-wal-proof-")
+    );
+    try {
+      const mainOnly = path.join(proofRoot, "main-only.sqlite3");
+      const mainWal = path.join(proofRoot, "main-wal.sqlite3");
+      fs.copyFileSync(family.main, mainOnly);
+      fs.copyFileSync(family.main, mainWal);
+      fs.copyFileSync(family.wal, `${mainWal}-wal`);
+      assert.equal(
+        abortEvidenceAt(mainOnly, state.contract)
+          .phaseOnePublicationState,
+        "pending"
+      );
+      const recovered = abortEvidenceAt(mainWal, state.contract);
+      assert.equal(recovered.classification, "to_b_accepted");
+      assert.equal(recovered.phaseOnePublicationState, "published");
+    } finally {
+      fs.rmSync(proofRoot, { recursive: true, force: true });
+    }
+
+    await assert.rejects(
+      planReleaseQaStrictRestore(operationInput(state)),
+      { code: ERROR_CODES.pathUnsafe }
+    );
+
+    const copied = [];
+    const observedFs = Object.create(fs);
+    observedFs.copyFileSync = (source, target, flags) => {
+      copied.push({ source, target, flags });
+      return fs.copyFileSync(source, target, flags);
+    };
+    const firstPlan = await planAbortReleaseQaStrictRestore(
+      operationInput(state, { fsModule: observedFs })
+    );
+    const secondPlan = await planAbortReleaseQaStrictRestore(
+      operationInput(state)
+    );
+    assert.equal(firstPlan.planId, secondPlan.planId);
+    assert.match(
+      firstPlan.planId,
+      /^release-qa-strict-restore-abort-v2-[a-f0-9]{64}$/u
+    );
+    assert.equal(firstPlan.contractVersion, 2);
+    assert.equal(firstPlan.sourcePersistenceMode, "main-wal");
+    assert.equal(firstPlan.sourceWalSha256, hashFile(family.wal));
+    assert.equal(
+      firstPlan.sourceWalSizeBytes,
+      String(fs.statSync(family.wal).size)
+    );
+    assert.equal(firstPlan.sourceShmObserved, true);
+    assert.equal(firstPlan.sourceWalIncludedInInspection, true);
+    assert.equal(firstPlan.sourceShmIncludedInInspection, false);
+    assert.equal(firstPlan.sourcePersistentFamilyPreserved, true);
+    assert.equal(firstPlan.sourceStateClassification, "to_b_accepted");
+    assert.equal(firstPlan.sourcePhaseOnePublicationState, "published");
+    assert.equal(firstPlan.sourceReturnPublicationState, "none");
+    assert.equal(firstPlan.sourceSemanticChainCompleted, false);
+    assert.equal(firstPlan.verification.sourceSidecarsAbsent, false);
+    assert.equal(
+      firstPlan.verification.sourceWalIncludedInInspection,
+      true
+    );
+    assert.equal(
+      firstPlan.verification.sourceShmIncludedInInspection,
+      false
+    );
+    assert.equal(
+      firstPlan.verification.sourcePersistentFamilyStable,
+      true
+    );
+    assert.equal(
+      copied.some(({ source }) => source === family.shm),
+      false
+    );
+    for (const member of [family.main, family.wal]) {
+      const copies = copied.filter(({ source }) => source === member);
+      assert.equal(copies.length, 1);
+      assert.equal(copies[0].flags, fs.constants.COPYFILE_EXCL);
+    }
+    assertSourceFamilyBytes(state.contract, familyBefore);
+    assert.equal(
+      fs.existsSync(temporaryWorkDirectoryFor(
+        state.contract.targetDatabasePath
+      )),
+      false
+    );
+
+    const options = abortExecuteOptions(state.contract, firstPlan);
+    const executed = await executeAbortReleaseQaStrictRestore(
+      operationInput(state, { options })
+    );
+    assert.equal(executed.replayed, false);
+    assert.equal(executed.contractVersion, 2);
+    assert.equal(executed.authoritativeDatabaseMutationCount, 0);
+    assert.equal(executed.durableFilesystemMutationCount, 2);
+    assert.equal(executed.sourcePersistenceMode, "main-wal");
+    assert.equal(executed.sourceWalSha256, hashFile(family.wal));
+    assert.equal(executed.sourceWalIncludedInInspection, true);
+    assert.equal(executed.sourceShmIncludedInInspection, false);
+    assert.equal(executed.sourcePersistentFamilyPreserved, true);
+    assert.equal(
+      hashFile(state.contract.targetDatabasePath),
+      state.contract.plaintextSha256
+    );
+    assert.equal(
+      fs.existsSync(`${state.contract.targetDatabasePath}-wal`),
+      false
+    );
+    assert.equal(
+      fs.existsSync(`${state.contract.targetDatabasePath}-shm`),
+      false
+    );
+    assert.equal(
+      fs.existsSync(temporaryWorkDirectoryFor(
+        state.contract.targetDatabasePath
+      )),
+      false
+    );
+    assertSourceFamilyBytes(state.contract, familyBefore);
+
+    const receiptPath = receiptPathFor(state.contract.targetDatabasePath);
+    const receiptBytes = fs.readFileSync(receiptPath);
+    const receipt = JSON.parse(receiptBytes.toString("utf8"));
+    assert.equal(receipt.formatVersion, 2);
+    assert.equal(receipt.sourcePersistenceMode, "main-wal");
+    assert.equal(receipt.sourceWalSha256, hashFile(family.wal));
+    assert.equal(receipt.sourceWalIncludedInInspection, true);
+    assert.equal(receipt.sourceShmObserved, true);
+    assert.equal(receipt.sourceShmIncludedInInspection, false);
+    assert.equal(receipt.sourcePersistentFamilyPreserved, true);
+    assert.equal(receipt.planPayload.contractVersion, 2);
+    assert.equal(receipt.planPayload.sourcePersistenceMode, "main-wal");
+    assert.equal(receipt.planPayload.sourceWalSha256, hashFile(family.wal));
+    assert.match(receipt.planPayload.sourceWalSizeBytes, /^[1-9]\d*$/u);
+    assert.match(receipt.planPayload.sourceWalMtimeNs, /^\d+$/u);
+    assert.match(receipt.planPayload.sourceWalDevice, /^\d+$/u);
+    assert.match(receipt.planPayload.sourceWalInode, /^\d+$/u);
+    assert.equal(receipt.planPayload.sourceShmObserved, true);
+    assert.equal(
+      Number(receipt.planPayload.sourceShmSizeBytes) % 32_768,
+      0
+    );
+
+    let mutationAttemptCount = 0;
+    const replayFs = Object.create(fs);
+    for (const method of [
+      "chmodSync",
+      "copyFileSync",
+      "fsyncSync",
+      "linkSync",
+      "mkdirSync",
+      "openSync",
+      "renameSync",
+      "rmdirSync",
+      "rmSync",
+      "unlinkSync",
+      "writeFileSync",
+    ]) {
+      replayFs[method] = () => {
+        mutationAttemptCount += 1;
+        throw new Error(`abort WAL replay attempted ${method}`);
+      };
+    }
+    const replay = await executeAbortReleaseQaStrictRestore(
+      operationInput(state, {
+        options,
+        fsModule: replayFs,
+        objectStorage: {
+          async getPrivateObject() {
+            throw new Error("abort WAL replay attempted object download");
+          },
+          async headPrivateObject() {
+            throw new Error("abort WAL replay attempted object head");
+          },
+        },
+        keyResolver: async () => {
+          throw new Error("abort WAL replay attempted key resolution");
+        },
+        restoreFunction: async () => {
+          throw new Error("abort WAL replay attempted restore");
+        },
+      })
+    );
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.authoritativeDatabaseMutationCount, 0);
+    assert.equal(replay.durableFilesystemMutationCount, 0);
+    assert.equal(replay.temporaryFilesystemWork.performed, false);
+    assert.equal(replay.sourcePersistenceMode, "main-wal");
+    assert.equal(mutationAttemptCount, 0);
+    assert.deepEqual(fs.readFileSync(receiptPath), receiptBytes);
+    assertSourceFamilyBytes(state.contract, familyBefore);
+    assert.equal(
+      fs.existsSync(temporaryWorkDirectoryFor(
+        state.contract.targetDatabasePath
+      )),
+      false
+    );
+  } finally {
+    if (writer.database.open) writer.database.close();
+  }
+});
+
+test("abort v2 rejects unsafe or invalid source-family layouts", async (t) => {
+  await t.test("orphan SHM", async (child) => {
+    const state = await runtime(child, {
+      sourceSnapshot: strictSourceSnapshots.prepared_only,
+    });
+    fs.writeFileSync(
+      `${state.contract.sourceDatabasePath}-shm`,
+      Buffer.alloc(32_768)
+    );
+    await assert.rejects(
+      planAbortReleaseQaStrictRestore(operationInput(state)),
+      { code: ERROR_CODES.pathUnsafe }
+    );
+  });
+
+  await t.test("tiny WAL", async (child) => {
+    const state = await runtime(child, {
+      sourceSnapshot: strictSourceSnapshots.prepared_only,
+    });
+    fs.writeFileSync(
+      `${state.contract.sourceDatabasePath}-wal`,
+      Buffer.alloc(32)
+    );
+    await assert.rejects(
+      planAbortReleaseQaStrictRestore(operationInput(state)),
+      { code: ERROR_CODES.pathUnsafe }
+    );
+  });
+
+  await t.test("rollback journal", async (child) => {
+    const state = await runtime(child, {
+      sourceSnapshot: strictSourceSnapshots.prepared_only,
+    });
+    fs.writeFileSync(
+      `${state.contract.sourceDatabasePath}-journal`,
+      "foreign journal"
+    );
+    await assert.rejects(
+      planAbortReleaseQaStrictRestore(operationInput(state)),
+      { code: ERROR_CODES.pathUnsafe }
+    );
+  });
+
+  await t.test("WAL symbolic link", async (child) => {
+    const state = await runtime(child, {
+      sourceSnapshot: strictSourceSnapshots.prepared_only,
+    });
+    const foreign = path.join(state.contract.persistentRoot, "foreign-wal");
+    fs.writeFileSync(foreign, Buffer.alloc(64));
+    let linked = false;
+    try {
+      fs.symlinkSync(
+        foreign,
+        `${state.contract.sourceDatabasePath}-wal`,
+        "file"
+      );
+      linked = true;
+    } catch (error) {
+      if (["EPERM", "EACCES", "UNKNOWN"].includes(error.code)) {
+        child.diagnostic("symbolic-link capability unavailable on this host");
+      } else {
+        throw error;
+      }
+    }
+    if (linked) {
+      await assert.rejects(
+        planAbortReleaseQaStrictRestore(operationInput(state)),
+        { code: ERROR_CODES.pathUnsafe }
+      );
+    }
+  });
+
+  await t.test("corrupt WAL", async (child) => {
+    const state = await runtime(child, {
+      sourceSnapshot: strictSourceSnapshots.to_b_accepted_pending,
+    });
+    const writer = openPublishedPhaseOneWalWriter(state);
+    try {
+      const walPath = `${state.contract.sourceDatabasePath}-wal`;
+      const bytes = fs.readFileSync(walPath);
+      bytes.fill(0x7f, 0, Math.min(bytes.length, 4_096));
+      fs.writeFileSync(walPath, bytes);
+      await assert.rejects(
+        planAbortReleaseQaStrictRestore(operationInput(state)),
+        { code: ERROR_CODES.sourceInvalid }
+      );
+      assert.equal(
+        fs.existsSync(temporaryWorkDirectoryFor(
+          state.contract.targetDatabasePath
+        )),
+        false
+      );
+    } finally {
+      if (writer.database.open) writer.database.close();
+    }
+  });
+});
+
+test("abort v2 binds WAL identity and cleans a failed family copy", async (t) => {
+  for (const field of ["ino", "mtimeNs"]) {
+    await t.test(`${field} drift`, async (child) => {
+      const state = await runtime(child, {
+        sourceSnapshot: strictSourceSnapshots.to_b_accepted_pending,
+      });
+      const writer = openPublishedPhaseOneWalWriter(state);
+      try {
+        const family = sourceFamilyPaths(state.contract);
+        const before = sourceFamilyBytes(state.contract);
+        const actual = fs.lstatSync(family.wal, { bigint: true });
+        const initial = field === "ino"
+          ? 9_007_199_254_740_992n
+          : actual.mtimeNs;
+        await assert.rejects(
+          planAbortReleaseQaStrictRestore(operationInput(state, {
+            fsModule: driftedBigintStatFs(
+              family.wal,
+              field,
+              [initial, initial + 1n]
+            ),
+          })),
+          { code: ERROR_CODES.sourceChanged }
+        );
+        assertSourceFamilyBytes(state.contract, before);
+        assert.equal(
+          fs.existsSync(temporaryWorkDirectoryFor(
+            state.contract.targetDatabasePath
+          )),
+          false
+        );
+      } finally {
+        if (writer.database.open) writer.database.close();
+      }
+    });
+  }
+
+  await t.test("second exclusive family copy failure", async (child) => {
+    const state = await runtime(child, {
+      sourceSnapshot: strictSourceSnapshots.to_b_accepted_pending,
+    });
+    const writer = openPublishedPhaseOneWalWriter(state);
+    try {
+      const family = sourceFamilyPaths(state.contract);
+      const before = sourceFamilyBytes(state.contract);
+      const failingFs = Object.create(fs);
+      failingFs.copyFileSync = (source, target, flags) => {
+        if (source === family.wal) {
+          const error = new Error("injected WAL copy failure");
+          error.code = "EIO";
+          throw error;
+        }
+        return fs.copyFileSync(source, target, flags);
+      };
+      await assert.rejects(
+        planAbortReleaseQaStrictRestore(operationInput(state, {
+          fsModule: failingFs,
+        })),
+        { code: ERROR_CODES.sourceInvalid }
+      );
+      assertSourceFamilyBytes(state.contract, before);
+      assert.equal(
+        fs.existsSync(temporaryWorkDirectoryFor(
+          state.contract.targetDatabasePath
+        )),
+        false
+      );
+    } finally {
+      if (writer.database.open) writer.database.close();
+    }
+  });
+});
+
+test("abort v2 rolls publication back on WAL drift and replay stays read-only", async (t) => {
+  await t.test("drift after target publication", async (child) => {
+    const state = await runtime(child, {
+      sourceSnapshot: strictSourceSnapshots.to_b_accepted_pending,
+    });
+    const writer = openPublishedPhaseOneWalWriter(state);
+    try {
+      const walPath = `${state.contract.sourceDatabasePath}-wal`;
+      const plan = await planAbortReleaseQaStrictRestore(
+        operationInput(state)
+      );
+      await assert.rejects(
+        executeAbortReleaseQaStrictRestore(operationInput(state, {
+          options: abortExecuteOptions(state.contract, plan),
+          failureHook(stage) {
+            if (stage === "after-target") {
+              fs.appendFileSync(walPath, Buffer.from([0xff]));
+            }
+          },
+        })),
+        { code: ERROR_CODES.sourceChanged }
+      );
+      assert.equal(fs.existsSync(state.contract.targetDatabasePath), false);
+      assert.equal(
+        fs.existsSync(receiptPathFor(state.contract.targetDatabasePath)),
+        false
+      );
+      assert.equal(
+        fs.existsSync(temporaryWorkDirectoryFor(
+          state.contract.targetDatabasePath
+        )),
+        false
+      );
+    } finally {
+      if (writer.database.open) writer.database.close();
+    }
+  });
+
+  await t.test("SHM content drift after target publication", async (child) => {
+    const state = await runtime(child, {
+      sourceSnapshot: strictSourceSnapshots.to_b_accepted_pending,
+    });
+    const writer = openPublishedPhaseOneWalWriter(state);
+    try {
+      const family = sourceFamilyPaths(state.contract);
+      const familyBefore = sourceFamilyBytes(state.contract);
+      const plan = await planAbortReleaseQaStrictRestore(
+        operationInput(state)
+      );
+      let injectShmDrift = false;
+      const driftFs = Object.create(fs);
+      driftFs.readFileSync = (entryPath, ...args) => {
+        const value = fs.readFileSync(entryPath, ...args);
+        if (
+          injectShmDrift &&
+          entryPath === family.shm &&
+          Buffer.isBuffer(value)
+        ) {
+          const changed = Buffer.from(value);
+          changed[0] ^= 0xff;
+          return changed;
+        }
+        return value;
+      };
+      await assert.rejects(
+        executeAbortReleaseQaStrictRestore(operationInput(state, {
+          options: abortExecuteOptions(state.contract, plan),
+          fsModule: driftFs,
+          failureHook(stage) {
+            if (stage === "after-target") injectShmDrift = true;
+          },
+        })),
+        { code: ERROR_CODES.sourceChanged }
+      );
+      assert.equal(fs.existsSync(state.contract.targetDatabasePath), false);
+      assert.equal(
+        fs.existsSync(receiptPathFor(state.contract.targetDatabasePath)),
+        false
+      );
+      assert.equal(
+        fs.existsSync(temporaryWorkDirectoryFor(
+          state.contract.targetDatabasePath
+        )),
+        false
+      );
+      assertSourceFamilyBytes(state.contract, familyBefore);
+    } finally {
+      if (writer.database.open) writer.database.close();
+    }
+  });
+
+  await t.test("SHM read race after target publication", async (child) => {
+    const state = await runtime(child, {
+      sourceSnapshot: strictSourceSnapshots.to_b_accepted_pending,
+    });
+    const writer = openPublishedPhaseOneWalWriter(state);
+    try {
+      const family = sourceFamilyPaths(state.contract);
+      const familyBefore = sourceFamilyBytes(state.contract);
+      const plan = await planAbortReleaseQaStrictRestore(
+        operationInput(state)
+      );
+      let failShmRead = false;
+      const raceFs = Object.create(fs);
+      raceFs.readFileSync = (entryPath, ...args) => {
+        if (failShmRead && entryPath === family.shm) {
+          const error = new Error("injected SHM read race");
+          error.code = "EACCES";
+          throw error;
+        }
+        return fs.readFileSync(entryPath, ...args);
+      };
+      await assert.rejects(
+        executeAbortReleaseQaStrictRestore(operationInput(state, {
+          options: abortExecuteOptions(state.contract, plan),
+          fsModule: raceFs,
+          failureHook(stage) {
+            if (stage === "after-target") failShmRead = true;
+          },
+        })),
+        { code: ERROR_CODES.sourceChanged }
+      );
+      assert.equal(fs.existsSync(state.contract.targetDatabasePath), false);
+      assert.equal(
+        fs.existsSync(receiptPathFor(state.contract.targetDatabasePath)),
+        false
+      );
+      assert.equal(
+        fs.existsSync(temporaryWorkDirectoryFor(
+          state.contract.targetDatabasePath
+        )),
+        false
+      );
+      assertSourceFamilyBytes(state.contract, familyBefore);
+    } finally {
+      if (writer.database.open) writer.database.close();
+    }
+  });
+
+  await t.test("drift before replay", async (child) => {
+    const state = await runtime(child, {
+      sourceSnapshot: strictSourceSnapshots.to_b_accepted_pending,
+    });
+    const writer = openPublishedPhaseOneWalWriter(state);
+    try {
+      const plan = await planAbortReleaseQaStrictRestore(
+        operationInput(state)
+      );
+      const options = abortExecuteOptions(state.contract, plan);
+      await executeAbortReleaseQaStrictRestore(
+        operationInput(state, { options })
+      );
+      const targetBefore = fs.readFileSync(state.contract.targetDatabasePath);
+      const receiptPath = receiptPathFor(state.contract.targetDatabasePath);
+      const receiptBefore = fs.readFileSync(receiptPath);
+      fs.appendFileSync(
+        `${state.contract.sourceDatabasePath}-wal`,
+        Buffer.from([0xee])
+      );
+      let mutationAttemptCount = 0;
+      const replayFs = Object.create(fs);
+      for (const method of [
+        "chmodSync",
+        "copyFileSync",
+        "fsyncSync",
+        "linkSync",
+        "mkdirSync",
+        "openSync",
+        "renameSync",
+        "rmdirSync",
+        "rmSync",
+        "unlinkSync",
+        "writeFileSync",
+      ]) {
+        replayFs[method] = () => {
+          mutationAttemptCount += 1;
+          throw new Error(`drift replay attempted ${method}`);
+        };
+      }
+      await assert.rejects(
+        executeAbortReleaseQaStrictRestore(operationInput(state, {
+          options,
+          fsModule: replayFs,
+          objectStorage: {
+            async getPrivateObject() {
+              throw new Error("drift replay attempted object download");
+            },
+            async headPrivateObject() {
+              throw new Error("drift replay attempted object head");
+            },
+          },
+          keyResolver: async () => {
+            throw new Error("drift replay attempted key resolution");
+          },
+          restoreFunction: async () => {
+            throw new Error("drift replay attempted restore");
+          },
+        })),
+        { code: ERROR_CODES.targetConflict }
+      );
+      assert.equal(mutationAttemptCount, 0);
+      assert.deepEqual(
+        fs.readFileSync(state.contract.targetDatabasePath),
+        targetBefore
+      );
+      assert.deepEqual(fs.readFileSync(receiptPath), receiptBefore);
+      assert.equal(
+        fs.existsSync(temporaryWorkDirectoryFor(
+          state.contract.targetDatabasePath
+        )),
+        false
+      );
+    } finally {
+      if (writer.database.open) writer.database.close();
+    }
+  });
 });
 
 test("abort execute recovers an exact receipt-only publication window", async (t) => {
@@ -2320,7 +3148,7 @@ test("normal and abort plan namespaces and receipts cannot cross", async (t) => 
   }));
 
   const abortPlanId =
-    `release-qa-strict-restore-abort-v1-${"0".repeat(64)}`;
+    `release-qa-strict-restore-abort-v2-${"0".repeat(64)}`;
   const abortOptions = parseArguments([
     ...planArguments(state.contract),
     "--plan-id", abortPlanId,
