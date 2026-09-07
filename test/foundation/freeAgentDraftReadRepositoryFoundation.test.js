@@ -5101,6 +5101,7 @@ function assertCardDescriptorShape(descriptor) {
 
 function assertNavigationShape(navigation) {
   assertExactKeys(navigation, [
+    "availableDrafts",
     "candidateDeadlineAtMs",
     "competitionFirstMatchupStartsAtMs",
     "fadId",
@@ -8283,6 +8284,7 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
         serverNowMs: PREPUBLICATION_NOW_MS,
         timeZone: "America/Vancouver",
         fadId: null,
+        availableDrafts: [],
         seasonId: null,
         phase: "inactive",
         showMainNavigation: false,

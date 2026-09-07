@@ -244,7 +244,9 @@ describe("M4-05 rounded-AAV normal contract policy", () => {
     });
   });
 
-  test("enforces term, minimum AAV, and multi-year whole-dollar rules", () => {
+  test("accepts exact AAV-first totals while preserving historical whole-dollar contracts", () => {
+    assert.deepEqual(normalContractValue(375, 3), { originalTotalValueCents: 375, termYears: 3, aavCents: 125 });
+    assert.deepEqual(normalContractValue(250, 2), { originalTotalValueCents: 250, termYears: 2, aavCents: 125 });
     assertPolicyError(
       () => normalContractValue(400, 4),
       CONTRACT_POLICY_CODES.termInvalid

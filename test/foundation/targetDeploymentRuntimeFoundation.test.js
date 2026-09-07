@@ -316,6 +316,12 @@ async function startApplication(t, runtime) {
 }
 
 describe("M7-01 deployed target runtime configuration", () => {
+  test("daily auction testing requires staging and defaults off", () => {
+    const staging = deployedEnvironment();
+    assert.equal(loadTargetRuntimeConfig({ env: staging, backendRoot: ROOT }).stagingDailyAuctionsEnabled, false);
+    assert.equal(loadTargetRuntimeConfig({ env: { ...staging, STAGING_DAILY_AUCTIONS_ENABLED: "true" }, backendRoot: ROOT }).stagingDailyAuctionsEnabled, true);
+    assert.throws(() => loadTargetRuntimeConfig({ env: { ...staging, APP_ENV: "production", STAGING_DAILY_AUCTIONS_ENABLED: "true" }, backendRoot: ROOT, loadSecurity: () => ({ appEnv: "production" }) }), /daily auction testing is restricted to staging/);
+  });
   test("loads one immutable staging runtime configuration without fallbacks", () => {
     const config = loadTargetRuntimeConfig({
       env: deployedEnvironment(),
@@ -1239,6 +1245,22 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.equal(before.equals(runtime.database.serialize()), true);
     await runtime.scheduler.close();
     assert.equal(runtime.scheduler.getState(), "stopped");
+  });
+
+  test("limits daily staging auction testing to auction resolution and league delivery", async (t) => {
+    const input = deployedRuntimeInput(t);
+    input.config = Object.freeze({ ...input.config, stagingDailyAuctionsEnabled: true, scheduledJobsEnabled: true, accountEmailDeliveryEnabled: false, leagueWriteMode: "open" });
+    const runtime = openDeployedTargetRuntime(input);
+    t.after(async () => {
+      await runtime.scheduler.close();
+      if (runtime.database.open) runtime.close();
+      fs.rmSync(input.persistentRoot, { recursive: true, force: true });
+    });
+    const before = runtime.database.serialize();
+    const cycle = await runtime.scheduler.start().initialRun;
+    assert.equal(cycle.status, "succeeded");
+    assert.deepEqual(cycle.outcomes.map(({ name }) => name), ["free_agent_draft_auction_resolution", "auction_resolution", "league_outbox"]);
+    assert.equal(before.equals(runtime.database.serialize()), true);
   });
 
   test("starts account email without enabling league scheduled jobs", async (t) => {

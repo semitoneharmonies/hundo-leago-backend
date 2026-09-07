@@ -9,6 +9,7 @@ const {
   TRADE_PROPOSAL_FOUNDATION_CODES,
   TRADE_PROPOSAL_LIFETIME_MS,
   TradeProposalFoundationPolicyError,
+  assertTradeProposalFoundationState,
   deriveTradeProposalTiming,
   validateTradeProposalFoundationCommand,
   validateTradeProposalFoundationInput,
@@ -460,6 +461,18 @@ function assertPolicyReason(action, reasonCode) {
 }
 
 describe("M5-05 trade proposal policy", () => {
+  test("opens approved inaugural trading only after its opening and preserves deadline and authority", () => {
+    const command = { actorAuthority: "manager", seasonId: IDS.seasonA, createdAtMs: NOW_MS };
+    const context = { league_status: "active", membership_status: "active", assignment_status: "accepted", assignment_ended_at_ms: null, proposing_team_status: "active", receiving_team_status: "active", current_season_id: IDS.seasonA, season_status: "active", entry_draft_status: "setup", trading_opens_at_ms: null, inaugural_trading_opens_at_ms: NOW_MS, trade_deadline_at_ms: NOW_MS + 1 };
+    assert.equal(assertTradeProposalFoundationState({ command, context }), true);
+    for (const inaugural_trading_opens_at_ms of [null, undefined, NOW_MS + 1, -1]) {
+      assertPolicyReason(() => assertTradeProposalFoundationState({ command, context: { ...context, inaugural_trading_opens_at_ms } }), TRADE_PROPOSAL_FOUNDATION_CODES.windowClosed);
+    }
+    assertPolicyReason(() => assertTradeProposalFoundationState({ command, context: { ...context, trade_deadline_at_ms: NOW_MS } }), TRADE_PROPOSAL_FOUNDATION_CODES.windowClosed);
+    assertPolicyReason(() => assertTradeProposalFoundationState({ command, context: { ...context, assignment_status: "ended" } }), TRADE_PROPOSAL_FOUNDATION_CODES.authorizationDenied);
+    assertPolicyReason(() => assertTradeProposalFoundationState({ command, context: { ...context, current_season_id: IDS.seasonB } }), TRADE_PROPOSAL_FOUNDATION_CODES.seasonUnavailable);
+  });
+
   test("requires an exact two-team request and exact command", () => {
     assert.deepEqual(
       validateTradeProposalFoundationRequest({

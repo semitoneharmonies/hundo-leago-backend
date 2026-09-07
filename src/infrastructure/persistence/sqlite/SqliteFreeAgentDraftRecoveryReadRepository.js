@@ -1397,9 +1397,9 @@ function createSqliteFreeAgentDraftRecoveryReadRepository({
           const latest = recoveryIndex.latest(key);
           const enabled =
             latest !== null &&
-            ["pending", "ready"].includes(
-              latest.status
-            );
+            (["pending", "ready"].includes(latest.status) ||
+              (latest.status === "correction_required" &&
+                operations.some((operation) => operation.operationId === latest.createdByOperationId && operation.status === "failed")));
           return {
             action: binding.policy.action,
             resourceId: [

@@ -361,7 +361,12 @@ function createSqliteTradeProposalRepository({
         team_manager_assignments.status AS assignment_status,
         team_manager_assignments.ended_at_ms AS assignment_ended_at_ms,
         entry_drafts.status AS entry_draft_status,
-        entry_drafts.starts_at_ms AS trading_opens_at_ms
+        entry_drafts.starts_at_ms AS trading_opens_at_ms,
+        (SELECT fad.opened_at_ms FROM free_agent_drafts AS fad
+          WHERE fad.league_id = leagues.id
+            AND fad.season_id = leagues.current_season_id
+            AND fad.setup_path = 'no_draft_inaugural'
+        ) AS inaugural_trading_opens_at_ms
       FROM leagues
       LEFT JOIN seasons
         ON seasons.league_id = leagues.id

@@ -90,7 +90,7 @@ function createSqliteLeagueActivityRepository({ database } = {}) {
       LEFT JOIN players AS player
         ON player.id = activity.player_id
       WHERE activity.league_id = @leagueId
-        AND activity.event_type <> 'roster_moved'
+        AND activity.event_type NOT IN ('roster_moved', 'fad_allocation_player_acquired')
         AND (@category = 'all' OR (${category}) = @category)
       ORDER BY activity.occurred_at_ms DESC, activity.id DESC
       LIMIT @fetchLimit
@@ -106,7 +106,7 @@ function createSqliteLeagueActivityRepository({ database } = {}) {
       LEFT JOIN players AS player
         ON player.id = activity.player_id
       WHERE activity.league_id = @leagueId
-        AND activity.event_type <> 'roster_moved'
+        AND activity.event_type NOT IN ('roster_moved', 'fad_allocation_player_acquired')
         AND (@category = 'all' OR (${category}) = @category)
         AND (
           activity.occurred_at_ms < @cursorOccurredAtMs

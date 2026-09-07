@@ -436,6 +436,7 @@ function openDeployedTargetRuntime({
       freeAgentDraftRoutesEnabled:
         config.freeAgentDraftRoutesEnabled,
       stagingAccountAutoVerificationEnabled,
+      stagingDailyAuctionsEnabled: config.appEnv === "staging" && config.stagingDailyAuctionsEnabled === true,
     });
     const health = createRuntimeHealthService({
       database: connection.database,
@@ -447,7 +448,9 @@ function openDeployedTargetRuntime({
       enabled: config.scheduledJobsEnabled,
       emailEnabled: config.accountEmailDeliveryEnabled,
       leagueWriteMode: config.leagueWriteMode,
-      jobs: runtime.services.league.scheduledJobs,
+      jobs: config.appEnv === "staging" && config.stagingDailyAuctionsEnabled === true
+        ? runtime.services.league.scheduledJobs.filter(({ name }) => ["auction_resolution", "free_agent_draft_auction_resolution", "league_outbox"].includes(name))
+        : runtime.services.league.scheduledJobs,
       emailJob: runtime.services.accountEmail.job,
       health,
       logger: securityFoundations.logger,

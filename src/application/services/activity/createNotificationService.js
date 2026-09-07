@@ -79,6 +79,9 @@ function createNotificationService({
       limit: page.limit,
       cursor: page.cursor,
       readStatus: page.readStatus,
+      category: page.category,
+      pendingLeagueAccess: page.pendingLeagueAccess,
+      nowMs: safeNow(clock),
     });
     const notifications = Object.freeze(result.rows.map(projectRow));
     const last = result.rows.at(-1);

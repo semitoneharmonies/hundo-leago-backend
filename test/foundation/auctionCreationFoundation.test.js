@@ -15,6 +15,19 @@ const {
 const {
   openDatabase,
 } = require("../../src/infrastructure/database/connection");
+
+test("staging daily auctions roll at 4 PM Pacific while the default remains weekly", () => {
+  const nowMs = Date.parse("2026-09-11T20:00:00Z");
+  const daily = getAuctionCreationWindow({ nowMs, timeZone: "America/Vancouver", stagingDaily: true });
+  assert.equal(daily.canStart, true);
+  assert.equal(daily.scheduledResolutionAtMs, Date.parse("2026-09-11T23:00:00Z"));
+  assert.equal(daily.scheduledResolutionAtMs - daily.opensAtMs, 24 * 60 * 60 * 1000);
+  const next = getAuctionCreationWindow({ nowMs: daily.scheduledResolutionAtMs, timeZone: "America/Vancouver", stagingDaily: true });
+  assert.equal(next.scheduledResolutionAtMs, daily.scheduledResolutionAtMs + 24 * 60 * 60 * 1000);
+  const weekly = getAuctionCreationWindow({ nowMs, timeZone: "America/Vancouver" });
+  assert.equal(weekly.canStart, false);
+  assert.equal(weekly.scheduledResolutionAtMs, Date.parse("2026-09-13T23:00:00Z"));
+});
 const {
   applyMigrations,
   discoverMigrations,

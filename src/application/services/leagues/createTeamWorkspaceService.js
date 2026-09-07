@@ -338,13 +338,16 @@ function normalizeOrderInput(input) {
     !Number.isSafeInteger(input.expectedVersion) ||
     input.expectedVersion < 0 ||
     !Array.isArray(input.forwardOwnerships) ||
-    !Array.isArray(input.defenceOwnerships)
+    !Array.isArray(input.defenceOwnerships) ||
+    (input.forwardOwnerships.length > 12 && input.forwardOwnerships.includes(null)) ||
+    (input.defenceOwnerships.length > 6 && input.defenceOwnerships.includes(null))
   ) {
     failInput();
   }
   function items(values) {
     return Object.freeze(
       values.map((item) => {
+        if (item === null) return null;
         if (
           !item ||
           typeof item !== "object" ||

@@ -939,6 +939,17 @@ describe("M4-11 atomic SQLite commissioner corrections", () => {
     );
   });
 
+  test("rejects position changes in both roster preview and confirmation without writes", (t) => {
+    const runtime = createRuntime(t);
+    const before = runtime.database.serialize();
+    const input = rosterInput({ correctedPositionGroup: "D", confirmWarnings: true });
+    assertPolicyError(() => runtime.repository.previewRoster(input), COMMISSIONER_CORRECTION_CODES.rosterInvalid);
+    assert.deepEqual(runtime.database.serialize(), before);
+    assertPolicyError(() => runtime.repository.applyRoster(input,
+      correctionIdempotency("commissioner_roster_correction", 192)), COMMISSIONER_CORRECTION_CODES.rosterInvalid);
+    assert.deepEqual(runtime.database.serialize(), before);
+  });
+
   test("requires warning confirmation, then records all roster evidence atomically", (t) => {
     const runtime = createRuntime(t);
     assertPolicyError(

@@ -305,7 +305,7 @@ function validateRosterAddition(input) {
     termYears > 3 ||
     !Number.isSafeInteger(totalValueCents) ||
     totalValueCents < termYears * 100 ||
-    (termYears > 1 && totalValueCents % 100 !== 0) ||
+    (termYears > 1 && totalValueCents % 100 !== 0 && totalValueCents % (termYears * 25) !== 0) ||
     !Array.isArray(input.contractYearIds) ||
     input.contractYearIds.length !== termYears ||
     (
@@ -509,7 +509,7 @@ function validateContractCorrection(input) {
   if (
     !Number.isSafeInteger(totalValueCents) ||
     totalValueCents < termYears * 100 ||
-    (termYears > 1 && totalValueCents % 100 !== 0)
+    (termYears > 1 && totalValueCents % 100 !== 0 && totalValueCents % (termYears * 25) !== 0)
   ) {
     fail(COMMISSIONER_CORRECTION_CODES.contractInvalid);
   }

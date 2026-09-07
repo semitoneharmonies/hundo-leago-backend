@@ -3447,6 +3447,14 @@ function createSqliteFreeAgentDraftReadRepository({
     const scope = normalizeNavigationInput(input);
     try {
       const authority = requireViewerAuthority(scope);
+      const availableDrafts = database.prepare(`
+        SELECT f.id AS fadId, f.season_id AS seasonId,
+          CAST(substr(s.nhl_season_key, 1, 4) AS INTEGER) AS year,
+          f.status AS status
+        FROM free_agent_drafts f JOIN seasons s ON s.id = f.season_id AND s.league_id = f.league_id
+        WHERE f.league_id = @leagueId
+        ORDER BY year DESC, f.opened_at_ms DESC, f.id DESC
+      `).all({ leagueId: scope.leagueId });
       const fad = authority.current_season_id
         ? unique(
             currentFadStatement,
@@ -3535,6 +3543,7 @@ function createSqliteFreeAgentDraftReadRepository({
           : null;
       return deepFreeze({
         serverNowMs: scope.nowMs,
+        availableDrafts,
         timeZone: authority.timezone,
         fadId: fad?.id || null,
         seasonId: fad?.season_id || null,

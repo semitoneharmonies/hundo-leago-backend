@@ -113,7 +113,7 @@ function normalContractValue(originalTotalValueCents, termYears) {
   ) {
     fail(CONTRACT_POLICY_CODES.totalValueInvalid);
   }
-  if (term > 1 && originalTotalValueCents % 100 !== 0) {
+  if (term > 1 && originalTotalValueCents % 100 !== 0 && originalTotalValueCents % (term * 25) !== 0) {
     fail(CONTRACT_POLICY_CODES.precisionInvalid);
   }
   return Object.freeze({

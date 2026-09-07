@@ -395,6 +395,10 @@ function loadTargetRuntimeConfig({
   if (!DEPLOYED_ENVIRONMENTS.includes(security.appEnv)) {
     fail("APP_ENV", "the deployment entrypoint accepts only staging or production");
   }
+  const stagingDailyAuctionsEnabled = optionalExactBoolean(env, "STAGING_DAILY_AUCTIONS_ENABLED") === true;
+  if (stagingDailyAuctionsEnabled && security.appEnv !== "staging") {
+    fail("STAGING_DAILY_AUCTIONS_ENABLED", "daily auction testing is restricted to staging");
+  }
   const databasePath = absolutePath(env, "DATABASE_PATH");
   const persistentRoot = absolutePath(env, "PERSISTENT_DATA_ROOT");
   const relativeDatabasePath = path.relative(
@@ -453,6 +457,7 @@ function loadTargetRuntimeConfig({
     environmentId: deployedIdentity(env, "APP_ENVIRONMENT_ID"),
     frontendBuildId: deployedIdentity(env, "FRONTEND_BUILD_ID"),
     freeAgentDraftRoutesEnabled,
+    stagingDailyAuctionsEnabled,
     leagueWriteMode: exactEnum(env, "LEAGUE_WRITE_MODE", ["closed", "open"]),
     migrationsDirectory: path.join(
       path.resolve(backendRoot),

@@ -229,7 +229,7 @@ function zonedInstant({ year, month, day, hour }, timeZone) {
   return candidate;
 }
 
-function getAuctionCreationWindow({ nowMs, timeZone } = {}) {
+function getAuctionCreationWindow({ nowMs, timeZone, stagingDaily = false } = {}) {
   safeTimestamp(nowMs);
   if (
     typeof timeZone !== "string" ||
@@ -240,6 +240,21 @@ function getAuctionCreationWindow({ nowMs, timeZone } = {}) {
     fail(AUCTION_CREATION_CODES.timezoneInvalid);
   }
   const parts = zonedParts(nowMs, timeZone);
+  if (stagingDaily === true) {
+    const today = calendarDate(Number(parts.year), Number(parts.month), Number(parts.day), 0);
+    const todayClose = zonedInstant({ ...today, hour: 16 }, timeZone);
+    const closeDate = calendarDate(today.year, today.month, today.day, nowMs >= todayClose ? 1 : 0);
+    const previousDate = calendarDate(closeDate.year, closeDate.month, closeDate.day, -1);
+    const closesAtMs = zonedInstant({ ...closeDate, hour: 16 }, timeZone);
+    return Object.freeze({
+      opensAtMs: zonedInstant({ ...previousDate, hour: 16 }, timeZone),
+      newAuctionCutoffAtMs: closesAtMs,
+      bidClosesAtMs: closesAtMs,
+      scheduledResolutionAtMs: closesAtMs,
+      nextOpensAtMs: closesAtMs,
+      canStart: true,
+    });
+  }
   const weekday = Object.freeze({
     Mon: 0,
     Tue: 1,

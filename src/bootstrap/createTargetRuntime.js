@@ -1394,6 +1394,7 @@ function requireVerifiedSportsDataIoLiveDescriptor(value) {
 function createTargetRepositories({
   database,
   secureRandom,
+  stagingDailyAuctionsEnabled = false,
 } = {}) {
   const context = createSqliteRepositoryContext({ database });
   const matchupOccurrenceExecutionGuard =
@@ -1629,13 +1630,13 @@ function createTargetRepositories({
         notificationWriter,
       }),
     auctionBids: createSqliteAuctionBidRepository({ database }),
-    auctionReads: createSqliteAuctionReadRepository({ database }),
+    auctionReads: createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabled }),
     auctionResolutions: createSqliteAuctionResolutionRepository({
       database,
       leagueOutboxWriter,
       candidateCardSummerSynchronizer,
     }),
-    auctions: createSqliteAuctionRepository({ database }),
+    auctions: createSqliteAuctionRepository({ database, stagingDailyAuctionsEnabled }),
     audit: auditRepository,
     buyouts: createSqliteBuyoutRepository({
       database,
@@ -3086,6 +3087,7 @@ function createTargetRuntime({
   leagueWriteMode = "open",
   freeAgentDraftRoutesEnabled = true,
   stagingAccountAutoVerificationEnabled = false,
+  stagingDailyAuctionsEnabled = false,
   sportsDataIoNhl,
   sportsDataIoLiveNhl,
   sportsDataIoFetchImplementation,
@@ -3096,6 +3098,7 @@ function createTargetRuntime({
   const repositories = createTargetRepositories({
     database,
     secureRandom: securityFoundations?.secureRandom,
+    stagingDailyAuctionsEnabled,
   });
   let targetApplication = null;
   let socketRooms = null;

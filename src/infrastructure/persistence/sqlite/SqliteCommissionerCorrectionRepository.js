@@ -1923,6 +1923,9 @@ function createSqliteCommissionerCorrectionRepository({
       "The corrected roster ownership does not exist."
     );
     assertCurrentRecord(current, correction, "roster");
+    if (correction.correctedPositionGroup !== current.position_group) {
+      policyFailure(COMMISSIONER_CORRECTION_CODES.rosterInvalid);
+    }
     const activeContract = optionalUnique(
       activeContractByPlayerStatement.all(correction),
       "A player has multiple active league contracts."

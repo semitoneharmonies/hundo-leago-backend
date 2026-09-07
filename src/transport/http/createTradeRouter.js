@@ -7,6 +7,7 @@ const SAFE_MESSAGES = Object.freeze({
   TRADE_PRECONDITION_FAILED:
     "The trade proposal changed; refetch it and try again.",
   TRADE_REQUEST_CONFLICT: "The trade request conflicts with current state.",
+  TRADE_WINDOW_CLOSED: "Trading is not open for this league. Check the draft status and league trade deadline.",
   TRADE_REQUEST_FAILED: "The trade request could not be completed.",
   TRADE_REQUEST_TOO_LARGE: "The trade request is too large.",
 });
@@ -81,6 +82,9 @@ function createTradeRouter({
 
   function mapError(request, response, caught) {
     const code = caught?.reasonCode || caught?.code || "";
+    if (code === "TRADE_PROPOSAL_FOUNDATION_WINDOW_CLOSED") {
+      return failure(request, response, 409, "TRADE_WINDOW_CLOSED");
+    }
     if (
       code === "TRADE_NOT_FOUND" ||
       code.endsWith("_NOT_FOUND")

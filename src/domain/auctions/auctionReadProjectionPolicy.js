@@ -1051,9 +1051,11 @@ function validateAuctionStartTeamsProjection(value) {
   }
   const teamIds = new Set();
   for (const row of value) {
-    if (!hasExactDataFields(row, START_TEAM_FIELDS)) {
+    const hasRollover = row && Object.hasOwn(row, "nextRolloverAtMs");
+    if (!hasExactDataFields(row, hasRollover ? [...START_TEAM_FIELDS, "nextRolloverAtMs"] : START_TEAM_FIELDS)) {
       fail(reason);
     }
+    if (hasRollover && row.nextRolloverAtMs !== null) safeTimestamp(row.nextRolloverAtMs, reason);
     const teamId = stableId(row.teamId, reason);
     assertUniqueId(teamIds, teamId, reason);
     validateTeam(

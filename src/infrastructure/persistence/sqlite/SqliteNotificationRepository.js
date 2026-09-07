@@ -80,10 +80,26 @@ function createSqliteNotificationRepository({ database } = {}) {
       related_feature, related_record_id, delivery_status,
       created_at_ms, read_at_ms, delivered_at_ms, version
     `;
+    const filters = `
+      AND (@category = 'all' OR @category = CASE
+        WHEN event_type LIKE '%trade%' THEN 'trade'
+        WHEN event_type LIKE '%auction%' THEN 'auction'
+        WHEN event_type LIKE 'fad_%' OR event_type LIKE '%draft%' THEN 'draft'
+        WHEN event_type LIKE '%league%' OR event_type LIKE '%team%' OR event_type LIKE '%assignment%' THEN 'league'
+        ELSE 'account' END)
+      AND (@pendingLeagueAccess = 0 OR (
+        event_type IN ('league_invitation_created', 'commissioner_assignment_proposed')
+        AND EXISTS (SELECT 1 FROM league_invitations i JOIN leagues l ON l.id = i.league_id
+          WHERE i.id = notifications.related_record_id AND i.league_id = notifications.league_id
+            AND i.invited_user_id = @userId AND i.status = 'pending'
+            AND i.expires_at_ms > @nowMs AND l.status IN ('setup', 'active'))
+      ))
+    `;
     listFirstStatement = database.prepare(`
       SELECT ${columns}
       FROM notifications
       WHERE user_id = @userId
+        ${filters}
         AND (
           @readStatus = 'all'
           OR (@readStatus = 'read' AND read_at_ms IS NOT NULL)
@@ -96,6 +112,7 @@ function createSqliteNotificationRepository({ database } = {}) {
       SELECT ${columns}
       FROM notifications
       WHERE user_id = @userId
+        ${filters}
         AND (
           @readStatus = 'all'
           OR (@readStatus = 'read' AND read_at_ms IS NOT NULL)
@@ -172,11 +189,17 @@ function createSqliteNotificationRepository({ database } = {}) {
   );
 
   return Object.freeze({
-    listPage({ userId, limit, cursor, readStatus = "all" } = {}) {
+    listPage({ userId, limit, cursor, readStatus = "all", category = "all", pendingLeagueAccess = false, nowMs = 0 } = {}) {
+      if (!["all", "auction", "trade", "draft", "league", "account"].includes(category) || typeof pendingLeagueAccess !== "boolean") {
+        throw repositoryError(REPOSITORY_ERROR_CODES.argumentInvalid, "A valid notification category is required.");
+      }
       const parameters = {
         userId: stableId(userId),
         fetchLimit: safeLimit(limit) + 1,
         readStatus: safeReadStatus(readStatus),
+        category,
+        pendingLeagueAccess: pendingLeagueAccess ? 1 : 0,
+        nowMs: safeTimestamp(nowMs),
         ...(cursor
           ? {
               cursorOccurredAtMs: safeTimestamp(cursor.occurredAtMs),

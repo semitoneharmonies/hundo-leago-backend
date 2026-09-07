@@ -903,7 +903,9 @@ function validateProjectionBindings(result) {
     const latest = recoveries.at(-1) || null;
     const enabled =
       latest !== null &&
-      ["pending", "ready"].includes(latest.status);
+      (["pending", "ready"].includes(latest.status) ||
+        (latest.status === "correction_required" &&
+          operations.some((operation) => operation.operationId === latest.createdByOperationId && operation.status === "failed")));
     if (
       action.enabled !== enabled ||
       action.reasonCode !==

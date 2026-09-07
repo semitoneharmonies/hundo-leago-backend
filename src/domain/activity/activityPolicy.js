@@ -110,17 +110,22 @@ function validateActivityPageInput(input = {}) {
 
 function validateNotificationPageInput(input = {}) {
   const keys = Object.keys(input).sort();
-  if (keys.some((key) => !["cursor", "limit", "readStatus"].includes(key))) {
+  if (keys.some((key) => !["cursor", "limit", "readStatus", "category", "pendingLeagueAccess"].includes(key))) {
     fail(ACTIVITY_CODES.inputInvalid);
   }
   const readStatus = input.readStatus ?? "all";
   if (!NOTIFICATION_READ_STATUSES.includes(readStatus)) {
     fail(ACTIVITY_CODES.inputInvalid);
   }
+  const category = input.category ?? "all";
+  if (!["all", "auction", "trade", "draft", "league", "account"].includes(category) ||
+      ![undefined, "true", "false"].includes(input.pendingLeagueAccess)) fail(ACTIVITY_CODES.inputInvalid);
   return Object.freeze({
     limit: pageSize(input.limit),
     cursor: decodeCursor(input.cursor),
     readStatus,
+    category,
+    pendingLeagueAccess: input.pendingLeagueAccess === "true",
   });
 }
 

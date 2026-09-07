@@ -376,16 +376,16 @@ function createSqliteTeamWorkspaceRepository({ database } = {}) {
       ])
     );
     const submitted = [
-      ...command.forwardOwnerships.map((item, index) => ({
+      ...command.forwardOwnerships.map((item, index) => item && ({
         ...item,
         positionGroup: "F",
         displayOrder: index + 1,
-      })),
-      ...command.defenceOwnerships.map((item, index) => ({
+      })).filter(Boolean),
+      ...command.defenceOwnerships.map((item, index) => item && ({
         ...item,
         positionGroup: "D",
         displayOrder: index + 1,
-      })),
+      })).filter(Boolean),
     ];
     if (
       submitted.length !== expected.size ||

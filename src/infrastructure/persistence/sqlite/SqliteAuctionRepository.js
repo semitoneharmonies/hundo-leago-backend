@@ -43,7 +43,7 @@ function policyFail(reasonCode) {
   throw new AuctionCreationPolicyError(reasonCode);
 }
 
-function createSqliteAuctionRepository({ database } = {}) {
+function createSqliteAuctionRepository({ database, stagingDailyAuctionsEnabled = false } = {}) {
   let findIdempotency;
   let findAuthority;
   let findPlayer;
@@ -440,6 +440,7 @@ function createSqliteAuctionRepository({ database } = {}) {
         "Auction creation authority is not unique."
       );
       const window = getAuctionCreationWindow({
+        stagingDaily: stagingDailyAuctionsEnabled,
         nowMs: command.occurredAtMs,
         timeZone: authority?.league_timezone || "America/Vancouver",
       });

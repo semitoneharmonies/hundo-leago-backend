@@ -383,7 +383,7 @@ function sortUniqueRows(rows, key, message) {
   return sorted;
 }
 
-function createSqliteAuctionReadRepository({ database } = {}) {
+function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabled = false } = {}) {
   if (
     !database ||
     typeof database.prepare !== "function" ||
@@ -1433,6 +1433,7 @@ function createSqliteAuctionReadRepository({ database } = {}) {
     let window = null;
     if (authority.league_timezone) {
       window = getAuctionCreationWindow({
+        stagingDaily: stagingDailyAuctionsEnabled,
         nowMs: input.nowMs,
         timeZone: authority.league_timezone,
       });
@@ -1461,6 +1462,7 @@ function createSqliteAuctionReadRepository({ database } = {}) {
       sourceKind: "ordinary_weekly",
       fadId: null,
       fadRolloverId: null,
+      nextRolloverAtMs: window?.scheduledResolutionAtMs ?? null,
       targetRolloverAtMs: null,
       creationCutoffAtMs: null,
       generallyAllowed,
@@ -1490,6 +1492,7 @@ function createSqliteAuctionReadRepository({ database } = {}) {
         fadRolloverId: context.fadRolloverId,
         targetRolloverAtMs:
           context.targetRolloverAtMs,
+        nextRolloverAtMs: context.nextRolloverAtMs ?? context.targetRolloverAtMs,
         creationCutoffAtMs:
           context.creationCutoffAtMs,
         startAuction: allowed

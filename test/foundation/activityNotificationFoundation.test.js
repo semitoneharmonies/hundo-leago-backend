@@ -412,7 +412,7 @@ describe("M5-09 authenticated League Activity", () => {
     });
     assert.deepEqual(
       competitionOnly.activity.map(({ type }) => type),
-      ["fad_allocation_player_acquired"]
+      []
     );
     assert.equal(
       runtime.database.prepare("SELECT total_changes() AS n").get().n,
@@ -431,6 +431,18 @@ describe("M5-09 authenticated League Activity", () => {
 });
 
 describe("M5-09 owner-only notification acknowledgement", () => {
+  test("filters notification categories before pagination and preserves owner isolation without writes", (t) => {
+    const runtime = createRuntime(t);
+    runtime.database.prepare("UPDATE notifications SET event_type = 'auction_completed' WHERE id = ?").run(uuid(401));
+    runtime.database.prepare("UPDATE notifications SET event_type = 'auction_completed' WHERE id = ?").run(uuid(403));
+    const before = runtime.database.serialize();
+    const result = runtime.notifications.list({ query: { category: "auction", limit: 1 }, authenticated: authenticated(USER_A) });
+    assert.deepEqual(result.notifications.map(({ id }) => id), [uuid(401)]);
+    assert.equal(result.page.nextCursor, null);
+    assert.deepEqual(runtime.database.serialize(), before);
+    assert.throws(() => runtime.notifications.list({ query: { category: "invalid" }, authenticated: authenticated(USER_A) }));
+  });
+
   test("lists without writes and marks one or all exactly once", (t) => {
     const runtime = createRuntime(t);
     const before = runtime.database.prepare("SELECT total_changes() AS n").get().n;

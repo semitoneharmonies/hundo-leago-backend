@@ -162,10 +162,16 @@ function assertTradeProposalFoundationState({ command, context } = {}) {
   ) {
     fail(TRADE_PROPOSAL_FOUNDATION_CODES.seasonUnavailable);
   }
+  const entryDraftWindowOpen =
+    OPEN_DRAFT_STATUSES.includes(context.entry_draft_status) &&
+    Number.isSafeInteger(context.trading_opens_at_ms) &&
+    command.createdAtMs >= context.trading_opens_at_ms;
+  const inauguralWindowOpen =
+    Number.isSafeInteger(context.inaugural_trading_opens_at_ms) &&
+    context.inaugural_trading_opens_at_ms >= 0 &&
+    command.createdAtMs >= context.inaugural_trading_opens_at_ms;
   if (
-    !OPEN_DRAFT_STATUSES.includes(context.entry_draft_status) ||
-    !Number.isSafeInteger(context.trading_opens_at_ms) ||
-    command.createdAtMs < context.trading_opens_at_ms ||
+    (!entryDraftWindowOpen && !inauguralWindowOpen) ||
     !Number.isSafeInteger(context.trade_deadline_at_ms) ||
     command.createdAtMs >= context.trade_deadline_at_ms
   ) {
