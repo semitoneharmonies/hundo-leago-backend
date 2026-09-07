@@ -1,3 +1,4 @@
+const { historicalSchema54Migrations } = require("../helpers/historicalSchema54Migrations");
 const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -50,11 +51,11 @@ const {
 } = require("../../src/infrastructure/persistence/sqlite/repositoryCatalog");
 
 const ROOT = path.resolve(__dirname, "..", "..");
-const MIGRATIONS = path.join(
+const MIGRATIONS = historicalSchema54Migrations(path.join(
   ROOT,
   "database",
   "migrations"
-);
+));
 const FIRST_ADMINISTRATOR_SCRIPT = path.join(
   ROOT,
   "scripts",

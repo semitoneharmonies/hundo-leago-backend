@@ -1,3 +1,4 @@
+const { historicalSchema54Migrations } = require("../helpers/historicalSchema54Migrations");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -37,6 +38,7 @@ const {
 } = require("../../src/infrastructure/database/stagingEnvironment");
 
 const ROOT = path.resolve(__dirname, "..", "..");
+const HISTORICAL_MIGRATIONS = historicalSchema54Migrations(path.join(ROOT, "database", "migrations"));
 const RESET_MANIFEST_PATH = path.join(
   ROOT,
   "database",
@@ -581,6 +583,7 @@ function createVerifiedImportAttempt(t) {
     "utf8"
   );
   const importOptions = {
+    repositoryRoot: path.dirname(path.dirname(HISTORICAL_MIGRATIONS)),
     descriptorPath,
     sourceBundleDirectory,
     databasePath,

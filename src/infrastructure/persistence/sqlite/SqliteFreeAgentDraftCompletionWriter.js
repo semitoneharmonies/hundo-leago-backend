@@ -45,6 +45,7 @@ const JOB_TYPE = "fad_completion";
 const WRITER_METHODS = Object.freeze([
   "afterTransition",
   "beforeTransition",
+  "ensurePendingJobs",
   "executeClaimed",
   "listCandidates",
   "recordFailure",
@@ -3276,7 +3277,66 @@ function createSqliteFreeAgentDraftCompletionWriter({
     }
   );
 
+  const ensurePendingJobsTransaction = database.transaction((scan) => {
+    const drafts = database.prepare(`
+      SELECT draft.id, draft.league_id, draft.season_id,
+             seventh.rolls_over_at_ms AS scheduled_for_ms
+      FROM free_agent_drafts AS draft
+      JOIN leagues AS league ON league.id = draft.league_id
+        AND league.status = 'active' AND league.current_season_id = draft.season_id
+      JOIN seasons AS season ON season.id = draft.season_id
+        AND season.league_id = draft.league_id AND season.status = 'active'
+      JOIN free_agent_draft_rollovers AS seventh
+        ON seventh.league_id = draft.league_id AND seventh.season_id = draft.season_id
+        AND seventh.fad_id = draft.id AND seventh.sequence = 7
+        AND seventh.window_kind = 'initial'
+      WHERE draft.status = 'rapid' AND draft.completed_at_ms IS NULL
+        AND seventh.rolls_over_at_ms <= @nowMs
+        AND NOT EXISTS (
+          SELECT 1 FROM job_runs WHERE league_id = draft.league_id
+            AND season_id = draft.season_id AND job_type = 'fad_completion'
+            AND occurrence_key = 'fad:' || draft.id || ':complete'
+        )
+      ORDER BY seventh.rolls_over_at_ms, draft.league_id, draft.id
+      LIMIT @limit
+    `).all(scan);
+    const insert = database.prepare(`
+      INSERT INTO job_runs (
+        id, league_id, season_id, job_type, occurrence_key, scheduled_for_ms,
+        status, attempt_count, created_at_ms, updated_at_ms, version
+      ) VALUES (
+        @id, @leagueId, @seasonId, 'fad_completion', @occurrenceKey,
+        @scheduledForMs, 'pending', 0, @nowMs, @nowMs, 1
+      )
+    `);
+    for (const draft of drafts) {
+      insert.run({
+        id: deterministicUuid(`fad-completion:job:${draft.id}`),
+        leagueId: draft.league_id,
+        seasonId: draft.season_id,
+        occurrenceKey: buildFreeAgentDraftCompletionOccurrenceKey({ fadId: draft.id }),
+        scheduledForMs: draft.scheduled_for_ms,
+        nowMs: scan.nowMs,
+      });
+    }
+    return drafts.length;
+  });
+
   const writer = Object.freeze({
+    ensurePendingJobs(input = {}) {
+      const scan = normalizeScan(input);
+      if (database.inTransaction) {
+        invalid("Completion job ensuring owns its immediate transaction boundary.");
+      }
+      try {
+        return ensurePendingJobsTransaction.immediate(scan);
+      } catch (error) {
+        throw mapRepositoryError(error, {
+          operation: "ensureFreeAgentDraftCompletionJobs",
+          tableName: "job_runs",
+        });
+      }
+    },
     beforeTransition,
     afterTransition,
     executeClaimed(input = {}, lifecycleRepository) {

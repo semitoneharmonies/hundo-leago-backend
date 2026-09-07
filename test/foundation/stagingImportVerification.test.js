@@ -1,3 +1,4 @@
+const { historicalSchema54Migrations } = require("../helpers/historicalSchema54Migrations");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -34,6 +35,7 @@ const {
 } = require("../helpers/hashTree");
 
 const ROOT = path.resolve(__dirname, "..", "..");
+const HISTORICAL_MIGRATIONS = historicalSchema54Migrations(path.join(ROOT, "database", "migrations"));
 const RESET_MANIFEST = path.join(
   ROOT,
   "database",
@@ -164,6 +166,7 @@ function createImportedAttempt(t) {
   );
   const reportDirectory = path.join(reportRoot, "import");
   runStagingImport({
+    repositoryRoot: path.dirname(path.dirname(HISTORICAL_MIGRATIONS)),
     descriptorPath,
     sourceBundleDirectory,
     databasePath,

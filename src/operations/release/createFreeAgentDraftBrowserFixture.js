@@ -1704,7 +1704,7 @@ function createClockedFixtureRuntime(
     : null;
   const clocked = createTargetRuntime({
     database: runtime.database,
-    migrationsDirectory: path.resolve(
+    migrationsDirectory: runtime.migrationsDirectory || path.resolve(
       __dirname,
       "../../../database/migrations"
     ),

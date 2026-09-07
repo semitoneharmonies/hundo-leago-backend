@@ -3155,6 +3155,7 @@ function createTargetRuntime({
   return Object.freeze({
     app,
     migrationState,
+    migrationsDirectory,
     repositories,
     securityConfig: securityFoundations.config,
     services,

@@ -641,7 +641,8 @@ function createSqliteFreeAgentDraftRolloverWriter({
         source.id AS source_auction_id,
         allocation.id AS allocation_id,
         allocation.fallback_open_auction_id AS created_auction_id,
-        fallback_context.fad_rollover_id AS successor_rollover_id
+        COALESCE(fallback_opening.id, fallback_context.fad_rollover_id)
+          AS successor_rollover_id
       FROM auction_contexts AS source_context
       JOIN auctions AS source
         ON source.league_id = source_context.league_id
@@ -666,6 +667,16 @@ function createSqliteFreeAgentDraftRolloverWriter({
        AND fallback_context.fad_allocation_id = allocation.id
        AND fallback_context.fad_origin =
          'restricted_no_improvement_fallback'
+      LEFT JOIN auctions AS fallback
+        ON fallback.id = fallback_context.auction_id
+       AND fallback.league_id = fallback_context.league_id
+       AND fallback.season_id = fallback_context.season_id
+      LEFT JOIN free_agent_draft_rollovers AS fallback_opening
+        ON fallback_opening.league_id = allocation.league_id
+       AND fallback_opening.season_id = allocation.season_id
+       AND fallback_opening.fad_id = allocation.fad_id
+       AND fallback_opening.rolls_over_at_ms = fallback.opened_at_ms
+       AND fallback_opening.sequence = @sequence + 1
       WHERE source_context.league_id = @leagueId
         AND source_context.season_id = @seasonId
         AND source_context.fad_id = @fadId

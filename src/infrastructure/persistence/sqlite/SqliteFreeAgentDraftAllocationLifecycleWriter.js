@@ -58,6 +58,9 @@ const APPROVED_PRE_RAPID_STATUSES = new Set([
   "no_valid_offer",
   "restricted_active",
   "restricted_scheduled",
+  "restricted_fallback_open",
+  "restricted_resolved",
+  "fallback_open_resolved",
 ]);
 const CONTROL_PATTERN =
   /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
@@ -564,6 +567,9 @@ function createSqliteFreeAgentDraftAllocationLifecycleWriter({
               'automatic_award',
               'restricted_scheduled',
               'restricted_active',
+              'restricted_fallback_open',
+              'restricted_resolved',
+              'fallback_open_resolved',
               'no_valid_offer',
               'invalid',
               'correction_required'
@@ -962,7 +968,7 @@ function createSqliteFreeAgentDraftAllocationLifecycleWriter({
       ) {
         continue;
       } else if (
-        row.allocation_status === "automatic_award"
+        ["automatic_award", "restricted_resolved"].includes(row.allocation_status)
       ) {
         if (
           row.winning_snapshot_entry_id ===
@@ -986,6 +992,8 @@ function createSqliteFreeAgentDraftAllocationLifecycleWriter({
         } else {
           counts.losses += 1;
         }
+      } else if (["restricted_fallback_open", "fallback_open_resolved"].includes(row.allocation_status)) {
+        counts.losses += 1;
       }
     }
     return countsByTeam;

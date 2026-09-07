@@ -1782,6 +1782,23 @@ function installPriorScheduleRecovery({
 }
 
 describe("SQLite Free Agent Draft completion writer", () => {
+  test("ensures a missing due completion job exactly once while candidate reads remain read-only", (t) => {
+    const { database, writer } = fixture(t);
+    database.prepare("DELETE FROM job_runs WHERE id = ?").run(IDS.completionJob);
+    const before = database.prepare("SELECT total_changes() AS count").get().count;
+    assert.deepEqual(writer.listCandidates({ nowMs: COMPLETED_AT_MS, limit: 10 }), []);
+    assert.equal(database.prepare("SELECT total_changes() AS count").get().count, before);
+    assert.equal(writer.ensurePendingJobs({ nowMs: WEEK_ONE_AT_MS - 1, limit: 10 }), 0);
+    assert.equal(writer.ensurePendingJobs({ nowMs: COMPLETED_AT_MS, limit: 10 }), 1);
+    const candidates = writer.listCandidates({ nowMs: COMPLETED_AT_MS, limit: 10 });
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].fadId, IDS.fad);
+    assert.equal(candidates[0].scheduledForMs, WEEK_ONE_AT_MS);
+    const ensured = database.prepare("SELECT total_changes() AS count").get().count;
+    assert.equal(writer.ensurePendingJobs({ nowMs: COMPLETED_AT_MS + 1, limit: 10 }), 0);
+    assert.equal(database.prepare("SELECT total_changes() AS count").get().count, ensured);
+  });
+
   test("prepares against the migrated completion schema and requires outer hook transactions", (t) => {
     const { writer } = fixture(t);
     assert.throws(

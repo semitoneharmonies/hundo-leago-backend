@@ -209,7 +209,7 @@ function createClockedRuntime(runtime, clockState, operationId) {
   });
   const clocked = createTargetRuntime({
     database: runtime.database,
-    migrationsDirectory: path.resolve(
+    migrationsDirectory: runtime.migrationsDirectory || path.resolve(
       __dirname,
       "../../../database/migrations"
     ),

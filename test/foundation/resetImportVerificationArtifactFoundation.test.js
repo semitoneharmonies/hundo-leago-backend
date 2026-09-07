@@ -1,3 +1,4 @@
+const { historicalSchema54Migrations } = require("../helpers/historicalSchema54Migrations");
 const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
@@ -108,11 +109,11 @@ const RESET_MANIFEST_PATH = path.join(
   "reset-manifests",
   "2026-season-1-reset.json"
 );
-const MIGRATIONS_DIRECTORY = path.join(
+const MIGRATIONS_DIRECTORY = historicalSchema54Migrations(path.join(
   ROOT,
   "database",
   "migrations"
-);
+));
 const FIRST_ADMINISTRATOR_SCRIPT = path.join(
   ROOT,
   "scripts",
@@ -307,6 +308,7 @@ function fixture(t, suffix) {
     "utf8"
   );
   runStagingImport({
+    repositoryRoot: path.dirname(path.dirname(MIGRATIONS_DIRECTORY)),
     descriptorPath,
     sourceBundleDirectory,
     databasePath,

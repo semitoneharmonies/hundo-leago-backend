@@ -1,3 +1,4 @@
+const { historicalSchema54Migrations } = require("../helpers/historicalSchema54Migrations");
 "use strict";
 
 const assert = require("node:assert/strict");
@@ -95,7 +96,7 @@ const {
 } = require("../../scripts/release-qa-strict-restore-command");
 
 const ROOT = path.resolve(__dirname, "..", "..");
-const MIGRATIONS = path.join(ROOT, "database", "migrations");
+const MIGRATIONS = historicalSchema54Migrations(path.join(ROOT, "database", "migrations"));
 const BACKUP_ID = "e735e6a4-53d1-479a-bc5e-4b6bcf3d58a6";
 const KEY = Buffer.alloc(32, 0x61);
 const FIXED_TIME = Date.parse("2026-08-23T22:56:20.203Z");

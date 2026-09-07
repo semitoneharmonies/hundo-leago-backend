@@ -310,7 +310,8 @@ function createCommandTarget(t) {
   const database = new Database(databasePath);
   applyMigrations({
     database,
-    migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }),
+    migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY })
+      .filter(({ id }) => id <= 54),
     applicationBuildId: "fad-public-receipt-scan-foundation",
     now: () => CREATED_AT_MS,
   });

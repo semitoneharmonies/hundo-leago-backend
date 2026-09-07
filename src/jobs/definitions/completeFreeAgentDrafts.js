@@ -367,6 +367,7 @@ function createCompleteFreeAgentDraftsJob({
     "listCandidates",
     "an eligibility writer with listCandidates"
   );
+  requireMethod(writer, "ensurePendingJobs", "a completion writer with ensurePendingJobs");
   requireMethod(
     repository,
     "claim",
@@ -425,6 +426,7 @@ function createCompleteFreeAgentDraftsJob({
         clock.nowMs(),
         "a safe candidate-query timestamp"
       );
+      writer.ensurePendingJobs({ nowMs: listedAtMs, limit: batchSize });
       const candidates = writer.listCandidates({
         nowMs: listedAtMs,
         limit: batchSize,

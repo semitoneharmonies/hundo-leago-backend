@@ -1,3 +1,4 @@
+const { historicalSchema54Migrations } = require("../helpers/historicalSchema54Migrations");
 "use strict";
 
 const assert = require("node:assert/strict");
@@ -68,7 +69,7 @@ function migrationState() {
     status: "exact",
     userVersion: 54,
     applied: discoverMigrations({
-      migrationsDirectory: path.join(ROOT, "database", "migrations"),
+      migrationsDirectory: historicalSchema54Migrations(path.join(ROOT, "database", "migrations")),
     }),
   });
 }
@@ -92,7 +93,7 @@ function seedDeployedDatabase(databasePath) {
   try {
     migrateDatabase({
       database: connection.database,
-      migrationsDirectory: path.join(ROOT, "database", "migrations"),
+      migrationsDirectory: historicalSchema54Migrations(path.join(ROOT, "database", "migrations")),
       applicationBuildId: BACKEND_BUILD_ID,
       now: () => Date.parse("2026-08-21T18:00:00.000Z"),
     });

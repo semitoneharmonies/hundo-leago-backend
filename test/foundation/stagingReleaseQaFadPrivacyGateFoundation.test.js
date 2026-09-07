@@ -1,3 +1,4 @@
+const { historicalSchema54Migrations } = require("../helpers/historicalSchema54Migrations");
 "use strict";
 
 const assert = require("node:assert/strict");
@@ -78,11 +79,11 @@ const {
 );
 
 const ROOT_DIRECTORY = path.resolve(__dirname, "..", "..");
-const MIGRATIONS_DIRECTORY = path.join(
+const MIGRATIONS_DIRECTORY = historicalSchema54Migrations(path.join(
   ROOT_DIRECTORY,
   "database",
   "migrations"
-);
+));
 const OPERATION_ID = STRICT_RESTORE_CONTRACT.releaseId;
 const NOW_MS = Date.parse("2026-08-21T18:00:00.000Z");
 

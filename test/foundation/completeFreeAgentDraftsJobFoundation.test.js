@@ -103,6 +103,7 @@ function harness({
   const calls = [];
   let clockIndex = 0;
   const writer = {
+    ensurePendingJobs() { return 0; },
     listCandidates(input) {
       calls.push(["list", input]);
       return candidates;
@@ -437,7 +438,7 @@ describe("FAD completion scheduled job", () => {
     assert.throws(
       () =>
         createCompleteFreeAgentDraftsJob({
-          writer: { listCandidates() {} },
+          writer: { listCandidates() {}, ensurePendingJobs() { return 0; } },
           repository: { claim() {} },
           completionService: {
             executeClaimedCompletion() {},

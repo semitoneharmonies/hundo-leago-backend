@@ -1,3 +1,4 @@
+const { historicalSchema54Migrations } = require("../helpers/historicalSchema54Migrations");
 "use strict";
 
 const assert = require("node:assert/strict");
@@ -69,13 +70,13 @@ const {
   runReleaseQaCredentialRotationCommand,
 } = require("../../scripts/rotate-release-qa-credentials");
 
-const MIGRATIONS_DIRECTORY = path.resolve(
+const MIGRATIONS_DIRECTORY = historicalSchema54Migrations(path.resolve(
   __dirname,
   "..",
   "..",
   "database",
   "migrations"
-);
+));
 const RELEASE_ID = "HL-20260821-1";
 const OLD_PASSWORD = "old staging QA password";
 const NEW_PASSWORD = "new staging QA password 🏒";
