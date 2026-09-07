@@ -590,7 +590,7 @@ function migrationReportCommandArguments(
     "--database",
     runtime.staged.options.databasePath,
     "--migrations",
-    MIGRATIONS_DIRECTORY,
+    path.join(ROOT, "database", "migrations"),
     "--persistent-root",
     runtime.staged.root,
     "--descriptor",
@@ -667,7 +667,7 @@ function continuityOptions(
     leagueId: bootstrapResult.leagueId,
     leagueName: "Original Hundo League",
     migrationsDirectory:
-      MIGRATIONS_DIRECTORY,
+      path.join(ROOT, "database", "migrations"),
     operatingMode: "OFFSEASON_RESET",
     publicFrontendOrigin:
       PUBLIC_FRONTEND_ORIGIN,

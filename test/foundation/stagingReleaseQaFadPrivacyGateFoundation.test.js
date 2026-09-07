@@ -424,6 +424,21 @@ test(
       env: heldEnvironment(target),
       output: { log(value) { logs.push(value); } },
       now: () => NOW_MS,
+      createOperatorRuntimeFunction({ database, env, now }) {
+        const securityFoundations = createSecurityFoundations({ env, now, loggerSink() {} });
+        return Object.freeze({
+          ...createTargetRuntime({
+            database,
+            migrationsDirectory: MIGRATIONS_DIRECTORY,
+            securityFoundations,
+            currentSeason: { label: "2026", nhlSeasonKey: "20262027" },
+            leagueWriteMode: "closed",
+            freeAgentDraftRoutesEnabled: false,
+            networkSourceResolver() { return "127.0.0.1"; },
+          }),
+          database,
+        });
+      },
       openDatabaseFunction(options) {
         writerOptions = options;
         return { database: runtime.database };

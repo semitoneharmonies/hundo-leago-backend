@@ -177,7 +177,7 @@ function trustedSchemaFingerprint({
     migrations = discoverMigrations({
       migrationsDirectory:
         requestedMigrationsDirectory,
-    });
+    }).filter(({ id }) => id <= expectedUserVersion);
   } catch (error) {
     if (
       error instanceof

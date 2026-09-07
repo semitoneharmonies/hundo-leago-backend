@@ -435,10 +435,10 @@ test("deployed runtime mounts the release route only on the exact source databas
   });
 
   const sourceEnv = runtimeEnvironment(contract);
-  const sourceConfig = loadTargetRuntimeConfig({
+  const sourceConfig = {...loadTargetRuntimeConfig({
     env: sourceEnv,
     backendRoot: ROOT,
-  });
+  }), migrationsDirectory: historicalSchema54Migrations(path.join(ROOT, "database", "migrations"))};
   const sourceRuntime = openBoundDeployedRuntime(
     t,
     sourceConfig,
@@ -467,10 +467,10 @@ test("deployed runtime mounts the release route only on the exact source databas
   const restoredEnv = runtimeEnvironment(contract, {
     DATABASE_PATH: targetDatabasePath,
   });
-  const restoredConfig = loadTargetRuntimeConfig({
+  const restoredConfig = {...loadTargetRuntimeConfig({
     env: restoredEnv,
     backendRoot: ROOT,
-  });
+  }), migrationsDirectory: historicalSchema54Migrations(path.join(ROOT, "database", "migrations"))};
   const restoredRuntime = openBoundDeployedRuntime(
     t,
     restoredConfig,

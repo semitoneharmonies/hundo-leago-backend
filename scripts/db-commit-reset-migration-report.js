@@ -38,6 +38,9 @@ const {
   createSqliteRepositoryContext,
 } = require("../src/infrastructure/persistence/sqlite/createSqliteRepositoryContext");
 const {
+  REQUIRED_SCHEMA_VERSION,
+} = require("../src/infrastructure/persistence/sqlite/SqliteResetOriginalLeagueBootstrapRepository");
+const {
   createSecureRandom,
 } = require("../src/infrastructure/security/createSecureRandom");
 const {
@@ -333,7 +336,7 @@ function runResetMigrationReportCommand({
       discoverMigrations({
         migrationsDirectory:
           options.migrationsDirectory,
-      })
+      }).filter(({ id }) => id <= REQUIRED_SCHEMA_VERSION)
     );
     const verificationOptions =
       continuityOptions({

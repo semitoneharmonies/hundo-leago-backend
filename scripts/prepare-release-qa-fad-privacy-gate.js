@@ -180,6 +180,7 @@ function assertExactDatabaseBinding(database, expectedIdentity) {
     migrationState = inspectMigrationState(
       database,
       discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY })
+        .filter(({ id }) => id <= REQUIRED_SCHEMA_VERSION)
     );
   } catch (error) {
     fail(COMMAND_ERROR_CODES.schemaUnsupported, error);
