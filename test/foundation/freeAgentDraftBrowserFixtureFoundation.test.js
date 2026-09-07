@@ -346,7 +346,7 @@ test(
 );
 
 test(
-  "FAD browser fixture rejects anything except an open schema-54 release-QA runtime",
+  "FAD browser fixture rejects missing or unsupported release-QA runtimes",
   async () => {
     const source = fs.readFileSync(
       path.join(
@@ -381,6 +381,14 @@ test(
         error.code ===
           "FREE_AGENT_DRAFT_BROWSER_FIXTURE_RUNTIME_INVALID"
     );
+    for (const schemaVersion of [53, 56]) {
+      await assert.rejects(
+        createFreeAgentDraftBrowserFixture({
+          runtime: { database: { open: true, pragma: () => schemaVersion } },
+        }),
+        (error) => error.code === "FREE_AGENT_DRAFT_BROWSER_FIXTURE_RUNTIME_INVALID"
+      );
+    }
   }
 );
 
