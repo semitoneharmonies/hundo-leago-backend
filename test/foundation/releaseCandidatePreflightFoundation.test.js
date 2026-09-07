@@ -381,19 +381,20 @@ test("repository inspection hashes exact inputs and reports status without expos
   assert.equal(calls.length, 3);
 });
 
-test("backend release-source inspection proves schema 22 through 54 and the provider-disabled Blueprint", () => {
+test("backend release-source inspection reports schema 55 while the historical approval remains pinned to 54", () => {
   const facts = inspectBackendReleaseFacts({
     directory: path.resolve(__dirname, "..", ".."),
   });
   assert.deepEqual(facts.migrationSource, {
     baseSchemaVersion: EXPECTED_BASE_SCHEMA_VERSION,
-    targetSchemaVersion: EXPECTED_SCHEMA_VERSION,
-    migrationCount: EXPECTED_MIGRATION_COUNT,
-    postBaseMigrationCount: EXPECTED_POST_BASE_MIGRATION_COUNT,
+    targetSchemaVersion: 55,
+    migrationCount: 55,
+    postBaseMigrationCount: 33,
     contiguous: true,
     checksumSetSha256:
-      EXPECTED_MIGRATION_CHECKSUM_SET_SHA256,
+      "15f3570c200d269649904991f906658606029beb77bc7e2465142ec90ca14849",
   });
+  assert.equal(EXPECTED_SCHEMA_VERSION, 54);
   assert.deepEqual(facts.repositorySource, {
     repositoryCatalogCount:
       EXPECTED_REPOSITORY_CATALOG_COUNT,

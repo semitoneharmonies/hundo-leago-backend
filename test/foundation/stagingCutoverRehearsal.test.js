@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { historicalSchema54Migrations } = require("../helpers/historicalSchema54Migrations");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -46,11 +47,11 @@ const RESET_MANIFEST = path.join(
   "reset-manifests",
   "2026-season-1-reset.json"
 );
-const MIGRATIONS_DIRECTORY = path.join(
+const MIGRATIONS_DIRECTORY = historicalSchema54Migrations(path.join(
   ROOT,
   "database",
   "migrations"
-);
+));
 const FAD_STATE_TABLES = Object.freeze([
   "auction_administration_command_results",
   "candidate_card_entries",
@@ -201,6 +202,7 @@ function createImportedAttempt(t) {
   );
   const importReportDirectory = path.join(reportRoot, "import");
   runStagingImport({
+    repositoryRoot: path.dirname(path.dirname(MIGRATIONS_DIRECTORY)),
     descriptorPath,
     sourceBundleDirectory,
     databasePath,
