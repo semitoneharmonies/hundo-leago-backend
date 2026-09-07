@@ -733,14 +733,14 @@ function createFixture(t, prefix, base, {
   migrateDatabase({
     database: connection.database,
     migrationsDirectory: path.resolve("database/migrations"),
-    applicationBuildId: `${prefix}schema54`,
+    applicationBuildId: `${prefix}schema55`,
     now: () => 1,
   });
   assert.equal(
     connection.database.pragma("user_version", {
       simple: true,
     }),
-    54
+    55
   );
   const fixtureIds = ids(base);
   const actions = actionMatrix(fixtureIds);

@@ -868,20 +868,24 @@ function createRuntime(
     databasePath,
     environment: "test",
   });
-  const triggers = captureAndDropTriggers(
-    connection.database
-  );
+  const triggers = connection.database.transaction(() =>
+    captureAndDropTriggers(connection.database)
+  ).immediate();
   connection.database.pragma("foreign_keys = OFF");
   connection.database.pragma(
     "ignore_check_constraints = ON"
   );
-  seedCore(connection.database);
-  seed(connection.database);
+  connection.database.transaction(() => {
+    seedCore(connection.database);
+    seed(connection.database);
+  }).immediate();
   connection.database.pragma(
     "ignore_check_constraints = OFF"
   );
   connection.database.pragma("foreign_keys = ON");
-  restoreTriggers(connection.database, triggers);
+  connection.database.transaction(() => {
+    restoreTriggers(connection.database, triggers);
+  }).immediate();
   connection.database.pragma("wal_checkpoint(TRUNCATE)");
   const repository =
     createSqliteFreeAgentDraftAllocationCorrectionRepository({
@@ -1086,7 +1090,7 @@ before(() => {
   suiteRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "hundo-fad-t144-")
   );
-  templatePath = path.join(suiteRoot, "schema54.sqlite3");
+  templatePath = path.join(suiteRoot, "schema55.sqlite3");
   const connection = openDatabase({
     databasePath: templatePath,
     environment: "test",
@@ -1101,7 +1105,7 @@ before(() => {
     connection.database.pragma("user_version", {
       simple: true,
     }),
-    54
+    55
   );
   connection.database.pragma("wal_checkpoint(TRUNCATE)");
   connection.database.close();

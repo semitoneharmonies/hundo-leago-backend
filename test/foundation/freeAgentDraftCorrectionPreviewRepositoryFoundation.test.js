@@ -201,7 +201,7 @@ function seedTeam(database, id, name, colours) {
 function seedCore(database) {
   database.pragma("foreign_keys = OFF");
   database.pragma("ignore_check_constraints = ON");
-  dropAllTriggers(database);
+  database.transaction(() => dropAllTriggers(database)).immediate();
 
   seedUser(
     database,
@@ -1067,7 +1067,7 @@ before(() => {
   suiteRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "hundo-fad-t143-")
   );
-  templatePath = path.join(suiteRoot, "schema54.sqlite3");
+  templatePath = path.join(suiteRoot, "schema55.sqlite3");
   const connection = openDatabase({
     databasePath: templatePath,
     environment: "test",
@@ -1082,7 +1082,7 @@ before(() => {
     connection.database.pragma("user_version", {
       simple: true,
     }),
-    54
+    55
   );
   connection.database.pragma("wal_checkpoint(TRUNCATE)");
   connection.database.close();
