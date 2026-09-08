@@ -444,7 +444,7 @@ describe("M7-26 staging authority reconciliation command", () => {
         database: migrated,
         migrations: discoverMigrations({
           migrationsDirectory: MIGRATIONS_DIRECTORY,
-        }),
+        }).filter(({ id }) => id <= 54),
         applicationBuildId: "authority-command-post-reconciliation",
         now: () => 54,
       });
