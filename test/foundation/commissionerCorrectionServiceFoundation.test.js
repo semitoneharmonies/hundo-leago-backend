@@ -529,6 +529,53 @@ test("FAD-05 commissioner previews remain synchronous and never coordinate", () 
   assert.equal(calls.coordinateCommittedRoster, undefined);
 });
 
+test("staging review accepts quarter-dollar AAV contract corrections through preview and apply", async () => {
+  for (const [totalValueCents, termYears] of [[250, 2], [375, 3], [975, 3], [400, 3]]) {
+    const calls = {};
+    const service = createService(calls);
+    const input = contractBody({
+      correctedOriginalTotalValueCents: totalValueCents,
+      correctedOriginalTermYears: termYears,
+    });
+    const preview = service.previewContract({
+      leagueId: IDS.league,
+      input,
+      authenticated: { valid: true },
+    });
+    assert.equal(preview.preview, true);
+    assert.equal(calls.previewContract.correctedOriginalTotalValueCents, totalValueCents);
+    assert.equal(calls.previewContract.correctedOriginalTermYears, termYears);
+    assert.equal(calls.applyContract, undefined);
+    assert.equal(calls.coordinateCommittedRoster, undefined);
+
+    await service.applyContract({
+      leagueId: IDS.league,
+      input: { ...input, confirmWarnings: true },
+      idempotencyKey: `quarter-aav-${totalValueCents}-${termYears}`,
+      authenticated: { valid: true },
+    });
+    assert.equal(calls.applyContract.correctedOriginalTotalValueCents, totalValueCents);
+    assert.equal(calls.applyContract.correctedOriginalTermYears, termYears);
+  }
+});
+
+test("staging review rejects invalid corrected AAV totals before accessing the workspace", () => {
+  for (const [totalValueCents, termYears] of [[199, 2], [251, 2], [376, 3], [300.5, 3]]) {
+    const calls = {};
+    const service = createService(calls);
+    assert.throws(() => service.previewContract({
+      leagueId: IDS.league,
+      input: contractBody({
+        correctedOriginalTotalValueCents: totalValueCents,
+        correctedOriginalTermYears: termYears,
+      }),
+      authenticated: { valid: true },
+    }), { reasonCode: "COMMISSIONER_CORRECTION_CONTRACT_INVALID" });
+    assert.equal(calls.previewContract, undefined);
+    assert.equal(calls.applyContract, undefined);
+  }
+});
+
 test("FAD-05 contains commissioner post-commit coordination failures as awaiting data", async () => {
   const calls = {};
   const service = createService(calls, null, {

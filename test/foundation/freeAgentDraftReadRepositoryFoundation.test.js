@@ -5840,6 +5840,74 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
     assertNoWrites(runtime.database, before);
   });
 
+  test("preserves published awards after contract correction, transfer and removal using acquisition receipts", (t) => {
+    const runtime = createRuntime(t);
+    const { database } = runtime;
+    const fixture = seedPublishedPendingResults(database);
+    const offer = fixture.offers.find(({ teamId }) => teamId === PRIMARY.teamTwoId);
+    const contractId = uuid(23_100);
+    const ownershipId = uuid(23_101);
+    seedAutomaticAwardResult(database, {
+      scope: PRIMARY, offer, contractId, ownershipId, eventId: uuid(23_102),
+    });
+    const input = publishedHistoryInput({
+      teamId: PRIMARY.teamTwoId,
+      viewerUserId: PRIMARY.managerUserId,
+      viewerMembershipId: PRIMARY.managerMembershipId,
+    });
+    const original = runtime.readRepository.readPublishedCardHistory(input);
+    dropTableTriggers(database, "contract_events");
+    dropTableTriggers(database, "ownership_events");
+    insert(database, "contract_events", {
+      id: uuid(23_103), league_id: PRIMARY.leagueId, contract_id: contractId,
+      player_id: offer.player.playerId, team_id: offer.teamId,
+      actor_user_id: null, event_type: "contract_created",
+      source_type: "free_agent_draft_allocation", source_id: offer.player.allocationId,
+      metadata_json: JSON.stringify({
+        contractType: "normal", originalTotalValueCents: offer.totalValueCents,
+        originalTermYears: offer.termYears, aavCents: offer.totalValueCents / offer.termYears,
+        startSeasonId: PRIMARY.seasonId,
+      }),
+      reason: null, occurred_at_ms: ALLOCATION_AT_MS,
+    });
+    insert(database, "ownership_events", {
+      id: uuid(23_104), league_id: PRIMARY.leagueId, season_id: PRIMARY.seasonId,
+      player_id: offer.player.playerId, team_id: offer.teamId, ownership_id: ownershipId,
+      event_type: "fad_allocation_player_acquired", actor_user_id: null,
+      source_type: "free_agent_draft_allocation", source_id: offer.player.allocationId,
+      before_metadata_json: null,
+      after_metadata_json: JSON.stringify({
+        ownershipKind: "Rostered", rosterCategory: "Active",
+        positionGroup: offer.player.positionGroup, slotNumber: Number(offer.slotKey.slice(1)),
+      }),
+      reason: null, occurred_at_ms: ALLOCATION_AT_MS,
+    });
+    const verifyHistory = () => {
+      const before = noWriteSnapshot(database);
+      assert.deepEqual(runtime.readRepository.readPublishedCardHistory(input), original);
+      const summaries = runtime.readRepository.readPublishedCardSummaries(publishedSummaryInput());
+      assert.equal(summaries.data.find(({ teamId }) => teamId === offer.teamId).outcomeCounts.signed, 1);
+      assert.equal(runtime.readRepository.readPublishedCardHistory(publishedHistoryInput({
+        teamId: PRIMARY.teamTwoId,
+        viewerUserId: PRIMARY.administratorUserId,
+        viewerMembershipId: PRIMARY.administratorMembershipId,
+      })).results[0].offer, null);
+      assertNoWrites(database, before);
+    };
+    database.prepare("UPDATE contracts SET original_total_value_cents=800,aav_cents=400,version=version+1 WHERE id=?").run(contractId);
+    verifyHistory();
+    database.prepare("UPDATE contracts SET current_team_id=?,version=version+1 WHERE id=?").run(PRIMARY.teamOneId, contractId);
+    database.prepare("UPDATE player_ownerships SET team_id=?,version=version+1 WHERE id=?").run(PRIMARY.teamOneId, ownershipId);
+    verifyHistory();
+    database.prepare("DELETE FROM player_ownerships WHERE id=?").run(ownershipId);
+    database.prepare("UPDATE contracts SET status='cancelled',version=version+1 WHERE id=?").run(contractId);
+    verifyHistory();
+
+    // A receipt for a different acquisition cannot substitute for this award.
+    database.prepare("UPDATE ownership_events SET source_id=? WHERE id=?").run(uuid(23_199), uuid(23_104));
+    assertRepositoryError(() => runtime.readRepository.readPublishedCardHistory(input), REPOSITORY_ERROR_CODES.schemaIncompatible);
+  });
+
   test("projects an automatic winner with money only for the current selected-team manager", (t) => {
     const runtime = createRuntime(t);
     const fixture = seedPublishedPendingResults(

@@ -402,6 +402,28 @@ describe("M5-09 authenticated League Activity", () => {
       metadata_json: null,
       occurred_at_ms: NOW_MS + 11,
     });
+    for (const [index, eventType] of [
+      "free_agent_draft_player_awarded",
+      "free_agent_draft_completed",
+      "free_agent_draft_auction_player_acquired",
+    ].entries()) {
+      runtime.context.repositories.league_activity.insert({
+        id: uuid(212 + index),
+        league_id: LEAGUE_A,
+        season_id: null,
+        event_type: eventType,
+        actor_user_id: null,
+        actor_authority: "system",
+        team_id: null,
+        player_id: null,
+        related_type: "free_agent_draft",
+        related_id: uuid(311),
+        display_summary: eventType,
+        reason: null,
+        metadata_json: null,
+        occurred_at_ms: NOW_MS + 12 + index,
+      });
+    }
     const beforeCompetitionRead = runtime.database
       .prepare("SELECT total_changes() AS n")
       .get().n;
@@ -412,8 +434,25 @@ describe("M5-09 authenticated League Activity", () => {
     });
     assert.deepEqual(
       competitionOnly.activity.map(({ type }) => type),
-      []
+      ["free_agent_draft_completed"]
     );
+    const newest = runtime.activity.list({
+      leagueId: LEAGUE_A,
+      query: { limit: 1 },
+      authenticated: authenticated(USER_A),
+    });
+    assert.deepEqual(newest.activity.map(({ type }) => type), [
+      "free_agent_draft_auction_player_acquired",
+    ]);
+    const older = runtime.activity.list({
+      leagueId: LEAGUE_A,
+      query: { limit: 2, cursor: newest.page.nextCursor },
+      authenticated: authenticated(USER_A),
+    });
+    assert.deepEqual(older.activity.map(({ type }) => type), [
+      "free_agent_draft_completed",
+      "trade_completed",
+    ]);
     assert.equal(
       runtime.database.prepare("SELECT total_changes() AS n").get().n,
       beforeCompetitionRead

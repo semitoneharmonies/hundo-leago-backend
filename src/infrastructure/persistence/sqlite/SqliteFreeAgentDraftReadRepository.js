@@ -892,6 +892,7 @@ function createSqliteFreeAgentDraftReadRepository({
   let actionableTieAuctionStatement;
   let allocationOffersStatement;
   let allocationWinnerStatement;
+  let allocationWinnerHistoryStatement;
   let allocationAuctionsStatement;
   let allocationParticipantsStatement;
   let allocationDrawsStatement;
@@ -2390,6 +2391,86 @@ function createSqliteFreeAgentDraftReadRepository({
           AND allocation.id = @allocationId
         LIMIT 2
       `);
+    allocationWinnerHistoryStatement = database.prepare(`
+      SELECT
+        json_extract(created.metadata_json, '$.originalTotalValueCents') AS original_total_value_cents,
+        json_extract(created.metadata_json, '$.originalTermYears') AS original_term_years,
+        json_extract(created.metadata_json, '$.aavCents') AS aav_cents,
+        created.player_id AS contract_player_id,
+        created.team_id AS contract_team_id,
+        acquired.player_id AS ownership_player_id,
+        acquired.team_id AS ownership_team_id,
+        acquired.season_id AS ownership_season_id,
+        json_extract(acquired.after_metadata_json, '$.ownershipKind') AS ownership_kind,
+        json_extract(acquired.after_metadata_json, '$.rosterCategory') AS roster_category,
+        json_extract(acquired.after_metadata_json, '$.positionGroup') AS ownership_position_group,
+        json_extract(acquired.after_metadata_json, '$.slotNumber') AS ownership_slot_number
+      FROM free_agent_draft_player_allocations AS allocation
+      JOIN contract_events AS created
+        ON created.league_id = allocation.league_id
+       AND created.contract_id = allocation.contract_id
+       AND created.player_id = allocation.player_id
+       AND created.team_id = allocation.winning_team_id
+       AND created.event_type = 'contract_created'
+       AND created.actor_user_id IS NULL
+       AND created.occurred_at_ms = allocation.accounted_at_ms
+       AND json_extract(created.metadata_json, '$.startSeasonId') = allocation.season_id
+       AND json_extract(created.metadata_json, '$.contractType') = 'normal'
+      JOIN ownership_events AS acquired
+        ON acquired.league_id = allocation.league_id
+       AND acquired.season_id = allocation.season_id
+       AND acquired.player_id = allocation.player_id
+       AND acquired.team_id = allocation.winning_team_id
+       AND acquired.ownership_id = allocation.ownership_id
+       AND acquired.source_type = created.source_type
+       AND acquired.source_id = created.source_id
+       AND acquired.occurred_at_ms = created.occurred_at_ms
+       AND acquired.actor_user_id IS NULL
+       AND acquired.before_metadata_json IS NULL
+      WHERE allocation.league_id = @leagueId
+        AND allocation.fad_id = @fadId
+        AND allocation.id = @allocationId
+        AND (
+          (allocation.status = 'automatic_award'
+            AND created.source_type = 'free_agent_draft_allocation'
+            AND created.source_id = allocation.id
+            AND acquired.event_type = 'fad_allocation_player_acquired'
+            AND EXISTS (
+              SELECT 1 FROM candidate_card_snapshot_entries AS offer
+              WHERE offer.id = allocation.winning_snapshot_entry_id
+                AND offer.league_id = allocation.league_id
+                AND offer.season_id = allocation.season_id
+                AND offer.fad_id = allocation.fad_id
+                AND offer.player_id = allocation.player_id
+                AND offer.team_id = allocation.winning_team_id
+                AND offer.proposed_total_value_cents = json_extract(created.metadata_json, '$.originalTotalValueCents')
+                AND offer.proposed_term_years = json_extract(created.metadata_json, '$.originalTermYears')
+                AND offer.proposed_aav_cents = json_extract(created.metadata_json, '$.aavCents')
+            ))
+          OR (allocation.status IN ('restricted_resolved', 'fallback_open_resolved')
+            AND created.source_type = 'auction_resolution'
+            AND acquired.event_type = 'auction_player_acquired'
+            AND EXISTS (
+              SELECT 1 FROM auction_resolutions AS resolution
+              WHERE resolution.league_id = allocation.league_id
+                AND resolution.season_id = allocation.season_id
+                AND resolution.id = created.source_id
+                AND resolution.auction_id = CASE allocation.status
+                  WHEN 'restricted_resolved' THEN allocation.restricted_auction_id
+                  ELSE allocation.fallback_open_auction_id END
+                AND resolution.winning_team_id = allocation.winning_team_id
+                AND resolution.contract_id = allocation.contract_id
+                AND resolution.ownership_id = allocation.ownership_id
+                AND resolution.status = 'resolved'
+                AND resolution.outcome_code = 'winner'
+                AND resolution.resolved_at_ms = allocation.accounted_at_ms
+                AND resolution.final_contract_value_cents = json_extract(created.metadata_json, '$.originalTotalValueCents')
+                AND resolution.winning_term_years = json_extract(created.metadata_json, '$.originalTermYears')
+                AND resolution.final_aav_cents = json_extract(created.metadata_json, '$.aavCents')
+            ))
+        )
+      LIMIT 2
+    `);
     allocationAuctionsStatement =
       database.prepare(`
         SELECT
@@ -4493,30 +4574,38 @@ function createSqliteFreeAgentDraftReadRepository({
       },
       "The FAD allocation winner"
     );
+    // A later roster removal, trade or contract correction does not undo an
+    // awarded draft result. Prefer the scoped, immutable acquisition receipts.
+    const history = unique(
+      allocationWinnerHistoryStatement,
+      { leagueId: allocation.league_id, fadId: allocation.fad_id, allocationId: allocation.id },
+      "The FAD allocation acquisition receipts"
+    );
+    const award = history || row;
     if (
       !row ||
       !UUID_PATTERN.test(row.winning_team_id || "") ||
       !UUID_PATTERN.test(row.contract_id || "") ||
       !UUID_PATTERN.test(row.ownership_id || "") ||
       !Number.isSafeInteger(
-        row.original_total_value_cents
+        award.original_total_value_cents
       ) ||
       !Number.isSafeInteger(
-        row.original_term_years
+        award.original_term_years
       ) ||
-      !Number.isSafeInteger(row.aav_cents) ||
-      row.contract_player_id !==
+      !Number.isSafeInteger(award.aav_cents) ||
+      award.contract_player_id !==
         allocation.player_id ||
-      row.contract_team_id !==
+      award.contract_team_id !==
         row.winning_team_id ||
-      row.contract_status !== "active" ||
-      row.ownership_player_id !==
+      (!history && row.contract_status !== "active") ||
+      award.ownership_player_id !==
         allocation.player_id ||
-      row.ownership_team_id !==
+      award.ownership_team_id !==
         row.winning_team_id ||
-      row.ownership_season_id !==
+      award.ownership_season_id !==
         allocation.season_id ||
-      row.ownership_kind !== "Rostered"
+      award.ownership_kind !== "Rostered"
     ) {
       incompatible(
         "The FAD allocation winner is incomplete."
@@ -4548,12 +4637,12 @@ function createSqliteFreeAgentDraftReadRepository({
         );
       }
       const group =
-        row.roster_category === "Bench"
+        award.roster_category === "Bench"
           ? "B"
-          : row.ownership_position_group;
+          : award.ownership_position_group;
       slotKey = candidateSlotKey(
         group,
-        row.ownership_slot_number
+        award.ownership_slot_number
       );
     }
     const offerDetailsVisible =
@@ -4567,13 +4656,13 @@ function createSqliteFreeAgentDraftReadRepository({
       slotKey,
       totalValueCents:
         offerDetailsVisible
-          ? row.original_total_value_cents
+          ? award.original_total_value_cents
           : null,
       termYears: offerDetailsVisible
-        ? row.original_term_years
+        ? award.original_term_years
         : null,
       aavCents: offerDetailsVisible
-        ? row.aav_cents
+        ? award.aav_cents
         : null,
     });
   }

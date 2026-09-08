@@ -299,7 +299,7 @@ function assertBoundedContractValue(totalValueCents, termYears) {
   if (
     !Number.isSafeInteger(totalValueCents) ||
     totalValueCents < termYears * 100 ||
-    (termYears > 1 && totalValueCents % 100 !== 0)
+    (termYears > 1 && totalValueCents % 100 !== 0 && totalValueCents % (termYears * 25) !== 0)
   ) {
     throw new CommissionerCorrectionPolicyError(
       COMMISSIONER_CORRECTION_CODES.contractInvalid
