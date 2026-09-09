@@ -431,6 +431,8 @@ function openDeployedTargetRuntime({
       sportsDataIoNhl: config.sportsDataIoNhl,
       sportsDataIoLiveNhl,
       sportsDataIoFetchImplementation,
+      nhlCompletedStatisticsEnabled: config.nhlCompletedStatisticsEnabled === true,
+      matchupProcessingEnabled: config.matchupProcessingEnabled === true,
       leagueInvalidationPublisher,
       leagueWriteMode: config.leagueWriteMode,
       freeAgentDraftRoutesEnabled:
@@ -449,7 +451,13 @@ function openDeployedTargetRuntime({
       emailEnabled: config.accountEmailDeliveryEnabled,
       leagueWriteMode: config.leagueWriteMode,
       jobs: config.appEnv === "staging" && config.stagingDailyAuctionsEnabled === true
-        ? runtime.services.league.scheduledJobs.filter(({ name }) => ["auction_resolution", "free_agent_draft_auction_resolution", "league_outbox"].includes(name))
+        ? runtime.services.league.scheduledJobs.filter(({ name }) => [
+            "auction_resolution",
+            "free_agent_draft_auction_resolution",
+            "league_outbox",
+            ...(config.nhlCompletedStatisticsEnabled ? ["nhl_completed_statistics"] : []),
+            ...(config.matchupProcessingEnabled ? ["matchup_occurrences"] : []),
+          ].includes(name))
         : runtime.services.league.scheduledJobs,
       emailJob: runtime.services.accountEmail.job,
       health,

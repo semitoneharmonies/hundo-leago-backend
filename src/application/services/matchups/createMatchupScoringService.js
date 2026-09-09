@@ -430,14 +430,53 @@ function createMatchupScoringService({ repository } = {}) {
       }));
       exclusionsByTeam.set(exclusion.team_id, teamExclusions);
     }
+    let pendingGameCount = 0;
+    if (context.refresh.provider === "nhl-completed-games") {
+      const lockedIds = new Set(context.lockedPlayers.map((row) => row.player_id));
+      for (const row of currentPlayerGames.values()) {
+        if (lockedIds.has(row.playerId) && row.nhlGameScheduledStartsAtMs >= context.matchup.week_starts_at_ms && row.nhlGameScheduledStartsAtMs < context.matchup.week_ends_at_ms && !["final", "postponed", "cancelled"].includes(row.observedGameState)) {
+          pendingGameCount += 1;
+        }
+      }
+    }
     const score = (teamId) => {
       const lock = lockByTeam.get(teamId);
       if (!lock) fail(MATCHUP_SCORING_SERVICE_CODES.locksIncomplete, "A team lock is missing.");
+      const lockedPlayers = playersByLock.get(lock.id) || [];
+      let currentTotals = context.totals;
+      let excludedPlayerGames = exclusionsByTeam.get(teamId) || [];
+      if (context.refresh.provider === "nhl-completed-games") {
+        // Completed games belong to their start-time window, even if the feed
+        // finishes a Sunday game after Monday's baseline or finalization is delayed.
+        // Project only scoring deltas; the persisted baselines remain immutable.
+        const totals = new Map(context.totals.map((row) => [row.player_id, { ...row }]));
+        const selected = new Set(lockedPlayers.map((row) => row.player_id));
+        const excluded = new Set(excludedPlayerGames.map((row) => `${row.player_id}\u0000${row.nhl_game_id}`));
+        const startsAtMs = lock.lock_type === "late" ? lock.locked_at_ms : context.matchup.week_starts_at_ms;
+        for (const player of lockedPlayers) {
+          const total = totals.get(player.player_id);
+          if (!total) continue; // The scoring policy rejects missing totals.
+          total.goals = player.baseline_goals;
+          total.assists = player.baseline_assists;
+          total.fantasy_points_hundredths = player.baseline_fantasy_points_hundredths;
+        }
+        for (const [pair, row] of currentPlayerGames) {
+          if (!selected.has(row.playerId) || excluded.has(pair) || row.observedGameState !== "final" || row.nhlGameScheduledStartsAtMs < startsAtMs || row.nhlGameScheduledStartsAtMs >= context.matchup.week_ends_at_ms) continue;
+          const total = totals.get(row.playerId);
+          if (total) {
+            total.goals += row.goals;
+            total.assists += row.assists;
+            total.fantasy_points_hundredths += row.fantasyPointsHundredths;
+          }
+        }
+        currentTotals = [...totals.values()];
+        excludedPlayerGames = []; // Sealed exclusions were applied to the game window above.
+      }
       return calculateTeamLiveScore({
         lock,
-        lockedPlayers: playersByLock.get(lock.id) || [],
-        currentTotals: context.totals,
-        excludedPlayerGames: exclusionsByTeam.get(teamId) || [],
+        lockedPlayers,
+        currentTotals,
+        excludedPlayerGames,
       });
     };
     return Object.freeze({
@@ -448,6 +487,7 @@ function createMatchupScoringService({ repository } = {}) {
         refreshId: context.refresh.id,
         completedAtMs: context.refresh.completed_at_ms,
         ...source,
+        ...(context.refresh.provider === "nhl-completed-games" ? { pendingGameCount } : {}),
       }),
       home: score(context.matchup.home_team_id),
       away: score(context.matchup.away_team_id),

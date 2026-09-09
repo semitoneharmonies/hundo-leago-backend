@@ -86,7 +86,8 @@ function escapeLike(value) {
   return value.replace(/[\\%_]/g, "\\$&");
 }
 
-function createSqlitePlayerRepository({ database } = {}) {
+function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = null } = {}) {
+  if (currentNhlStatisticsSeason !== null && !/^\d{8}$/.test(currentNhlStatisticsSeason)) throw new TypeError("Current NHL statistics require an exact season key.");
   const players = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("players"),
@@ -135,7 +136,9 @@ function createSqlitePlayerRepository({ database } = {}) {
       "JOIN stat_refreshes AS refresh ON refresh.id = totals.refresh_id " +
       "JOIN stat_sources AS statistics_source ON statistics_source.id = totals.stat_source_id " +
       "WHERE totals.player_id = players.id " +
-      `AND statistics_source.provider IN ('${SPORTSDATAIO_PROVIDER}', '${RELEASE_QA_FIXTURE_PROVIDER}') ` +
+      (currentNhlStatisticsSeason === null
+        ? `AND statistics_source.provider IN ('${SPORTSDATAIO_PROVIDER}', '${RELEASE_QA_FIXTURE_PROVIDER}') `
+        : `AND statistics_source.provider = 'nhl-completed-games' AND totals.nhl_season_key = '${currentNhlStatisticsSeason}' `) +
       "AND refresh.status = 'succeeded' " +
       `ORDER BY (statistics_source.provider = '${SPORTSDATAIO_PROVIDER}') DESC, ` +
       `((statistics_source.provider = '${RELEASE_QA_FIXTURE_PROVIDER}')) DESC, ` +

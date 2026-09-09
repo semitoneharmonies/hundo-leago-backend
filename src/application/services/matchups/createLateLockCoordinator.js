@@ -414,7 +414,12 @@ function createLateLockCoordinator({
   provider,
   clock,
   logger = null,
+  refreshOnRosterChange = true,
+  executionEnabled = true,
 } = {}) {
+  if (typeof refreshOnRosterChange !== "boolean" || typeof executionEnabled !== "boolean") {
+    throw new TypeError("Late-lock execution and refresh controls must be booleans.");
+  }
   requireMethod(
     targetRepository,
     "listEligibleLateLocks",
@@ -462,6 +467,7 @@ function createLateLockCoordinator({
   }
 
   async function attempt(target, occurrenceExecution) {
+    if (!executionEnabled) return Object.freeze({ projection: safeProjection("awaiting_data"), refreshable: false });
     try {
       const result = await legalityService.lockLate({
         ...target,
@@ -550,7 +556,7 @@ function createLateLockCoordinator({
         .filter((outcome) => outcome.refreshable)
         .map((outcome) => outcome.teamKey)
     );
-    if (refreshableKeys.size === 0) return aggregateOutcomes(outcomes);
+    if (refreshableKeys.size === 0 || !refreshOnRosterChange) return aggregateOutcomes(outcomes);
 
     try {
       await statisticsService.refresh({});
@@ -652,6 +658,12 @@ function createLateLockCoordinator({
   return Object.freeze({
     coordinateCommittedRoster,
     retryEligibleLateLocks,
+    async retryAfterStatisticsRefresh({ nhlSeasonKey }) {
+      const targets = normalizeTargets(targetRepository.listEligibleLateLocks({ mode: "statistics_refresh", nhlSeasonKey, nowMs: now() }));
+      const results = [];
+      for (const target of targets) results.push((await attempt(target)).projection);
+      return Object.freeze({ attempted: results.length, completed: results.filter((result) => result.status === "completed").length, awaitingData: results.filter((result) => result.status === "awaiting_data").length });
+    },
   });
 }
 

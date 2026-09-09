@@ -190,6 +190,8 @@ const {
 const {
   createLiveStatisticsService,
 } = require("../application/services/statistics/createLiveStatisticsService");
+const { createStatisticsOperationsService } = require("../application/services/statistics/createStatisticsOperationsService");
+const { createStatisticsOperationsRouter } = require("../transport/http/createStatisticsOperationsRouter");
 const {
   createTradeProposalFoundationService,
 } = require("../application/services/trades/createTradeProposalFoundationService");
@@ -340,6 +342,9 @@ const {
   PROVIDER_NAME: SPORTSDATAIO_LIVE_PROVIDER_NAME,
   createSportsDataIoLiveNhlAdapter,
 } = require("../infrastructure/sportsdataio/SportsDataIoLiveNhlAdapter");
+const { createNhlCompletedGameAdapter, PROVIDER_NAME: NHL_COMPLETED_PROVIDER, PLAYER_IDENTITY_PROVIDER: NHL_IDENTITY_PROVIDER } = require("../infrastructure/nhl/NhlCompletedGameAdapter");
+const { createSqliteStatisticsScheduleRepository } = require("../infrastructure/persistence/sqlite/SqliteStatisticsScheduleRepository");
+const { createRunCompletedGameStatisticsJob } = require("../jobs/definitions/runCompletedGameStatistics");
 const {
   PROVIDER_NAME: SPORTSDATAIO_PLAYER_IDENTITY_PROVIDER_NAME,
 } = require("../infrastructure/sportsdataio/SportsDataIoNhlAdapter");
@@ -729,6 +734,8 @@ const SPORTSDATAIO_LIVE_UUID_V4_PATTERN =
 const SPORTSDATAIO_LIVE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const TARGET_ENDPOINTS = Object.freeze([
+  ["POST", "/api/v1/operations/statistics/refresh", "statisticsOperations"],
+  ["GET", "/api/v1/operations/statistics/refreshes/:jobId", "statisticsOperations"],
   ["POST", "/api/v1/accounts", "accountRegistration"],
   ["POST", "/api/v1/accounts/email-verifications", "accountRegistration"],
   ["POST", "/api/v1/accounts/email-verification-requests", "accountRegistration"],
@@ -1395,6 +1402,7 @@ function createTargetRepositories({
   database,
   secureRandom,
   stagingDailyAuctionsEnabled = false,
+  currentNhlStatisticsSeason = null,
 } = {}) {
   const context = createSqliteRepositoryContext({ database });
   const matchupOccurrenceExecutionGuard =
@@ -1764,7 +1772,7 @@ function createTargetRepositories({
       database,
       candidateCardSummerSynchronizer,
     }),
-    players: createSqlitePlayerRepository({ database }),
+    players: createSqlitePlayerRepository({ database, currentNhlStatisticsSeason }),
     platformRoles: createSqlitePlatformRoleRepository({ database }),
     publicRoster: createSqlitePublicRosterRepository({ database }),
     prospectDecisions: createSqliteProspectDecisionRepository({
@@ -1792,6 +1800,7 @@ function createTargetRepositories({
       occurrenceExecutionGuard:
         matchupOccurrenceExecutionGuard,
     }),
+    statisticsSchedule: createSqliteStatisticsScheduleRepository({ database }),
     teamAuthority: createSqliteTeamAuthorityRepository({ database }),
     teamCreation: createSqliteTeamCreationRepository({ database }),
     teamManagerAssignments: createSqliteTeamManagerAssignmentRepository({
@@ -1836,6 +1845,9 @@ function createTargetServices({
   sportsDataIoFetchImplementation,
   createSportsDataIoLiveNhlAdapterFunction =
     createSportsDataIoLiveNhlAdapter,
+  nhlCompletedStatisticsEnabled = false,
+  matchupProcessingEnabled = false,
+  nhlFetchImplementation,
 } = {}) {
   const { config, clock, secureRandom, logger } = securityFoundations || {};
   if (!config || !clock || !secureRandom || !logger) {
@@ -1843,6 +1855,14 @@ function createTargetServices({
   }
   const verifiedSportsDataIoLiveNhl =
     requireVerifiedSportsDataIoLiveDescriptor(sportsDataIoLiveNhl);
+  if (
+    typeof nhlCompletedStatisticsEnabled !== "boolean" ||
+    typeof matchupProcessingEnabled !== "boolean" ||
+    (nhlCompletedStatisticsEnabled && verifiedSportsDataIoLiveNhl) ||
+    (matchupProcessingEnabled && !nhlCompletedStatisticsEnabled)
+  ) {
+    throw new TypeError("Statistics and matchup enablement must select one explicit NHL source.");
+  }
   if (
     verifiedSportsDataIoLiveNhl &&
     typeof createSportsDataIoLiveNhlAdapterFunction !== "function"
@@ -1993,8 +2013,16 @@ function createTargetServices({
         nowMs: () => clock.nowMs(),
       })
       : null;
+  const completedNhlAdapter = nhlCompletedStatisticsEnabled
+    ? createNhlCompletedGameAdapter({
+        fetchImpl: nhlFetchImplementation,
+        nowMs: () => clock.nowMs(),
+        readCatalogPlayers: () => repositories.statistics.readNhlCatalogPlayers(),
+      })
+    : null;
+  const statisticsProviderName = completedNhlAdapter ? NHL_COMPLETED_PROVIDER : SPORTSDATAIO_LIVE_PROVIDER_NAME;
   const statisticsProvider =
-    liveSportsDataIoAdapter ||
+    completedNhlAdapter || liveSportsDataIoAdapter ||
     Object.freeze({
       async fetchLiveSnapshot() {
         const error = new Error(
@@ -2009,9 +2037,9 @@ function createTargetServices({
     repository: repositories.statistics,
     provider: statisticsProvider,
     nhlSeasonKey: currentSeason.nhlSeasonKey,
-    providerName: SPORTSDATAIO_LIVE_PROVIDER_NAME,
+    providerName: statisticsProviderName,
     playerIdentityProvider:
-      SPORTSDATAIO_PLAYER_IDENTITY_PROVIDER_NAME,
+      completedNhlAdapter ? NHL_IDENTITY_PROVIDER : SPORTSDATAIO_PLAYER_IDENTITY_PROVIDER_NAME,
     minimumPlayerCount:
       MINIMUM_CURRENT_SEASON_PLAYER_COUNT,
     nowMs: () => clock.nowMs(),
@@ -2044,7 +2072,7 @@ function createTargetServices({
   const matchupLegality = createMatchupLegalityService({
     repository: repositories.matchupLocks,
     normalLockService: matchupLock,
-    gameStateProvider: liveSportsDataIoAdapter,
+    gameStateProvider: completedNhlAdapter || liveSportsDataIoAdapter,
     createId: () => secureRandom.id(),
     nowMs: () => clock.nowMs(),
   });
@@ -2052,10 +2080,25 @@ function createTargetServices({
     targetRepository: repositories.lateLockCoordinator,
     legalityService: matchupLegality,
     statisticsService: statistics,
-    provider: SPORTSDATAIO_LIVE_PROVIDER_NAME,
+    provider: statisticsProviderName,
     clock,
     logger,
+    refreshOnRosterChange: !completedNhlAdapter,
+    executionEnabled: !completedNhlAdapter || matchupProcessingEnabled,
   });
+  const retryLateLocksAfterRefresh = () => matchupProcessingEnabled
+    ? lateLockCoordinator.retryAfterStatisticsRefresh({ nhlSeasonKey: currentSeason.nhlSeasonKey })
+    : undefined;
+  const completedStatisticsJob = completedNhlAdapter
+    ? createRunCompletedGameStatisticsJob({
+        repository: repositories.statisticsSchedule,
+        statisticsService: statistics,
+        nhlSeasonKey: currentSeason.nhlSeasonKey,
+        clock,
+        logger,
+        afterRefresh: retryLateLocksAfterRefresh,
+      })
+    : null;
   const lifecycleTransition =
     createLeagueLifecycleTransitionService({
       repositoryContext: repositories.context,
@@ -2392,7 +2435,7 @@ function createTargetServices({
     standingsService: matchupStandings,
     recoveryService: matchupRecovery,
     statisticsProviders: Object.freeze([
-      SPORTSDATAIO_LIVE_PROVIDER_NAME,
+      statisticsProviderName,
       "release_qa_fixture",
     ]),
     clock,
@@ -2405,7 +2448,7 @@ function createTargetServices({
     weekService: matchupWeeks,
     legalityService: matchupLegality,
     resultService: matchupResults,
-    provider: SPORTSDATAIO_LIVE_PROVIDER_NAME,
+    provider: statisticsProviderName,
   });
   const matchupOccurrenceJob = createRunMatchupOccurrencesJob({
     repository: repositories.matchupJobs,
@@ -2735,7 +2778,8 @@ function createTargetServices({
         runner: freeAgentDraftCompletionJob,
       }),
       Object.freeze({ name: "trade_expiry", runner: tradeProposalExpiry }),
-      ...(liveSportsDataIoAdapter
+      ...(completedStatisticsJob ? [Object.freeze({ name: "nhl_completed_statistics", runner: completedStatisticsJob })] : []),
+      ...(matchupProcessingEnabled || liveSportsDataIoAdapter
         ? [
             Object.freeze({
               name: "matchup_occurrences",
@@ -2869,6 +2913,13 @@ function createTargetServices({
       clock,
     }),
     statistics,
+    statisticsOperations: createStatisticsOperationsService({
+      platformAuthorization,
+      statisticsService: statistics,
+      repository: repositories.statistics,
+      enabled: nhlCompletedStatisticsEnabled,
+      afterRefresh: retryLateLocksAfterRefresh,
+    }),
   });
 
   return Object.freeze({
@@ -2916,6 +2967,10 @@ function createTargetRouters({
     networkSourceResolver,
   };
   const routers = Object.freeze({
+    statisticsOperations: createStatisticsOperationsRouter({
+      requestSecurity,
+      statisticsOperationsService: services.league.statisticsOperations,
+    }),
     activityNotification: createActivityNotificationRouter({
       requestSecurity,
       leagueActivityService: services.league.activity,
@@ -3092,6 +3147,9 @@ function createTargetRuntime({
   sportsDataIoLiveNhl,
   sportsDataIoFetchImplementation,
   createSportsDataIoLiveNhlAdapterFunction,
+  nhlCompletedStatisticsEnabled = false,
+  matchupProcessingEnabled = false,
+  nhlFetchImplementation,
 } = {}) {
   const migrations = discoverMigrations({ migrationsDirectory });
   const migrationState = assertMigrationCompatibility(database, migrations);
@@ -3099,6 +3157,7 @@ function createTargetRuntime({
     database,
     secureRandom: securityFoundations?.secureRandom,
     stagingDailyAuctionsEnabled,
+    currentNhlStatisticsSeason: nhlCompletedStatisticsEnabled ? currentSeason.nhlSeasonKey : null,
   });
   let targetApplication = null;
   let socketRooms = null;
@@ -3122,6 +3181,9 @@ function createTargetRuntime({
     sportsDataIoLiveNhl,
     sportsDataIoFetchImplementation,
     createSportsDataIoLiveNhlAdapterFunction,
+    nhlCompletedStatisticsEnabled,
+    matchupProcessingEnabled,
+    nhlFetchImplementation,
   });
   const transport = createTargetRouters({
     services,

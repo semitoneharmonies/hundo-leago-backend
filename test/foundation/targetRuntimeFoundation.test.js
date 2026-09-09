@@ -1283,12 +1283,12 @@ function installedTargetEndpoints(routers) {
 }
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 123 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 123);
+  test("declares 125 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 125);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      123
+      125
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -1311,6 +1311,7 @@ describe("M3-19 exact target endpoint dispatch", () => {
       "publicRoster",
       "rosterAction",
       "standingsFinalization",
+      "statisticsOperations",
       "team",
       "teamManagerAssignment",
       "teamProfile",
@@ -1541,6 +1542,31 @@ describe("M3-19 exact target endpoint dispatch", () => {
 });
 
 describe("M3-19 exact-schema target dependency composition", () => {
+  test("composes completed NHL statistics separately and projects only the configured season", async (t) => {
+    const database = createDatabase(t);
+    const rows = seedLiveStatisticsCatalog(database);
+    const insert = database.prepare("INSERT INTO player_external_ids (id,player_id,provider,external_value,created_at_ms) VALUES (?,?,'nhl',?,1)");
+    rows.forEach((row, i) => insert.run(uuid(90_000+i), uuid(20_000+i), String(row.PlayerID)));
+    let fetches = 0;
+    const options = runtimeOptions(database, { nhlCompletedStatisticsEnabled: true, nhlFetchImplementation: async (url) => {
+      fetches += 1;
+      assert.match(String(url), /api\.nhle\.com\/stats\/rest\/en\/game/);
+      return { ok: true, json: async () => ({ total: 1, data: [{ id: 2026020001, season: 20262027, gameType: 2, easternStartTime: "2026-10-10T19:00:00", homeTeamId: 13, visitingTeamId: 16, gameStateId: 1 }] }) };
+    } });
+    const runtime = createTargetRuntime(options);
+    const names = runtime.services.league.scheduledJobs.map(({ name }) => name);
+    assert.ok(names.includes("nhl_completed_statistics"));
+    assert.ok(!names.includes("matchup_occurrences"));
+    assert.equal(fetches, 0);
+    const result = await runtime.services.league.statistics.refresh();
+    assert.equal(result.playerCount, rows.length);
+    assert.equal(fetches, 1);
+    const detail = runtime.repositories.players.findDetailById(uuid(20_000));
+    assert.equal(detail.statistics_provider, "nhl-completed-games");
+    assert.equal(detail.statistics_nhl_season_key, "20262027");
+    assert.ok(createTargetRuntime({ ...options, matchupProcessingEnabled: true }).services.league.scheduledJobs.some(({ name }) => name === "matchup_occurrences"));
+    assert.throws(() => createTargetRuntime({ ...options, sportsDataIoLiveNhl: verifiedSportsDataIoLiveNhl() }), /one explicit NHL source/);
+  });
   test("constructs every repository, service, router, and socket boundary without writes or listening", (t) => {
     const database = createDatabase(t);
     const before = database.serialize();
@@ -2482,7 +2508,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 123);
+    assert.equal(TARGET_ENDPOINTS.length, 125);
   });
 
   test("runs FAD readiness through the composed target runtime and opens every Candidate Card atomically", async (t) => {

@@ -200,6 +200,7 @@ function createSqliteLateLockCoordinatorRepository({ database } = {}) {
   let deletionEvidenceStatement;
   let immediateStatement;
   let scheduledStatement;
+  let statisticsStatement;
   let immediateRead;
   try {
     ownershipStatement = database.prepare(
@@ -473,6 +474,7 @@ function createSqliteLateLockCoordinatorRepository({ database } = {}) {
         "AND locks.matchup_week_id = @weekId " +
         deterministicOrder
     );
+    statisticsStatement = database.prepare(commonSelection + commonEligibility + "AND EXISTS (SELECT 1 FROM seasons WHERE seasons.id = locks.season_id AND seasons.league_id = locks.league_id AND seasons.nhl_season_key = @nhlSeasonKey) " + deterministicOrder);
     immediateRead = database.transaction((scope) => {
       for (const witness of scope.ownershipWitnesses) {
         const rows = ownershipStatement.all(witness);
@@ -563,6 +565,11 @@ function createSqliteLateLockCoordinatorRepository({ database } = {}) {
             nowMs: safeTimestamp(input.nowMs),
           })
         );
+      }
+      if (input.mode === "statistics_refresh") {
+        exactObject(input, ["mode", "nhlSeasonKey", "nowMs"], "statistics-refresh lookup");
+        if (typeof input.nhlSeasonKey !== "string" || !/^\d{8}$/.test(input.nhlSeasonKey)) failInput("A statistics season key is required.");
+        return freezeTargets(statisticsStatement.all({ nhlSeasonKey: input.nhlSeasonKey, nowMs: safeTimestamp(input.nowMs) }));
       }
       failInput("A canonical late-lock target lookup mode is required.");
     } catch (error) {

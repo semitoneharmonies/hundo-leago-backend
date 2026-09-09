@@ -85,6 +85,9 @@ function createMatchupResultService({ repository, scoringService, createId = ran
       fail(MATCHUP_RESULT_SERVICE_CODES.stateInvalid, "The matchup is not ready for finalization.");
     }
     const score = scoringService.readLive(input);
+    if (score.source.pendingGameCount > 0) {
+      return Object.freeze({ replayed: false, finalized: false, waiting: { ready: false, reasonCode: "NHL_GAMES_NOT_COMPLETE" } });
+    }
     const source = evaluateFinalSource({
       weekEndsAtMs: context.matchup.ends_at_ms,
       refreshCompletedAtMs: score.source.completedAtMs,

@@ -316,6 +316,18 @@ async function startApplication(t, runtime) {
 }
 
 describe("M7-01 deployed target runtime configuration", () => {
+  test("NHL statistics and matchup processing require separate explicit controls", () => {
+    const defaults = loadTargetRuntimeConfig({ env: deployedEnvironment(), backendRoot: ROOT });
+    assert.equal(defaults.nhlCompletedStatisticsEnabled, false);
+    assert.equal(defaults.matchupProcessingEnabled, false);
+    const enabled = loadTargetRuntimeConfig({ env: deployedEnvironment({ NHL_COMPLETED_STATISTICS_ENABLED: "true", MATCHUP_PROCESSING_ENABLED: "true" }), backendRoot: ROOT });
+    assert.equal(enabled.nhlCompletedStatisticsEnabled, true);
+    assert.equal(enabled.matchupProcessingEnabled, true);
+    for (const overrides of [{ NHL_COMPLETED_STATISTICS_ENABLED: "yes" }, { MATCHUP_PROCESSING_ENABLED: "true" }, { MATCHUP_PROCESSING_ENABLED: "1" }]) {
+      assert.throws(() => loadTargetRuntimeConfig({ env: deployedEnvironment(overrides), backendRoot: ROOT }), TargetRuntimeConfigError);
+    }
+    assert.throws(() => loadTargetRuntimeConfig({ env: liveProviderEnvironment("required", { NHL_COMPLETED_STATISTICS_ENABLED: "true" }), backendRoot: ROOT }), TargetRuntimeConfigError);
+  });
   test("daily auction testing requires staging and defaults off", () => {
     const staging = deployedEnvironment();
     assert.equal(loadTargetRuntimeConfig({ env: staging, backendRoot: ROOT }).stagingDailyAuctionsEnabled, false);

@@ -122,6 +122,8 @@ function runtime({
   refresh,
   nowMs,
   loggerError,
+  executionEnabled = true,
+  refreshOnRosterChange = true,
 } = {}) {
   const calls = {
     errors: [],
@@ -132,6 +134,8 @@ function runtime({
   };
   let currentNowMs = 1_000;
   const coordinator = createLateLockCoordinator({
+    executionEnabled,
+    refreshOnRosterChange,
     targetRepository: {
       listEligibleLateLocks(input) {
         calls.targetReads.push(input);
@@ -182,6 +186,19 @@ function runtime({
 }
 
 describe("FAD-05 closed-batch late-lock coordinator", () => {
+  test("statistics-only enablement performs no late lock or roster-triggered refresh", async () => {
+    const f = runtime({ executionEnabled: false, refreshOnRosterChange: false });
+    assert.equal((await f.coordinator.coordinateCommittedRoster(batch())).status, "awaiting_data");
+    assert.equal(f.calls.locks.length, 0);
+    assert.equal(f.calls.refreshes.length, 0);
+  });
+
+  test("NHL roster changes await scheduled data without refreshing the provider", async () => {
+    const f = runtime({ refreshOnRosterChange: false, lockLate: () => { throw codedError("MATCHUP_LOCK_SOURCE_STALE"); } });
+    assert.equal((await f.coordinator.coordinateCommittedRoster(batch())).status, "awaiting_data");
+    assert.equal(f.calls.locks.length, 1);
+    assert.equal(f.calls.refreshes.length, 0);
+  });
   test("exports the exact safe states, canonical writer registry, and maintenance exclusions", () => {
     assert.deepEqual(LATE_LOCK_COORDINATOR_STATUSES, [
       "completed",

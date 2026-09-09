@@ -439,7 +439,17 @@ function loadTargetRuntimeConfig({
     env,
     "FREE_AGENT_DRAFT_ROUTES_ENABLED"
   );
+  const nhlCompletedStatisticsEnabled = optionalExactBoolean(env, "NHL_COMPLETED_STATISTICS_ENABLED") === true;
+  const matchupProcessingEnabled = optionalExactBoolean(env, "MATCHUP_PROCESSING_ENABLED") === true;
+  if (nhlCompletedStatisticsEnabled && sportsDataIoLiveNhl.mode !== "disabled") {
+    fail("NHL_COMPLETED_STATISTICS_ENABLED", "only one current-season statistics source may be enabled");
+  }
+  if (matchupProcessingEnabled && !nhlCompletedStatisticsEnabled) {
+    fail("MATCHUP_PROCESSING_ENABLED", "the completed-game NHL source must be enabled first");
+  }
   return Object.freeze({
+    nhlCompletedStatisticsEnabled,
+    matchupProcessingEnabled,
     accountEmailDeliveryEnabled: exactBoolean(
       env,
       "ACCOUNT_EMAIL_DELIVERY_ENABLED"

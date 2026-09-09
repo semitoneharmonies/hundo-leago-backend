@@ -1303,6 +1303,9 @@ function createSqliteStatisticsRepository({
         });
       }
     },
+    readNhlCatalogPlayers() {
+      return Object.freeze(database.prepare("SELECT player_id AS playerId, external_value AS providerPlayerId FROM player_external_ids WHERE provider = 'nhl' ORDER BY player_id").all().map(freezeRow));
+    },
     readRefresh(refreshId) {
       return freezeRow(findRefresh.get({ refreshId: stableId(refreshId) }));
     },
