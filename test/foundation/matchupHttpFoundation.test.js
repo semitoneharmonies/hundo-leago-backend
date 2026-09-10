@@ -260,6 +260,8 @@ function integrationFixture({
             FIRST_WEEK_STARTS_AT_MS,
           weeks: [
             {
+              sequence: 1,
+              startsAtMs: FIRST_WEEK_STARTS_AT_MS,
               pairs: [{
                 homeTeamId: HOME_ID,
                 awayTeamId: AWAY_ID,
@@ -876,6 +878,11 @@ describe("M6-12 matchup HTTP integration service", () => {
           byeCount: 0,
           lastWeekEndsAtMs:
             LAST_WEEK_ENDS_AT_MS,
+          weeks: [{
+            sequence: 1,
+            startsAtMs: FIRST_WEEK_STARTS_AT_MS,
+            endsAtMs: LAST_WEEK_ENDS_AT_MS,
+          }],
         },
       }
     );
