@@ -174,6 +174,7 @@ function createResendEmailAdapter({
     const timeout = setTimeoutFunction(() => controller.abort(), timeoutMs);
     if (timeout && typeof timeout.unref === "function") timeout.unref();
     let response;
+    let payload;
     try {
       response = await fetchImplementation(RESEND_EMAIL_ENDPOINT, {
         method: "POST",
@@ -187,13 +188,14 @@ function createResendEmailAdapter({
         body: JSON.stringify(body),
         signal: controller.signal,
       });
+      payload = await safeResponseJson(response);
+      if (controller.signal.aborted) throw providerFailure(true);
     } catch {
       throw providerFailure(true);
     } finally {
       clearTimeoutFunction(timeout);
     }
 
-    const payload = await safeResponseJson(response);
     if (!response || response.ok !== true) {
       throw providerFailure(
         isRetryableResponse(response?.status, payload?.name),

@@ -90,6 +90,9 @@ const {
 const ROOT_DIRECTORY = path.resolve(__dirname, "..", "..");
 const MIGRATIONS_DIRECTORY = path.join(ROOT_DIRECTORY, "database", "migrations");
 const NOW_MS = Date.parse("2026-07-21T19:00:00.000Z");
+const { createSqliteBuyoutRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteBuyoutRepository");
+const { createRosterActionService } = require("../../src/application/services/leagues/createRosterActionService");
+const { createSqliteTeamWorkspaceRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteTeamWorkspaceRepository");
 const TRADE_DEADLINE_MS = NOW_MS + 2 * 24 * 60 * 60 * 1000;
 
 function uuid(value) {
@@ -859,6 +862,7 @@ function createRuntime(
     repositories: context.repositories,
     repository,
     leagueAuthorization,
+    teamAuthorization,
     clock,
     secureRandom,
     service,
@@ -1004,6 +1008,79 @@ async function assertAsyncExecutionReason(action, reasonCode) {
 }
 
 describe("M5-06 atomic pending trade-proposal creation", () => {
+  test("signed Prospect buyout cancels pending and awaiting-approval proposals through real services", async (t) => {
+    const runtime = createRuntime(t);
+    insertContract(runtime.repositories, { id: IDS.prospectContract, yearId: IDS.prospectContractYear, playerId: IDS.prospectPlayer, teamId: IDS.teamA, aavCents: 100, status: "active" });
+    runtime.database.prepare("UPDATE contracts SET contract_type = 'fantasy_elc' WHERE id = ?").run(IDS.prospectContract);
+    const pending = create(runtime, "buyout-pending", creationInput());
+    const awaiting = create(runtime, "buyout-awaiting", creationInput());
+    assert.equal((await accept(runtime, awaiting.proposal.id, "buyout-awaiting-accept")).proposal.storageStatus, "awaiting_commissioner_approval");
+    const notifications = runtime.database.prepare("SELECT * FROM notifications ORDER BY id").all();
+    const assets = runtime.database.prepare("SELECT * FROM trade_assets ORDER BY id").all();
+    const acceptances = runtime.database.prepare("SELECT * FROM trade_future_consideration_acceptances ORDER BY id").all();
+    const retentions = runtime.database.prepare("SELECT * FROM retention_obligations ORDER BY id").all();
+    const rosterActions = createRosterActionService({
+      leagueAuthorization: runtime.leagueAuthorization, teamAuthorization: runtime.teamAuthorization,
+      workspaceRepository: createSqliteTeamWorkspaceRepository({ database: runtime.database }),
+      rosterMovementRepository: { move() { throw new Error("outside buyout scope"); } },
+      buyoutRepository: createSqliteBuyoutRepository({ database: runtime.database, candidateCardSummerSynchronizer: { synchronize() {} } }),
+      lateLockCoordinator: { async coordinateCommittedRoster() { return { status: "not_applicable" }; } },
+      clock: runtime.clock, secureRandom: runtime.secureRandom,
+    });
+    const request = { authenticated: authenticated(), leagueId: IDS.league, teamId: IDS.teamA, contractId: IDS.prospectContract,
+      input: { confirmed: true, expectedContractVersion: 1, expectedOwnershipVersion: 1 } };
+    const beforeDenied = runtime.database.serialize();
+    await assert.rejects(() => rosterActions.buyOutContract({ ...request, authenticated: authenticated(IDS.receivingManager) }));
+    assert.equal(beforeDenied.equals(runtime.database.serialize()), true);
+    const result = await rosterActions.buyOutContract(request);
+    assert.deepEqual(result.automaticallyCancelledTradeIds, [pending.proposal.id, awaiting.proposal.id].sort());
+    assert.equal(result.buyout.annualPenaltyCents, 25);
+    assert.equal(result.code, "CONTRACT_BOUGHT_OUT");
+    assert.deepEqual(runtime.database.prepare("SELECT * FROM notifications ORDER BY id").all(), notifications);
+    assert.deepEqual(runtime.database.prepare("SELECT * FROM trade_assets ORDER BY id").all(), assets);
+    assert.deepEqual(runtime.database.prepare("SELECT * FROM trade_future_consideration_acceptances ORDER BY id").all(), acceptances);
+    assert.deepEqual(runtime.database.prepare("SELECT * FROM retention_obligations ORDER BY id").all(), retentions);
+    for (const tradeId of result.automaticallyCancelledTradeIds) {
+      const detail = runtime.readService.read({ authenticated: authenticated(IDS.receivingManager), leagueId: IDS.league, tradeId });
+      assert.equal(detail.proposal.status, "Cancelled");
+      const cancellation = runtime.database.prepare("SELECT reason FROM trade_events WHERE trade_id = ? AND event_type = 'proposal_auto_cancelled'").get(tradeId);
+      assert.equal(cancellation.reason, "player_bought_out");
+    }
+    const after = runtime.database.serialize();
+    await assert.rejects(() => rosterActions.buyOutContract(request));
+    await assert.rejects(() => approve(runtime, awaiting.proposal.id, "buyout-invalid-approval"));
+    assert.throws(() => create(runtime, "buyout-new-stale-proposal", creationInput()));
+    assert.equal(after.equals(runtime.database.serialize()), true);
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+  });
+
+  test("serializes buyout against a competing proposal transaction on another connection", (t) => {
+    const runtime = createRuntime(t);
+    const second = openDatabase({ databasePath: runtime.database.name, environment: "test" });
+    try {
+    second.database.pragma("busy_timeout = 0");
+    const buyouts = createSqliteBuyoutRepository({ database: second.database, candidateCardSummerSynchronizer: { synchronize() {} } });
+    const input = { buyoutId: uuid(980001), buyoutYearIds: [uuid(980002)], contractEventId: uuid(980003), ownershipEventId: uuid(980004), activityId: uuid(980005),
+      leagueId: IDS.league, seasonId: IDS.currentSeason, teamId: IDS.teamA, playerId: IDS.contractPlayer, contractId: IDS.contract, ownershipId: IDS.ownership,
+      expectedContractVersion: 1, expectedOwnershipVersion: 1, actorUserId: IDS.manager, actorAuthority: "manager", confirmed: true, reason: null, occurredAtMs: NOW_MS };
+    let proposal;
+    runtime.database.transaction(() => {
+      proposal = create(runtime, "competing-proposal-before-buyout");
+      assert.throws(() => buyouts.buyOut(input), error => error.code === "REPOSITORY_OPERATION_FAILED" && error.cause?.code === "SQLITE_BUSY");
+      assert.equal(runtime.database.prepare("SELECT status FROM contracts WHERE id = ?").get(IDS.contract).status, "active");
+    }).immediate();
+    const result = buyouts.buyOut(input);
+    assert.deepEqual(result.automaticallyCancelledTradeIds, [proposal.proposal.id]);
+    const after = runtime.database.serialize();
+    assert.deepEqual(buyouts.buyOut(input), result);
+    assert.throws(() => create(runtime, "competing-proposal-after-buyout"));
+    assert.equal(after.equals(runtime.database.serialize()), true);
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+    } finally {
+      second.database.close();
+    }
+  });
+
   test("snapshots every approved asset and writes only proposal evidence atomically", (t) => {
     const runtime = createRuntime(t);
     const beforeSources = sourceState(runtime.database);

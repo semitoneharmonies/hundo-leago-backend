@@ -167,7 +167,6 @@ function createBuyoutAggregate(input) {
     "contract",
     "ownership",
     "remainingContractYears",
-    "pendingTradeCount",
   ]);
   const command = validateBuyoutCommand(input.command);
   const { contract, ownership } = input;
@@ -207,7 +206,9 @@ function createBuyoutAggregate(input) {
     fail(BUYOUT_POLICY_CODES.scopeMismatch);
   }
   if (
-    ownership.ownership_kind !== "Rostered" ||
+    (ownership.ownership_kind !== "Rostered" &&
+      !(ownership.ownership_kind === "Prospect Right" && ownership.roster_category === "Prospect")) ||
+    (ownership.roster_category === "Prospect" && contract.contract_type !== "fantasy_elc") ||
     !["Active", "Bench", "Injured Reserve", "Prospect"].includes(
       ownership.roster_category
     )
@@ -231,13 +232,6 @@ function createBuyoutAggregate(input) {
       remainingYears.length
   ) {
     fail(BUYOUT_POLICY_CODES.scheduleInvalid);
-  }
-  const pendingTradeCount = safeNonnegative(
-    input.pendingTradeCount,
-    BUYOUT_POLICY_CODES.pendingTradeExists
-  );
-  if (pendingTradeCount !== 0) {
-    fail(BUYOUT_POLICY_CODES.pendingTradeExists);
   }
   const annualPenaltyCents = calculateBuyoutPenaltyCents(
     contract.aav_cents

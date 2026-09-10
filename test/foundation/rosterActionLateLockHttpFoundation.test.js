@@ -309,6 +309,7 @@ describe("roster-action late-lock HTTP boundary", () => {
           annualPenaltyCents: 125,
           remainingYears: 2,
         },
+        automaticallyCancelledTradeIds: [],
         lateLock: { status: "completed", lockId: IDS.lock },
       },
       meta: { requestId: REQUEST_ID },

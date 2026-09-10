@@ -68,6 +68,7 @@ function createAccountSessionRouter({
   rateLimiter,
   auditPrivacyDigest,
   sessionCookie,
+  leagueReadService,
   networkSourceResolver = (request) => request.ip,
 } = {}) {
   for (const method of [
@@ -94,6 +95,7 @@ function createAccountSessionRouter({
     "signIn",
     "a sign-in service"
   );
+  assertMethod(leagueReadService, "list", "authorized league reads for session bootstrap");
   assertMethod(
     signOutService,
     "signOut",
@@ -419,10 +421,13 @@ function createAccountSessionRouter({
         requestSecurity.getSessionBootstrap(
           request
         );
+      const { leagues } = leagueReadService.list({ authenticated: bootstrap });
       successResponse(request, response, {
         csrfToken: bootstrap.rawCsrfToken,
         session: bootstrap.session,
         user: bootstrap.user,
+        leagues,
+        defaultLeagueId: leagues.length === 1 ? leagues[0].id : null,
       });
     }
   );

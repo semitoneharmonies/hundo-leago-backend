@@ -1565,6 +1565,8 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(detail.statistics_provider, "nhl-completed-games");
     assert.equal(detail.statistics_nhl_season_key, "20262027");
     assert.ok(createTargetRuntime({ ...options, matchupProcessingEnabled: true }).services.league.scheduledJobs.some(({ name }) => name === "matchup_occurrences"));
+    assert.throws(() => createTargetRuntime({ ...options, matchupProcessingLeagueIds: [] }), /canonical league IDs/);
+    assert.ok(createTargetRuntime({ ...options, matchupProcessingEnabled: true, matchupProcessingLeagueIds: [uuid(1)] }).services.league.scheduledJobs.some(({ name }) => name === "matchup_occurrences"));
     assert.throws(() => createTargetRuntime({ ...options, sportsDataIoLiveNhl: verifiedSportsDataIoLiveNhl() }), /one explicit NHL source/);
   });
   test("constructs every repository, service, router, and socket boundary without writes or listening", (t) => {
@@ -5619,6 +5621,37 @@ describe("M3-19 composed target HTTP boundary", () => {
     }
   });
 
+  test("session bootstrap returns current memberships and an unambiguous league default without writes", async (t) => {
+    const database = createDatabase(t);
+    const runtime = createTargetRuntime(runtimeOptions(database));
+    const scenario = seedTwoLeagueProfileScenario(runtime);
+    const session = runtime.services.sessionService.issueForUser({ userId: uuid(1101) });
+    const baseUrl = await startRuntimeApp(t, runtime);
+    const headers = browserHeaders({ Cookie: `${runtime.transport.sessionCookie.name}=${session.rawSessionToken}` });
+    const read = async () => {
+      const before = database.serialize();
+      const response = await fetch(new URL(`/api/v1/session?leagueId=${uuid(1202)}`, baseUrl), { headers });
+      const body = await response.json();
+      assert.equal(response.status, 200);
+      assert.deepEqual(database.serialize(), before);
+      return body.data;
+    };
+    const one = await read();
+    assert.equal(one.defaultLeagueId, uuid(1201));
+    assert.deepEqual(one.leagues.map(league => league.id), [uuid(1201)]);
+    assert.equal(one.leagues[0].membership.permissionCategory, "manager");
+    assert.equal(one.leagues[0].membership.status, "active");
+    database.prepare("INSERT INTO league_memberships (id,league_id,user_id,permission_category,status,joined_at_ms,ended_at_ms,created_at_ms,updated_at_ms,version) VALUES (?,?,?,'member','active',?,NULL,?,?,1)").run(uuid(1399),uuid(1202),uuid(1101),NOW_MS,NOW_MS,NOW_MS);
+    const multiple = await read();
+    assert.equal(multiple.leagues.length, 2);
+    assert.equal(multiple.defaultLeagueId, null);
+    database.prepare("UPDATE league_memberships SET status='ended',ended_at_ms=?,updated_at_ms=?,version=version+1 WHERE user_id=?").run(NOW_MS+1,NOW_MS+1,uuid(1101));
+    const none = await read();
+    assert.deepEqual(none.leagues, []);
+    assert.equal(none.defaultLeagueId, null);
+    assert.equal(database.pragma("foreign_key_check").length, 0);
+  });
+
   test("signs in, bootstraps read-only, enforces CSRF, and signs out through the composed session router", async (t) => {
     const database = createDatabase(t);
     const securityFoundations = foundations();
@@ -5667,6 +5700,8 @@ describe("M3-19 composed target HTTP boundary", () => {
     });
     const bootstrapBody = await bootstrap.json();
     assert.equal(bootstrap.status, 200);
+    assert.deepEqual(bootstrapBody.data.leagues, []);
+    assert.equal(bootstrapBody.data.defaultLeagueId, null);
     assert.equal(
       bootstrapBody.data.session.id,
       signInBody.data.session.id
@@ -6258,6 +6293,100 @@ describe("M3-19 composed target HTTP boundary", () => {
 });
 
 describe("M3-19 composed target Socket.IO authorization", () => {
+  test("rejects a session revoked while its socket handshake is joining rooms", async (t) => {
+    const database = createDatabase(t);
+    const runtime = createTargetRuntime(runtimeOptions(database));
+    const scenario = seedTwoLeagueProfileScenario(runtime);
+    const socket = createTargetSocket(runtime, scenario.session);
+    const join = socket.join;
+    let revoked = false;
+    socket.join = async function (room) {
+      await join.call(this, room);
+      if (!revoked) {
+        revoked = true;
+        runtime.services.sessionService.revoke({ sessionId: scenario.session.session.id, expectedVersion: 1, reason: "sign_out" });
+      }
+    };
+    const error = await runSocketMiddleware(runtime.socketRooms.middleware, socket);
+    assert.ok(error);
+    assert.equal(socket.disconnected, true);
+    assert.equal(socket.rooms.size, 0);
+    assert.equal(runtime.socketRooms.getAuthority(socket), null);
+  });
+
+  test("disconnects revoked and replaced sessions without another request, preserving other users", async (t) => {
+    const database = createDatabase(t);
+    const runtime = createTargetRuntime(runtimeOptions(database));
+    const scenario = seedTwoLeagueProfileScenario(runtime);
+    const otherSession = runtime.services.sessionService.issueForUser({ userId: uuid(1102) });
+    const sockets = new Map();
+    runtime.app.set("io", { sockets: { sockets } });
+    async function connect(session) {
+      const socket = createTargetSocket(runtime, session);
+      assert.equal(await runSocketMiddleware(runtime.socketRooms.middleware, socket), undefined);
+      sockets.set(session.session.id, socket);
+      return socket;
+    }
+    const otherSocket = await connect(otherSession);
+    let current = scenario.session;
+    let socket = await connect(current);
+    const replacement = runtime.services.sessionService.issueForUser({ userId: scenario.managerUserId });
+    const afterReplacement = database.serialize();
+    await new Promise(setImmediate);
+    assert.equal(socket.disconnected, true);
+    assert.equal(runtime.socketRooms.getAuthority(socket), null);
+    assert.equal(afterReplacement.equals(database.serialize()), true);
+    assert.equal(otherSocket.disconnected, false);
+    current = replacement;
+    for (const reason of ["sign_out", "password_change", "password_reset", "account_deactivation", "platform_safety_disable", "platform_security_action"]) {
+      socket = await connect(current);
+      runtime.services.sessionService.revoke({ sessionId: current.session.id, expectedVersion: 1, reason });
+      const afterRevoke = database.serialize();
+      await new Promise(setImmediate);
+      assert.equal(socket.disconnected, true, reason);
+      assert.equal(runtime.socketRooms.getAuthority(socket), null);
+      assert.equal(otherSocket.disconnected, false);
+      assert.equal(afterRevoke.equals(database.serialize()), true);
+      current = runtime.services.sessionService.issueForUser({ userId: scenario.managerUserId });
+    }
+    socket = await connect(current);
+    runtime.repositories.sessions.expireActive({ sessionId: current.session.id, expectedVersion: 1, changedAtMs: NOW_MS, reason: "idle_expired", transactionHook: null });
+    await new Promise(setImmediate);
+    assert.equal(socket.disconnected, true);
+    assert.equal(otherSocket.disconnected, false);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  });
+
+  test("keeps connected sessions valid when revocation or replacement rolls back", async (t) => {
+    const database = createDatabase(t);
+    const runtime = createTargetRuntime(runtimeOptions(database));
+    const scenario = seedTwoLeagueProfileScenario(runtime);
+    const socket = createTargetSocket(runtime, scenario.session);
+    assert.equal(await runSocketMiddleware(runtime.socketRooms.middleware, socket), undefined);
+    runtime.app.set("io", { sockets: { sockets: new Map([["current", socket]]) } });
+    const before = database.serialize();
+    for (const change of [
+      () => runtime.services.sessionService.revoke({ sessionId: scenario.session.session.id, expectedVersion: 1, reason: "password_change" }),
+      () => runtime.services.sessionService.issueForUser({ userId: scenario.managerUserId }),
+    ]) {
+      assert.throws(() => runtime.repositories.context.transaction(() => {
+        change();
+        throw new Error("later account persistence failed");
+      }));
+      await new Promise(setImmediate);
+      assert.equal(socket.disconnected, false);
+      assert.equal(runtime.socketRooms.getAuthority(socket).userId, scenario.managerUserId);
+      assert.equal(before.equals(database.serialize()), true);
+    }
+    assert.throws(() => runtime.services.sessionService.revoke({
+      sessionId: scenario.session.session.id, expectedVersion: 1, reason: "sign_out",
+      transactionHook() { throw new Error("audit failed"); },
+    }));
+    await new Promise(setImmediate);
+    assert.equal(socket.disconnected, false);
+    assert.equal(before.equals(database.serialize()), true);
+  });
+
   test("joins only the current user's visible league and managed-team rooms without writes", async (t) => {
     const database = createDatabase(t);
     const runtime = createTargetRuntime(runtimeOptions(database));

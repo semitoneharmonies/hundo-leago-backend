@@ -1,3 +1,4 @@
+const crypto = require("node:crypto");
 const {
   BuyoutPolicyError,
   createBuyoutAggregate,
@@ -14,6 +15,14 @@ const {
 const {
   getRepositoryDefinition,
 } = require("./repositoryCatalog");
+const {
+  resolveSqliteTradeProposalCancellationWriter,
+} = require("./SqliteTradeProposalCancellationWriter");
+
+function cancellationEventId(buyoutId, tradeId) {
+  const hex = crypto.createHash("sha256").update(`${buyoutId}:auto-cancel:${tradeId}`).digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
 
 function freezeRow(row) {
   return row ? Object.freeze({ ...row }) : null;
@@ -23,9 +32,16 @@ function freezeRows(rows) {
   return Object.freeze(rows.map(freezeRow));
 }
 
+function commandHash(command) {
+  return crypto.createHash("sha256").update(JSON.stringify(command)).digest("hex");
+}
+
 function createSqliteBuyoutRepository({
   database,
   candidateCardSummerSynchronizer,
+  leagueOutboxWriter,
+  tradePublicationWriter,
+  tradeProposalCancellationWriter,
 } = {}) {
   if (
     !candidateCardSummerSynchronizer ||
@@ -68,6 +84,9 @@ function createSqliteBuyoutRepository({
   let deleteOwnershipStatement;
   let buyoutTransaction;
   try {
+    const cancellationWriter = resolveSqliteTradeProposalCancellationWriter({
+      database, leagueOutboxWriter, tradePublicationWriter, tradeProposalCancellationWriter,
+    });
     contractStatement = database.prepare(
       "SELECT * FROM contracts " +
         "WHERE id = @contractId AND league_id = @leagueId LIMIT 2"
@@ -82,12 +101,17 @@ function createSqliteBuyoutRepository({
         "AND status IN ('current', 'future') ORDER BY year_number ASC"
     );
     pendingTradesStatement = database.prepare(
-      "SELECT COUNT(DISTINCT trades.id) AS count FROM trades " +
-        "INNER JOIN trade_assets ON trade_assets.league_id = trades.league_id " +
-        "AND trade_assets.trade_id = trades.id " +
-        "WHERE trades.league_id = @leagueId AND trades.status = 'proposed' " +
-        "AND trade_assets.asset_type = 'contract' " +
-        "AND trade_assets.contract_id = @contractId"
+      `SELECT DISTINCT trades.id, trades.season_id, trades.version,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM trade_future_consideration_acceptances AS acceptance
+          WHERE acceptance.league_id = trades.league_id AND acceptance.trade_id = trades.id
+        ) THEN 'awaiting_commissioner_approval' ELSE 'proposed' END AS trade_status
+      FROM trades
+      JOIN trade_assets ON trade_assets.league_id = trades.league_id AND trade_assets.trade_id = trades.id
+      WHERE trades.league_id = @leagueId AND trades.status = 'proposed'
+        AND ((trade_assets.asset_type = 'contract' AND trade_assets.contract_id = @contractId)
+          OR (trade_assets.asset_type = 'prospect_right' AND trade_assets.player_id = @playerId))
+      ORDER BY trades.id`
     );
     eliminateYearStatement = database.prepare(
       "UPDATE contract_years SET status = 'eliminated', " +
@@ -102,6 +126,26 @@ function createSqliteBuyoutRepository({
     );
 
     buyoutTransaction = database.transaction((command) => {
+      const existingActivity = activity.findByKey({ key: command.activityId, leagueId: command.leagueId });
+      if (existingActivity?.event_type === "contract_bought_out") {
+        const metadata = JSON.parse(existingActivity.metadata_json);
+        const receipt = metadata.buyoutReceipt;
+        if (!receipt || receipt.commandHash !== commandHash(command)) {
+          throw repositoryError(REPOSITORY_ERROR_CODES.versionConflict,
+            "The buyout receipt belongs to a different command.");
+        }
+        const contractEvent = contractEvents.requireByKey({ key: command.contractEventId, leagueId: command.leagueId });
+        const ownershipEvent = ownershipEvents.requireByKey({ key: command.ownershipEventId, leagueId: command.leagueId });
+        return Object.freeze({
+          contract: freezeRow(receipt.contract), obligation: freezeRow(receipt.obligation),
+          years: freezeRows(receipt.years), releasedOwnership: freezeRow(receipt.releasedOwnership),
+          contractEvent: freezeRow(contractEvent), ownershipEvent: freezeRow(ownershipEvent),
+          activity: freezeRow(existingActivity),
+          automaticallyCancelledTradeIds: Object.freeze(receipt.automaticallyCancelledTradeIds),
+          annualPenaltyCents: metadata.annualPenaltyCents,
+          totalScheduledPenaltyCents: metadata.totalScheduledPenaltyCents,
+        });
+      }
       const contractRows = contractStatement.all(command);
       const ownershipRows = ownershipStatement.all(command);
       if (contractRows.length > 1 || ownershipRows.length > 1) {
@@ -128,8 +172,30 @@ function createSqliteBuyoutRepository({
           seasonId: year.season_id,
           status: year.status,
         })),
-        pendingTradeCount: pendingTradesStatement.get(command).count,
       });
+
+      const automaticallyCancelledTradeIds = [];
+      for (const trade of pendingTradesStatement.all(command)) {
+        const cancelled = cancellationWriter.cancelPending({
+          eventId: cancellationEventId(command.buyoutId, trade.id),
+          leagueId: command.leagueId,
+          seasonId: trade.season_id,
+          tradeId: trade.id,
+          expectedVersion: trade.version,
+          fromStatus: trade.trade_status,
+          reasonCode: "player_bought_out",
+          sourceMetadata: {
+            buyoutId: command.buyoutId, playerId: command.playerId,
+            contractId: command.contractId, ownershipId: command.ownershipId,
+          },
+          occurredAtMs: command.occurredAtMs,
+        });
+        if (!cancelled || typeof cancelled.then === "function") {
+          throw repositoryError(REPOSITORY_ERROR_CODES.versionConflict,
+            "An affected trade could not be cancelled atomically with the buyout.");
+        }
+        automaticallyCancelledTradeIds.push(trade.id);
+      }
 
       const contract = freezeRow(
         contracts.updateVersioned({
@@ -178,6 +244,7 @@ function createSqliteBuyoutRepository({
             aavCents: contractBefore.aav_cents,
             annualPenaltyCents: aggregate.annualPenaltyCents,
             remainingYears: aggregate.years.length,
+            automaticallyCancelledTradeIds,
             priorStatus: contractBefore.status,
             resultingStatus: contract.status,
           }),
@@ -228,6 +295,11 @@ function createSqliteBuyoutRepository({
             totalScheduledPenaltyCents:
               aggregate.totalScheduledPenaltyCents,
             remainingYears: aggregate.years.length,
+            automaticallyCancelledTradeIds,
+            buyoutReceipt: {
+              commandHash: commandHash(command), contract, obligation, years,
+              releasedOwnership: ownershipBefore, automaticallyCancelledTradeIds,
+            },
           }),
           occurred_at_ms: command.occurredAtMs,
         })
@@ -255,6 +327,7 @@ function createSqliteBuyoutRepository({
         releasedOwnership: ownershipBefore,
         ownershipEvent,
         activity: activityRow,
+        automaticallyCancelledTradeIds: Object.freeze(automaticallyCancelledTradeIds),
         annualPenaltyCents: aggregate.annualPenaltyCents,
         totalScheduledPenaltyCents:
           aggregate.totalScheduledPenaltyCents,

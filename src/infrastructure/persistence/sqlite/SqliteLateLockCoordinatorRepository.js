@@ -163,7 +163,7 @@ function freezeTargets(rows, { singleTeam = false } = {}) {
   return Object.freeze(targets);
 }
 
-function createSqliteLateLockCoordinatorRepository({ database } = {}) {
+function createSqliteLateLockCoordinatorRepository({ database, executionScope } = {}) {
   if (
     !database ||
     typeof database.prepare !== "function" ||
@@ -174,6 +174,7 @@ function createSqliteLateLockCoordinatorRepository({ database } = {}) {
     );
   }
 
+  const execution = require("./SqliteMatchupExecutionScope").createSqliteMatchupExecutionScope(executionScope, "weeks");
   const commonSelection =
     "SELECT locks.league_id, locks.season_id, " +
     "locks.matchup_week_id, locks.team_id, locks.id AS lock_id " +
@@ -191,7 +192,7 @@ function createSqliteLateLockCoordinatorRepository({ database } = {}) {
     "AND locks.locked_at_ms = weeks.locks_at_ms " +
     "AND weeks.status = 'live' " +
     "AND weeks.locks_at_ms < @nowMs " +
-    "AND @nowMs < weeks.ends_at_ms ";
+    "AND @nowMs < weeks.ends_at_ms " + execution.sql;
   const deterministicOrder =
     "ORDER BY locks.league_id, locks.season_id, " +
     "locks.matchup_week_id, locks.team_id, locks.id";
@@ -523,7 +524,7 @@ function createSqliteLateLockCoordinatorRepository({ database } = {}) {
           );
         }
       }
-      return freezeTargets(immediateStatement.all(scope), {
+      return freezeTargets(immediateStatement.all({ ...scope, ...execution.parameters }), {
         singleTeam: true,
       });
     });
@@ -559,6 +560,7 @@ function createSqliteLateLockCoordinatorRepository({ database } = {}) {
         );
         return freezeTargets(
           scheduledStatement.all({
+            ...execution.parameters,
             leagueId: stableId(input.leagueId, "league"),
             seasonId: stableId(input.seasonId, "season"),
             weekId: stableId(input.weekId, "matchup week"),
@@ -569,7 +571,7 @@ function createSqliteLateLockCoordinatorRepository({ database } = {}) {
       if (input.mode === "statistics_refresh") {
         exactObject(input, ["mode", "nhlSeasonKey", "nowMs"], "statistics-refresh lookup");
         if (typeof input.nhlSeasonKey !== "string" || !/^\d{8}$/.test(input.nhlSeasonKey)) failInput("A statistics season key is required.");
-        return freezeTargets(statisticsStatement.all({ nhlSeasonKey: input.nhlSeasonKey, nowMs: safeTimestamp(input.nowMs) }));
+        return freezeTargets(statisticsStatement.all({ ...execution.parameters, nhlSeasonKey: input.nhlSeasonKey, nowMs: safeTimestamp(input.nowMs) }));
       }
       failInput("A canonical late-lock target lookup mode is required.");
     } catch (error) {

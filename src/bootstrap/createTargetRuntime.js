@@ -622,6 +622,9 @@ const {
   createSocketIoInvalidationPublisher,
 } = require("../infrastructure/socket/createSocketIoInvalidationPublisher");
 const {
+  createSessionSocketInvalidator,
+} = require("../infrastructure/socket/createSessionSocketInvalidator");
+const {
   createActionTokenDeliveryEnvelope,
 } = require("../infrastructure/security/createActionTokenDeliveryEnvelope");
 const {
@@ -1401,8 +1404,10 @@ function requireVerifiedSportsDataIoLiveDescriptor(value) {
 function createTargetRepositories({
   database,
   secureRandom,
+  onSessionChanged = null,
   stagingDailyAuctionsEnabled = false,
   currentNhlStatisticsSeason = null,
+  matchupProcessingLeagueIds = null,
 } = {}) {
   const context = createSqliteRepositoryContext({ database });
   const matchupOccurrenceExecutionGuard =
@@ -1728,8 +1733,8 @@ function createTargetRepositories({
     leagueOutbox: createSqliteLeagueOutboxRepository({ database }),
     leagueOutboxWriter,
     lateLockCoordinator:
-      createSqliteLateLockCoordinatorRepository({ database }),
-    matchupJobs: createSqliteMatchupJobRepository({ database }),
+      createSqliteLateLockCoordinatorRepository({ database, executionScope: { leagueIds: matchupProcessingLeagueIds, nhlSeasonKey: currentNhlStatisticsSeason } }),
+    matchupJobs: createSqliteMatchupJobRepository({ database, executionScope: { leagueIds: matchupProcessingLeagueIds, nhlSeasonKey: currentNhlStatisticsSeason } }),
     matchupLocks: createSqliteMatchupLockRepository({
       database,
       occurrenceExecutionGuard:
@@ -1794,7 +1799,7 @@ function createTargetRepositories({
       createSqliteSeasonRolloverJobRepository({
         database,
       }),
-    sessions: createSqliteSessionRepository({ database }),
+    sessions: createSqliteSessionRepository({ database, onSessionChanged }),
     statistics: createSqliteStatisticsRepository({
       database,
       occurrenceExecutionGuard:
@@ -2994,6 +2999,7 @@ function createTargetRouters({
     }),
     accountSession: createAccountSessionRouter({
       ...sharedAudit,
+      leagueReadService: services.league.read,
       signInService: services.account.signIn,
       signOutService: services.account.signOut,
       passwordChangeService: services.account.passwordChange,
@@ -3150,17 +3156,24 @@ function createTargetRuntime({
   nhlCompletedStatisticsEnabled = false,
   matchupProcessingEnabled = false,
   nhlFetchImplementation,
+  matchupProcessingLeagueIds = null,
 } = {}) {
   const migrations = discoverMigrations({ migrationsDirectory });
   const migrationState = assertMigrationCompatibility(database, migrations);
+  let targetApplication = null;
+  let socketRooms = null;
+  const onSessionChanged = createSessionSocketInvalidator({
+    getIo: () => targetApplication?.get("io"),
+    getSocketRooms: () => socketRooms,
+  });
   const repositories = createTargetRepositories({
     database,
+    onSessionChanged,
     secureRandom: securityFoundations?.secureRandom,
     stagingDailyAuctionsEnabled,
     currentNhlStatisticsSeason: nhlCompletedStatisticsEnabled ? currentSeason.nhlSeasonKey : null,
+    matchupProcessingLeagueIds,
   });
-  let targetApplication = null;
-  let socketRooms = null;
   const resolvedLeagueInvalidationPublisher =
     leagueInvalidationPublisher ||
     createSocketIoInvalidationPublisher({

@@ -678,23 +678,12 @@ describe("M3-13 socket authorization", () => {
   });
 
   test("reauthorization leaves stale rooms and joins only current rooms", async () => {
-    let callCount = 0;
+    let currentLeagueId = LEAGUE_A_ID;
     const authorizationService = {
       authorizeHandshake() {
-        callCount += 1;
         return Object.freeze({
           userId: USER_ID,
-          rooms: Object.freeze(
-            callCount === 1
-              ? [
-                  `user:${USER_ID}`,
-                  `league:${LEAGUE_A_ID}`,
-                ]
-              : [
-                  `user:${USER_ID}`,
-                  `league:${LEAGUE_B_ID}`,
-                ]
-          ),
+          rooms: Object.freeze([`user:${USER_ID}`, `league:${currentLeagueId}`]),
         });
       },
     };
@@ -707,6 +696,7 @@ describe("M3-13 socket authorization", () => {
       undefined
     );
 
+    currentLeagueId = LEAGUE_B_ID;
     assert.equal(await roomManager.reauthorize(socket), true);
     assert.equal(
       socket.rooms.has(`league:${LEAGUE_A_ID}`),

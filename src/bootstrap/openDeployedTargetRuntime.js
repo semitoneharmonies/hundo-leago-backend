@@ -433,6 +433,7 @@ function openDeployedTargetRuntime({
       sportsDataIoFetchImplementation,
       nhlCompletedStatisticsEnabled: config.nhlCompletedStatisticsEnabled === true,
       matchupProcessingEnabled: config.matchupProcessingEnabled === true,
+      matchupProcessingLeagueIds: config.matchupProcessingLeagueIds,
       leagueInvalidationPublisher,
       leagueWriteMode: config.leagueWriteMode,
       freeAgentDraftRoutesEnabled:

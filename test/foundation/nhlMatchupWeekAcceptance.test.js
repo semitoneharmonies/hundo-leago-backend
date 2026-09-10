@@ -66,6 +66,27 @@ test("NHL readiness detects missing roster identities without changing persisted
   assert.deepEqual(database.serialize(), missingBefore);
 });
 
+test("NHL readiness reports scoped source conflicts before any roster lock and rejects unknown scope leagues", (t) => {
+  const { database } = setup(t);
+  const cleanLeague = uuid(800), cleanSeason = uuid(801);
+  database.prepare("INSERT INTO leagues (id,name,name_normalized,status,timezone,created_at_ms,updated_at_ms,version) VALUES (?,'Scoped QA','scoped qa','active','America/Vancouver',1,1,1)").run(cleanLeague);
+  database.prepare("INSERT INTO seasons (id,league_id,label,nhl_season_key,status,created_at_ms,updated_at_ms,version) VALUES (?,?,'2026-27','20262027','active',1,1,1)").run(cleanSeason,cleanLeague);
+  database.prepare("INSERT INTO stat_sources (id,provider,status,created_at_ms,updated_at_ms,version) VALUES (?,'release_qa_fixture','active',1,1,1)").run(uuid(802));
+  database.prepare("INSERT INTO stat_refreshes (id,stat_source_id,nhl_season_key,source_version,status,started_at_ms,completed_at_ms,player_count,version) VALUES (?,?,'20262027','scope-test','succeeded',1,2,0,1)").run(uuid(803),uuid(802));
+  database.prepare("INSERT INTO stat_snapshots (id,stat_source_id,source_refresh_id,league_id,season_id,matchup_week_id,intended_use,completeness_status,freshness_status,captured_at_ms,committed,created_at_ms) VALUES (?,?,?,?,?,?,'matchup_baseline','complete','fresh',2,1,2)").run(uuid(804),uuid(802),uuid(803),uuid(1),uuid(2),uuid(3));
+  const before = database.serialize();
+  const inspect = (matchupLeagueIds = null) => inspectNhlStatisticsReadiness({ database, nhlSeasonKey: "20262027", minimumPlayerCount: 30, matchupLeagueIds });
+  assert.equal(inspect().readyForStatistics, false);
+  assert.equal(inspect().conflictingWeeks.length, 1);
+  assert.equal(inspect().conflictingLocks.length, 0);
+  assert.equal(inspect([cleanLeague]).readyForStatistics, true);
+  assert.equal(inspect([uuid(1)]).readyForStatistics, false);
+  assert.equal(inspect([uuid(999)]).readyForStatistics, false);
+  assert.deepEqual(inspect([uuid(999)]).unknownScopeLeagues, [uuid(999)]);
+  assert.throws(() => inspect([]));
+  assert.deepEqual(database.serialize(), before);
+});
+
 test("NHL completed-game source carries an accelerated week through locks, late exclusions, failure recovery and official standings", async (t) => {
   const { database,catalog }=setup(t);
   let now=START,offline=false,calls=0;

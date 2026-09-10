@@ -42,7 +42,7 @@ const IDS = Object.freeze({
   retentionYear3: uuid(93), trade: uuid(100), tradeAsset: uuid(101),
 });
 
-function seed(context) {
+function seed(context, { signedProspect = false } = {}) {
   context.repositories.users.insert({
     id: IDS.user, email_normalized: "manager@example.test",
     email_display: "manager@example.test", display_name: "Manager",
@@ -79,9 +79,9 @@ function seed(context) {
   });
   context.repositories.contracts.insert({
     id: IDS.contract, league_id: IDS.league, player_id: IDS.player,
-    current_team_id: IDS.team1, contract_type: "normal",
-    original_total_value_cents: 1_000, original_term_years: 3,
-    aav_cents: 333, start_season_id: IDS.season1, status: "active",
+    current_team_id: IDS.team1, contract_type: signedProspect ? "fantasy_elc" : "normal",
+    original_total_value_cents: signedProspect ? 300 : 1_000, original_term_years: 3,
+    aav_cents: signedProspect ? 100 : 333, start_season_id: IDS.season1, status: "active",
     acquisition_source_type: "auction", acquisition_source_id: null,
     auction_buyout_lock_expires_at_ms: null, created_at_ms: NOW_MS,
     updated_at_ms: NOW_MS, version: 1,
@@ -93,14 +93,14 @@ function seed(context) {
   ]) {
     context.repositories.contract_years.insert({
       id, league_id: IDS.league, contract_id: IDS.contract,
-      season_id: seasonId, year_number: number, aav_cents: 333,
+      season_id: seasonId, year_number: number, aav_cents: signedProspect ? 100 : 333,
       status, rollover_at_ms: null, created_at_ms: NOW_MS,
     });
   }
   context.repositories.player_ownerships.insert({
     id: IDS.ownership, league_id: IDS.league, season_id: IDS.season1,
-    player_id: IDS.player, team_id: IDS.team1, ownership_kind: "Rostered",
-    roster_category: "Active", position_group: "F", slot_number: 1,
+    player_id: IDS.player, team_id: IDS.team1, ownership_kind: signedProspect ? "Prospect Right" : "Rostered",
+    roster_category: signedProspect ? "Prospect" : "Active", position_group: "F", slot_number: signedProspect ? null : 1,
     acquired_transaction_type: "auction", acquired_transaction_id: null,
     created_at_ms: NOW_MS, updated_at_ms: NOW_MS, version: 1,
   });
@@ -108,7 +108,7 @@ function seed(context) {
 
 function createRuntime(
   t,
-  { candidateCardSummerSynchronizer } = {}
+  { candidateCardSummerSynchronizer, signedProspect = false, tradeProposalCancellationWriter, tradePublicationWriter } = {}
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m4-08-"));
   const connection = openDatabase({
@@ -123,11 +123,13 @@ function createRuntime(
     fs.rmSync(root, { recursive: true, force: true });
   });
   const context = createSqliteRepositoryContext({ database: connection.database });
-  seed(context);
+  seed(context, { signedProspect });
   return {
     context, database: connection.database,
     repository: createSqliteBuyoutRepository({
       database: connection.database,
+      tradeProposalCancellationWriter,
+      tradePublicationWriter,
       candidateCardSummerSynchronizer:
         candidateCardSummerSynchronizer ?? {
           synchronize() {
@@ -173,7 +175,6 @@ function aggregateInput(overrides = {}) {
       { contractYearId: IDS.contractYear2, seasonId: IDS.season2, status: "future" },
       { contractYearId: IDS.contractYear3, seasonId: IDS.season3, status: "future" },
     ],
-    pendingTradeCount: 0,
     ...overrides,
   };
 }
@@ -209,23 +210,24 @@ function seedRetention(context) {
   }
 }
 
-function seedPendingTrade(context) {
+function seedPendingTrade(context, { tradeId = IDS.trade, assetId = IDS.tradeAsset, prospect = false, playerId = IDS.player, status = "proposed", leagueId = IDS.league, seasonId = IDS.season1, team1 = IDS.team1, team2 = IDS.team2 } = {}) {
   context.repositories.trades.insert({
-    id: IDS.trade, league_id: IDS.league, season_id: IDS.season1,
-    proposing_team_id: IDS.team1, receiving_team_id: IDS.team2,
-    proposing_user_id: IDS.user, status: "proposed", created_at_ms: NOW_MS,
+    id: tradeId, league_id: leagueId, season_id: seasonId,
+    proposing_team_id: team1, receiving_team_id: team2,
+    proposing_user_id: IDS.user, status, created_at_ms: NOW_MS,
     expires_at_ms: NOW_MS + 100, responded_at_ms: null,
     completed_at_ms: null, commissioner_completion_reference: null,
     updated_at_ms: NOW_MS, version: 1,
   });
   context.repositories.trade_assets.insert({
-    id: IDS.tradeAsset, league_id: IDS.league, trade_id: IDS.trade,
-    direction: "proposing_to_receiving", source_team_id: IDS.team1,
-    destination_team_id: IDS.team2, asset_type: "contract",
-    contract_id: IDS.contract, player_id: null, draft_pick_id: null,
+    id: assetId, league_id: leagueId, trade_id: tradeId,
+    direction: "proposing_to_receiving", source_team_id: team1,
+    destination_team_id: team2, asset_type: prospect ? "prospect_right" : "contract",
+    contract_id: prospect ? null : IDS.contract, player_id: prospect ? playerId : null, draft_pick_id: null,
     retention_obligation_id: null, buyout_obligation_id: null,
     future_consideration_id: null, requested_retention_cents: null,
-    proposal_snapshot_json: null, sequence: 1, created_at_ms: NOW_MS,
+    proposal_snapshot_json: prospect ? JSON.stringify({ schemaVersion: 1, type: "prospect_right", player: { id: playerId, name: "Player One" }, ownership: { id: IDS.ownership, teamId: team1, rosterCategory: "Prospect", positionGroup: "F", version: 1 }, fantasyElc: { contractId: IDS.contract, aavCents: 100, version: 1 } }) : null,
+    sequence: 1, created_at_ms: NOW_MS,
   });
 }
 
@@ -270,18 +272,134 @@ describe("M4-08 buyout policy", () => {
     })).annualPenaltyCents, 83);
   });
 
-  test("accepts a signed-ELC Prospect but fails closed for pending trades", () => {
-    assert.equal(createBuyoutAggregate(aggregateInput({ ownership: {
-      ...aggregateInput().ownership, roster_category: "Prospect",
-    } })).annualPenaltyCents, 83);
+  test("accepts signed-ELC Prospect ownership and rejects unsigned or incompatible rights", () => {
+    const signed = aggregateInput({
+      contract: { ...aggregateInput().contract, contract_type: "fantasy_elc" },
+      ownership: { ...aggregateInput().ownership, ownership_kind: "Prospect Right", roster_category: "Prospect" },
+    });
+    assert.equal(createBuyoutAggregate(signed).annualPenaltyCents, 83);
     assertPolicyError(
-      () => createBuyoutAggregate(aggregateInput({ pendingTradeCount: 1 })),
-      BUYOUT_POLICY_CODES.pendingTradeExists
+      () => createBuyoutAggregate({ ...signed, contract: { ...signed.contract, contract_type: "normal" } }),
+      BUYOUT_POLICY_CODES.ownershipInvalid
     );
   });
 });
 
 describe("M4-08 atomic SQLite buyout", () => {
+  test("buys out signed Prospect rights, cancels every matching proposal, and replays without writes", (t) => {
+    const { context, database, repository } = createRuntime(t, { signedProspect: true });
+    seedPendingTrade(context, { prospect: true });
+    seedPendingTrade(context, { tradeId: uuid(102), assetId: uuid(103), prospect: true });
+    seedPendingTrade(context, { tradeId: uuid(104), assetId: uuid(105) });
+    const historyBefore = database.prepare("SELECT * FROM trade_assets ORDER BY id").all();
+    const result = repository.buyOut(command());
+    assert.deepEqual(result.automaticallyCancelledTradeIds, [IDS.trade, uuid(102), uuid(104)]);
+    assert.equal(result.annualPenaltyCents, 25);
+    assert.equal(count(database, "player_ownerships"), 0);
+    assert.equal(count(database, "trade_events"), 3);
+    assert.equal(count(database, "league_activity"), 4);
+    assert.equal(count(database, "outbox_events"), 3);
+    assert.deepEqual(database.prepare("SELECT * FROM trade_assets ORDER BY id").all(), historyBefore);
+    for (const event of database.prepare("SELECT * FROM trade_events").all()) {
+      assert.equal(event.reason, "player_bought_out");
+      assert.equal(JSON.parse(event.metadata_json).ownershipId, IDS.ownership);
+    }
+    const after = database.serialize();
+    assert.deepEqual(repository.buyOut(command()), result);
+    assert.equal(after.equals(database.serialize()), true);
+    assert.throws(() => repository.buyOut(command({ reason: "different command" })));
+    assert.throws(() => repository.buyOut(command({ buyoutId: uuid(999), activityId: uuid(998) })));
+    assert.equal(after.equals(database.serialize()), true);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  });
+
+  test("rolls signed Prospect buyout and earlier cancellations back when a later publication fails", (t) => {
+    let publicationCount = 0;
+    const { context, database, repository } = createRuntime(t, {
+      signedProspect: true,
+      tradePublicationWriter: { publish() {
+        publicationCount += 1;
+        if (publicationCount === 2) throw new Error("injected second publication failure");
+      } },
+    });
+    seedPendingTrade(context, { prospect: true });
+    seedPendingTrade(context, { tradeId: uuid(102), assetId: uuid(103), prospect: true });
+    const before = database.serialize();
+    assert.throws(() => repository.buyOut(command()));
+    assert.equal(publicationCount, 2);
+    assert.equal(before.equals(database.serialize()), true);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  });
+
+  test("preserves unrelated and terminal proposals and the same player in another league", (t) => {
+    const { context, database, repository } = createRuntime(t, { signedProspect: true });
+    const read = (table, id) => database.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id);
+    const other = { leagueId: uuid(210), seasonId: uuid(220), team1: uuid(230), team2: uuid(231), tradeId: uuid(200), assetId: uuid(201), prospect: true };
+    context.repositories.leagues.insert({ ...read("leagues", IDS.league), id: other.leagueId, name: "Other League", name_normalized: "other league" });
+    context.repositories.seasons.insert({ ...read("seasons", IDS.season1), id: other.seasonId, league_id: other.leagueId });
+    for (const [id, template] of [[other.team1, IDS.team1], [other.team2, IDS.team2]]) {
+      context.repositories.teams.insert({ ...read("teams", template), id, league_id: other.leagueId });
+    }
+    context.repositories.contracts.insert({ ...read("contracts", IDS.contract), id: uuid(260), league_id: other.leagueId, current_team_id: other.team1, start_season_id: other.seasonId });
+    context.repositories.player_ownerships.insert({ ...read("player_ownerships", IDS.ownership), id: uuid(250), league_id: other.leagueId, season_id: other.seasonId, team_id: other.team1 });
+    seedPendingTrade(context, other);
+    context.repositories.players.insert({ ...read("players", IDS.player), id: uuid(240), full_name: "Other Player" });
+    seedPendingTrade(context, { prospect: true });
+    seedPendingTrade(context, { tradeId: uuid(102), assetId: uuid(103), prospect: true, playerId: uuid(240) });
+    seedPendingTrade(context, { tradeId: uuid(104), assetId: uuid(105), prospect: true, status: "cancelled" });
+    const unaffectedTrades = [other.tradeId, uuid(102), uuid(104)].map(id => read("trades", id));
+    const otherOwnership = read("player_ownerships", uuid(250));
+    const otherContract = read("contracts", uuid(260));
+    const assetsBefore = database.prepare("SELECT * FROM trade_assets ORDER BY id").all();
+    const result = repository.buyOut(command());
+    assert.deepEqual(result.automaticallyCancelledTradeIds, [IDS.trade]);
+    assert.deepEqual(unaffectedTrades.map(row => read("trades", row.id)), unaffectedTrades);
+    assert.deepEqual(read("player_ownerships", uuid(250)), otherOwnership);
+    assert.deepEqual(read("contracts", uuid(260)), otherContract);
+    assert.deepEqual(database.prepare("SELECT * FROM trade_assets ORDER BY id").all(), assetsBefore);
+    for (const table of ["trade_events", "league_activity", "outbox_events", "buyout_obligations"]) {
+      assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE league_id = ?`).get(other.leagueId).count, 0);
+    }
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  });
+
+  test("fails atomically if a matched pending trade cannot be cancelled", (t) => {
+    const { context, database, repository } = createRuntime(t, {
+      signedProspect: true, tradeProposalCancellationWriter: { cancelPending() { return null; } },
+    });
+    seedPendingTrade(context, { prospect: true });
+    const before = database.serialize();
+    assert.throws(() => repository.buyOut(command()), error => error.code === REPOSITORY_ERROR_CODES.versionConflict);
+    assert.equal(before.equals(database.serialize()), true);
+  });
+
+  test("rolls back persisted cancellation publications and all buyout effects at both failure boundaries", (t) => {
+    let failSummer = false;
+    const { context, database, repository } = createRuntime(t, {
+      signedProspect: true,
+      candidateCardSummerSynchronizer: { synchronize() { if (failSummer) throw new Error("late synchronization failure"); } },
+    });
+    seedPendingTrade(context, { prospect: true });
+    seedPendingTrade(context, { tradeId: uuid(102), assetId: uuid(103), prospect: true });
+    database.exec(`CREATE TRIGGER reject_second_buyout_publication BEFORE INSERT ON outbox_events
+      WHEN (SELECT COUNT(*) FROM outbox_events) = 1
+      BEGIN SELECT RAISE(ABORT, 'injected second cancellation outbox failure'); END`);
+    const beforeOutboxFailure = database.serialize();
+    assert.throws(() => repository.buyOut(command()));
+    assert.equal(beforeOutboxFailure.equals(database.serialize()), true);
+    database.exec("DROP TRIGGER reject_second_buyout_publication");
+    failSummer = true;
+    const beforeLateFailure = database.serialize();
+    assert.throws(() => repository.buyOut(command()));
+    assert.equal(beforeLateFailure.equals(database.serialize()), true);
+    failSummer = false;
+    const result = repository.buyOut(command());
+    assert.equal(result.automaticallyCancelledTradeIds.length, 2);
+    assert.equal(count(database, "outbox_events"), 2);
+    assert.equal(count(database, "league_activity"), 3);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  });
+
   test("synchronizes the released player and penalty team inside the buyout transaction", (t) => {
     const calls = [];
     let runtime;
@@ -335,7 +453,7 @@ describe("M4-08 atomic SQLite buyout", () => {
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   });
 
-  test("rejects active locks and pending trades without writes", (t) => {
+  test("rejects active locks and cancels pending contract trades atomically", (t) => {
     const first = createRuntime(t);
     first.context.repositories.contracts.updateVersioned({
       key: IDS.contract, leagueId: IDS.league, expectedVersion: 1,
@@ -351,12 +469,11 @@ describe("M4-08 atomic SQLite buyout", () => {
 
     const second = createRuntime(t);
     seedPendingTrade(second.context);
-    assertPolicyError(
-      () => second.repository.buyOut(command()),
-      BUYOUT_POLICY_CODES.pendingTradeExists
-    );
-    assert.equal(count(second.database, "buyout_obligations"), 0);
-    assert.equal(count(second.database, "player_ownerships"), 1);
+    const boughtOut = second.repository.buyOut(command());
+    assert.deepEqual(boughtOut.automaticallyCancelledTradeIds, [IDS.trade]);
+    assert.equal(second.database.prepare("SELECT status FROM trades").get().status, "cancelled");
+    assert.equal(count(second.database, "buyout_obligations"), 1);
+    assert.equal(count(second.database, "player_ownerships"), 0);
   });
 
   test("rejects stale ownership and contract versions without partial mutation", (t) => {

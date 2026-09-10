@@ -130,7 +130,25 @@ function createAuthenticatedSocketRooms({
       Promise.resolve(
         applyAuthority(socket, authority)
       ).then(
-        () => next(),
+        () => {
+          try {
+            // Room joins can yield. A revoke or permission change during the
+            // handshake must not leave a newly connected socket authorized
+            // from the earlier read, before it enters the server socket map.
+            const current = authorizationService.authorizeHandshake(socket.handshake);
+            if (
+              current.userId !== authority.userId ||
+              JSON.stringify(current.rooms) !== JSON.stringify(authority.rooms)
+            ) {
+              throw new Error("Socket authority changed during connection.");
+            }
+            next();
+          } catch (error) {
+            delete socket.data[AUTHORITY_DATA_KEY];
+            socket.disconnect(true);
+            next(connectionError(error));
+          }
+        },
         (error) => next(connectionError(error))
       );
     } catch (error) {

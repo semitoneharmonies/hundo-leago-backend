@@ -314,6 +314,54 @@ describe("M3-21 Resend account email adapter", () => {
     );
   });
 
+  test("keeps the timeout active through a stalled response body and retries safely", async () => {
+    for (const status of [200, 400]) {
+      let expireTimeout;
+      let clearCount = 0;
+      let startBody;
+      const bodyStarted = new Promise((resolve) => { startBody = resolve; });
+      const adapter = createResendEmailAdapter({
+        apiKey: API_KEY,
+        deliveryMode: "send",
+        from: "accounts@hundo.example",
+        setTimeoutFunction(callback) {
+          expireTimeout = callback;
+          return { unref() {} };
+        },
+        clearTimeoutFunction() { clearCount += 1; },
+        fetchImplementation: async (_url, { signal }) => ({
+          ok: status === 200,
+          status,
+          text() {
+            startBody();
+            return new Promise((_resolve, reject) => {
+              signal.addEventListener("abort", () => {
+                reject(new Error(`private provider body ${API_KEY}`));
+              }, { once: true });
+            });
+          },
+        }),
+      });
+      const rejection = assert.rejects(
+        adapter.sendEmailVerification(verification()),
+        (error) => {
+          assert.equal(error instanceof AccountEmailProviderError, true);
+          assert.equal(error.retryable, true);
+          assert.equal(error.stack.includes(API_KEY), false);
+          return true;
+        }
+      );
+      await bodyStarted;
+      try {
+        assert.equal(clearCount, 0, "the body must remain inside the timeout");
+      } finally {
+        expireTimeout();
+        await rejection;
+      }
+      assert.equal(clearCount, 1);
+    }
+  });
+
   test("fails closed for invalid construction and message inputs", async () => {
     for (const options of [
       { apiKey: "bad" },

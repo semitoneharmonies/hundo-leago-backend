@@ -748,6 +748,8 @@ function createRosterActionService({
     });
     return Object.freeze({
       code: "CONTRACT_BOUGHT_OUT",
+      automaticallyCancelledTradeIds:
+        boughtOut.automaticallyCancelledTradeIds ?? Object.freeze([]),
       buyout: Object.freeze({
         id: boughtOut.obligation.id,
         annualPenaltyCents: boughtOut.annualPenaltyCents,

@@ -441,6 +441,16 @@ function loadTargetRuntimeConfig({
   );
   const nhlCompletedStatisticsEnabled = optionalExactBoolean(env, "NHL_COMPLETED_STATISTICS_ENABLED") === true;
   const matchupProcessingEnabled = optionalExactBoolean(env, "MATCHUP_PROCESSING_ENABLED") === true;
+  let matchupProcessingLeagueIds = null;
+  if (Object.hasOwn(env, "MATCHUP_PROCESSING_LEAGUE_IDS")) {
+    try {
+      const raw = env.MATCHUP_PROCESSING_LEAGUE_IDS;
+      if (typeof raw !== "string") throw new TypeError();
+      matchupProcessingLeagueIds = require("../domain/matchups/matchupExecutionScope").normalizeMatchupExecutionLeagueIds(raw.split(","));
+    } catch {
+      fail("MATCHUP_PROCESSING_LEAGUE_IDS", "use one to 100 distinct canonical league IDs separated by commas");
+    }
+  }
   if (nhlCompletedStatisticsEnabled && sportsDataIoLiveNhl.mode !== "disabled") {
     fail("NHL_COMPLETED_STATISTICS_ENABLED", "only one current-season statistics source may be enabled");
   }
@@ -450,6 +460,7 @@ function loadTargetRuntimeConfig({
   return Object.freeze({
     nhlCompletedStatisticsEnabled,
     matchupProcessingEnabled,
+    matchupProcessingLeagueIds,
     accountEmailDeliveryEnabled: exactBoolean(
       env,
       "ACCOUNT_EMAIL_DELIVERY_ENABLED"

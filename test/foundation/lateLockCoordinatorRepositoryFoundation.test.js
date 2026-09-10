@@ -470,6 +470,24 @@ function createRuntime(t) {
 }
 
 describe("FAD-05 late-lock coordinator target repository", () => {
+  test("NHL execution scope protects other leagues and old baselines in every late-lock path", (t) => {
+    const { database } = createRuntime(t);
+    const first = seedScope(database, 1_000), second = seedScope(database, 2_000);
+    const repository = createSqliteLateLockCoordinatorRepository({ database, executionScope: { leagueIds: [first.leagueId], nhlSeasonKey: "20262027" } });
+    const refreshed = { mode: "statistics_refresh", nhlSeasonKey: "20262027", nowMs: LOCK_MS + 1 };
+    const before = database.serialize();
+    assert.deepEqual(repository.listEligibleLateLocks(refreshed), [expectedTarget(first)]);
+    assert.deepEqual(repository.listEligibleLateLocks(committedInput(first)), [expectedTarget(first)]);
+    assert.deepEqual(repository.listEligibleLateLocks(scheduledInput(first)), [expectedTarget(first)]);
+    assert.deepEqual(repository.listEligibleLateLocks(committedInput(second)), []);
+    assert.deepEqual(repository.listEligibleLateLocks(scheduledInput(second)), []);
+    assert.deepEqual(database.serialize(), before);
+    database.prepare("INSERT INTO stat_snapshots (id,stat_source_id,source_refresh_id,league_id,season_id,matchup_week_id,intended_use,completeness_status,freshness_status,captured_at_ms,committed,created_at_ms) VALUES (?,?,?,?,?,?,'matchup_baseline','complete','fresh',2,1,2)").run(first.snapshotId,STAT_SOURCE_ID,STAT_REFRESH_ID,first.leagueId,first.seasonId,first.weekId);
+    const protectedBefore = database.serialize();
+    for (const input of [refreshed, committedInput(first), scheduledInput(first)]) assert.deepEqual(repository.listEligibleLateLocks(input), []);
+    assert.deepEqual(database.serialize(), protectedBefore);
+  });
+
   test("accepts a canonical multi-ownership receipt and performs no write", (t) => {
     const { database, repository } = createRuntime(t);
     const scope = seedScope(database, 1_000);

@@ -320,6 +320,14 @@ describe("M7-01 deployed target runtime configuration", () => {
     const defaults = loadTargetRuntimeConfig({ env: deployedEnvironment(), backendRoot: ROOT });
     assert.equal(defaults.nhlCompletedStatisticsEnabled, false);
     assert.equal(defaults.matchupProcessingEnabled, false);
+    assert.equal(defaults.matchupProcessingLeagueIds, null);
+    const leagueId = "00000000-0000-4000-8000-000000000001";
+    const scoped = loadTargetRuntimeConfig({ env: deployedEnvironment({ MATCHUP_PROCESSING_LEAGUE_IDS: leagueId }), backendRoot: ROOT });
+    assert.deepEqual(scoped.matchupProcessingLeagueIds, [leagueId]);
+    assert.equal(Object.isFrozen(scoped.matchupProcessingLeagueIds), true);
+    for (const invalid of ["", "all", ` ${leagueId}`, `${leagueId},`, `${leagueId},${leagueId}`, [leagueId]]) {
+      assert.throws(() => loadTargetRuntimeConfig({ env: deployedEnvironment({ MATCHUP_PROCESSING_LEAGUE_IDS: invalid }), backendRoot: ROOT }), TargetRuntimeConfigError);
+    }
     const enabled = loadTargetRuntimeConfig({ env: deployedEnvironment({ NHL_COMPLETED_STATISTICS_ENABLED: "true", MATCHUP_PROCESSING_ENABLED: "true" }), backendRoot: ROOT });
     assert.equal(enabled.nhlCompletedStatisticsEnabled, true);
     assert.equal(enabled.matchupProcessingEnabled, true);

@@ -993,6 +993,43 @@ describe("FAD-05 matchup occurrence registration", () => {
 });
 
 describe("FAD-05 completed-FAD schedule gate", () => {
+  test("NHL execution scope leaves excluded leagues, seasons and old-provider weeks unclaimed", (t) => {
+    const { database, repository } = createRuntime(t);
+    const valid = insertLegacyJob(database);
+    completeFadGate(database);
+    const command = { leagueId: IDS.league, seasonId: IDS.season, jobType: valid.jobType,
+      occurrenceKey: valid.occurrenceKey, leaseOwner: "scoped-worker", leaseToken: "scoped-token",
+      nowMs: WEEK_END_MS + 1, leaseExpiresAtMs: WEEK_END_MS + 101 };
+    const scoped = (leagueIds, nhlSeasonKey = "20262027") => createSqliteMatchupJobRepository({ database, executionScope: { leagueIds, nhlSeasonKey } });
+    const before = database.serialize();
+    for (const candidate of [scoped([IDS.otherLeague]), scoped([IDS.league], "20272028")]) {
+      assert.deepEqual(candidate.listDue({ nowMs: command.nowMs, limit: 1 }), []);
+      assert.equal(candidate.claim(command).acquired, false);
+      assert.deepEqual(database.serialize(), before);
+    }
+    const allowed = scoped([IDS.league]);
+    assert.deepEqual(allowed.listDue({ nowMs: command.nowMs, limit: 1 }).map(row => row.id), [valid.runId]);
+    // A baseline appearing after listing must also stop the transactional claim.
+    database.prepare("INSERT INTO stat_sources (id,provider,status,created_at_ms,updated_at_ms,version) VALUES (?,'release_qa_fixture','active',1,1,1)").run(uuid(800));
+    database.prepare("INSERT INTO stat_refreshes (id,stat_source_id,nhl_season_key,source_version,status,started_at_ms,completed_at_ms,player_count,version) VALUES (?,?,'20262027','scope-test','succeeded',1,2,0,1)").run(uuid(801),uuid(800));
+    database.prepare("INSERT INTO stat_snapshots (id,stat_source_id,source_refresh_id,league_id,season_id,matchup_week_id,intended_use,completeness_status,freshness_status,captured_at_ms,committed,created_at_ms) VALUES (?,?,?,?,?,?,'matchup_baseline','complete','fresh',2,1,2)").run(uuid(802),uuid(800),uuid(801),IDS.league,IDS.season,IDS.week);
+    const protectedBefore = database.serialize();
+    assert.deepEqual(allowed.listDue({ nowMs: command.nowMs }), []);
+    assert.equal(allowed.claim(command).acquired, false);
+    assert.deepEqual(database.serialize(), protectedBefore);
+    // A held earlier job must not fill the batch and starve a later eligible week.
+    const nextWeek = uuid(803), offset = 604_800_000;
+    database.prepare(`INSERT INTO matchup_weeks (id,league_id,season_id,week_key,sequence,starts_at_ms,baseline_at_ms,locks_at_ms,ends_at_ms,rolls_over_at_ms,status,created_at_ms,updated_at_ms,version)
+      SELECT ?,league_id,season_id,'regular-02',2,starts_at_ms+?,baseline_at_ms+?,locks_at_ms+?,ends_at_ms+?,rolls_over_at_ms+?,'scheduled',1,1,1 FROM matchup_weeks WHERE id=?`).run(nextWeek,offset,offset,offset,offset,offset,IDS.week);
+    const later = occurrence("matchup:baseline", BASELINE_MS + offset, { weekId: nextWeek, runId: uuid(804), bindingId: uuid(805) });
+    repository.schedule(later);
+    assert.deepEqual(allowed.listDue({ nowMs: WEEK_END_MS + offset + 1, limit: 1 }).map(row => row.id), [later.runId]);
+    assert.equal(allowed.claim({ ...command, jobType: later.jobType, occurrenceKey: later.occurrenceKey, nowMs: WEEK_END_MS + offset + 1, leaseExpiresAtMs: WEEK_END_MS + offset + 101 }).acquired, true);
+    // Existing non-NHL operation remains unchanged when no NHL scope is configured.
+    assert.equal(repository.listDue({ nowMs: command.nowMs }).length, 1);
+    assert.equal(scoped([IDS.league], null).claim(command).acquired, true);
+  });
+
   test("admits an exact migrated legacy occurrence only when its durable binding is valid", (t) => {
     const { database, repository } =
       createRuntime(t);

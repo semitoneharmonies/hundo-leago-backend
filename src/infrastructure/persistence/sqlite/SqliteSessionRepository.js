@@ -201,7 +201,15 @@ function runTransactionHook(hook, context) {
 
 function createSqliteSessionRepository({
   database,
+  onSessionChanged = null,
 } = {}) {
+  if (onSessionChanged !== null && typeof onSessionChanged !== "function") {
+    throw new TypeError("Session change observer must be a function or null.");
+  }
+  function notifySessionChanged(userId) {
+    // Transport availability must not change the result of a committed write.
+    try { onSessionChanged?.(userId); } catch { /* best-effort notification */ }
+  }
   const records = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("sessions"),
@@ -378,7 +386,7 @@ function createSqliteSessionRepository({
     }
 
     try {
-      return transitionTransaction.immediate({
+      const updated = transitionTransaction.immediate({
         sessionId,
         expectedVersion: options.expectedVersion,
         changedAtMs,
@@ -386,6 +394,8 @@ function createSqliteSessionRepository({
         reason: options.reason,
         hook: options.transactionHook,
       });
+      notifySessionChanged(updated.user_id);
+      return updated;
     } catch (error) {
       throw mapRepositoryError(error, {
         operation:
@@ -466,11 +476,13 @@ function createSqliteSessionRepository({
       }
 
       try {
-        return replaceTransaction.immediate({
+        const replaced = replaceTransaction.immediate({
           replacement: options.replacement,
           replacedAtMs,
           hook: options.transactionHook,
         });
+        if (replaced.previous) notifySessionChanged(replaced.previous.user_id);
+        return replaced;
       } catch (error) {
         throw mapRepositoryError(error, {
           operation: "replaceActive",

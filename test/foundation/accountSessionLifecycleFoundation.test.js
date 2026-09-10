@@ -552,6 +552,7 @@ async function startSessionApi(t, runtime) {
     });
   const router = createAccountSessionRouter({
     requestSecurity,
+    leagueReadService: { list: () => ({ leagues: [] }) },
     signInService: runtime.signInService(),
     signOutService,
     passwordChangeService,
@@ -2040,6 +2041,8 @@ describe("M3-08 isolated session HTTP contracts", () => {
       .prepare("SELECT * FROM sessions ORDER BY id")
       .all();
     assert.equal(bootstrap.status, 200);
+    assert.deepEqual(bootstrap.json.data.leagues, []);
+    assert.equal(bootstrap.json.data.defaultLeagueId, null);
     assert.equal(
       bootstrap.json.data.session.id,
       signIn.json.data.session.id

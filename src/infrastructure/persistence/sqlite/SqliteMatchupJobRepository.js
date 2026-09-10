@@ -198,13 +198,14 @@ function executionFromCommand(command) {
   ));
 }
 
-function createSqliteMatchupJobRepository({ database, beforeCommit } = {}) {
+function createSqliteMatchupJobRepository({ database, beforeCommit, executionScope } = {}) {
   if (!database || typeof database.prepare !== "function") {
     throw new TypeError("createSqliteMatchupJobRepository requires a database");
   }
   if (beforeCommit !== undefined && typeof beforeCommit !== "function") {
     throw new TypeError("matchup-job beforeCommit must be a function");
   }
+  const scope = require("./SqliteMatchupExecutionScope").createSqliteMatchupExecutionScope(executionScope, "owning_week");
   const occurrenceExecutionGuard =
     createSqliteMatchupOccurrenceExecutionGuard({
       database,
@@ -405,7 +406,7 @@ function createSqliteMatchupJobRepository({ database, beforeCommit } = {}) {
       )
   `;
   const due = database.prepare(`
-    ${gateSelect}
+    ${gateSelect} ${scope.sql}
       AND job_runs.job_type IN (
         ${M6_JOB_TYPES.map(() => "?").join(", ")}
       )
@@ -434,7 +435,7 @@ function createSqliteMatchupJobRepository({ database, beforeCommit } = {}) {
     LIMIT ?
   `);
   const gatedByOccurrence = database.prepare(`
-    ${gateSelect}
+    ${gateSelect} ${scope.sql}
       AND job_runs.league_id = @leagueId
       AND job_runs.season_id = @seasonId
       AND job_runs.job_type = @jobType
@@ -879,7 +880,7 @@ function createSqliteMatchupJobRepository({ database, beforeCommit } = {}) {
         occurrence: null,
       });
     }
-    const gatedRows = gatedByOccurrence.all(command);
+    const gatedRows = gatedByOccurrence.all({ ...command, ...scope.parameters });
     if (
       gatedRows.length !== 1 ||
       !gateOccurrenceIsCanonical(gatedRows[0])
@@ -897,7 +898,7 @@ function createSqliteMatchupJobRepository({ database, beforeCommit } = {}) {
     if (claim.run({ ...command, runId: row.id, expectedVersion: row.version }).changes !== 1) {
       return Object.freeze({ acquired: false, occurrence: freeze(byOccurrence.get(command)) });
     }
-    const claimedRows = gatedByOccurrence.all(command);
+    const claimedRows = gatedByOccurrence.all({ ...command, ...scope.parameters });
     if (
       claimedRows.length !== 1 ||
       !gateOccurrenceIsCanonical(claimedRows[0]) ||
@@ -1034,6 +1035,7 @@ function createSqliteMatchupJobRepository({ database, beforeCommit } = {}) {
       return Object.freeze(
         due
           .all(
+            scope.parameters,
             ...M6_JOB_TYPES,
             nowMs,
             nowMs,
