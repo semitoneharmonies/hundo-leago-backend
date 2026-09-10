@@ -232,14 +232,93 @@ function deepFreeze(value) {
     : Object.freeze(value);
 }
 
+// Approved September 2026 calendar. End instants are exclusive local midnights.
+// Exact matching keeps existing test calendars and other NHL seasons unchanged.
+function defaultSeasonCalendar(nhlSeasonKey, timeZone) {
+  if (nhlSeasonKey !== "20262027") return null;
+  const at = (year, month, day) => localMidnight({ year, month, day }, timeZone);
+  return deepFreeze({
+    nhlSeasonKey,
+    nhlRegularSeasonStartsAtMs: at(2026, 9, 29),
+    nhlRegularSeasonEndsAtMs: at(2027, 4, 11),
+    fantasyPlayoffsStartAtMs: at(2027, 3, 15),
+    fantasyPlayoffsEndAtMs: at(2027, 4, 11),
+    firstWeekStartsAtMs: at(2026, 9, 29),
+    scoringBreaks: [
+      { startsAtMs: at(2026, 12, 23), endsAtMs: at(2026, 12, 26) },
+      { startsAtMs: at(2027, 2, 4), endsAtMs: at(2027, 2, 8) },
+    ],
+  });
+}
+
+function isDefaultSeasonCalendar(calendar, timeZone) {
+  const defaults = defaultSeasonCalendar(calendar.nhlSeasonKey, timeZone);
+  return defaults !== null && [
+    "nhlRegularSeasonStartsAtMs", "nhlRegularSeasonEndsAtMs",
+    "fantasyPlayoffsStartAtMs", "fantasyPlayoffsEndAtMs",
+  ].every((field) => calendar[field] === defaults[field]);
+}
+
+function isDefaultWeekStart(timestampMs, calendar, timeZone) {
+  return isDefaultSeasonCalendar(calendar, timeZone) &&
+    Number.isSafeInteger(timestampMs) &&
+    localMidnight(getPartsInTZ(new Date(timestampMs), timeZone), timeZone) === timestampMs &&
+    !defaultSeasonCalendar(calendar.nhlSeasonKey, timeZone).scoringBreaks.some(
+      ({ startsAtMs, endsAtMs }) => timestampMs >= startsAtMs && timestampMs < endsAtMs);
+}
+
+function buildDefaultWeekWindows(firstStartsAtMs, endsAtMs, timeZone, breaks) {
+  const segments = [];
+  let start = firstStartsAtMs;
+  for (const pause of breaks) {
+    if (pause.endsAtMs <= start || pause.startsAtMs >= endsAtMs) continue;
+    if (start < pause.startsAtMs) segments.push([start, pause.startsAtMs]);
+    start = pause.endsAtMs;
+  }
+  if (start < endsAtMs) segments.push([start, endsAtMs]);
+  return segments.flatMap(([segmentStart, segmentEnd]) => {
+    const windows = [];
+    for (let cursor = segmentStart; cursor < segmentEnd;) {
+      const end = Math.min(firstEligibleMonday(addLocalDays(cursor, 1, timeZone), timeZone), segmentEnd);
+      windows.push({ startsAtMs: cursor, endsAtMs: end });
+      cursor = end;
+    }
+    // Attach very short holiday fragments to the adjacent week on the same side
+    // of the break. No matchup includes an excluded day.
+    if (windows.length > 1 && windows[0].endsAtMs < addLocalDays(windows[0].startsAtMs, 4, timeZone)) {
+      windows[1].startsAtMs = windows.shift().startsAtMs;
+    }
+    if (windows.length > 1 && windows.at(-1).endsAtMs < addLocalDays(windows.at(-1).startsAtMs, 4, timeZone)) {
+      const last = windows.pop();
+      windows.at(-1).endsAtMs = last.endsAtMs;
+    }
+    return windows;
+  });
+}
+
 function buildWeeks({
   teams,
   firstWeekStartsAtMs,
   fantasyPlayoffsStartAtMs,
   timeZone,
+  scoringBreaks = null,
 }) {
   const rounds = createRoundRobin(teams);
   const weeks = [];
+  if (scoringBreaks !== null) {
+    return buildDefaultWeekWindows(firstWeekStartsAtMs, fantasyPlayoffsStartAtMs, timeZone, scoringBreaks)
+      .map(({ startsAtMs, endsAtMs }, index) => ({
+        sequence: index + 1,
+        weekKey: `regular-${String(index + 1).padStart(2, "0")}`,
+        startsAtMs,
+        baselineAtMs: boundary(startsAtMs, 1, timeZone),
+        locksAtMs: boundary(startsAtMs, 16, timeZone),
+        endsAtMs,
+        rollsOverAtMs: endsAtMs,
+        pairs: rounds[index % rounds.length].pairs,
+        byeTeamId: rounds[index % rounds.length].byeTeamId,
+      }));
+  }
   for (
     let startsAtMs = firstWeekStartsAtMs, sequence = 1;
     startsAtMs < fantasyPlayoffsStartAtMs;
@@ -287,7 +366,7 @@ function stableScheduleId(value, description) {
   return value;
 }
 
-function canonicalExistingScheduleWeeks(value, timeZone) {
+function canonicalExistingScheduleWeeks(value, timeZone, expectedWindows = null) {
   if (!Array.isArray(value) || value.length < 1) {
     fail(
       MATCHUP_SCHEDULE_CODES.inputInvalid,
@@ -363,7 +442,9 @@ function canonicalExistingScheduleWeeks(value, timeZone) {
       week.rollsOverAtMs
     );
     if (
-      !isLocalMondayMidnight(startsAtMs, timeZone) ||
+      (expectedWindows !== null
+        ? startsAtMs !== expectedWindows[index]?.startsAtMs || endsAtMs !== expectedWindows[index]?.endsAtMs
+        : !isLocalMondayMidnight(startsAtMs, timeZone) ||
       (
         previousStartsAtMs !== null &&
         startsAtMs !==
@@ -372,10 +453,9 @@ function canonicalExistingScheduleWeeks(value, timeZone) {
             7,
             timeZone
           )
-      ) ||
+      ) || endsAtMs !== addLocalDays(startsAtMs, 7, timeZone)) ||
       baselineAtMs !== boundary(startsAtMs, 1, timeZone) ||
       locksAtMs !== boundary(startsAtMs, 16, timeZone) ||
-      endsAtMs !== addLocalDays(startsAtMs, 7, timeZone) ||
       rollsOverAtMs !== endsAtMs
     ) {
       fail(
@@ -502,6 +582,15 @@ function planExplicitMatchupSchedule({
   const selectedFirstWeekStartsAtMs =
     safeExplicitTimestamp(firstWeekStartsAtMs);
   const plannedAtMs = safeExplicitTimestamp(nowMs);
+  const usesDefaultCalendar = isDefaultSeasonCalendar({
+    nhlSeasonKey,
+    nhlRegularSeasonStartsAtMs: regularStartsAtMs,
+    nhlRegularSeasonEndsAtMs: regularEndsAtMs,
+    fantasyPlayoffsStartAtMs: playoffsStartAtMs,
+    fantasyPlayoffsEndAtMs: playoffsEndAtMs,
+  }, zone);
+  const scoringBreaks = usesDefaultCalendar
+    ? defaultSeasonCalendar(nhlSeasonKey, zone).scoringBreaks : null;
 
   if (
     regularStartsAtMs >= playoffsStartAtMs ||
@@ -514,7 +603,7 @@ function planExplicitMatchupSchedule({
     );
   }
   if (
-    playoffsEndAtMs - playoffsStartAtMs !==
+    !usesDefaultCalendar && playoffsEndAtMs - playoffsStartAtMs !==
     FANTASY_PLAYOFF_DURATION_MS
   ) {
     fail(
@@ -541,10 +630,13 @@ function planExplicitMatchupSchedule({
       "Fantasy playoffs must begin at league-local Monday midnight."
     );
   }
-  if (!isLocalMondayMidnight(selectedFirstWeekStartsAtMs, zone)) {
+  if (usesDefaultCalendar
+    ? localMidnight(getPartsInTZ(new Date(selectedFirstWeekStartsAtMs), zone), zone) !== selectedFirstWeekStartsAtMs ||
+      scoringBreaks.some(({ startsAtMs, endsAtMs }) => selectedFirstWeekStartsAtMs >= startsAtMs && selectedFirstWeekStartsAtMs < endsAtMs)
+    : !isLocalMondayMidnight(selectedFirstWeekStartsAtMs, zone)) {
     fail(
       MATCHUP_SCHEDULE_CODES.calendarInvalid,
-      "Week 1 must begin at league-local Monday midnight."
+      "Week 1 must begin at an eligible league-local midnight."
     );
   }
   if (selectedFirstWeekStartsAtMs <= plannedAtMs) {
@@ -555,7 +647,7 @@ function planExplicitMatchupSchedule({
   }
   if (
     selectedFirstWeekStartsAtMs < regularStartsAtMs ||
-    addLocalDays(selectedFirstWeekStartsAtMs, 7, zone) >
+    addLocalDays(selectedFirstWeekStartsAtMs, usesDefaultCalendar ? 1 : 7, zone) >
       playoffsStartAtMs
   ) {
     fail(
@@ -569,6 +661,7 @@ function planExplicitMatchupSchedule({
     firstWeekStartsAtMs: selectedFirstWeekStartsAtMs,
     fantasyPlayoffsStartAtMs: playoffsStartAtMs,
     timeZone: zone,
+    scoringBreaks,
   });
 
   return deepFreeze({
@@ -596,8 +689,18 @@ function planMatchupWeekOneShift({
   nowMs,
 } = {}) {
   const zone = validateTimeZone(timeZone);
+  const usesDefaultCalendar = isDefaultSeasonCalendar({
+    nhlSeasonKey, nhlRegularSeasonStartsAtMs, nhlRegularSeasonEndsAtMs,
+    fantasyPlayoffsStartAtMs, fantasyPlayoffsEndAtMs,
+  }, zone);
+  const expectedWindows = usesDefaultCalendar && Array.isArray(weeks) && weeks.length > 0
+    ? buildDefaultWeekWindows(safeExplicitTimestamp(weeks[0].startsAtMs), safeExplicitTimestamp(fantasyPlayoffsStartAtMs), zone, defaultSeasonCalendar(nhlSeasonKey, zone).scoringBreaks)
+    : null;
+  if (expectedWindows !== null && expectedWindows.length !== weeks.length) {
+    fail(MATCHUP_SCHEDULE_CODES.calendarInvalid, "The existing default calendar is incomplete.");
+  }
   const existingWeeks =
-    canonicalExistingScheduleWeeks(weeks, zone);
+    canonicalExistingScheduleWeeks(weeks, zone, expectedWindows);
   const previousFirstWeekStartsAtMs =
     existingWeeks[0].startsAtMs;
   const selectedFirstWeekStartsAtMs =
@@ -656,14 +759,17 @@ function planMatchupWeekOneShift({
     );
   }
 
+  if (usesDefaultCalendar && calendar.weeks.length !== existingWeeks.length) {
+    fail(MATCHUP_SCHEDULE_CODES.calendarInvalid, "Changing Week 1 must preserve the number of scheduled matchups.");
+  }
   const shiftedWeeks = existingWeeks.map(
     (week, index) => {
-      const startsAtMs = addLocalDays(
+      const startsAtMs = usesDefaultCalendar ? calendar.weeks[index].startsAtMs : addLocalDays(
         selectedFirstWeekStartsAtMs,
         index * 7,
         zone
       );
-      const endsAtMs = addLocalDays(
+      const endsAtMs = usesDefaultCalendar ? calendar.weeks[index].endsAtMs : addLocalDays(
         startsAtMs,
         7,
         zone
@@ -787,6 +893,9 @@ function planMatchupSchedule({
 }
 
 module.exports = {
+  defaultSeasonCalendar,
+  isDefaultSeasonCalendar,
+  isDefaultWeekStart,
   FANTASY_PLAYOFF_DURATION_MS,
   MAXIMUM_UTC_TIMESTAMP_MS,
   MATCHUP_SCHEDULE_CODES,

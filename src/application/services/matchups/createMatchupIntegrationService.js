@@ -493,6 +493,8 @@ function createMatchupIntegrationService({
       matchupCount: preview.plan.weeks.reduce((sum, week) => sum + week.pairs.length, 0),
       byeCount: preview.plan.weeks.filter((week) => week.byeTeamId !== null).length,
       lastWeekEndsAtMs: preview.plan.weeks.at(-1)?.endsAtMs ?? null,
+      weeks: Object.freeze(preview.plan.weeks.map(({ sequence, startsAtMs, endsAtMs }) =>
+        Object.freeze({ sequence, startsAtMs, endsAtMs }))),
     });
     return Object.freeze({
       code: "MATCHUP_SCHEDULE_PREVIEWED",

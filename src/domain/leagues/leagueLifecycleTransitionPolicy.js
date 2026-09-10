@@ -4,6 +4,8 @@ const {
 const {
   addLocalDays,
   firstEligibleMonday,
+  isDefaultSeasonCalendar,
+  isDefaultWeekStart,
 } = require("../matchups/matchupSchedulePolicy");
 
 const LEAGUE_LIFECYCLE_TRANSITION_OPERATION =
@@ -384,7 +386,7 @@ function utcYear(value) {
   return new Date(value).getUTCFullYear();
 }
 
-function calendarHasCanonicalShape(value) {
+function calendarHasCanonicalShape(value, timeZone) {
   return (
     hasExactKeys(value, SEASON_CALENDAR_KEYS) &&
     [
@@ -399,9 +401,9 @@ function calendarHasCanonicalShape(value) {
       value.fantasyPlayoffsEndAtMs &&
     value.fantasyPlayoffsEndAtMs ===
       value.nhlRegularSeasonEndsAtMs &&
-    value.fantasyPlayoffsEndAtMs -
+    (isDefaultSeasonCalendar(value, timeZone) || value.fantasyPlayoffsEndAtMs -
         value.fantasyPlayoffsStartAtMs ===
-      FANTASY_PLAYOFF_DURATION_MS
+      FANTASY_PLAYOFF_DURATION_MS)
   );
 }
 
@@ -424,9 +426,10 @@ function calendarMatchesNhlSeasonKey(
 
 function normalizeRolloverCalendarSeason(
   value,
-  role
+  role,
+  timeZone
 ) {
-  if (!calendarHasCanonicalShape(value)) {
+  if (!calendarHasCanonicalShape(value, timeZone)) {
     failRolloverNotReady(
       `${role}_calendar_invalid`
     );
@@ -487,13 +490,16 @@ function validateSeasonRolloverCalendar(value) {
       "rollover_calendar_invalid"
     );
   }
+  const leagueTimeZone = canonicalLeagueTimeZone(value.leagueTimeZone);
   const source = normalizeRolloverCalendarSeason(
     value.source,
-    "source"
+    "source",
+    leagueTimeZone
   );
   const target = normalizeRolloverCalendarSeason(
     value.target,
-    "target"
+    "target",
+    leagueTimeZone
   );
   const targetIdentity =
     validateCanonicalConsecutiveNhlSeason({
@@ -508,10 +514,6 @@ function validateSeasonRolloverCalendar(value) {
   if (!timestamps.every(safeUtcTimestamp)) {
     failRolloverNotReady("rollover_time_invalid");
   }
-  const leagueTimeZone =
-    canonicalLeagueTimeZone(
-      value.leagueTimeZone
-    );
   if (
     value.entryDraftStartsAtMs <
     source.nhlRegularSeasonEndsAtMs
@@ -539,7 +541,7 @@ function validateSeasonRolloverCalendar(value) {
     );
   }
   if (
-    firstEligibleMonday(
+    !isDefaultWeekStart(value.weekOneStartsAtMs, target, leagueTimeZone) && firstEligibleMonday(
       value.weekOneStartsAtMs,
       leagueTimeZone
     ) !== value.weekOneStartsAtMs

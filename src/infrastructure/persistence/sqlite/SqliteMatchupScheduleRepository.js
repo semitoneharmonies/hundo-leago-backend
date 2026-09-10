@@ -3679,8 +3679,6 @@ function createSqliteMatchupScheduleRepository({
             week.rollsOverAtMs ===
               week.endsAtMs
           ) ||
-          week.previousStartsAtMs ===
-            week.startsAtMs ||
           !Array.isArray(week.matchups) ||
           week.matchups.length < 1 ||
           !Array.isArray(week.occurrences) ||

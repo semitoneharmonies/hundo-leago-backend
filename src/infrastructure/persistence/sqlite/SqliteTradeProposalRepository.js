@@ -2004,6 +2004,10 @@ function createSqliteTradeProposalRepository({
     const buyouts = listAcceptanceBuyoutsStatement
       .all(command)
       .map((row) => ({ ...row }));
+    const beforeTeams = new Map([command.proposingTeamId, command.receivingTeamId].map((teamId) => {
+      const before = projectTeamAcceptancePreview({ teamId, settings, roster, retentions, buyouts });
+      return [teamId, Object.freeze({ cap: before.cap, rosterCounts: before.rosterCounts, retentionSlots: before.retentionSlots })];
+    }));
     const movingOwnershipIds = new Set();
     for (let index = 0; index < assets.length; index += 1) {
       if (!["contract", "prospect_right"].includes(assets[index].inputType)) {
@@ -2013,10 +2017,16 @@ function createSqliteTradeProposalRepository({
       movingOwnershipIds.add(snapshot.ownership.id);
     }
     const occupiedSlots = new Set();
+    const remainingCounts = new Map();
+    const categoryKey = (row, teamId = row.team_id) =>
+      row.roster_category === "Active"
+        ? `${teamId}:Active:${row.position_group}`
+        : `${teamId}:${row.roster_category}`;
     for (const row of roster) {
-      if (movingOwnershipIds.has(row.ownership_id) || row.slot_number === null) {
-        continue;
-      }
+      if (movingOwnershipIds.has(row.ownership_id)) continue;
+      const key = categoryKey(row);
+      remainingCounts.set(key, (remainingCounts.get(key) || 0) + 1);
+      if (row.slot_number === null) continue;
       occupiedSlots.add(
         row.roster_category === "Active"
           ? `${row.team_id}:Active:${row.position_group}:${row.slot_number}`
@@ -2024,8 +2034,16 @@ function createSqliteTradeProposalRepository({
       );
     }
     const plannedRosterSlotByAssetId = new Map();
+    const plannedRosterCategoryByAssetId = new Map();
     function assignDestinationSlot(row, destinationTeamId) {
       if (row.roster_category === "Prospect") return null;
+      const activeLimit = row.position_group === "F"
+        ? settings.active_forward_slots
+        : settings.active_defence_slots;
+      const activeCount = remainingCounts.get(`${destinationTeamId}:Active:${row.position_group}`) || 0;
+      row.roster_category = activeCount < activeLimit
+        ? "Active"
+        : "Bench";
       const limit =
         row.roster_category === "Active"
           ? row.position_group === "F"
@@ -2034,6 +2052,10 @@ function createSqliteTradeProposalRepository({
           : row.roster_category === "Bench"
             ? settings.bench_slots
             : settings.injured_reserve_slots;
+      const key = categoryKey(row, destinationTeamId);
+      const count = remainingCounts.get(key) || 0;
+      remainingCounts.set(key, count + 1);
+      if (count >= limit) return null;
       for (let slotNumber = 1; slotNumber <= limit; slotNumber += 1) {
         const key =
           row.roster_category === "Active"
@@ -2063,6 +2085,7 @@ function createSqliteTradeProposalRepository({
             asset.destinationTeamId
           );
           plannedRosterSlotByAssetId.set(asset.id, row.slot_number);
+          plannedRosterCategoryByAssetId.set(asset.id, row.roster_category);
           break;
         }
         case "prospect_right": {
@@ -2072,6 +2095,7 @@ function createSqliteTradeProposalRepository({
           row.team_id = asset.destinationTeamId;
           row.slot_number = null;
           plannedRosterSlotByAssetId.set(asset.id, null);
+          plannedRosterCategoryByAssetId.set(asset.id, "Prospect");
           if (row.contract_id !== null) {
             row.contract_team_id = asset.destinationTeamId;
           }
@@ -2102,15 +2126,16 @@ function createSqliteTradeProposalRepository({
       }
     }
     const teams = Object.freeze(
-      [command.proposingTeamId, command.receivingTeamId].map((teamId) =>
-        projectTeamAcceptancePreview({
+      [command.proposingTeamId, command.receivingTeamId].map((teamId) => Object.freeze({
+        ...projectTeamAcceptancePreview({
           teamId,
           settings,
           roster,
           retentions,
           buyouts,
-        })
-      )
+        }),
+        before: beforeTeams.get(teamId),
+      }))
     );
     return Object.freeze({
       trade: Object.freeze({ ...context }),
@@ -2126,6 +2151,8 @@ function createSqliteTradeProposalRepository({
             ),
             plannedRosterSlotNumber:
               plannedRosterSlotByAssetId.get(asset.id) ?? null,
+            plannedRosterCategory:
+              plannedRosterCategoryByAssetId.get(asset.id) ?? null,
           })
         )
       ),
@@ -2492,9 +2519,14 @@ function createSqliteTradeProposalRepository({
           "sourceTeamId",
           "destinationTeamId",
           "plannedRosterSlotNumber",
+          ...(Object.hasOwn(transfer || {}, "plannedRosterCategory") ? ["plannedRosterCategory"] : []),
         ],
         "public transfer receipt"
       );
+      if (Object.hasOwn(transfer || {}, "plannedRosterCategory") &&
+          !["Active", "Bench"].includes(transfer.plannedRosterCategory)) {
+        persistedAggregateFail("The accepted trade roster destination is invalid.");
+      }
       const assetId = persistedStableId(
         transfer.assetId,
         "public transfer asset identifier"
@@ -2681,6 +2713,7 @@ function createSqliteTradeProposalRepository({
         record.asset.asset_type === "contract"
           ? record.snapshot.ownership.rosterCategory
           : "Prospect";
+      const destinationRosterCategory = record.publicTransfer.plannedRosterCategory ?? rosterCategory;
       const sourceSlotNumber = record.snapshot.ownership.slotNumber ?? null;
       const destinationSlotNumber =
         record.asset.asset_type === "contract"
@@ -2710,7 +2743,7 @@ function createSqliteTradeProposalRepository({
           destinationOwnership.player_id !== record.playerId ||
           destinationOwnership.team_id !== mapping.destinationTeamId ||
           destinationOwnership.ownership_kind !== ownershipKind ||
-          destinationOwnership.roster_category !== rosterCategory ||
+          destinationOwnership.roster_category !== destinationRosterCategory ||
           destinationOwnership.position_group !==
             record.snapshot.ownership.positionGroup ||
           destinationOwnership.slot_number !== destinationSlotNumber ||
@@ -2763,7 +2796,7 @@ function createSqliteTradeProposalRepository({
           playerId: record.playerId,
           teamId: mapping.destinationTeamId,
           ownershipKind,
-          rosterCategory,
+          rosterCategory: destinationRosterCategory,
           positionGroup: record.snapshot.ownership.positionGroup,
           slotNumber: destinationSlotNumber,
           version: 1,
@@ -3165,7 +3198,7 @@ function createSqliteTradeProposalRepository({
           asset.asset_type === "contract" ? "Rostered" : "Prospect Right",
         rosterCategory:
           asset.asset_type === "contract"
-            ? current.ownership.rosterCategory
+            ? asset.plannedRosterCategory
             : "Prospect",
         positionGroup: current.ownership.positionGroup,
         plannedRosterSlotNumber:
@@ -3205,7 +3238,7 @@ function createSqliteTradeProposalRepository({
             playerId: current.player.id,
             teamId: asset.source_team_id,
             ownershipKind: tenure.ownershipKind,
-            rosterCategory: tenure.rosterCategory,
+            rosterCategory: current.ownership.rosterCategory,
             positionGroup: tenure.positionGroup,
             slotNumber: current.ownership.slotNumber ?? null,
             version: tenure.sourceOwnershipVersion,
@@ -3414,6 +3447,9 @@ function createSqliteTradeProposalRepository({
           sourceTeamId: asset.source_team_id,
           destinationTeamId: asset.destination_team_id,
           plannedRosterSlotNumber: asset.plannedRosterSlotNumber,
+          ...(asset.asset_type === "contract" && asset.plannedRosterCategory !== asset.currentSnapshot.ownership.rosterCategory
+            ? { plannedRosterCategory: asset.plannedRosterCategory }
+            : {}),
         })
       );
     }

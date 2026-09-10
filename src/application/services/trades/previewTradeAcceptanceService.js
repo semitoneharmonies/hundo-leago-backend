@@ -31,6 +31,7 @@ function projectAsset(asset) {
         : asset.asset_type,
     sequence: asset.sequence,
     plannedRosterSlotNumber: asset.plannedRosterSlotNumber,
+    plannedRosterCategory: asset.plannedRosterCategory,
     proposalSnapshot: asset.proposalSnapshot,
     currentSnapshot: asset.currentSnapshot,
   });

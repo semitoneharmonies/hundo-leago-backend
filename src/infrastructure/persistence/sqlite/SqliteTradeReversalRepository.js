@@ -701,7 +701,9 @@ function createSqliteTradeReversalRepository({
     if (acceptanceMetadataValid) {
       for (const transfer of completionMetadata.transfers) {
         if (
-          !hasExactKeys(transfer, PUBLIC_TRANSFER_KEYS) ||
+          !hasExactKeys(transfer, [...PUBLIC_TRANSFER_KEYS,
+            ...(Object.hasOwn(transfer || {}, "plannedRosterCategory") ? ["plannedRosterCategory"] : [])]) ||
+          (Object.hasOwn(transfer || {}, "plannedRosterCategory") && !["Active", "Bench"].includes(transfer.plannedRosterCategory)) ||
           !UUID_PATTERN.test(transfer.assetId || "") ||
           !UUID_PATTERN.test(transfer.sourceTeamId || "") ||
           !UUID_PATTERN.test(transfer.destinationTeamId || "") ||
@@ -836,7 +838,7 @@ function createSqliteTradeReversalRepository({
               season_id: context.season_id,
               player_id: snapshot.player?.id,
               ownership_kind: "Rostered",
-              roster_category: snapshot.ownership?.rosterCategory,
+              roster_category: item.transfer.plannedRosterCategory ?? snapshot.ownership?.rosterCategory,
               position_group: snapshot.ownership?.positionGroup,
               slot_number: item.transfer.plannedRosterSlotNumber,
               acquired_transaction_type: "trade_execution",
@@ -1317,7 +1319,8 @@ function createSqliteTradeReversalRepository({
     for (const transfer of completionMetadata.transfers) {
       exactPersistedObject(
         transfer,
-        PUBLIC_TRANSFER_KEYS,
+        [...PUBLIC_TRANSFER_KEYS,
+          ...(Object.hasOwn(transfer || {}, "plannedRosterCategory") ? ["plannedRosterCategory"] : [])],
         "public transfer receipt"
       );
       persistedStableId(transfer.assetId, "public transfer asset identifier");
@@ -1327,6 +1330,7 @@ function createSqliteTradeReversalRepository({
         "public transfer destination team"
       );
       if (
+        (Object.hasOwn(transfer || {}, "plannedRosterCategory") && !["Active", "Bench"].includes(transfer.plannedRosterCategory)) ||
         transfer.sourceTeamId === transfer.destinationTeamId ||
         publicTransfersByAssetId.has(transfer.assetId)
       ) {
@@ -1601,7 +1605,7 @@ function createSqliteTradeReversalRepository({
           playerId: record.snapshot.player.id,
           teamId: mapping.sourceTeamId,
           ownershipKind,
-          rosterCategory,
+          rosterCategory: record.publicTransfer.plannedRosterCategory ?? rosterCategory,
           positionGroup: record.snapshot.ownership.positionGroup,
           slotNumber: sourceSlotNumber,
           version: mapping.sourceOwnershipVersion,
@@ -1831,7 +1835,7 @@ function createSqliteTradeReversalRepository({
               teamId: asset.destination_team_id,
               ownershipKind:
                 snapshot.type === "contract" ? "Rostered" : "Prospect Right",
-              rosterCategory: snapshot.ownership.rosterCategory,
+              rosterCategory: transfer?.plannedRosterCategory ?? snapshot.ownership.rosterCategory,
               positionGroup: snapshot.ownership.positionGroup,
               slotNumber: transfer?.plannedRosterSlotNumber ?? null,
               version: tenure.sourceOwnershipVersion,

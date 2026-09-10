@@ -1446,11 +1446,10 @@ describe("M5-07 read-only trade acceptance preview", () => {
     assert.equal(result.assets[0].proposalSnapshot.ownership.rosterCategory, "Active");
     assert.equal(result.assets[0].currentSnapshot.ownership.rosterCategory, "Bench");
     assert.equal(result.generallyIllegal, true);
-    assert.ok(
-      result.teams.some((team) =>
-        team.issues.some((issue) => issue.code === "BENCH_AAV_LIMIT_EXCEEDED")
-      )
-    );
+    assert.equal(result.assets[0].plannedRosterCategory, "Active");
+    assert.equal(result.teams.some((team) =>
+      team.issues.some((issue) => issue.code === "BENCH_AAV_LIMIT_EXCEEDED")
+    ), false);
     assert.ok(
       result.teams.some((team) =>
         team.issues.some((issue) => issue.code === "SALARY_CAP_EXCEEDED")
@@ -2463,7 +2462,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
 
   test("persists an explicit unplaced transfer and general-illegality evidence", async (t) => {
     const runtime = createRuntime(t);
-    for (let slotNumber = 1; slotNumber <= 12; slotNumber += 1) {
+    for (let slotNumber = 1; slotNumber <= 16; slotNumber += 1) {
       const playerId = uuid(200 + slotNumber);
       const contractId = uuid(300 + slotNumber);
       insertPlayer(runtime.repositories, playerId, `Filler${slotNumber}`);
@@ -2482,9 +2481,9 @@ describe("M5-08 atomic typed-asset trade execution", () => {
         player_id: playerId,
         team_id: IDS.teamB,
         ownership_kind: "Rostered",
-        roster_category: "Active",
+        roster_category: slotNumber <= 12 ? "Active" : "Bench",
         position_group: "F",
-        slot_number: slotNumber,
+        slot_number: slotNumber <= 12 ? slotNumber : slotNumber - 12,
         acquired_transaction_type: "migration",
         acquired_transaction_id: null,
         created_at_ms: NOW_MS - 20_000,
@@ -2507,7 +2506,7 @@ describe("M5-08 atomic typed-asset trade execution", () => {
       .get(IDS.contractPlayer);
     assert.notEqual(ownership.id, IDS.ownership);
     assert.equal(ownership.team_id, IDS.teamB);
-    assert.equal(ownership.roster_category, "Active");
+    assert.equal(ownership.roster_category, "Bench");
     assert.equal(ownership.slot_number, null);
     assert.equal(ownership.acquired_transaction_type, "trade_execution");
     assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
@@ -2636,6 +2635,64 @@ describe("M5-08 atomic typed-asset trade execution", () => {
       true
     );
   });
+
+  for (const outgoingForward of [false, true]) {
+    test(`places an incoming player after considering all outgoing players (${outgoingForward ? "active slot freed" : "bench fallback"})`, async (t) => {
+      const runtime = createRuntime(t);
+      runtime.database.prepare("UPDATE contracts SET aav_cents = 400, original_total_value_cents = 400 WHERE id = ?").run(IDS.contract);
+      runtime.database.prepare("UPDATE contract_years SET aav_cents = 400 WHERE contract_id = ?").run(IDS.contract);
+      for (let slot = 1; slot <= 12; slot += 1) {
+        const playerId = uuid(20_000 + slot);
+        const contractId = uuid(21_000 + slot);
+        insertPlayer(runtime.repositories, playerId, `ReceiverForward${slot}`);
+        insertContract(runtime.repositories, { id: contractId, yearId: uuid(22_000 + slot), playerId, teamId: IDS.teamB, aavCents: 100, status: "active" });
+        runtime.repositories.player_ownerships.insert({
+          id: uuid(23_000 + slot), league_id: IDS.league, season_id: IDS.currentSeason,
+          player_id: playerId, team_id: IDS.teamB, ownership_kind: "Rostered",
+          roster_category: "Active", position_group: "F", slot_number: slot,
+          acquired_transaction_type: "migration", acquired_transaction_id: null,
+          created_at_ms: NOW_MS - 20_000, updated_at_ms: NOW_MS - 20_000, version: 1,
+        });
+      }
+      const proposal = create(runtime, `placement-${outgoingForward}`, ordinaryCreationInput({
+        proposingAssets: [
+          { type: "contract", contractId: IDS.contract },
+          { type: "requested_retention", contractId: IDS.contract, retainedAavCents: 100 },
+          { type: "prospect_right", playerId: IDS.prospectPlayer },
+        ],
+        receivingAssets: outgoingForward
+          ? [{ type: "contract", contractId: uuid(21_001) }]
+          : [{ type: "buyout_obligation", buyoutObligationId: IDS.buyout }],
+      }));
+      const bytesBefore = runtime.database.serialize();
+      const projected = preview(runtime, proposal.proposal.id);
+      assert.equal(bytesBefore.equals(runtime.database.serialize()), true);
+      const transfer = projected.assets.find((asset) => asset.type === "contract" && asset.sourceTeamId === IDS.teamA);
+      assert.equal(transfer.plannedRosterCategory, outgoingForward ? "Active" : "Bench");
+      assert.equal(transfer.plannedRosterSlotNumber, 1);
+      const receiver = projected.teams.find((team) => team.teamId === IDS.teamB);
+      assert.equal(receiver.rosterCounts.activeForwards, 12);
+      assert.equal(receiver.rosterCounts.bench, outgoingForward ? 0 : 1);
+      assert.equal(receiver.rosterCounts.prospects, 1);
+      assert.deepEqual(receiver.issues, []);
+      assert.equal(receiver.before.cap.usageCents, 1475);
+      assert.equal(receiver.cap.usageCents, outgoingForward ? 1575 : 1400);
+      const result = await accept(runtime, proposal.proposal.id, `accept-placement-${outgoingForward}`);
+      assert.deepEqual(result.teams, projected.teams);
+      const ownership = runtime.database.prepare("SELECT * FROM player_ownerships WHERE player_id = ?").get(IDS.contractPlayer);
+      assert.equal(ownership.roster_category, transfer.plannedRosterCategory);
+      assert.equal(ownership.slot_number, transfer.plannedRosterSlotNumber);
+      assert.equal(runtime.database.prepare("SELECT roster_category FROM player_ownerships WHERE player_id = ?").get(IDS.prospectPlayer).roster_category, "Prospect");
+      const bytesAfter = runtime.database.serialize();
+      const replay = await accept(runtime, proposal.proposal.id, `accept-placement-${outgoingForward}`);
+      assert.equal(replay.replayed, true);
+      assert.equal(bytesAfter.equals(runtime.database.serialize()), true);
+      assert.equal(recoveryPreview(runtime, proposal.proposal.id).preview.recoverable, true);
+      await reverseTrade(runtime, proposal.proposal.id, `reverse-placement-${outgoingForward}`);
+      assert.equal(runtime.database.prepare("SELECT roster_category FROM player_ownerships WHERE player_id = ?").get(IDS.contractPlayer).roster_category, "Active");
+      assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+    });
+  }
 
   test("reruns authoritative validation when a Future Considerations trade is approved", async (t) => {
     const runtime = createRuntime(t);

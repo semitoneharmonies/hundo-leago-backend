@@ -7,6 +7,7 @@ const { describe, test } = require("node:test");
 const {
   MATCHUP_SCHEDULE_CODES,
   planMatchupSchedule,
+  defaultSeasonCalendar,
 } = require("../../src/domain/matchups/matchupSchedulePolicy");
 const {
   MATCHUP_SCHEDULE_SERVICE_CODES,
@@ -491,6 +492,32 @@ describe("M6-02 matchup schedule policy", () => {
 });
 
 describe("M6-02 atomic matchup schedule persistence", () => {
+  test("persists and replays the approved default with holiday gaps and a bounded Week 1 correction", (t) => {
+    const runtime = createRuntime(t);
+    runtime.database.prepare(`UPDATE seasons SET regular_season_starts_at_ms = NULL, regular_season_ends_at_ms = NULL,
+      fantasy_playoffs_start_at_ms = NULL, fantasy_playoffs_end_at_ms = NULL WHERE id = ?`).run(runtime.scope.seasonId);
+    const { nhlSeasonKey, scoringBreaks, ...calendar } = defaultSeasonCalendar("20262027", "America/Vancouver");
+    assert.equal(nhlSeasonKey, "20262027");
+    const before = runtime.database.serialize();
+    const preview = runtime.service.preview({ ...runtime.scope, ...calendar, actorUserId: runtime.scope.commissionerId, nowMs: NOW_MS });
+    assert.equal(before.equals(runtime.database.serialize()), true);
+    const command = confirmedScheduleCommand(runtime.scope, { input: { ...calendar, confirmed: true } });
+    const result = runtime.service.generate(command);
+    assert.equal(result.calendarPersisted, true);
+    assert.equal(result.weekCount, 22);
+    const rows = runtime.database.prepare("SELECT starts_at_ms, ends_at_ms FROM matchup_weeks WHERE season_id = ? ORDER BY sequence").all(runtime.scope.seasonId);
+    assert.deepEqual(rows, preview.plan.weeks.map((w) => ({ starts_at_ms: w.startsAtMs, ends_at_ms: w.endsAtMs })));
+    for (const row of rows) assert.equal(scoringBreaks.some((b) => row.starts_at_ms < b.endsAtMs && row.ends_at_ms > b.startsAtMs), false);
+    const after = runtime.database.serialize();
+    assert.deepEqual(runtime.service.generate(command), result);
+    assert.equal(after.equals(runtime.database.serialize()), true);
+    const shifted = runtime.service.shiftWeekOne(shiftWeekOneCommand(runtime.scope, { weekId: result.firstWeekId, expectedWeekVersion: 1,
+      firstWeekStartsAtMs: Date.parse("2026-09-30T07:00:00Z"), idempotencyKey: "default-partial-week-correction" }));
+    assert.equal(shifted.firstWeekStartsAtMs, Date.parse("2026-09-30T07:00:00Z"));
+    assert.deepEqual(runtime.database.prepare("SELECT starts_at_ms, ends_at_ms FROM matchup_weeks WHERE season_id = ? ORDER BY sequence").all(runtime.scope.seasonId).slice(1), rows.slice(1));
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+  });
+
   test("keeps preview read-only and persists participants, weeks, pairs, byes, and operation once", (t) => {
     const observedSeams = [];
     const runtime = createRuntime(t, {
