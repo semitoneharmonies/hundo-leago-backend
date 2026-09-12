@@ -4612,3 +4612,134 @@ describe(
     });
   }
 );
+
+test("restored running FAD readiness rejects its old worker after recovery preparation", async (t) => {
+  const crypto = require("node:crypto");
+  const { openReadonlyDatabase } = require("../../src/infrastructure/database/connection");
+  const { canonicalize } = require("../../src/infrastructure/migration/sourceInventory");
+  const { initializeDatabaseIdentity } = require("../../src/infrastructure/database/databaseIdentity");
+  const { loadBackupConfig } = require("../../src/config/loadBackupConfig");
+  const { createObjectStorageAdapter } = require("../../src/infrastructure/backups/createObjectStorageAdapter");
+  const { createEncryptedOffsiteBackup } = require("../../src/operations/backups/createEncryptedOffsiteBackup");
+  const { restoreEncryptedBackupToCleanPath } = require("../../src/operations/backups/restoreEncryptedBackupToCleanPath");
+  const { prepareRecoveryCredentials } = require("../../src/operations/backups/prepareRecoveryCredentials");
+  const { buildRecoveryReconciliationPlan } = require("../../src/operations/backups/buildRecoveryReconciliationPlan");
+  const { assertRecoveryRuntimeAllowed } = require("../../src/infrastructure/database/recoveryHold");
+  const { database, repository } = migratedReadinessFixture(t);
+  const root = path.dirname(database.name);
+  const identity = { environmentId: "test:recovery-fad-readiness", databaseId: "recovery-fad-readiness-fixture" };
+  initializeDatabaseIdentity({ databasePath: database.name, persistentRoot: root, applicationEnvironment: "staging",
+    ...identity, databaseCreatedAt: "2026-09-12T00:00:00.000Z", migrationsDirectory: path.resolve("database/migrations") });
+  const claimInput = readinessClaimCommand();
+  const claimed = repository.claim(claimInput);
+  assert.equal(claimed.acquired, true);
+  const selectedPair = readMigratedReadinessPair(database);
+  assert.equal(selectedPair.job.status, "running");
+  assert.equal(selectedPair.readiness.status, "running");
+  const hash = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
+  const key = crypto.randomBytes(32);
+  const config = loadBackupConfig({ env: {
+    BACKUP_LOCAL_DIR: path.join(root, "backup-work"), BACKUP_OBJECT_ENDPOINT: "https://recovery-fad.invalid",
+    BACKUP_OBJECT_REGION: "local-1", BACKUP_OBJECT_BUCKET: "hundo-recovery-test", BACKUP_OBJECT_PREFIX: "test/recovery-fad/",
+    BACKUP_OBJECT_ACCESS_KEY_ID: "test-only", BACKUP_OBJECT_SECRET_ACCESS_KEY: "test-only",
+    BACKUP_ENCRYPTION_KEY_VERSION: "recovery-test-v1", BACKUP_ENCRYPTION_KEY: key.toString("base64url"),
+    BACKUP_SCHEDULE_ENABLED: "false",
+  }, runtimeConfig: { appEnv: "staging", persistentRoot: root, ...identity } });
+  const objects = new Map();
+  const objectStorage = createObjectStorageAdapter({ client: {
+    async putObject({ key: objectKey, body, visibility }) {
+      assert.equal(visibility, "private"); objects.set(objectKey, Buffer.from(body)); return { stored: true };
+    },
+    async headObject({ key: objectKey }) {
+      const body = objects.get(objectKey); return body ? { byteSize: body.length, sha256: hash(body) } : null;
+    },
+    async getObject({ key: objectKey }) { return { body: Buffer.from(objects.get(objectKey)) }; },
+  } });
+  const backup = await createEncryptedOffsiteBackup({ databasePath: database.name, config, objectStorage,
+    reason: "pre-cutover-rehearsal", requestedByType: "release_qa_automation", requestedById: "recovery-fad-fixture",
+    backendBuildId: "recovery-fad-readiness", retentionClass: "incident-preservation" });
+  const oldWorkerCommand = { leagueId: IDS.league, seasonId: IDS.season, fadId: null, runId: IDS.readinessJob,
+    jobType: "fad_readiness", occurrenceKey: READINESS_OCCURRENCE_KEY, scheduledForMs: OPENED_AT_MS,
+    expectedVersion: claimed.occurrence.version, leaseOwner: claimInput.leaseOwner, leaseToken: claimInput.leaseToken,
+    completedAtMs: READINESS_STARTED_AT_MS + 1_000, errorCode: "RECOVERY_FIXTURE_FAILURE",
+    nextAttemptAtMs: READINESS_STARTED_AT_MS + 2_000 };
+  // Prove this is a valid original worker command, after taking the selected
+  // backup. The later source result is preserved; restoration must not invent it.
+  repository.fail(oldWorkerCommand);
+  assert.equal(readMigratedReadinessPair(database).job.status, "failed");
+  const sourceAfterFailure = database.serialize();
+  const restored = await restoreEncryptedBackupToCleanPath({ manifestObjectKey: backup.manifestObjectKey,
+    objectStorage, keyResolver: async () => key, expectedEnvironment: "staging",
+    expectedEnvironmentId: identity.environmentId, expectedDatabaseId: identity.databaseId,
+    targetDatabasePath: path.join(root, "restored.sqlite3"), temporaryRoot: root });
+  const restoredHash = hash(fs.readFileSync(restored.targetDatabasePath));
+  const preparedAtMs = claimInput.leaseExpiresAtMs;
+  const preparationInput = { restoredCandidate: restored, temporaryRoot: root,
+    outputDirectory: path.join(root, "prepared"), expectedEnvironmentId: identity.environmentId,
+    expectedDatabaseId: identity.databaseId, recoveryId: crypto.randomUUID(), preparedAtMs };
+  assert.throws(() => prepareRecoveryCredentials({ ...preparationInput, preparedAtMs: preparedAtMs - 1 }),
+    { code: "RECOVERY_READINESS_LEASE_ACTIVE" });
+  assert.equal(fs.existsSync(preparationInput.outputDirectory), false);
+  assert.equal(hash(fs.readFileSync(restored.targetDatabasePath)), restoredHash);
+  const prepared = prepareRecoveryCredentials(preparationInput);
+  assert.equal(prepared.reportVersion, 6);
+  assert.equal(prepared.restoredReadinessLeaseHandoffs.length, 1);
+  assert.equal(prepared.restoredJobLeasesInvalidated, 1);
+  assert.equal(prepared.activationReady, false);
+  const candidatePath = path.join(root, "prepared-worker-check.sqlite3");
+  fs.copyFileSync(prepared.preparedDatabasePath, candidatePath, fs.constants.COPYFILE_EXCL);
+  const candidate = openDatabase({ databasePath: candidatePath, environment: "staging",
+    persistentRoot: root, requirePersistentRoot: true }).database;
+  try {
+    const pair = readMigratedReadinessPair(candidate);
+    assert.notEqual(pair.job.lease_token, claimInput.leaseToken);
+    assert.match(pair.job.lease_token, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+    const lease = { lease_owner: `recovery:${prepared.recoveryId}`, lease_token: pair.job.lease_token,
+      lease_expires_at_ms: preparedAtMs + 1, updated_at_ms: preparedAtMs };
+    assert.deepEqual(pair.readiness, { ...selectedPair.readiness, ...lease, version: selectedPair.readiness.version + 1 });
+    assert.deepEqual(pair.job, { ...selectedPair.job, ...lease, version: selectedPair.job.version + 1 });
+    assert.deepEqual(prepared.restoredReadinessLeaseHandoffs, [{ jobId: pair.job.id,
+      readinessOperationId: pair.readiness.id, previousVersion: selectedPair.job.version,
+      jobRowSha256: hash(canonicalize(pair.job)), readinessRowSha256: hash(canonicalize(pair.readiness)) }]);
+    const before = candidate.serialize();
+    const changes = candidate.prepare("SELECT total_changes() n").get().n;
+    const restoredRepository = createSqliteFreeAgentDraftJobRepository({ database: candidate });
+    assert.throws(() => restoredRepository.fail(oldWorkerCommand), { code: "REPOSITORY_VERSION_CONFLICT" });
+    assert.throws(() => assertRecoveryRuntimeAllowed(candidate), { code: "DATABASE_RECOVERY_HELD" });
+    assert.deepEqual(candidate.serialize(), before);
+    assert.equal(candidate.prepare("SELECT total_changes() n").get().n, changes);
+    assert.equal(candidate.pragma("foreign_key_check").length, 0);
+  } finally { candidate.close(); }
+  const reviewPath = path.join(root, "prepared-readonly-review.sqlite3");
+  fs.copyFileSync(prepared.preparedDatabasePath, reviewPath, fs.constants.COPYFILE_EXCL);
+  const reader = openReadonlyDatabase({ databasePath: reviewPath });
+  try {
+    const options = { database: reader, credentialPreparation: prepared, observedAtMs: preparedAtMs + 1,
+      expectedEnvironmentId: identity.environmentId, expectedDatabaseId: identity.databaseId };
+    const before = reader.serialize();
+    const plan = buildRecoveryReconciliationPlan(options);
+    assert.equal(plan.planVersion, 2);
+    assert.equal(plan.activationReady, false);
+    const job = plan.jobs.find(row => row.id === IDS.readinessJob);
+    assert.equal(job.leaseExpired, true);
+    assert.equal(job.executionPermitted, false);
+    assert.equal(job.disposition, "held-awaiting-occurrence-evidence");
+    for (const change of [
+      receipt => { receipt.restoredReadinessLeaseHandoffs = []; },
+      receipt => { receipt.restoredReadinessLeaseHandoffs[0].readinessRowSha256 = "0".repeat(64); },
+      receipt => { receipt.restoredReadinessLeaseHandoffs[0].previousVersion++; },
+    ]) {
+      const altered = structuredClone(prepared);
+      const { preparedDatabasePath, inspection, reportChecksum, ...receipt } = altered;
+      change(receipt);
+      const credentialPreparation = { ...receipt, preparedDatabasePath, inspection, reportChecksum: hash(canonicalize(receipt)) };
+      assert.throws(() => buildRecoveryReconciliationPlan({ ...options, credentialPreparation }),
+        { code: "RECOVERY_PLAN_LEASE_BOUNDARY_INVALID" });
+    }
+    assert.deepEqual(reader.serialize(), before);
+    assert.equal(reader.prepare("SELECT total_changes() n").get().n, 0);
+  } finally { reader.close(); }
+  assert.equal(hash(fs.readFileSync(prepared.preparedDatabasePath)), prepared.preparedPlaintextSha256);
+  assert.equal(hash(fs.readFileSync(restored.targetDatabasePath)), restoredHash);
+  assert.deepEqual(database.serialize(), sourceAfterFailure);
+});

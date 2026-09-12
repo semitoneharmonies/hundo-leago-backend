@@ -13,6 +13,7 @@ const { createSqliteSessionRepository } = require("../../infrastructure/persiste
 const { createSqliteAccountActionTokenRepository } = require("../../infrastructure/persistence/sqlite/SqliteAccountActionTokenRepository");
 const { createSqliteSecurityAuditRepository } = require("../../infrastructure/persistence/sqlite/SqliteSecurityAuditRepository");
 const { ACTION_LINK_EVENTS, CLEARED_PAYLOAD_JSON, createSqliteOutboxEventRepository } = require("../../infrastructure/persistence/sqlite/SqliteOutboxEventRepository");
+const { createSqliteFreeAgentDraftJobRepository } = require("../../infrastructure/persistence/sqlite/SqliteFreeAgentDraftJobRepository");
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const AUDIT_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -152,9 +153,17 @@ function prepareRecoveryCredentials({
       if (audit.findById(recoveryId)) {
         fail("RECOVERY_PREPARATION_ALREADY_RECORDED", "This recovery identifier is already recorded in the candidate.");
       }
+      const beforeJobs = database.prepare("SELECT * FROM job_runs ORDER BY id").all();
+      const readinessLeases = beforeJobs.filter(row => row.job_type === "fad_readiness" && row.status === "running");
+      if (readinessLeases.some(row => !Number.isSafeInteger(row.lease_expires_at_ms) || row.lease_expires_at_ms > preparedAtMs) ||
+          (readinessLeases.length > 0 && !Number.isSafeInteger(preparedAtMs + 1))) {
+        fail("RECOVERY_READINESS_LEASE_ACTIVE", "Restored draft-readiness leases must expire before recovery preparation.");
+      }
+      const beforeReadiness = database.prepare("SELECT * FROM free_agent_draft_readiness_operations ORDER BY id").all();
       const protectedTables = database.prepare(
         "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-      ).all().map(({ name }) => name).filter((name) => !CHANGED_TABLES.has(name));
+      ).all().map(({ name }) => name).filter((name) => !CHANGED_TABLES.has(name) &&
+        !(readinessLeases.length > 0 && name === "free_agent_draft_readiness_operations"));
       const preserved = fingerprint(database, protectedTables);
       const beforeSessions = database.prepare("SELECT * FROM sessions ORDER BY id").all();
       const beforeTokens = database.prepare("SELECT * FROM account_action_tokens ORDER BY id").all();
@@ -167,7 +176,6 @@ function prepareRecoveryCredentials({
         fail("RECOVERY_PREPARATION_INPUT_INVALID", "The preparation time predates the existing recovery boundary.");
       }
       const beforeOutbox = database.prepare("SELECT * FROM outbox_events ORDER BY id").all();
-      const beforeJobs = database.prepare("SELECT * FROM job_runs ORDER BY id").all();
       const restoredLeases = beforeJobs.filter(row => ["leased", "running"].includes(row.status));
       if (restoredLeases.some(row => row.created_at_ms > preparedAtMs || row.updated_at_ms > preparedAtMs ||
           !Number.isSafeInteger(row.version + 1))) {
@@ -213,10 +221,32 @@ function prepareRecoveryCredentials({
       }
       // Retain each occurrence and its recorded state for reconciliation while
       // invalidating the restored worker's token, version and expiry. This is
-      // not a claim, retry, completion or permission to execute the occurrence.
+      // not a retry, completion or permission to execute the occurrence. Paired
+      // readiness rows use their existing expired-lease handoff while held.
       const invalidateLease = database.prepare("UPDATE job_runs SET lease_owner=NULL, lease_token=NULL, " +
         "lease_expires_at_ms=?, updated_at_ms=?, version=version+1 WHERE id=? AND version=? AND status IN ('leased','running')");
+      const readinessChanges = new Map();
+      const readinessEvidence = [];
+      const readinessRepository = readinessLeases.length > 0 ? createSqliteFreeAgentDraftJobRepository({ database }) : null;
       for (const lease of restoredLeases) {
+        if (lease.job_type === "fad_readiness" && lease.status === "running") {
+          const readiness = beforeReadiness.find(row => row.job_run_id === lease.id && row.league_id === lease.league_id);
+          if (!readiness) fail("RECOVERY_PREPARATION_POSTCHECK_FAILED", "A restored readiness lease lacks its exact paired operation.");
+          const leaseOwner = `recovery:${recoveryId}`;
+          const leaseToken = crypto.randomUUID();
+          const result = readinessRepository.claim({ leagueId: lease.league_id, seasonId: lease.season_id, fadId: null,
+            runId: lease.id, jobType: lease.job_type, occurrenceKey: lease.occurrence_key, scheduledForMs: lease.scheduled_for_ms,
+            expectedVersion: lease.version, leaseOwner, leaseToken, nowMs: preparedAtMs, leaseExpiresAtMs: preparedAtMs + 1 });
+          if (result.acquired !== true) fail("RECOVERY_PREPARATION_POSTCHECK_FAILED", "A restored readiness lease could not be handed over safely.");
+          const mutation = { lease_owner: leaseOwner, lease_token: leaseToken, lease_expires_at_ms: preparedAtMs + 1,
+            updated_at_ms: preparedAtMs, version: lease.version + 1 };
+          const job = { ...lease, ...mutation };
+          const operation = { ...readiness, ...mutation, version: readiness.version + 1 };
+          readinessChanges.set(lease.id, { job, operation });
+          readinessEvidence.push({ jobId: lease.id, readinessOperationId: readiness.id,
+            previousVersion: lease.version, jobRowSha256: hash(canonicalize(job)), readinessRowSha256: hash(canonicalize(operation)) });
+          continue;
+        }
         if (invalidateLease.run(preparedAtMs, preparedAtMs, lease.id, lease.version).changes !== 1) {
           fail("RECOVERY_PREPARATION_POSTCHECK_FAILED", "A restored job lease changed during preparation.");
         }
@@ -244,21 +274,25 @@ function prepareRecoveryCredentials({
         ...row, status: "discarded", payload_json: CLEARED_PAYLOAD_JSON, last_error_code: STALE_LINK_REASON,
         updated_at_ms: preparedAtMs, version: row.version + 1,
       });
-      const expectedJobs = beforeJobs.map(row => !["leased", "running"].includes(row.status) ? row : {
+      const expectedJobs = beforeJobs.map(row => readinessChanges.has(row.id) ? readinessChanges.get(row.id).job :
+        !["leased", "running"].includes(row.status) ? row : {
         ...row, lease_owner: null, lease_token: null, lease_expires_at_ms: preparedAtMs,
         updated_at_ms: preparedAtMs, version: row.version + 1,
       });
+      const expectedReadiness = beforeReadiness.map(row => readinessChanges.has(row.job_run_id)
+        ? readinessChanges.get(row.job_run_id).operation : row);
       if (
         canonicalize(database.prepare("SELECT * FROM sessions ORDER BY id").all()) !== canonicalize(expectedSessions) ||
         canonicalize(database.prepare("SELECT * FROM account_action_tokens ORDER BY id").all()) !== canonicalize(expectedTokens) ||
         canonicalize(database.prepare("SELECT * FROM outbox_events ORDER BY id").all()) !== canonicalize(expectedOutbox) ||
         canonicalize(database.prepare("SELECT * FROM job_runs ORDER BY id").all()) !== canonicalize(expectedJobs) ||
+        canonicalize(database.prepare("SELECT * FROM free_agent_draft_readiness_operations ORDER BY id").all()) !== canonicalize(expectedReadiness) ||
         canonicalize(database.prepare("SELECT * FROM security_audit_events WHERE id <> ? ORDER BY id").all(recoveryId)) !== canonicalize(beforeAudit) ||
         canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key NOT IN (?,?) ORDER BY metadata_key").all(RECOVERY_HOLD_KEY, RECOVERY_EPOCH_KEY)) !== canonicalize(beforeMetadata.filter(row => row.metadata_key !== RECOVERY_EPOCH_KEY)) ||
         canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key = ?").get(RECOVERY_HOLD_KEY)) !== canonicalize(holdRecord) ||
         canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key = ?").get(RECOVERY_EPOCH_KEY)) !== canonicalize(epochRecord) ||
         canonicalize(fingerprint(database, protectedTables)) !== canonicalize(preserved) ||
-        database.prepare("SELECT total_changes() AS count").get().count - initialChanges !== activeSessions.length + activeTokens.length + staleLinks.length + restoredLeases.length + 3 ||
+        database.prepare("SELECT total_changes() AS count").get().count - initialChanges !== activeSessions.length + activeTokens.length + staleLinks.length + restoredLeases.length + readinessChanges.size + 3 ||
         database.pragma("foreign_key_check").length !== 0
       ) {
         fail("RECOVERY_PREPARATION_POSTCHECK_FAILED", "The candidate preparation did not preserve its exact allowed changes.");
@@ -268,6 +302,7 @@ function prepareRecoveryCredentials({
         staleAccountLinksDiscarded: staleLinks.length, staleAccountLinkEvidenceSha256: hash(canonicalize(staleLinks)),
         restoredJobLeasesInvalidated: restoredLeases.length, restoredJobLeaseEvidenceSha256: hash(canonicalize(restoredLeases)),
         jobOccurrences: "preserved-and-held",
+        ...(readinessEvidence.length > 0 ? { restoredReadinessLeaseHandoffs: readinessEvidence } : {}),
         otherOutboxRecords: "unchanged-and-held",
         protectedTableCount: protectedTables.length };
     }).immediate();
@@ -276,7 +311,7 @@ function prepareRecoveryCredentials({
     const inspection = inspectDatabase(preparedPath);
     assertSourceUnchanged(source, restoredCandidate.plaintextSha256);
     const reportBase = {
-      reportVersion: 5, recoveryId, sourceBackupId: restoredCandidate.backupId,
+      reportVersion: counts.restoredReadinessLeaseHandoffs ? 6 : 5, recoveryId, sourceBackupId: restoredCandidate.backupId,
       sourcePlaintextSha256: restoredCandidate.plaintextSha256, preparedPlaintextSha256: hashFile(preparedPath),
       preparedAtMs, ...counts, sourceDatabase: "unchanged", status: "credentials-prepared",
       normalRuntime: "blocked-by-durable-recovery-hold",

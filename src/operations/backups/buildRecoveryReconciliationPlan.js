@@ -39,7 +39,7 @@ function buildRecoveryReconciliationPlan({ database, credentialPreparation, obse
   if (!database?.open || database.readonly !== true || database.inTransaction || !path.isAbsolute(database.name || "") ||
       !Number.isSafeInteger(observedAtMs) || observedAtMs < 0 || !credentialPreparation ||
       !IDENTITY.test(expectedEnvironmentId || "") || !IDENTITY.test(expectedDatabaseId || "") ||
-      credentialPreparation.reportVersion !== 5 || credentialPreparation.status !== "credentials-prepared" ||
+      ![5, 6].includes(credentialPreparation.reportVersion) || credentialPreparation.status !== "credentials-prepared" ||
       credentialPreparation.activationReady !== false || credentialPreparation.normalRuntime !== "blocked-by-durable-recovery-hold" ||
       !UUID.test(credentialPreparation.recoveryId || "") || !UUID.test(credentialPreparation.sourceBackupId || "") ||
       !Number.isSafeInteger(credentialPreparation.preparedAtMs) || observedAtMs < credentialPreparation.preparedAtMs ||
@@ -71,11 +71,36 @@ function buildRecoveryReconciliationPlan({ database, credentialPreparation, obse
         fail("RECOVERY_PLAN_CREDENTIAL_BOUNDARY_INVALID");
       }
       const invalidatedLeases = database.prepare("SELECT * FROM job_runs WHERE status IN ('leased','running') ORDER BY id").all();
+      const readinessHandoffs = receipt.reportVersion === 6 ? receipt.restoredReadinessLeaseHandoffs : [];
+      if (!Array.isArray(readinessHandoffs) || (receipt.reportVersion === 6 &&
+          (readinessHandoffs.length === 0 || !Number.isSafeInteger(receipt.preparedAtMs + 1))) ||
+          new Set(readinessHandoffs.map(row => row?.jobId)).size !== readinessHandoffs.length ||
+          readinessHandoffs.some(row => !row || Object.keys(row).sort().join(",") !== "jobId,jobRowSha256,previousVersion,readinessOperationId,readinessRowSha256" ||
+            !UUID.test(row.jobId) || !UUID.test(row.readinessOperationId) || !Number.isSafeInteger(row.previousVersion) || row.previousVersion < 1 ||
+            !DIGEST.test(row.jobRowSha256) || !DIGEST.test(row.readinessRowSha256))) fail("RECOVERY_PLAN_LEASE_BOUNDARY_INVALID");
+      const handedOver = new Map(readinessHandoffs.map(row => [row.jobId, row]));
+      let verifiedHandoffs = 0;
+      const invalidLease = row => {
+        const evidence = handedOver.get(row.id);
+        if (!evidence) return row.lease_owner !== null || row.lease_token !== null ||
+          row.lease_expires_at_ms !== receipt.preparedAtMs || row.updated_at_ms !== receipt.preparedAtMs || row.version < 2;
+        const readiness = database.prepare("SELECT * FROM free_agent_draft_readiness_operations WHERE id=?").get(evidence.readinessOperationId);
+        if (row.job_type !== "fad_readiness" || row.status !== "running" || row.lease_owner !== `recovery:${receipt.recoveryId}` ||
+            !UUID.test(row.lease_token) || row.version !== evidence.previousVersion + 1 ||
+            row.lease_expires_at_ms !== receipt.preparedAtMs + 1 || row.updated_at_ms !== receipt.preparedAtMs ||
+            !readiness || readiness.job_run_id !== row.id || readiness.league_id !== row.league_id ||
+            readiness.season_id !== row.season_id || readiness.readiness_occurrence_key !== row.occurrence_key ||
+            readiness.status !== "running" || readiness.version !== row.version || readiness.attempt_count !== row.attempt_count ||
+            readiness.lease_owner !== row.lease_owner || readiness.lease_token !== row.lease_token ||
+            readiness.lease_expires_at_ms !== row.lease_expires_at_ms || readiness.updated_at_ms !== row.updated_at_ms ||
+            hash(canonicalize(row)) !== evidence.jobRowSha256 || hash(canonicalize(readiness)) !== evidence.readinessRowSha256) return true;
+        verifiedHandoffs++;
+        return false;
+      };
       if (receipt.jobOccurrences !== "preserved-and-held" ||
           receipt.restoredJobLeasesInvalidated !== invalidatedLeases.length ||
           !DIGEST.test(receipt.restoredJobLeaseEvidenceSha256 || "") ||
-          invalidatedLeases.some(row => row.lease_owner !== null || row.lease_token !== null ||
-            row.lease_expires_at_ms !== receipt.preparedAtMs || row.updated_at_ms !== receipt.preparedAtMs || row.version < 2)) {
+          invalidatedLeases.some(invalidLease) || verifiedHandoffs !== readinessHandoffs.length) {
         fail("RECOVERY_PLAN_LEASE_BOUNDARY_INVALID");
       }
       const tables = database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
