@@ -33,6 +33,7 @@ function createS3CompatibleClient({
   secretAccessKey,
   fetchImplementation = fetch,
   now = () => new Date(),
+  requestTimeoutMs = null,
 } = {}) {
   let parsedEndpoint;
   try {
@@ -52,7 +53,8 @@ function createS3CompatibleClient({
     typeof secretAccessKey !== "string" ||
     secretAccessKey.trim() === "" ||
     typeof fetchImplementation !== "function" ||
-    typeof now !== "function"
+    typeof now !== "function" ||
+    (requestTimeoutMs !== null && (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 300_000))
   ) {
     throw new TypeError("S3 client requires complete private configuration");
   }
@@ -111,6 +113,7 @@ function createS3CompatibleClient({
       headers,
       body: method === "PUT" ? body : undefined,
       redirect: "error",
+      ...(requestTimeoutMs === null ? {} : { signal: AbortSignal.timeout(requestTimeoutMs) }),
     });
     if (!response?.ok) {
       const error = new Error("The private object-storage request failed.");

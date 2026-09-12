@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const { createDeployedBackupJob } = require("./createDeployedBackupJob");
 const { assertRecoveryRuntimeAllowed } = require("../infrastructure/database/recoveryHold");
 
 const {
@@ -350,6 +351,8 @@ function openDeployedTargetRuntime({
   emailAdapter,
   emailFetchImplementation,
   emailJobOptions,
+  backupFetchImplementation,
+  backupJobOptions,
   sportsDataIoFetchImplementation,
   leagueInvalidationPublisher,
   fsModule = fs,
@@ -419,6 +422,8 @@ function openDeployedTargetRuntime({
       runtimeConfig
     );
     assertRecoveryRuntimeAllowed(connection.database);
+    const backupJob = createDeployedBackupJob({ database: connection.database, config: runtimeConfig,
+      logger: securityFoundations.logger, fetchImplementation: backupFetchImplementation, jobOptions: backupJobOptions });
     const stagingAccountAutoVerificationEnabled =
       isStagingAccountAutoVerificationEnabled(config);
     const runtime = createRuntimeFunction({
@@ -463,6 +468,8 @@ function openDeployedTargetRuntime({
           ].includes(name))
         : runtime.services.league.scheduledJobs,
       emailJob: runtime.services.accountEmail.job,
+      backupEnabled: config.backupScheduleEnabled === true,
+      backupJob,
       health,
       logger: securityFoundations.logger,
     });
@@ -609,13 +616,21 @@ function openDeployedTargetRuntime({
     }
 
     let closed = false;
+    let closePromise = null;
     function close() {
-      if (closed) return;
+      if (closed) return closePromise;
       closed = true;
       health.markStopping();
-      if (typeof runtime.close === "function") runtime.close();
-      if (connection.database.open) connection.database.close();
-      health.markClosed();
+      const finish = () => {
+        if (typeof runtime.close === "function") runtime.close();
+        if (connection.database.open) connection.database.close();
+        health.markClosed();
+      };
+      if (backupJob) {
+        closePromise = scheduler.close().finally(finish);
+        return closePromise;
+      }
+      finish();
     }
 
     return Object.freeze({

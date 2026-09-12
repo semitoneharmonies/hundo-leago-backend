@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { JOB_TYPE: BACKUP_JOB_TYPE } = require("../../../infrastructure/persistence/sqlite/SqliteScheduledBackupRepository");
 
 const SPORTSDATAIO_PROVIDER = "sportsdataio-discovery-lab";
 const SPORTSDATAIO_LIVE_PROVIDER = "sportsdataio-live";
@@ -201,6 +202,12 @@ function createRuntimeHealthService({
     ORDER BY completed_at_ms DESC, started_at_ms DESC, id DESC
     LIMIT 1
   `);
+  const latestBackupJobQuery = database.prepare(`
+    SELECT status, scheduled_for_ms AS scheduledForMs, completed_at_ms AS completedAtMs,
+      next_attempt_at_ms AS nextAttemptAtMs, last_error_code AS lastErrorCode
+    FROM job_runs WHERE league_id IS NULL AND job_type = ?
+    ORDER BY scheduled_for_ms DESC, created_at_ms DESC, id DESC LIMIT 1
+  `);
   const latestSportsDataIoImportQuery = database.prepare(`
     SELECT stat_refreshes.id, stat_refreshes.nhl_season_key AS nhlSeasonKey,
       stat_refreshes.started_at_ms AS startedAtMs,
@@ -316,6 +323,8 @@ function createRuntimeHealthService({
       }),
       maintenance: Object.freeze({ state: runtimeConfig.leagueWriteMode }),
       lastVerifiedBackup: backup ? Object.freeze({ ...backup }) : null,
+      backupSchedule: Object.freeze({ enabled: runtimeConfig.backupScheduleEnabled === true,
+        latestRun: latestBackupJobQuery.get(BACKUP_JOB_TYPE) || null }),
       lastValidStatisticsRefresh: statistics
         ? Object.freeze({ ...statistics })
         : null,

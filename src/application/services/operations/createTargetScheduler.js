@@ -7,6 +7,8 @@ function createTargetScheduler({
   leagueWriteMode,
   jobs,
   emailJob = null,
+  backupEnabled = false,
+  backupJob = null,
   health,
   logger,
   intervalMs = DEFAULT_INTERVAL_MS,
@@ -50,6 +52,10 @@ function createTargetScheduler({
       "target scheduler requires an account-email job when delivery is enabled"
     );
   }
+  if (typeof backupEnabled !== "boolean" || (backupEnabled && backupJob === null) ||
+      (backupJob !== null && (typeof backupJob.start !== "function" || typeof backupJob.close !== "function"))) {
+    throw new TypeError("target scheduler requires a controlled backup job when backups are enabled");
+  }
   if (!health || typeof health.setSchedulerState !== "function") {
     throw new TypeError("target scheduler requires runtime health state");
   }
@@ -76,6 +82,7 @@ function createTargetScheduler({
   let startResult = null;
   let closePromise = null;
   let emailStarted = false;
+  let backupStarted = false;
 
   function transition(nextState) {
     state = nextState;
@@ -136,12 +143,24 @@ function createTargetScheduler({
       throw new Error("target scheduler is closed");
     }
     let emailStart = null;
+    let backupStart = null;
     try {
+      if (backupEnabled) {
+        backupStart = backupJob.start();
+        backupStarted = true;
+      }
       if (emailEnabled) {
         emailStart = emailJob.start();
         emailStarted = true;
       }
       if (state === "disabled" || state === "paused_maintenance") {
+        if (backupStarted) {
+          startResult = Object.freeze({ status: emailStarted ? "email_and_backup" : "backup_only",
+            backupInitialRun: backupStart?.initialRun || null,
+            ...(emailStarted ? { emailInitialRun: emailStart?.initialRun || null, emailRecovered: emailStart?.recovered ?? null } : {}),
+          });
+          return startResult;
+        }
         startResult = emailStarted
           ? Object.freeze({
               status: "email_only",
@@ -166,6 +185,7 @@ function createTargetScheduler({
         initialRun,
         emailInitialRun: emailStart?.initialRun || null,
         emailRecovered: emailStart?.recovered ?? null,
+        ...(backupStarted ? { backupInitialRun: backupStart?.initialRun || null } : {}),
       });
       return startResult;
     } catch (error) {
@@ -203,6 +223,9 @@ function createTargetScheduler({
         } catch (error) {
           errors.push(error);
         }
+      }
+      if (backupStarted) {
+        try { await backupJob.close(); } catch (error) { errors.push(error); }
       }
       if (leagueSchedulerActive) transition("stopped");
       if (errors.length > 0) {
