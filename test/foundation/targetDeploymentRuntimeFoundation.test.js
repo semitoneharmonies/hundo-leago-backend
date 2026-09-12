@@ -34,6 +34,7 @@ const {
 const {
   migrateDatabase,
 } = require("../../src/infrastructure/database/migrate");
+const { RECOVERY_HOLD_KEY } = require("../../src/infrastructure/database/recoveryHold");
 const {
   createReleaseQaFixture,
 } = require("../../src/operations/release/createReleaseQaFixture");
@@ -1149,6 +1150,32 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.equal(runtime.runtimeConfig, input.config);
     assert.equal(runtime.securityConfig, input.config.security);
     assert.equal(runtime.database.open, true);
+  });
+
+  test("a durable recovery hold blocks deployed composition even with jobs and email enabled", (t) => {
+    const input = deployedRuntimeInput(t);
+    t.after(() => fs.rmSync(input.persistentRoot, { recursive: true, force: true }));
+    for (const markerValue of ['{"state":"held"}', 'false', 'damaged']) {
+      const seed = openDatabase({ databasePath: input.config.databasePath, environment: "test" });
+      seed.database.prepare("INSERT INTO application_metadata (metadata_key,metadata_value,created_at_ms,updated_at_ms) " +
+        "VALUES (?, ?, 0, 0) ON CONFLICT(metadata_key) DO UPDATE SET metadata_value=excluded.metadata_value")
+        .run(RECOVERY_HOLD_KEY, markerValue);
+      seed.database.close();
+      const before = fs.readFileSync(input.config.databasePath);
+      for (const enabled of [false, true]) {
+        let opened;
+        let compositions = 0;
+        assert.throws(() => openDeployedTargetRuntime({ ...input,
+          config: Object.freeze({ ...input.config, scheduledJobsEnabled: enabled,
+            accountEmailDeliveryEnabled: enabled, leagueWriteMode: enabled ? "open" : "closed" }),
+          openDatabaseFunction(options) { opened = openDatabase(options); return opened; },
+          createRuntimeFunction() { compositions += 1; throw new Error("Must not compose workers or HTTP"); },
+        }), { code: "DATABASE_RECOVERY_HELD" });
+        assert.equal(compositions, 0);
+        assert.equal(opened.database.open, false);
+        assert.deepEqual(fs.readFileSync(input.config.databasePath), before);
+      }
+    }
   });
 
   test("keeps deployed dedicated FAD reads, writes, and preflights unexposed while shared auctions remain routed", async (t) => {

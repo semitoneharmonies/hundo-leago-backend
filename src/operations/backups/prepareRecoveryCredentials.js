@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { openDatabase } = require("../../infrastructure/database/connection");
 const { assertDatabaseIdentity } = require("../../infrastructure/database/databaseIdentity");
+const { RECOVERY_HOLD_KEY, assertRecoveryRuntimeAllowed } = require("../../infrastructure/database/recoveryHold");
 const { inspectDatabase } = require("../../infrastructure/database/sqliteBackup");
 const { canonicalize } = require("../../infrastructure/migration/sourceInventory");
 const { createSqliteSessionRepository } = require("../../infrastructure/persistence/sqlite/SqliteSessionRepository");
@@ -14,7 +15,7 @@ const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-
 const AUDIT_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const IDENTITY = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
-const CHANGED_TABLES = new Set(["sessions", "account_action_tokens", "security_audit_events"]);
+const CHANGED_TABLES = new Set(["sessions", "account_action_tokens", "security_audit_events", "application_metadata"]);
 
 class RecoveryCredentialPreparationError extends Error {
   constructor(code, message, options = {}) {
@@ -117,6 +118,7 @@ function prepareRecoveryCredentials({
 
     const counts = database.transaction(() => {
       assertDatabaseIdentity(database, { environmentId: expectedEnvironmentId, databaseId: expectedDatabaseId });
+      assertRecoveryRuntimeAllowed(database);
       if (audit.findById(recoveryId)) {
         fail("RECOVERY_PREPARATION_ALREADY_RECORDED", "This recovery identifier is already recorded in the candidate.");
       }
@@ -127,12 +129,21 @@ function prepareRecoveryCredentials({
       const beforeSessions = database.prepare("SELECT * FROM sessions ORDER BY id").all();
       const beforeTokens = database.prepare("SELECT * FROM account_action_tokens ORDER BY id").all();
       const beforeAudit = database.prepare("SELECT * FROM security_audit_events ORDER BY id").all();
+      const beforeMetadata = database.prepare("SELECT * FROM application_metadata ORDER BY metadata_key").all();
       const activeSessions = beforeSessions.filter(({ status }) => status === "active");
       const activeTokens = beforeTokens.filter(({ status }) => status === "active");
       if ([...activeSessions, ...activeTokens].some(({ created_at_ms }) => preparedAtMs < created_at_ms)) {
         fail("RECOVERY_PREPARATION_INPUT_INVALID", "The preparation time predates a restored active credential.");
       }
       const initialChanges = database.prepare("SELECT total_changes() AS count").get().count;
+      const holdRecord = {
+        metadata_key: RECOVERY_HOLD_KEY,
+        metadata_value: canonicalize({ recoveryId, sourceBackupId: restoredCandidate.backupId,
+          sourcePlaintextSha256: restoredCandidate.plaintextSha256, state: "held" }),
+        created_at_ms: preparedAtMs, updated_at_ms: preparedAtMs,
+      };
+      database.prepare("INSERT INTO application_metadata (metadata_key,metadata_value,created_at_ms,updated_at_ms) " +
+        "VALUES (@metadata_key,@metadata_value,@created_at_ms,@updated_at_ms)").run(holdRecord);
       for (const session of activeSessions) {
         sessions.revokeActive({
           sessionId: session.id, expectedVersion: session.version, changedAtMs: preparedAtMs,
@@ -166,8 +177,10 @@ function prepareRecoveryCredentials({
         canonicalize(database.prepare("SELECT * FROM sessions ORDER BY id").all()) !== canonicalize(expectedSessions) ||
         canonicalize(database.prepare("SELECT * FROM account_action_tokens ORDER BY id").all()) !== canonicalize(expectedTokens) ||
         canonicalize(database.prepare("SELECT * FROM security_audit_events WHERE id <> ? ORDER BY id").all(recoveryId)) !== canonicalize(beforeAudit) ||
+        canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key <> ? ORDER BY metadata_key").all(RECOVERY_HOLD_KEY)) !== canonicalize(beforeMetadata) ||
+        canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key = ?").get(RECOVERY_HOLD_KEY)) !== canonicalize(holdRecord) ||
         canonicalize(fingerprint(database, protectedTables)) !== canonicalize(preserved) ||
-        database.prepare("SELECT total_changes() AS count").get().count - initialChanges !== activeSessions.length + activeTokens.length + 1 ||
+        database.prepare("SELECT total_changes() AS count").get().count - initialChanges !== activeSessions.length + activeTokens.length + 2 ||
         database.pragma("foreign_key_check").length !== 0
       ) {
         fail("RECOVERY_PREPARATION_POSTCHECK_FAILED", "The candidate preparation did not preserve its exact allowed changes.");
@@ -181,9 +194,10 @@ function prepareRecoveryCredentials({
     const inspection = inspectDatabase(preparedPath);
     assertSourceUnchanged(source, restoredCandidate.plaintextSha256);
     const reportBase = {
-      reportVersion: 1, recoveryId, sourceBackupId: restoredCandidate.backupId,
+      reportVersion: 2, recoveryId, sourceBackupId: restoredCandidate.backupId,
       sourcePlaintextSha256: restoredCandidate.plaintextSha256, preparedPlaintextSha256: hashFile(preparedPath),
       preparedAtMs, ...counts, sourceDatabase: "unchanged", status: "credentials-prepared",
+      normalRuntime: "blocked-by-durable-recovery-hold",
       activationReady: false, remainingRecoveryGates: ["recovery-execution-boundary", "job-and-outbox-reconciliation", "financial-and-league-reconciliation", "controlled-reopening"],
     };
     const report = { ...reportBase, reportChecksum: hash(canonicalize(reportBase)) };

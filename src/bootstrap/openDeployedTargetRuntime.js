@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const { assertRecoveryRuntimeAllowed } = require("../infrastructure/database/recoveryHold");
 
 const {
   createTargetRuntime,
@@ -417,6 +418,7 @@ function openDeployedTargetRuntime({
       connection.database,
       runtimeConfig
     );
+    assertRecoveryRuntimeAllowed(connection.database);
     const stagingAccountAutoVerificationEnabled =
       isStagingAccountAutoVerificationEnabled(config);
     const runtime = createRuntimeFunction({

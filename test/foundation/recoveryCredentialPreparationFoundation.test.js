@@ -20,6 +20,8 @@ const { createSqliteAccountActionTokenRepository } = require("../../src/infrastr
 const { createSecureRandom } = require("../../src/infrastructure/security/createSecureRandom");
 const { createSessionSecrets } = require("../../src/infrastructure/security/createSessionSecrets");
 const { createOpaqueActionTokens } = require("../../src/infrastructure/security/createOpaqueActionTokens");
+const { RECOVERY_HOLD_KEY } = require("../../src/infrastructure/database/recoveryHold");
+const { createTargetRuntime } = require("../../src/bootstrap/createTargetRuntime");
 
 const PURPOSES = ["email_verification", "administrator_setup", "password_reset", "self_reactivation"];
 const PRIVATE_VALUE = "private-recovery-credential-marker";
@@ -138,6 +140,7 @@ test("encrypted clean restore preparation invalidates credentials atomically and
     assert.equal(report.actionTokensInvalidated, 4);
     assert.equal(report.activationReady, false);
     assert.equal(report.sourceDatabase, "unchanged");
+    assert.equal(report.normalRuntime, "blocked-by-durable-recovery-hold");
     assert.equal(report.sourceBackupId, input.restoredCandidate.backupId);
     assert.equal(report.sourcePlaintextSha256, originalHash);
     assert.notEqual(report.preparedPlaintextSha256, originalHash);
@@ -147,10 +150,17 @@ test("encrypted clean restore preparation invalidates credentials atomically and
     for (const purpose of PURPOSES) assert.equal(inventory.activeActionTokens[purpose], 0);
     const preparedRows = allRows(database);
     for (const [table, rows] of Object.entries(sourceRows)) {
-      if (!["sessions", "account_action_tokens", "security_audit_events"].includes(table)) {
+      if (!["sessions", "account_action_tokens", "security_audit_events", "application_metadata"].includes(table)) {
         assert.deepEqual(preparedRows[table], rows, table);
       }
     }
+    assert.deepEqual(preparedRows.application_metadata.filter((row) => JSON.parse(row).metadata_key !== RECOVERY_HOLD_KEY), sourceRows.application_metadata);
+    const hold = database.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY);
+    assert.equal(JSON.parse(hold.metadata_value).recoveryId, input.recoveryId);
+    assert.equal(JSON.parse(hold.metadata_value).sourcePlaintextSha256, originalHash);
+    assert.throws(() => createTargetRuntime({ database,
+      migrationsDirectory: path.resolve(__dirname, "../../database/migrations") }), { code: "DATABASE_RECOVERY_HELD" });
+    assert.equal(database.prepare("SELECT total_changes() AS count").get().count, 0);
     for (const table of ["sessions", "account_action_tokens"]) {
       for (const row of sourceRows[table].map(JSON.parse).filter(({ status }) => status !== "active")) {
         assert.deepEqual(database.prepare(`SELECT * FROM ${table} WHERE id=?`).get(row.id), row);

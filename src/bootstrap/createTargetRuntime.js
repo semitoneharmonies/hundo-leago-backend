@@ -1,4 +1,5 @@
 const express = require("express");
+const { assertRecoveryRuntimeAllowed } = require("../infrastructure/database/recoveryHold");
 
 const {
   createLeagueWriteGate,
@@ -3160,6 +3161,7 @@ function createTargetRuntime({
 } = {}) {
   const migrations = discoverMigrations({ migrationsDirectory });
   const migrationState = assertMigrationCompatibility(database, migrations);
+  assertRecoveryRuntimeAllowed(database);
   let targetApplication = null;
   let socketRooms = null;
   const onSessionChanged = createSessionSocketInvalidator({

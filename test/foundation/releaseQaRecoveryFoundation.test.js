@@ -54,6 +54,7 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   assert.equal(report.recoveryInventory.databaseIdentity.databaseId, FIXTURE_DATABASE_ID);
   assert.equal(report.recoveryInventory.remainingRecoveryGates.length, 6);
   assert.equal(report.credentialPreparation.status, "credentials-prepared");
+  assert.equal(report.credentialPreparation.normalRuntime, "blocked-by-durable-recovery-hold");
   assert.equal(report.credentialPreparation.activationReady, false);
   assert.equal(report.credentialPreparation.sourceDatabase, "unchanged");
   assert.equal(report.credentialPreparation.preparedDatabasePath, undefined);
