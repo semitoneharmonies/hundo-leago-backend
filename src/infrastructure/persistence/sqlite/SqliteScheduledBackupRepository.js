@@ -1,8 +1,8 @@
 const { assertDatabaseIdentity } = require("../../database/databaseIdentity");
 const { assertRecoveryRuntimeAllowed } = require("../../database/recoveryHold");
 const { canonicalize } = require("../../migration/sourceInventory");
+const { JOB_TYPE } = require("../../../domain/backups/scheduledBackupContract");
 
-const JOB_TYPE = "encrypted_database_backup";
 const INTERVALS = Object.freeze({ hourly: 3_600_000, daily: 86_400_000 });
 const LEASE_MS = 15 * 60_000;
 const RETRY_MS = 5 * 60_000;

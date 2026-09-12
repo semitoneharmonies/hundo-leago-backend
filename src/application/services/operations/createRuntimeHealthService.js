@@ -1,5 +1,5 @@
 const crypto = require("node:crypto");
-const { JOB_TYPE: BACKUP_JOB_TYPE } = require("../../../infrastructure/persistence/sqlite/SqliteScheduledBackupRepository");
+const { JOB_TYPE: BACKUP_JOB_TYPE } = require("../../../domain/backups/scheduledBackupContract");
 
 const SPORTSDATAIO_PROVIDER = "sportsdataio-discovery-lab";
 const SPORTSDATAIO_LIVE_PROVIDER = "sportsdataio-live";
