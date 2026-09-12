@@ -79,31 +79,32 @@ function createSqliteScheduledBackupRepository({ database, environmentId, databa
 
   const completeTransaction = database.transaction(({ claim, nowMs, evidence }) => {
     guard();
-    const receipt = { backupId: claim.backupId, ...evidence };
+    const receipt = { backupId: evidence.verifiedBackupId, ...evidence };
     const saved = byId.get(claim.runId, JOB_TYPE);
     const metadata = saved && canonicalize({ jobRunId: saved.id, occurrenceKey: saved.occurrence_key,
       manifestChecksum: evidence.manifestChecksum, encryptedArtifactSha256: evidence.encryptedArtifactSha256,
-      retentionClass: saved.occurrence_key.split(":")[0], encryptionKeyVersion: evidence.encryptionKeyVersion });
+      retentionClass: saved.occurrence_key.split(":")[0], encryptionKeyVersion: evidence.encryptionKeyVersion,
+      occurrenceReceiptObjectKey: evidence.occurrenceReceiptObjectKey, occurrenceReceiptChecksum: evidence.occurrenceReceiptChecksum });
     if (saved?.status === "succeeded" && saved.result_json === canonicalize(receipt)) {
-      const catalog = database.prepare("SELECT * FROM backup_catalog WHERE id=?").get(claim.backupId);
+      const catalog = database.prepare("SELECT * FROM backup_catalog WHERE id=?").get(evidence.verifiedBackupId);
       if (!catalog || catalog.status !== "verified" || catalog.database_checksum !== evidence.plaintextSha256 ||
           catalog.storage_reference !== evidence.manifestObjectKey || catalog.environment_identity !== environmentId ||
           catalog.source_database_id !== databaseId || catalog.backup_kind !== "scheduled" ||
           catalog.league_id !== null || catalog.schema_version !== evidence.schemaVersion ||
-          catalog.created_at_ms !== saved.started_at_ms || catalog.verified_at_ms !== saved.completed_at_ms ||
+          catalog.created_at_ms !== evidence.backupCreatedAtMs || catalog.verified_at_ms !== saved.completed_at_ms ||
           catalog.metadata_json !== metadata) fail("BACKUP_JOB_CATALOG_MISMATCH");
-      return Object.freeze({ status: "replayed", backupId: claim.backupId });
+      return Object.freeze({ status: "replayed", backupId: evidence.verifiedBackupId });
     }
     const row = currentClaim(claim, nowMs);
     database.prepare("INSERT INTO backup_catalog (id,league_id,environment_identity,backup_kind,storage_reference," +
       "database_checksum,schema_version,source_database_id,status,created_at_ms,verified_at_ms,metadata_json) " +
-      "VALUES (?,NULL,?,'scheduled',?,?,?,?,'verified',?,?,?)").run(claim.backupId, environmentId,
+      "VALUES (?,NULL,?,'scheduled',?,?,?,?,'verified',?,?,?)").run(evidence.verifiedBackupId, environmentId,
       evidence.manifestObjectKey, evidence.plaintextSha256, evidence.schemaVersion, databaseId,
-      row.started_at_ms, nowMs, metadata);
+      evidence.backupCreatedAtMs, nowMs, metadata);
     database.prepare("UPDATE job_runs SET status='succeeded',completed_at_ms=?,result_json=?,lease_owner=NULL," +
       "lease_token=NULL,lease_expires_at_ms=NULL,updated_at_ms=?,version=version+1 WHERE id=? AND version=?")
       .run(nowMs, canonicalize(receipt), nowMs, row.id, row.version);
-    return Object.freeze({ status: "succeeded", backupId: claim.backupId });
+    return Object.freeze({ status: "succeeded", backupId: evidence.verifiedBackupId });
   });
 
   const failTransaction = database.transaction(({ claim, nowMs }) => {
@@ -132,14 +133,20 @@ function createSqliteScheduledBackupRepository({ database, environmentId, databa
     },
     complete({ claim, nowMs, evidence } = {}) {
       timestamp(nowMs); id(claim?.runId); id(claim?.backupId);
-      if (!evidence || ![evidence.plaintextSha256, evidence.manifestChecksum, evidence.encryptedArtifactSha256].every((value) => DIGEST.test(value || "")) ||
+      if (!evidence || ![evidence.plaintextSha256, evidence.manifestChecksum, evidence.encryptedArtifactSha256, evidence.occurrenceReceiptChecksum].every((value) => DIGEST.test(value || "")) ||
           !Number.isSafeInteger(evidence.schemaVersion) || evidence.schemaVersion < 1 ||
+          !Number.isSafeInteger(evidence.backupCreatedAtMs) || evidence.backupCreatedAtMs < 0 || evidence.backupCreatedAtMs > nowMs ||
           typeof evidence.manifestObjectKey !== "string" || !/^[A-Za-z0-9][A-Za-z0-9/_:.-]{0,511}$/.test(evidence.manifestObjectKey) ||
           evidence.manifestObjectKey.includes("..") ||
+          typeof evidence.occurrenceReceiptObjectKey !== "string" || !/^[A-Za-z0-9][A-Za-z0-9/_:.-]{0,511}$/.test(evidence.occurrenceReceiptObjectKey) ||
+          evidence.occurrenceReceiptObjectKey.includes("..") ||
           typeof evidence.encryptionKeyVersion !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(evidence.encryptionKeyVersion)) fail("BACKUP_JOB_INPUT_INVALID");
-      const { plaintextSha256, manifestChecksum, encryptedArtifactSha256, schemaVersion, manifestObjectKey, encryptionKeyVersion } = evidence;
+      const { plaintextSha256, manifestChecksum, encryptedArtifactSha256, schemaVersion, manifestObjectKey, encryptionKeyVersion,
+        backupCreatedAtMs, occurrenceReceiptObjectKey, occurrenceReceiptChecksum, verifiedBackupId = claim.backupId } = evidence;
+      id(verifiedBackupId);
       return completeTransaction.immediate({ claim, nowMs, evidence: {
         plaintextSha256, manifestChecksum, encryptedArtifactSha256, schemaVersion, manifestObjectKey, encryptionKeyVersion,
+        backupCreatedAtMs, occurrenceReceiptObjectKey, occurrenceReceiptChecksum, verifiedBackupId,
       } });
     },
     fail({ claim, nowMs } = {}) { timestamp(nowMs); return failTransaction.immediate({ claim, nowMs }); },

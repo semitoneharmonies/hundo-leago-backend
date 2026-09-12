@@ -15,7 +15,8 @@ const claimInput = (nowMs = now, extras = {}) => ({ cadence: "daily", nowMs,
   runId: crypto.randomUUID(), backupId: crypto.randomUUID(), leaseToken: crypto.randomUUID(),
   leaseOwner: "worker-a", ...extras });
 const evidence = (name = "first") => ({ plaintextSha256: "a".repeat(64), manifestChecksum: "b".repeat(64),
-  encryptedArtifactSha256: "c".repeat(64), schemaVersion: 55, manifestObjectKey: `test/${name}.manifest.json`, encryptionKeyVersion: "v1" });
+  encryptedArtifactSha256: "c".repeat(64), schemaVersion: 55, manifestObjectKey: `test/${name}.manifest.json`, encryptionKeyVersion: "v1",
+  backupCreatedAtMs: now, occurrenceReceiptObjectKey: `test/${name}.occurrence.json`, occurrenceReceiptChecksum: "d".repeat(64) });
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-scheduled-backup-"));

@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const { canonicalize } = require("../../infrastructure/migration/sourceInventory");
 const { createEncryptedOffsiteBackup } = require("./createEncryptedOffsiteBackup");
 const { readManifest } = require("./restoreEncryptedBackupToCleanPath");
+const { occurrenceReceiptKey, loadOccurrenceReceipt, publishOccurrenceReceipt, catalogEvidence } = require("./scheduledBackupReceipt");
 
 const INTERVAL_MS = 60_000;
 const MINIMUM_FREE_MARGIN = 64n * 1024n * 1024n;
@@ -54,21 +55,27 @@ function createScheduledBackupJob({ databasePath, config, repository, objectStor
         runId: createId(), backupId: createId(), leaseToken: createId(), leaseOwner });
       if (claimed.status !== "claimed") return claimed;
       claim = claimed.claim;
-      assertBackupDiskSpace({ databasePath, persistentRoot: config.persistentRoot, fsModule });
       heartbeat = setIntervalFunction(() => {
         try { renew(); } catch (error) { leaseError = error; }
       }, INTERVAL_MS);
       heartbeat?.unref?.();
-      // Every external boundary rechecks ownership. Superseded attempts keep
-      // distinct immutable IDs and are never entered in the verified catalog.
+      // Every external boundary rechecks ownership. Attempts retain distinct
+      // artifacts; only the immutable occurrence winner enters the catalog.
       const guardedStorage = Object.fromEntries(["putPrivateObject", "headPrivateObject", "getPrivateObject"].map((method) => [method, async (input) => {
         renew();
         const result = await objectStorage[method](input);
         renew();
         return result;
       }]));
+      const resumed = await loadOccurrenceReceipt({ config, claim, objectStorage: guardedStorage });
+      if (resumed) {
+        const completion = repository.complete({ claim, nowMs: nowMs(), evidence: catalogEvidence(resumed) });
+        logger.info("scheduled_backup.verified", { backupId: completion.backupId });
+        return completion;
+      }
+      assertBackupDiskSpace({ databasePath, persistentRoot: config.persistentRoot, fsModule });
       const scheduledOccurrence = { jobRunId: claim.runId, occurrenceKey: claim.occurrenceKey,
-        supersedesBackupId: claim.supersedesBackupId };
+        supersedesBackupId: claim.supersedesBackupId, completionObjectKey: occurrenceReceiptKey({ config, claim }) };
       const result = await createEncryptedOffsiteBackup({ databasePath, config, objectStorage: guardedStorage,
         reason: `scheduled-${claim.cadence}`, retentionClass: claim.cadence,
         requestedByType: "backup_scheduler", requestedById: claim.runId, backendBuildId,
@@ -81,14 +88,11 @@ function createScheduledBackupJob({ databasePath, config, repository, objectStor
           manifest.environmentId !== config.environmentId || manifest.databaseId !== config.databaseId ||
           manifest.encryptionKeyVersion !== config.encryption.keyVersion || manifest.backendBuildId !== backendBuildId ||
           manifest.reason !== `scheduled-${claim.cadence}` || manifest.retentionClass !== claim.cadence ||
-          canonicalize(manifest.scheduledOccurrence) !== canonicalize({ ...scheduledOccurrence, catalogCommitRequired: true })) {
+          canonicalize(manifest.scheduledOccurrence) !== canonicalize({ ...scheduledOccurrence, completionReceiptRequired: true })) {
         throw new Error("Scheduled backup manifest does not match its occurrence");
       }
-      const completion = repository.complete({ claim, nowMs: nowMs(), evidence: {
-        plaintextSha256: manifest.plainBackupSha256, manifestChecksum: manifest.manifestChecksum,
-        encryptedArtifactSha256: manifest.encryptedArtifactSha256, schemaVersion: manifest.schemaVersion,
-        manifestObjectKey: manifest.manifestObjectKey, encryptionKeyVersion: manifest.encryptionKeyVersion,
-      } });
+      const qualified = await publishOccurrenceReceipt({ manifest, config, claim, objectStorage: guardedStorage });
+      const completion = repository.complete({ claim, nowMs: nowMs(), evidence: catalogEvidence(qualified) });
       logger.info("scheduled_backup.verified", { backupId: completion.backupId });
       return completion;
     } catch (error) {

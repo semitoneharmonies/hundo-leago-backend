@@ -265,6 +265,7 @@ test("deployed backup worker starts during maintenance and shutdown waits for ve
         return { ok: true };
       }
       const object = objects.get(url);
+      if (!object) return { ok: false, status: 404 };
       assert.ok(object);
       return options.method === "HEAD" ? { ok: true, headers: new Headers({ "content-length": String(object.body.length), "x-amz-meta-sha256": object.sha256 }) }
         : { ok: true, arrayBuffer: async () => object.body };
@@ -286,7 +287,7 @@ test("deployed backup worker starts during maintenance and shutdown waits for ve
   assert.equal((await started.backupInitialRun).status, "succeeded");
   await closing;
   assert.equal(runtime.database.open, false);
-  assert.equal(objects.size, 2);
+  assert.equal(objects.size, 3);
   assert.equal(timers.every((timer) => timer.cleared), true);
   const reopened = openDatabase({ databasePath: paths.databasePath, environment: "test" });
   try {

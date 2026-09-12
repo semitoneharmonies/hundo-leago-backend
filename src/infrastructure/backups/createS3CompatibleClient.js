@@ -59,7 +59,7 @@ function createS3CompatibleClient({
     throw new TypeError("S3 client requires complete private configuration");
   }
 
-  async function request({ method, key, body = Buffer.alloc(0), contentType, metadata = {} }) {
+  async function request({ method, key, body = Buffer.alloc(0), contentType, metadata = {}, ifNoneMatch = null }) {
     if (!Buffer.isBuffer(body)) {
       throw new TypeError("S3 client requires a buffer payload");
     }
@@ -74,6 +74,7 @@ function createS3CompatibleClient({
       "x-amz-date": timestamp,
     };
     if (contentType) headers["content-type"] = contentType;
+    if (ifNoneMatch !== null) headers["if-none-match"] = ifNoneMatch;
     for (const [name, value] of Object.entries(metadata).sort(([a], [b]) => a.localeCompare(b))) {
       if (!/^[a-z0-9-]{1,64}$/.test(name) || typeof value !== "string") {
         throw new TypeError("S3 client metadata is invalid");
@@ -125,11 +126,14 @@ function createS3CompatibleClient({
   }
 
   return Object.freeze({
-    async putObject({ key, body, contentType, metadata, visibility } = {}) {
+    async putObject({ key, body, contentType, metadata, visibility, ifNoneMatch = null } = {}) {
       if (visibility !== "private") {
         throw new TypeError("S3 backup objects must remain private");
       }
-      await request({ method: "PUT", key, body, contentType, metadata });
+      if (ifNoneMatch !== null && ifNoneMatch !== "*") {
+        throw new TypeError("S3 conditional creation requires an absent object");
+      }
+      await request({ method: "PUT", key, body, contentType, metadata, ifNoneMatch });
       return Object.freeze({ stored: true });
     },
     async headObject({ key } = {}) {
