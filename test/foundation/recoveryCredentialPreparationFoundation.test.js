@@ -324,9 +324,11 @@ test("reviewed restored email suppression preserves source, jobs and every unrel
       assert.equal(initialReport.plan.planVersion, 2);
       assert.equal(initialReport.lossWindow.changedRecords, 0);
       assert.equal(initialReport.lossWindow.completeLossWindowEvidence, false);
+      assert.equal(initialReport.lossWindow.financialState, undefined);
       assert.equal(initialReport.plan.unresolvedMessages, plan.unresolvedMessages);
       request.emailReview = { originalPlanPath: write("original-plan.json", plan),
         emailReconciliationPath: write("email.json", result), reconciledDatabasePath: result.reconciledDatabasePath };
+      request.lossWindow.includeFinancialState = true;
       const reviewed = invoke(request);
       assert.equal(reviewed.status, 0, reviewed.stderr); assert.equal(reviewed.stderr, "");
       const report = JSON.parse(reviewed.stdout);
@@ -334,12 +336,17 @@ test("reviewed restored email suppression preserves source, jobs and every unrel
       assert.equal(report.plan.previousPlanChecksum, plan.planChecksum);
       assert.equal(report.activationReady, false); assert.equal(report.executable, false);
       assert.equal(report.providerEvidenceFetched, false);
+      assert.equal(report.lossWindow.financialState.changedLeagues, 0);
+      assert.equal(report.lossWindow.financialState.leagues.length, 2);
+      assert.equal(report.lossWindow.financialState.completeReconciliation, false);
+      assert.equal(report.lossWindow.financialState.capCalculationPerformed, false);
       const { reportChecksum, ...body } = report; assert.equal(hash(canonicalize(body)), reportChecksum);
       assert.equal(reviewed.stdout.includes(PRIVATE_VALUE), false);
       assert.equal(reviewed.stdout.includes(directory.replace(/\\/g, "\\\\")), false);
       for (const invalid of [{ ...request, expectedDatabaseId: "wrong-database-identity" },
         { ...request, emailReview: { ...request.emailReview, emailReconciliationPath: write("forged-email.json", { ...result, reportChecksum: "e".repeat(64) }) } },
-        { ...request, lossWindow: { ...request.lossWindow, preservedPlaintextSha256: "e".repeat(64) } }]) {
+        { ...request, lossWindow: { ...request.lossWindow, preservedPlaintextSha256: "e".repeat(64) } },
+        { ...request, lossWindow: { ...request.lossWindow, includeFinancialState: "true" } }]) {
         const failure = invoke(invalid); assert.equal(failure.status, 1); assert.equal(failure.stdout, "");
         assert.equal(JSON.parse(failure.stderr).error.message, "Recovery review failed safely. No activation was performed.");
         assert.equal(failure.stderr.includes(PRIVATE_VALUE), false);
@@ -716,8 +723,30 @@ test("restoring the selected backup excludes a later real buyout and restores ex
     const comparison = compareRecoveryLossWindow({ restoredDatabase, preservedDatabase,
       restoredPlaintextSha256: restored.plaintextSha256, preservedPlaintextSha256: preserved.plaintextSha256,
       sourceBackupId: backup.backupId, expectedEnvironmentId: config.environmentId, expectedDatabaseId: config.databaseId,
-      observedAtMs: Date.now() });
+      observedAtMs: Date.now(), includeFinancialState: true });
     assert.equal(Object.keys(comparison.tables).length, Object.keys(atBackup).length);
+    const financial = comparison.financialState;
+    assert.equal(financial.unit, "integer-cents");
+    assert.equal(financial.changedLeagues, 1);
+    assert.equal(financial.capCalculationPerformed, false);
+    assert.equal(financial.completeReconciliation, false);
+    const otherLeague = financial.leagues.find(row => row.leagueId === fixtureId("league:leagueA"));
+    assert.deepEqual(otherLeague.restored, otherLeague.preserved);
+    assert.equal(otherLeague.recordedTotalsChanged, false);
+    const changedLeague = financial.leagues.find(row => row.leagueId === fixtureId("league:leagueB"));
+    assert.equal(changedLeague.recordedTotalsChanged, true);
+    const activeBefore = changedLeague.restored.contracts.find(row => row.status === "active");
+    const activeAfter = changedLeague.preserved.contracts.find(row => row.status === "active");
+    assert.equal(activeAfter.count, activeBefore.count - 1);
+    assert.equal(activeAfter.originalTotalValueCents, activeBefore.originalTotalValueCents - contractAtBackup.original_total_value_cents);
+    assert.equal(activeAfter.aavCents, activeBefore.aavCents - contractAtBackup.aav_cents);
+    assert.deepEqual(changedLeague.restored.retentionObligations, changedLeague.preserved.retentionObligations);
+    const penalties = state => state.seasons.flatMap(season => season.buyoutYears)
+      .reduce((sum, row) => sum + row.penaltyCents, 0);
+    assert.equal(penalties(changedLeague.preserved) - penalties(changedLeague.restored),
+      boughtOut.buyout.annualPenaltyCents * boughtOut.buyout.remainingYears);
+    const { reportChecksum, ...comparisonBody } = comparison;
+    assert.equal(hash(canonicalize(comparisonBody)), reportChecksum);
     const keyHash = id => hash(canonicalize([id]));
     const changedContract = comparison.tables.contracts.changes.find(row => row.keySha256 === keyHash(contractId));
     assert.equal(changedContract.kind, "changed-after-backup");
