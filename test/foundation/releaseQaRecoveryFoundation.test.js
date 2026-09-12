@@ -48,7 +48,7 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   assert.equal(report.objectCount, 4);
   assert.equal(report.sourceDatabase, "unchanged");
   assert.equal(report.wrongKeyRestore, "rejected-without-target");
-  assert.equal(report.reportVersion, 4);
+  assert.equal(report.reportVersion, 5);
   assert.equal(report.recoveryInventory.verificationScope, "read-only-inventory");
   assert.equal(report.recoveryInventory.activationReady, false);
   assert.equal(report.recoveryInventory.databaseIdentity.databaseId, FIXTURE_DATABASE_ID);
@@ -66,6 +66,16 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   assert.deepEqual(report.preparedInventory.leagueOutbox, report.recoveryInventory.leagueOutbox);
   assert.deepEqual(report.preparedInventory.accountEmailOutbox, report.recoveryInventory.accountEmailOutbox);
   assert.deepEqual(report.preparedInventory.jobs, report.recoveryInventory.jobs);
+  assert.equal(report.reconciliationPlan.planVersion, 1);
+  assert.equal(report.reconciliationPlan.executable, false);
+  assert.equal(report.reconciliationPlan.activationReady, false);
+  assert.equal(report.reconciliationPlan.credentialPreparationChecksum, report.credentialPreparation.reportChecksum);
+  assert.equal(report.reconciliationPlan.preparedPlaintextSha256, report.credentialPreparation.preparedPlaintextSha256);
+  assert.equal(report.reconciliationPlan.outbox.every(row => row.deliveryPermitted === false), true);
+  assert.equal(report.reconciliationPlan.jobs.every(row => row.executionPermitted === false), true);
+  assert.equal(report.reconciliationPlan.unresolvedMessages, report.preparedInventory.leagueOutbox.pending);
+  assert.equal(Object.keys(report.reconciliationPlan.tableSnapshots).length, report.postPreparationBackup.tableCount);
+  assert.match(report.reconciliationPlan.planChecksum, /^[a-f0-9]{64}$/);
   assert.equal(report.postPreparationBackup.encryptedBackup, "verified");
   assert.equal(report.postPreparationBackup.cleanRestore, "verified-to-new-path");
   assert.equal(report.postPreparationBackup.preparedCredentialsAndHold, "preserved");

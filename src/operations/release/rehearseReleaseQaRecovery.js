@@ -22,6 +22,9 @@ const {
   prepareRecoveryCredentials,
 } = require("../backups/prepareRecoveryCredentials");
 const {
+  buildRecoveryReconciliationPlan,
+} = require("../backups/buildRecoveryReconciliationPlan");
+const {
   openReadonlyDatabase,
 } = require("../../infrastructure/database/connection");
 const {
@@ -281,6 +284,7 @@ async function rehearseReleaseQaRecovery({
     const { preparedDatabasePath, inspection, ...credentialPreparation } = prepared;
     const preparedCandidate = openReadonlyDatabase({ databasePath: preparedDatabasePath });
     let preparedInventory;
+    let reconciliationPlan;
     try {
       preparedInventory = inspectRecoveryInventory({
         database: preparedCandidate,
@@ -288,6 +292,9 @@ async function rehearseReleaseQaRecovery({
         expectedDatabaseId: config.databaseId,
         observedAtMs: prepared.preparedAtMs,
       });
+      reconciliationPlan = buildRecoveryReconciliationPlan({ database: preparedCandidate,
+        credentialPreparation: prepared, expectedEnvironmentId: config.environmentId,
+        expectedDatabaseId: config.databaseId, observedAtMs: prepared.preparedAtMs });
     } finally {
       preparedCandidate.close();
     }
@@ -322,7 +329,7 @@ async function rehearseReleaseQaRecovery({
       fail("RELEASE_QA_RECOVERY_VERIFICATION_FAILED", "Credential preparation or source-preservation proof failed.");
     }
     const reportBase = Object.freeze({
-      reportVersion: 4,
+      reportVersion: 5,
       backup: "encrypted-private-object-verified",
       cleanRestore: "verified-to-new-path",
       fixtureManifestChecksum,
@@ -332,6 +339,7 @@ async function rehearseReleaseQaRecovery({
       recoveryInventory,
       credentialPreparation,
       preparedInventory,
+      reconciliationPlan,
       postPreparationBackup: Object.freeze({
         backupId: preparedBackup.backupId,
         encryptedBackup: "verified",

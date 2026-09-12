@@ -9,6 +9,7 @@ const { openReadonlyDatabase } = require("../../src/infrastructure/database/conn
 const { createEncryptedOffsiteBackup } = require("../../src/operations/backups/createEncryptedOffsiteBackup");
 const { restoreEncryptedBackupToCleanPath } = require("../../src/operations/backups/restoreEncryptedBackupToCleanPath");
 const { prepareRecoveryCredentials } = require("../../src/operations/backups/prepareRecoveryCredentials");
+const { buildRecoveryReconciliationPlan } = require("../../src/operations/backups/buildRecoveryReconciliationPlan");
 const { inspectRecoveryInventory } = require("../../src/operations/backups/inspectRecoveryInventory");
 const { createReleaseQaRuntime } = require("../../src/operations/release/createReleaseQaRuntime");
 const { fixtureId, canonicalize, FIXTURE_DATABASE_ID, FIXTURE_ENVIRONMENT_ID } = require("../../src/operations/release/releaseQaFixtureContract");
@@ -88,6 +89,14 @@ function seedCredentials(database) {
       "attempt_count,available_at_ms,published_at_ms,last_error_code,created_at_ms,updated_at_ms,version) " +
       "VALUES (?,NULL,?,'user',?,?,?,1,10,?,NULL,10,50,1)")
       .run(fixtureId(`recovery-preparation:outbox:${suffix}`), eventType, userId, JSON.stringify(payload), status, publishedAt);
+  }
+  for (const [index, status] of ["pending", "leased", "running", "failed", "succeeded", "skipped"].entries()) {
+    database.prepare("INSERT INTO job_runs (id,league_id,job_type,occurrence_key,scheduled_for_ms,status,attempt_count," +
+      "lease_owner,lease_token,lease_expires_at_ms,started_at_ms,completed_at_ms,result_json,created_at_ms,updated_at_ms,version) " +
+      "VALUES (?,?,'recovery.fixture',?,20,?,1,?,?,?,30,?,?,10,50,1)")
+      .run(fixtureId(`recovery-preparation:job:${status}`), index % 2 ? fixtureId("league:leagueA") : fixtureId("league:leagueB"),
+        `recovery:${status}`, status, PRIVATE_VALUE, PRIVATE_VALUE, status === "leased" ? 80 : null,
+        ["succeeded", "skipped"].includes(status) ? 50 : null, JSON.stringify({ private: PRIVATE_VALUE }));
   }
 }
 
@@ -212,6 +221,49 @@ test("encrypted clean restore preparation invalidates credentials atomically and
   } finally { database.close(); }
   assert.equal(readHash(input.restoredCandidate.targetDatabasePath), originalHash);
   assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
+
+  await t.test("a read-only reconciliation plan binds every held job and message without permitting replay", () => {
+    const reader = openReadonlyDatabase({ databasePath: report.preparedDatabasePath });
+    try {
+      const options = { database: reader, credentialPreparation: report, observedAtMs: 100,
+        expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID, expectedDatabaseId: FIXTURE_DATABASE_ID };
+      const plan = buildRecoveryReconciliationPlan(options);
+      assert.deepEqual(buildRecoveryReconciliationPlan(options), plan);
+      assert.equal(plan.activationReady, false);
+      assert.equal(plan.executable, false);
+      assert.equal(plan.preparedPlaintextSha256, report.preparedPlaintextSha256);
+      assert.equal(Object.keys(plan.tableSnapshots).length, Object.keys(preparedRows).length);
+      assert.equal(plan.unresolvedJobs, 4);
+      assert.equal(plan.jobs.every(row => row.executionPermitted === false), true);
+      assert.equal(plan.outbox.every(row => row.deliveryPermitted === false), true);
+      assert.equal(plan.jobs.find(row => row.status === "leased").leaseExpired, true);
+      assert.equal(plan.jobs.find(row => row.status === "running").leaseExpired, null, "a missing expiry is unknown, not proof of expiration");
+      for (const status of ["succeeded", "skipped"]) {
+        assert.equal(plan.jobs.find(row => row.status === status).disposition, "preserve-recorded-result");
+      }
+      assert.equal(plan.outbox.find(row => row.id === fixtureId("recovery-preparation:outbox:security")).disposition, "held-awaiting-delivery-evidence");
+      assert.equal(plan.outbox.filter(row => row.status === "discarded").every(row => row.disposition === "preserve-recorded-result"), true);
+      for (const record of plan.outbox) {
+        assert.equal(record.rowSha256, hash(canonicalize(reader.prepare("SELECT * FROM outbox_events WHERE id=?").get(record.id))));
+      }
+      const { planChecksum, ...body } = plan;
+      assert.equal(planChecksum, hash(canonicalize(body)));
+      assert.equal(JSON.stringify(plan).includes(PRIVATE_VALUE), false);
+      assert.equal(JSON.stringify(plan).includes("payload_json"), false);
+      assert.equal(reader.prepare("SELECT total_changes() AS count").get().count, 0);
+      assert.throws(() => buildRecoveryReconciliationPlan({ ...options, credentialPreparation: { ...report, reportChecksum: "e".repeat(64) } }),
+        { code: "RECOVERY_PLAN_RECEIPT_INVALID" });
+      const { preparedDatabasePath, inspection, reportChecksum, ...wrongFileReceipt } = report;
+      wrongFileReceipt.preparedPlaintextSha256 = "f".repeat(64);
+      assert.throws(() => buildRecoveryReconciliationPlan({ ...options,
+        credentialPreparation: { ...wrongFileReceipt, reportChecksum: hash(canonicalize(wrongFileReceipt)) } }),
+      { code: "RECOVERY_PLAN_SOURCE_CHANGED" });
+      assert.throws(() => buildRecoveryReconciliationPlan({ ...options, expectedDatabaseId: "different-database" }), { code: "RECOVERY_PLAN_FAILED" });
+      assert.throws(() => buildRecoveryReconciliationPlan({ ...options, database: started.runtime.database }), { code: "RECOVERY_PLAN_INPUT_INVALID" });
+      assert.deepEqual(allRows(reader), preparedRows);
+    } finally { reader.close(); }
+    assert.equal(readHash(report.preparedDatabasePath), report.preparedPlaintextSha256);
+  });
 
   await t.test("a new encrypted backup preserves invalidated credentials, audit and hold across another restore", async () => {
     const backup = await createEncryptedOffsiteBackup({
