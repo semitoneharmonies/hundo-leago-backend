@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -117,6 +118,74 @@ describe("M2-10 SQLite backup and restore verification", () => {
       databasePath: source.databasePath, outputDirectory: existing,
       environment: "test", reason: "pre-migration", capturedAtMs: 1,
     }), code(BACKUP_ERROR_CODES.pathUnsafe));
+  });
+
+  test("preserves a backup building directory owned by an earlier attempt", async (t) => {
+    const source = sourceDatabase(t);
+    const output = path.join(source.root, "collision-backup");
+    const backupId = "00000000-0000-4000-8000-000000000010";
+    const existingDirectory = `${output}.building-${backupId}`;
+    const artifact = path.join(existingDirectory, "in-progress.sqlite3");
+    fs.mkdirSync(existingDirectory);
+    fs.writeFileSync(artifact, "preserve existing backup");
+    const databaseBefore = source.database.serialize();
+    t.mock.method(crypto, "randomUUID", () => backupId);
+
+    await assert.rejects(createVerifiedBackup({
+      databasePath: source.databasePath, outputDirectory: output,
+      environment: "test", reason: "pre-migration", capturedAtMs: 10,
+    }), code(BACKUP_ERROR_CODES.operationFailed));
+
+    assert.equal(fs.readFileSync(artifact, "utf8"), "preserve existing backup");
+    assert.equal(fs.existsSync(output), false);
+    assert.deepEqual(source.database.serialize(), databaseBefore);
+  });
+
+  test("preserves a restore target created after the clean-path check", async (t) => {
+    const source = sourceDatabase(t);
+    const output = path.join(source.root, "backup");
+    await createVerifiedBackup({
+      databasePath: source.databasePath, outputDirectory: output,
+      environment: "test", reason: "pre-restore", capturedAtMs: 10,
+    });
+    const target = path.join(source.root, "competing-restore.sqlite3");
+    const databaseBefore = source.database.serialize();
+    const originalCopy = fs.copyFileSync;
+    t.mock.method(fs, "copyFileSync", (input, destination, flags) => {
+      assert.equal(destination, target);
+      fs.writeFileSync(destination, "preserve competing restore", { flag: "wx" });
+      return originalCopy(input, destination, flags);
+    });
+
+    assert.throws(() => restoreBackupToCleanPath({
+      backupDirectory: output, targetDatabasePath: target, environment: "test",
+    }), code(BACKUP_ERROR_CODES.operationFailed));
+
+    assert.equal(fs.readFileSync(target, "utf8"), "preserve competing restore");
+    assert.deepEqual(source.database.serialize(), databaseBefore);
+  });
+
+  test("removes its own restore target when copied bytes fail verification", async (t) => {
+    const source = sourceDatabase(t);
+    const output = path.join(source.root, "backup");
+    await createVerifiedBackup({
+      databasePath: source.databasePath, outputDirectory: output,
+      environment: "test", reason: "pre-restore", capturedAtMs: 10,
+    });
+    const target = path.join(source.root, "corrupted-copy.sqlite3");
+    const databaseBefore = source.database.serialize();
+    const originalCopy = fs.copyFileSync;
+    t.mock.method(fs, "copyFileSync", (input, destination, flags) => {
+      originalCopy(input, destination, flags);
+      fs.appendFileSync(destination, "corrupt copied bytes");
+    });
+
+    assert.throws(() => restoreBackupToCleanPath({
+      backupDirectory: output, targetDatabasePath: target, environment: "test",
+    }), code(BACKUP_ERROR_CODES.checksumMismatch));
+
+    assert.equal(fs.existsSync(target), false);
+    assert.deepEqual(source.database.serialize(), databaseBefore);
   });
 
   test("backup and restore CLIs verify a migrated database", async (t) => {

@@ -100,6 +100,7 @@ function buildBackupAad(manifest) {
     encryptionAlgorithm: manifest.encryptionAlgorithm,
     encryptionKeyVersion: manifest.encryptionKeyVersion,
     storageObjectKey: manifest.storageObjectKey,
+    ...(manifest.scheduledOccurrence ? { scheduledOccurrence: manifest.scheduledOccurrence } : {}),
   };
   return Buffer.from(canonicalize(fields));
 }
@@ -145,6 +146,7 @@ async function createEncryptedOffsiteBackup({
   nowMs = Date.now,
   createId = crypto.randomUUID,
   randomBytes = crypto.randomBytes,
+  scheduledOccurrence = null,
 } = {}) {
   assertDependencies(config, objectStorage);
   if (
@@ -160,6 +162,18 @@ async function createEncryptedOffsiteBackup({
     fail("BACKUP_INPUT_INVALID", "A stable backup identifier is required.");
   }
   const createdAtMs = nowMs();
+  let scheduleEvidence = null;
+  if (scheduledOccurrence !== null) {
+    const { jobRunId, occurrenceKey, supersedesBackupId } = scheduledOccurrence;
+    if (!UUID_PATTERN.test(jobRunId || "") ||
+        !/^(hourly|daily):[0-9]{1,16}$/.test(occurrenceKey || "") ||
+        reason !== `scheduled-${occurrenceKey.split(":")[0]}` ||
+        retentionClass !== occurrenceKey.split(":")[0] ||
+        (supersedesBackupId !== null && (!UUID_PATTERN.test(supersedesBackupId || "") || supersedesBackupId === backupId))) {
+      fail("BACKUP_INPUT_INVALID", "The scheduled backup occurrence is invalid.");
+    }
+    scheduleEvidence = Object.freeze({ jobRunId, occurrenceKey, supersedesBackupId, catalogCommitRequired: true });
+  }
   const createdAt = new Date(createdAtMs).toISOString();
   const safeRequestedByType = bounded(requestedByType, "requester type", 64);
   const safeRequestedById = bounded(requestedById, "requester identity", 128);
@@ -184,8 +198,10 @@ async function createEncryptedOffsiteBackup({
     `hundo-leago_${config.appEnv}_${backupTimestamp(createdAtMs)}_${backupId}`;
   const storageObjectKey = `${config.objectStorage.prefix}${baseName}.sqlite3.gz.enc`;
   const manifestObjectKey = `${config.objectStorage.prefix}${baseName}.manifest.json`;
+  let ownsWorkDirectory = false;
   try {
     fs.mkdirSync(workDirectory, { recursive: false });
+    ownsWorkDirectory = true;
     const verified = await createVerifiedBackup({
       databasePath,
       outputDirectory: verifiedDirectory,
@@ -223,6 +239,7 @@ async function createEncryptedOffsiteBackup({
       encryptionAlgorithm: "AES-256-GCM",
       encryptionKeyVersion: config.encryption.keyVersion,
       storageObjectKey,
+      ...(scheduleEvidence ? { scheduledOccurrence: scheduleEvidence } : {}),
     };
     const aad = buildBackupAad(aadManifest);
     const encrypted = await compressAndEncryptBackup({
@@ -319,7 +336,9 @@ async function createEncryptedOffsiteBackup({
       error
     );
   } finally {
-    fs.rmSync(workDirectory, { recursive: true, force: true });
+    if (ownsWorkDirectory) {
+      fs.rmSync(workDirectory, { recursive: true, force: true });
+    }
   }
 }
 

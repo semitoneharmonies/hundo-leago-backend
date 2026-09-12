@@ -16,6 +16,15 @@ const {
   restoreEncryptedBackupToCleanPath,
 } = require("../backups/restoreEncryptedBackupToCleanPath");
 const {
+  inspectRecoveryInventory,
+} = require("../backups/inspectRecoveryInventory");
+const {
+  prepareRecoveryCredentials,
+} = require("../backups/prepareRecoveryCredentials");
+const {
+  openReadonlyDatabase,
+} = require("../../infrastructure/database/connection");
+const {
   FIXTURE_DATABASE_ID,
   canonicalize,
 } = require("./releaseQaFixtureContract");
@@ -44,6 +53,22 @@ function fail(code, message, cause) {
 
 function hash(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function readRowSnapshot(databasePath) {
+  const database = openReadonlyDatabase({ databasePath });
+  try {
+    return database.transaction(() => {
+      const tables = database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+      const rows = tables.map(({ name }) => {
+        if (!/^[a-z][a-z0-9_]*$/.test(name)) throw new Error("Unsupported recovery table name");
+        return [name, hash(canonicalize(database.prepare(`SELECT * FROM "${name}"`).all().map(canonicalize).sort()))];
+      });
+      return Object.freeze({ tableCount: tables.length, rowSnapshotSha256: hash(canonicalize(rows)) });
+    }).deferred();
+  } finally {
+    database.close();
+  }
 }
 
 function isInside(rootPath, targetPath) {
@@ -216,6 +241,17 @@ async function rehearseReleaseQaRecovery({
       targetDatabasePath: restoredPath,
       temporaryRoot: physicalRoot,
     });
+    // Prepare the closed restore before additional read-only connections create
+    // SQLite WAL sidecars. Preparation intentionally refuses any such sidecar.
+    const prepared = prepareRecoveryCredentials({
+      restoredCandidate: restored,
+      temporaryRoot: physicalRoot,
+      outputDirectory: path.join(rehearsalRoot, "credential-preparation"),
+      expectedEnvironmentId: config.environmentId,
+      expectedDatabaseId: config.databaseId,
+      recoveryId: crypto.randomUUID(),
+      preparedAtMs: Date.now(),
+    });
     const fixtureAfterRestore = verifyReleaseQaFixture({
       databasePath: restored.targetDatabasePath,
     });
@@ -229,14 +265,82 @@ async function rehearseReleaseQaRecovery({
         "The clean restore or source-preservation proof failed."
       );
     }
+    const candidate = openReadonlyDatabase({ databasePath: restored.targetDatabasePath });
+    let recoveryInventory;
+    try {
+      recoveryInventory = inspectRecoveryInventory({
+        database: candidate,
+        expectedEnvironmentId: config.environmentId,
+        expectedDatabaseId: config.databaseId,
+        observedAtMs: Date.now(),
+      });
+    } finally {
+      candidate.close();
+    }
+    // Keep disposable filesystem paths and row counts out of the durable report.
+    const { preparedDatabasePath, inspection, ...credentialPreparation } = prepared;
+    const preparedCandidate = openReadonlyDatabase({ databasePath: preparedDatabasePath });
+    let preparedInventory;
+    try {
+      preparedInventory = inspectRecoveryInventory({
+        database: preparedCandidate,
+        expectedEnvironmentId: config.environmentId,
+        expectedDatabaseId: config.databaseId,
+        observedAtMs: prepared.preparedAtMs,
+      });
+    } finally {
+      preparedCandidate.close();
+    }
+    const preparedRows = readRowSnapshot(preparedDatabasePath);
+    const preparedBackup = await createEncryptedOffsiteBackup({
+      databasePath: preparedDatabasePath,
+      config,
+      objectStorage: storage.adapter,
+      reason: "pre-cutover-rehearsal",
+      requestedByType: "release_qa_automation",
+      requestedById: "m7-local-post-preparation-rehearsal",
+      backendBuildId: "m7-local-backend",
+      retentionClass: "incident-preservation",
+    });
+    const preparedBackupRestore = await restoreEncryptedBackupToCleanPath({
+      manifestObjectKey: preparedBackup.manifestObjectKey,
+      objectStorage: storage.adapter,
+      keyResolver: async (version) => version === config.encryption.keyVersion ? encryptionKey : null,
+      expectedEnvironment: config.appEnv,
+      expectedEnvironmentId: config.environmentId,
+      expectedDatabaseId: config.databaseId,
+      targetDatabasePath: path.join(restoreDirectory, "post-preparation.sqlite3"),
+      temporaryRoot: physicalRoot,
+    });
+    if (canonicalize(readRowSnapshot(preparedBackupRestore.targetDatabasePath)) !== canonicalize(preparedRows) ||
+        hash(fs.readFileSync(preparedDatabasePath)) !== prepared.preparedPlaintextSha256) {
+      fail("RELEASE_QA_RECOVERY_VERIFICATION_FAILED", "The post-preparation backup changed the held candidate or its restored rows.");
+    }
+    if (hash(fs.readFileSync(physicalDatabase)) !== sourceSha256Before ||
+        preparedInventory.sessions.active !== 0 ||
+        Object.values(preparedInventory.activeActionTokens).some((count) => count !== 0)) {
+      fail("RELEASE_QA_RECOVERY_VERIFICATION_FAILED", "Credential preparation or source-preservation proof failed.");
+    }
     const reportBase = Object.freeze({
-      reportVersion: 1,
+      reportVersion: 4,
       backup: "encrypted-private-object-verified",
       cleanRestore: "verified-to-new-path",
       fixtureManifestChecksum,
       objectCount: storage.count(),
       sourceDatabase: "unchanged",
       wrongKeyRestore: "rejected-without-target",
+      recoveryInventory,
+      credentialPreparation,
+      preparedInventory,
+      postPreparationBackup: Object.freeze({
+        backupId: preparedBackup.backupId,
+        encryptedBackup: "verified",
+        cleanRestore: "verified-to-new-path",
+        ...preparedRows,
+        originalCandidate: "unchanged",
+        preparedCredentialsAndHold: "preserved",
+        activationReady: false,
+      }),
     });
     return Object.freeze({
       ...reportBase,

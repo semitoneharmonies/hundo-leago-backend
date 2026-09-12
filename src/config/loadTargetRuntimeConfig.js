@@ -1,4 +1,5 @@
 const path = require("node:path");
+const { loadBackupConfig } = require("./loadBackupConfig");
 
 const {
   loadSecurityConfig,
@@ -457,7 +458,7 @@ function loadTargetRuntimeConfig({
   if (matchupProcessingEnabled && !nhlCompletedStatisticsEnabled) {
     fail("MATCHUP_PROCESSING_ENABLED", "the completed-game NHL source must be enabled first");
   }
-  return Object.freeze({
+  const runtimeConfig = {
     nhlCompletedStatisticsEnabled,
     matchupProcessingEnabled,
     matchupProcessingLeagueIds,
@@ -499,7 +500,11 @@ function loadTargetRuntimeConfig({
     sportsDataIoLiveNhl,
     sportsDataIoNhl,
     sportsDataIoNhlImportFieldsAbsent,
-  });
+  };
+  if (runtimeConfig.backupScheduleEnabled) {
+    runtimeConfig.backup = loadBackupConfig({ env, runtimeConfig });
+  }
+  return Object.freeze(runtimeConfig);
 }
 
 module.exports = {

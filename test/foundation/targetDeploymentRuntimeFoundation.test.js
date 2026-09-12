@@ -34,6 +34,7 @@ const {
 const {
   migrateDatabase,
 } = require("../../src/infrastructure/database/migrate");
+const { RECOVERY_HOLD_KEY } = require("../../src/infrastructure/database/recoveryHold");
 const {
   createReleaseQaFixture,
 } = require("../../src/operations/release/createReleaseQaFixture");
@@ -220,6 +221,95 @@ function deployedRuntimeInput(t, options) {
   });
   return { config, persistentRoot: paths.persistentRoot, securityFoundations };
 }
+
+function backupEnvironment(persistentRoot, overrides = {}) {
+  return { BACKUP_SCHEDULE_ENABLED: "true", BACKUP_LOCAL_DIR: path.join(persistentRoot, "backup-work"),
+    BACKUP_OBJECT_ENDPOINT: "https://backup.invalid", BACKUP_OBJECT_REGION: "local-1", BACKUP_OBJECT_BUCKET: "runtime-backup-test",
+    BACKUP_OBJECT_PREFIX: "runtime/", BACKUP_OBJECT_ACCESS_KEY_ID: "fixture-access", BACKUP_OBJECT_SECRET_ACCESS_KEY: "private-backup-fixture",
+    BACKUP_ENCRYPTION_KEY_VERSION: "test-v1", BACKUP_ENCRYPTION_KEY: Buffer.alloc(32, 21).toString("base64url"), ...overrides };
+}
+
+test("backup enablement requires complete configuration and disabled backups do not load secrets", () => {
+  const disabled = loadTargetRuntimeConfig({ env: deployedEnvironment({ BACKUP_SCHEDULE_ENABLED: "false", BACKUP_ENCRYPTION_KEY: "invalid" }), backendRoot: ROOT });
+  assert.equal(disabled.backup, undefined);
+  assert.throws(() => loadTargetRuntimeConfig({ env: deployedEnvironment({ BACKUP_SCHEDULE_ENABLED: "true" }), backendRoot: ROOT }), { code: "BACKUP_CONFIG_INVALID" });
+  const enabled = loadTargetRuntimeConfig({ env: deployedEnvironment(backupEnvironment(PERSISTENT_ROOT)), backendRoot: ROOT });
+  assert.equal(enabled.backup.scheduleEnabled, true);
+  assert.equal(enabled.backup.encryption.key.value.length, 32);
+  assert.equal(JSON.stringify(enabled).includes("private-backup-fixture"), false);
+  assert.equal(JSON.stringify(enabled).includes(Buffer.alloc(32, 21).toString("base64url")), false);
+});
+
+test("deployed backup worker starts during maintenance and shutdown waits for verified storage completion", async (t) => {
+  const paths = createDeployedDatabase(t);
+  const env = deployedEnvironment({ DATABASE_PATH: paths.databasePath, PERSISTENT_DATA_ROOT: paths.persistentRoot,
+    ...backupEnvironment(paths.persistentRoot) });
+  const config = loadTargetRuntimeConfig({ env, backendRoot: ROOT });
+  const securityFoundations = createSecurityFoundations({ env, loadConfig: () => config.security, loggerSink() {} });
+  const objects = new Map();
+  const timers = [];
+  let firstRequest;
+  const uploadReached = new Promise((resolve) => { firstRequest = resolve; });
+  let allowUpload;
+  const uploadAllowed = new Promise((resolve) => { allowUpload = resolve; });
+  const runtime = openDeployedTargetRuntime({ config, securityFoundations,
+    backupJobOptions: { setIntervalFunction(callback) { const timer = { callback, unref() {} }; timers.push(timer); return timer; },
+      clearIntervalFunction(timer) { timer.cleared = true; } },
+    async backupFetchImplementation(url, options) {
+      assert.ok(options.signal instanceof AbortSignal);
+      if (options.method === "PUT") {
+        firstRequest();
+        await uploadAllowed;
+        assert.equal(objects.has(url), false);
+        objects.set(url, { body: Buffer.from(options.body), sha256: options.headers["x-amz-meta-sha256"] });
+        return { ok: true };
+      }
+      const object = objects.get(url);
+      assert.ok(object);
+      return options.method === "HEAD" ? { ok: true, headers: new Headers({ "content-length": String(object.body.length), "x-amz-meta-sha256": object.sha256 }) }
+        : { ok: true, arrayBuffer: async () => object.body };
+    },
+  });
+  t.after(async () => { allowUpload(); await runtime.close(); fs.rmSync(paths.persistentRoot, { recursive: true, force: true }); });
+  runtime.health.markReady();
+  assert.deepEqual(runtime.health.readOperations().backupSchedule, { enabled: true, latestRun: null });
+  const started = runtime.scheduler.start();
+  assert.equal(started.status, "backup_only");
+  await uploadReached;
+  assert.equal(runtime.health.readOperations().backupSchedule.latestRun.status, "leased");
+  let closed = false;
+  const closing = runtime.close().then(() => { closed = true; });
+  await Promise.resolve();
+  assert.equal(closed, false);
+  assert.equal(runtime.database.open, true);
+  allowUpload();
+  assert.equal((await started.backupInitialRun).status, "succeeded");
+  await closing;
+  assert.equal(runtime.database.open, false);
+  assert.equal(objects.size, 2);
+  assert.equal(timers.every((timer) => timer.cleared), true);
+  const reopened = openDatabase({ databasePath: paths.databasePath, environment: "test" });
+  try {
+    assert.equal(reopened.database.prepare("SELECT COUNT(*) AS count FROM backup_catalog WHERE status='verified'").get().count, 1);
+    assert.deepEqual(reopened.database.pragma("foreign_key_check"), []);
+  } finally { reopened.database.close(); }
+});
+
+test("disabled deployed backup worker creates no requests, timers, catalog rows or backup occurrences", async (t) => {
+  const input = deployedRuntimeInput(t);
+  const runtime = openDeployedTargetRuntime({ ...input,
+    backupFetchImplementation() { throw new Error("disabled backups contacted storage"); },
+    backupJobOptions: { setIntervalFunction() { throw new Error("disabled backups scheduled work"); } },
+  });
+  try {
+    const before = runtime.database.serialize();
+    assert.equal(runtime.scheduler.start().status, "disabled");
+    await runtime.scheduler.close();
+    assert.deepEqual(runtime.database.serialize(), before);
+    assert.equal(runtime.database.prepare("SELECT COUNT(*) AS count FROM backup_catalog").get().count, 0);
+    assert.equal(runtime.database.prepare("SELECT COUNT(*) AS count FROM job_runs WHERE job_type='encrypted_database_backup'").get().count, 0);
+  } finally { runtime.close(); fs.rmSync(input.persistentRoot, { recursive: true, force: true }); }
+});
 
 function requiredDeployedRuntimeInput(t, overrides = {}) {
   const paths = createDeployedDatabase(t);
@@ -1151,6 +1241,33 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.equal(runtime.database.open, true);
   });
 
+  test("a durable recovery hold blocks deployed composition even with jobs, email and backups enabled", (t) => {
+    const input = deployedRuntimeInput(t);
+    t.after(() => fs.rmSync(input.persistentRoot, { recursive: true, force: true }));
+    for (const markerValue of ['{"state":"held"}', 'false', 'damaged']) {
+      const seed = openDatabase({ databasePath: input.config.databasePath, environment: "test" });
+      seed.database.prepare("INSERT INTO application_metadata (metadata_key,metadata_value,created_at_ms,updated_at_ms) " +
+        "VALUES (?, ?, 0, 0) ON CONFLICT(metadata_key) DO UPDATE SET metadata_value=excluded.metadata_value")
+        .run(RECOVERY_HOLD_KEY, markerValue);
+      seed.database.close();
+      const before = fs.readFileSync(input.config.databasePath);
+      for (const enabled of [false, true]) {
+        let opened;
+        let compositions = 0;
+        assert.throws(() => openDeployedTargetRuntime({ ...input,
+          config: Object.freeze({ ...input.config, scheduledJobsEnabled: enabled,
+            accountEmailDeliveryEnabled: enabled, backupScheduleEnabled: enabled, leagueWriteMode: enabled ? "open" : "closed" }),
+          backupFetchImplementation() { throw new Error("Held recovery must not access backup storage"); },
+          openDatabaseFunction(options) { opened = openDatabase(options); return opened; },
+          createRuntimeFunction() { compositions += 1; throw new Error("Must not compose workers or HTTP"); },
+        }), { code: "DATABASE_RECOVERY_HELD" });
+        assert.equal(compositions, 0);
+        assert.equal(opened.database.open, false);
+        assert.deepEqual(fs.readFileSync(input.config.databasePath), before);
+      }
+    }
+  });
+
   test("keeps deployed dedicated FAD reads, writes, and preflights unexposed while shared auctions remain routed", async (t) => {
     const input = deployedRuntimeInput(t);
     const runtime = openDeployedTargetRuntime(input);
@@ -1504,6 +1621,7 @@ describe("M7-01 deployed target runtime configuration", () => {
       [
         "accountEmailDelivery",
         "backendBuildId",
+        "backupSchedule",
         "databaseIdSuffix",
         "environment",
         "environmentId",
@@ -1525,6 +1643,7 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.equal(body.data.schemaVersion, 56);
     assert.equal(body.data.scheduler.state, "disabled");
     assert.deepEqual(body.data.accountEmailDelivery, { enabled: false });
+    assert.deepEqual(body.data.backupSchedule, { enabled: false, latestRun: null });
     assert.deepEqual(body.data.freeAgentDraftRoutes, { enabled: true });
     assert.deepEqual(body.data.maintenance, { state: "closed" });
     assert.deepEqual(body.data.sportsDataIoNhl, {

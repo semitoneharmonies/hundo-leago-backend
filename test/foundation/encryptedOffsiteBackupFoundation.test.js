@@ -272,6 +272,39 @@ test("wrong key, wrong environment, and encrypted corruption create no target", 
   await attempt("corrupt");
 });
 
+test("an existing backup work directory is preserved when a backup identifier collides", async (t) => {
+  const state = runtime(t);
+  const storage = createStorage();
+  const workDirectory = path.join(state.config.localDirectory, BACKUP_ID);
+  const existingDirectory = path.join(workDirectory, "verified");
+  const existingArtifact = path.join(existingDirectory, "in-progress.sqlite3");
+  const preservedBytes = Buffer.from("another backup still owns this artifact");
+  fs.mkdirSync(existingDirectory, { recursive: true });
+  fs.writeFileSync(existingArtifact, preservedBytes);
+  const databaseBefore = state.connection.database.serialize();
+
+  await assert.rejects(
+    createEncryptedOffsiteBackup({
+      databasePath: state.connection.databasePath,
+      config: state.config,
+      objectStorage: storage.adapter,
+      reason: "pre-deploy",
+      requestedByType: "platform_administrator",
+      requestedById: "00000000-0000-4000-8000-000000007020",
+      backendBuildId: "candidate-backup-test",
+      retentionClass: "pre-change",
+      nowMs: () => Date.parse("2026-07-22T12:00:00.000Z"),
+      createId: () => BACKUP_ID,
+    }),
+    { code: "BACKUP_OFFSITE_OPERATION_FAILED" }
+  );
+
+  assert.deepEqual(fs.readFileSync(existingArtifact), preservedBytes);
+  assert.deepEqual(fs.readdirSync(workDirectory), ["verified"]);
+  assert.deepEqual(storage.calls, []);
+  assert.deepEqual(state.connection.database.serialize(), databaseBefore);
+});
+
 test("remote checksum mismatch prevents verified catalog publication and cleans plaintext", async (t) => {
   const state = runtime(t);
   const storage = createStorage();

@@ -32,6 +32,20 @@ const {
 const ROOT = path.resolve(__dirname, "..", "..");
 const MIGRATIONS = path.join(ROOT, "database", "migrations");
 
+test("configured request deadlines abort a stalled object upload", async () => {
+  const keepAlive = setTimeout(() => {}, 1000);
+  try {
+    const client = createS3CompatibleClient({ endpoint: "https://objects.example.test", region: "local-1", bucket: "test-backup",
+      accessKeyId: "fixture", secretAccessKey: "fixture-secret", requestTimeoutMs: 5,
+      fetchImplementation: async (_url, { signal }) => new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }),
+    });
+    await assert.rejects(client.putObject({ key: "test.enc", body: Buffer.from("fixture"), contentType: "application/octet-stream", visibility: "private" }),
+      { name: "TimeoutError" });
+  } finally { clearTimeout(keepAlive); }
+});
+
 test("signs private path-style PUT, HEAD, and GET without exposing the secret", async () => {
   const requests = [];
   const payload = Buffer.from("encrypted");

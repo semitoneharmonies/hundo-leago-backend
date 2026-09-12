@@ -50,6 +50,37 @@ function harness(overrides = {}) {
   return { calls, email, handles, runner, scheduler, states };
 }
 
+test("backup lifecycle runs while league writes or jobs are disabled and shutdown drains its pending work", async () => {
+  for (const enabled of [true, false]) {
+    let finish;
+    let closes = 0;
+    const pending = new Promise((resolve) => { finish = resolve; });
+    const backupJob = { start: () => ({ initialRun: pending }), async close() { closes += 1; await pending; } };
+    const state = harness({ enabled, emailEnabled: false, leagueWriteMode: "closed", backupEnabled: true, backupJob });
+    const start = state.scheduler.start();
+    assert.equal(start.status, "backup_only");
+    assert.equal(start.backupInitialRun, pending);
+    assert.deepEqual(state.calls, []);
+    let closed = false;
+    const closing = state.scheduler.close().then(() => { closed = true; });
+    await Promise.resolve();
+    assert.equal(closed, false);
+    assert.equal(closes, 1);
+    finish({ status: "succeeded" });
+    await closing;
+    await state.scheduler.close();
+    assert.equal(closes, 1);
+  }
+});
+
+test("disabled backup lifecycle never starts and enabled backup requires a runner", async () => {
+  const backupJob = { start() { throw new Error("disabled worker started"); }, close() { throw new Error("disabled worker closed"); } };
+  const state = harness({ backupEnabled: false, backupJob });
+  await state.scheduler.start().initialRun;
+  await state.scheduler.close();
+  assert.throws(() => harness({ backupEnabled: true }), /controlled backup job/);
+});
+
 test("disabled and maintenance-paused schedulers create no work", async () => {
   for (const input of [
     { enabled: false, leagueWriteMode: "open", expected: "disabled" },
