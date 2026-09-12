@@ -11,6 +11,8 @@ const { restoreEncryptedBackupToCleanPath } = require("../../src/operations/back
 const { prepareRecoveryCredentials } = require("../../src/operations/backups/prepareRecoveryCredentials");
 const { buildRecoveryReconciliationPlan } = require("../../src/operations/backups/buildRecoveryReconciliationPlan");
 const { prepareRecoveryEmailReconciliation } = require("../../src/operations/backups/prepareRecoveryEmailReconciliation");
+const { createLeagueOutboxPublicationService } = require("../../src/application/services/activity/createLeagueOutboxPublicationService");
+const { createSqliteLeagueOutboxRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteLeagueOutboxRepository");
 const { compareRecoveryLossWindow } = require("../../src/operations/backups/compareRecoveryLossWindow");
 const { createVerifiedBackup, BACKUP_FILE_NAME } = require("../../src/infrastructure/database/sqliteBackup");
 const { inspectRecoveryInventory } = require("../../src/operations/backups/inspectRecoveryInventory");
@@ -158,6 +160,67 @@ async function candidate(t, alterSource = null) {
     recoveryId: crypto.randomUUID(), preparedAtMs: 100 };
   return { started, input, config, objectStorage, encryptionKey, backup };
 }
+
+test("selected restored league invalidations publish once without repeating domain effects after worker restart", async t => {
+  const { started, input } = await candidate(t);
+  const sourceBefore = started.runtime.database.serialize();
+  const prepared = prepareRecoveryCredentials({ ...input, outputDirectory: path.join(input.temporaryRoot, "league-publication-input") });
+  const preparedHash = readHash(prepared.preparedDatabasePath);
+  const workPath = path.join(input.temporaryRoot, "league-publication-work.sqlite3");
+  fs.copyFileSync(prepared.preparedDatabasePath, workPath, fs.constants.COPYFILE_EXCL);
+  const database = openDatabase({ databasePath: workPath, environment: "staging", persistentRoot: input.temporaryRoot, requirePersistentRoot: true }).database;
+  try {
+    const before = allRows(database);
+    const pending = database.prepare("SELECT * FROM outbox_events WHERE league_id IS NOT NULL AND status='pending' ORDER BY id").all();
+    assert.ok(pending.length > 0); assert.equal(new Set(pending.map(row => row.league_id)).size, 2);
+    // Explicit fixture event selection is local recovery-test authority only.
+    // No scheduler, real Socket.IO publisher or ordinary runtime is started.
+    const captured = [];
+    const repository = createSqliteLeagueOutboxRepository({ database });
+    const nowMs = Date.now();
+    const publisher = { async publish(event) {
+      assert.equal(event.payload.eventId, event.eventId);
+      assert.equal(event.payload.leagueId, event.leagueId);
+      assert.ok(event.audiences.length > 0);
+      assert.ok(event.audiences.every(audience => audience.leagueId === event.leagueId));
+      captured.push({ eventId: event.eventId, leagueId: event.leagueId, payload: event.payload, audiences: event.audiences });
+    } };
+    const service = createLeagueOutboxPublicationService({ repository, publisher, clock: { nowMs: () => nowMs } });
+    const first = pending[0];
+    const otherLeagueId = pending.find(row => row.league_id !== first.league_id).league_id;
+    const initialBytes = database.serialize();
+    assert.equal((await service.publishExact({ eventId: first.id, leagueId: otherLeagueId, expectedVersion: first.version })).outcome, "state_changed");
+    assert.equal((await service.publishExact({ eventId: first.id, leagueId: first.league_id, expectedVersion: first.version + 1 })).outcome, "state_changed");
+    assert.deepEqual(database.serialize(), initialBytes); assert.equal(captured.length, 0);
+    for (const row of pending) {
+      const result = await service.publishExact({ eventId: row.id, leagueId: row.league_id, expectedVersion: row.version });
+      assert.equal(result.outcome, "published", database.prepare("SELECT last_error_code FROM outbox_events WHERE id=?").get(row.id)?.last_error_code);
+    }
+    assert.equal(captured.length, pending.length); assert.equal(new Set(captured.map(row => row.eventId)).size, pending.length);
+    const after = allRows(database);
+    for (const [table, rows] of Object.entries(before)) if (table !== "outbox_events") assert.deepEqual(after[table], rows, table);
+    const selectedIds = new Set(pending.map(row => row.id));
+    for (const row of before.outbox_events.map(JSON.parse)) {
+      const actual = database.prepare("SELECT * FROM outbox_events WHERE id=?").get(row.id);
+      if (!selectedIds.has(row.id)) assert.deepEqual(actual, row);
+      else { assert.equal(actual.status, "published"); assert.equal(actual.attempt_count, row.attempt_count + 1); assert.equal(actual.payload_json, row.payload_json); }
+    }
+    const afterBytes = database.serialize();
+    const restarted = createLeagueOutboxPublicationService({ repository: createSqliteLeagueOutboxRepository({ database }),
+      publisher: { publish() { assert.fail("A completed restored occurrence must not publish again."); } }, clock: { nowMs: () => nowMs + 1000 } });
+    for (const row of pending) {
+      assert.equal((await restarted.publishExact({ eventId: row.id, leagueId: row.league_id, expectedVersion: row.version })).outcome, "state_changed");
+      const current = repository.findById({ eventId: row.id, leagueId: row.league_id });
+      assert.equal((await restarted.publishExact({ eventId: row.id, leagueId: row.league_id, expectedVersion: current.version })).outcome, "already_published");
+    }
+    assert.deepEqual(await restarted.publishDue(), []);
+    assert.deepEqual(database.serialize(), afterBytes);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY).n, 1);
+    assert.deepEqual(readRecoveryEpoch(database), prepared.recoveryEpoch); assertCredentialAccess(database, false);
+  } finally { database.close(); }
+  assert.equal(readHash(prepared.preparedDatabasePath), preparedHash);
+  assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
+});
 
 test("reviewed restored email suppression preserves source, jobs and every unrelated row", async t => {
   const { started, input, config, objectStorage, encryptionKey } = await candidate(t, database => {
