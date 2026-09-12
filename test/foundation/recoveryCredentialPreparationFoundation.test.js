@@ -17,6 +17,7 @@ const { createAccountActionTokenService } = require("../../src/application/servi
 const { createSqliteUserRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteUserRepository");
 const { createSqliteSessionRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteSessionRepository");
 const { createSqliteAccountActionTokenRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteAccountActionTokenRepository");
+const { ACTION_LINK_EVENTS, CLEARED_PAYLOAD_JSON } = require("../../src/infrastructure/persistence/sqlite/SqliteOutboxEventRepository");
 const { createSecureRandom } = require("../../src/infrastructure/security/createSecureRandom");
 const { createSessionSecrets } = require("../../src/infrastructure/security/createSessionSecrets");
 const { createOpaqueActionTokens } = require("../../src/infrastructure/security/createOpaqueActionTokens");
@@ -69,6 +70,24 @@ function seedCredentials(database) {
       "expires_at_ms,consumed_at_ms,invalidated_at_ms,version) VALUES (?,?,?,?,?,10,500,?,?,1)"
     ).run(fixtureId(`recovery-preparation:token:${index}`), userId, hash(tokenBytes(index)), purpose, status,
       status === "consumed" ? 50 : null, status === "invalidated" ? 50 : null);
+    const payload = { schemaVersion: 1, deliveryKind: purpose === "email_verification" ? "email_verification" : "account_action_link",
+      purpose, tokenId: fixtureId(`recovery-preparation:token:${index}`), recipientUserId: userId, expiresAtMs: 500,
+      envelope: { algorithm: "A256GCM", envelopeVersion: 1, keyVersion: 1, nonce: "fixture", authenticationTag: "fixture", ciphertext: PRIVATE_VALUE } };
+    database.prepare("INSERT INTO outbox_events (id,league_id,event_type,aggregate_type,aggregate_id,payload_json,status," +
+      "attempt_count,available_at_ms,published_at_ms,last_error_code,created_at_ms,updated_at_ms,version) " +
+      "VALUES (?,NULL,?,'user',?,?,?,1,10,NULL,NULL,10,10,1)")
+      .run(fixtureId(`recovery-preparation:outbox:${index}`), purpose === "email_verification" ? "account.email_verification_requested" : ACTION_LINK_EVENTS[purpose],
+        userId, JSON.stringify(payload), ["pending", "failed", "publishing"][index % 3]);
+  }
+  for (const [suffix, eventType, payload, status, publishedAt] of [
+    ["security", "account.password_changed_notification", { schemaVersion: 1, deliveryKind: "security_notification", notificationKind: "password_changed", recipientUserId: userId, occurredAtMs: 10 }, "pending", null],
+    ["published", "account.password_reset_requested", JSON.parse(CLEARED_PAYLOAD_JSON), "published", 50],
+    ["discarded", "account.password_reset_requested", JSON.parse(CLEARED_PAYLOAD_JSON), "discarded", null],
+  ]) {
+    database.prepare("INSERT INTO outbox_events (id,league_id,event_type,aggregate_type,aggregate_id,payload_json,status," +
+      "attempt_count,available_at_ms,published_at_ms,last_error_code,created_at_ms,updated_at_ms,version) " +
+      "VALUES (?,NULL,?,'user',?,?,?,1,10,?,NULL,10,50,1)")
+      .run(fixtureId(`recovery-preparation:outbox:${suffix}`), eventType, userId, JSON.stringify(payload), status, publishedAt);
   }
 }
 
@@ -79,7 +98,7 @@ function allRows(database) {
     .map(canonicalize).sort()]));
 }
 
-async function candidate(t) {
+async function candidate(t, alterSource = null) {
   const started = await createReleaseQaRuntime({
     frontendOrigin: "http://127.0.0.1:5173", leagueWriteMode: "closed", port: 0,
     migrationsDirectory: path.resolve(__dirname, "../../database/migrations"),
@@ -87,6 +106,7 @@ async function candidate(t) {
   });
   t.after(() => started.close());
   seedCredentials(started.runtime.database);
+  if (alterSource) alterSource(started.runtime.database);
   const encryptionKey = crypto.randomBytes(32);
   const config = loadBackupConfig({
     env: {
@@ -139,6 +159,8 @@ test("encrypted clean restore preparation invalidates credentials atomically and
     assertCredentialAccess(database, false);
     assert.equal(report.sessionsRevoked, 1);
     assert.equal(report.actionTokensInvalidated, 4);
+    assert.equal(report.staleAccountLinksDiscarded, 7);
+    assert.equal(report.otherOutboxRecords, "unchanged-and-held");
     assert.equal(report.activationReady, false);
     assert.equal(report.sourceDatabase, "unchanged");
     assert.equal(report.normalRuntime, "blocked-by-durable-recovery-hold");
@@ -151,10 +173,19 @@ test("encrypted clean restore preparation invalidates credentials atomically and
     for (const purpose of PURPOSES) assert.equal(inventory.activeActionTokens[purpose], 0);
     preparedRows = allRows(database);
     for (const [table, rows] of Object.entries(sourceRows)) {
-      if (!["sessions", "account_action_tokens", "security_audit_events", "application_metadata"].includes(table)) {
+      if (!["sessions", "account_action_tokens", "security_audit_events", "application_metadata", "outbox_events"].includes(table)) {
         assert.deepEqual(preparedRows[table], rows, table);
       }
     }
+    const staleIds = new Set(Array.from({ length: 7 }, (_, index) => fixtureId(`recovery-preparation:outbox:${index}`)));
+    const originalOutbox = sourceRows.outbox_events.map(JSON.parse);
+    for (const row of originalOutbox) {
+      const expected = !staleIds.has(row.id) ? row : { ...row, status: "discarded", payload_json: CLEARED_PAYLOAD_JSON,
+        last_error_code: "RECOVERY_STALE_ACCOUNT_LINK", updated_at_ms: 100, version: row.version + 1 };
+      assert.deepEqual(database.prepare("SELECT * FROM outbox_events WHERE id=?").get(row.id), expected);
+    }
+    const staleOriginal = originalOutbox.filter(row => staleIds.has(row.id)).sort((a, b) => a.id.localeCompare(b.id));
+    assert.equal(report.staleAccountLinkEvidenceSha256, hash(canonicalize(staleOriginal)));
     assert.deepEqual(preparedRows.application_metadata.filter((row) => JSON.parse(row).metadata_key !== RECOVERY_HOLD_KEY), sourceRows.application_metadata);
     const hold = database.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY);
     assert.equal(JSON.parse(hold.metadata_value).recoveryId, input.recoveryId);
@@ -255,6 +286,27 @@ test("encrypted clean restore preparation invalidates credentials atomically and
     } }), { code: "RECOVERY_PREPARATION_POSTCHECK_FAILED" });
     assert.equal(fs.existsSync(output), false);
   });
+  await t.test("an unexpected change to a held security notification rejects the entire candidate", () => {
+    const output = path.join(input.temporaryRoot, "unexpected-outbox-write");
+    assert.throws(() => prepareRecoveryCredentials({ ...input, outputDirectory: output, beforeCommit(database) {
+      database.prepare("UPDATE outbox_events SET version=version+1 WHERE id=?").run(fixtureId("recovery-preparation:outbox:security"));
+    } }), { code: "RECOVERY_PREPARATION_POSTCHECK_FAILED" });
+    assert.equal(fs.existsSync(output), false);
+  });
+  assert.equal(readHash(input.restoredCandidate.targetDatabasePath), originalHash);
+  assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
+});
+
+test("an account link bound to a different recipient rejects recovery preparation without changing its verified source", async (t) => {
+  const { started, input } = await candidate(t, database => {
+    database.prepare("UPDATE outbox_events SET payload_json=json_set(payload_json,'$.recipientUserId',?) WHERE id=?")
+      .run(fixtureId("account:leagueBManagerOne"), fixtureId("recovery-preparation:outbox:0"));
+  });
+  const sourceBefore = started.runtime.database.serialize();
+  const originalHash = readHash(input.restoredCandidate.targetDatabasePath);
+  const outputDirectory = path.join(input.temporaryRoot, "ambiguous-link");
+  assert.throws(() => prepareRecoveryCredentials({ ...input, outputDirectory }), { code: "RECOVERY_ACCOUNT_LINK_INVALID" });
+  assert.equal(fs.existsSync(outputDirectory), false);
   assert.equal(readHash(input.restoredCandidate.targetDatabasePath), originalHash);
   assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
 });
@@ -297,10 +349,13 @@ test("restoring the selected backup excludes a later real buyout and restores ex
     assert.equal(database.prepare("SELECT COALESCE(SUM(penalty_cents),0) AS total FROM buyout_years").get().total, penaltyTotalAtBackup);
     const recovered = allRows(database);
     for (const [table, rows] of Object.entries(atBackup)) {
-      if (!["sessions", "account_action_tokens", "security_audit_events", "application_metadata"].includes(table)) {
+      if (!["sessions", "account_action_tokens", "security_audit_events", "application_metadata", "outbox_events"].includes(table)) {
         assert.deepEqual(recovered[table], rows, table);
       }
     }
+    assert.deepEqual(recovered.outbox_events.filter(row => JSON.parse(row).league_id !== null),
+      atBackup.outbox_events.filter(row => JSON.parse(row).league_id !== null));
+    assert.equal(prepared.staleAccountLinksDiscarded, 7);
     assertCredentialAccess(database, false);
     assert.equal(prepared.activationReady, false);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
