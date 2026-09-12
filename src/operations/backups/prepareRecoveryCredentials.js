@@ -16,7 +16,7 @@ const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-
 const AUDIT_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const IDENTITY = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
-const CHANGED_TABLES = new Set(["sessions", "account_action_tokens", "security_audit_events", "application_metadata", "outbox_events"]);
+const CHANGED_TABLES = new Set(["sessions", "account_action_tokens", "security_audit_events", "application_metadata", "outbox_events", "job_runs"]);
 const LINK_EVENT_PURPOSES = Object.freeze(Object.fromEntries(Object.entries({
   ...ACTION_LINK_EVENTS, email_verification: "account.email_verification_requested",
 }).map(([purpose, event]) => [event, purpose])));
@@ -159,6 +159,12 @@ function prepareRecoveryCredentials({
       const beforeAudit = database.prepare("SELECT * FROM security_audit_events ORDER BY id").all();
       const beforeMetadata = database.prepare("SELECT * FROM application_metadata ORDER BY metadata_key").all();
       const beforeOutbox = database.prepare("SELECT * FROM outbox_events ORDER BY id").all();
+      const beforeJobs = database.prepare("SELECT * FROM job_runs ORDER BY id").all();
+      const restoredLeases = beforeJobs.filter(row => ["leased", "running"].includes(row.status));
+      if (restoredLeases.some(row => row.created_at_ms > preparedAtMs || row.updated_at_ms > preparedAtMs ||
+          !Number.isSafeInteger(row.version + 1))) {
+        fail("RECOVERY_PREPARATION_INPUT_INVALID", "A restored job lease cannot be invalidated at this preparation boundary.");
+      }
       const staleLinks = restoredAccountLinks(beforeOutbox, beforeTokens, preparedAtMs);
       const staleLinkIds = new Set(staleLinks.map(row => row.id));
       const activeSessions = beforeSessions.filter(({ status }) => status === "active");
@@ -192,6 +198,16 @@ function prepareRecoveryCredentials({
         outbox.discard({ eventId: link.id, expectedVersion: link.version,
           nowMs: preparedAtMs, errorCode: STALE_LINK_REASON });
       }
+      // Retain each occurrence and its recorded state for reconciliation while
+      // invalidating the restored worker's token, version and expiry. This is
+      // not a claim, retry, completion or permission to execute the occurrence.
+      const invalidateLease = database.prepare("UPDATE job_runs SET lease_owner=NULL, lease_token=NULL, " +
+        "lease_expires_at_ms=?, updated_at_ms=?, version=version+1 WHERE id=? AND version=? AND status IN ('leased','running')");
+      for (const lease of restoredLeases) {
+        if (invalidateLease.run(preparedAtMs, preparedAtMs, lease.id, lease.version).changes !== 1) {
+          fail("RECOVERY_PREPARATION_POSTCHECK_FAILED", "A restored job lease changed during preparation.");
+        }
+      }
       audit.append({
         id: recoveryId, event_type: "recovery.credentials_invalidated", outcome: "success",
         actor_user_id: null, target_user_id: null, league_id: null, session_id: null,
@@ -215,15 +231,20 @@ function prepareRecoveryCredentials({
         ...row, status: "discarded", payload_json: CLEARED_PAYLOAD_JSON, last_error_code: STALE_LINK_REASON,
         updated_at_ms: preparedAtMs, version: row.version + 1,
       });
+      const expectedJobs = beforeJobs.map(row => !["leased", "running"].includes(row.status) ? row : {
+        ...row, lease_owner: null, lease_token: null, lease_expires_at_ms: preparedAtMs,
+        updated_at_ms: preparedAtMs, version: row.version + 1,
+      });
       if (
         canonicalize(database.prepare("SELECT * FROM sessions ORDER BY id").all()) !== canonicalize(expectedSessions) ||
         canonicalize(database.prepare("SELECT * FROM account_action_tokens ORDER BY id").all()) !== canonicalize(expectedTokens) ||
         canonicalize(database.prepare("SELECT * FROM outbox_events ORDER BY id").all()) !== canonicalize(expectedOutbox) ||
+        canonicalize(database.prepare("SELECT * FROM job_runs ORDER BY id").all()) !== canonicalize(expectedJobs) ||
         canonicalize(database.prepare("SELECT * FROM security_audit_events WHERE id <> ? ORDER BY id").all(recoveryId)) !== canonicalize(beforeAudit) ||
         canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key <> ? ORDER BY metadata_key").all(RECOVERY_HOLD_KEY)) !== canonicalize(beforeMetadata) ||
         canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key = ?").get(RECOVERY_HOLD_KEY)) !== canonicalize(holdRecord) ||
         canonicalize(fingerprint(database, protectedTables)) !== canonicalize(preserved) ||
-        database.prepare("SELECT total_changes() AS count").get().count - initialChanges !== activeSessions.length + activeTokens.length + staleLinks.length + 2 ||
+        database.prepare("SELECT total_changes() AS count").get().count - initialChanges !== activeSessions.length + activeTokens.length + staleLinks.length + restoredLeases.length + 2 ||
         database.pragma("foreign_key_check").length !== 0
       ) {
         fail("RECOVERY_PREPARATION_POSTCHECK_FAILED", "The candidate preparation did not preserve its exact allowed changes.");
@@ -231,6 +252,8 @@ function prepareRecoveryCredentials({
       assertSourceUnchanged(source, restoredCandidate.plaintextSha256);
       return { sessionsRevoked: activeSessions.length, actionTokensInvalidated: activeTokens.length,
         staleAccountLinksDiscarded: staleLinks.length, staleAccountLinkEvidenceSha256: hash(canonicalize(staleLinks)),
+        restoredJobLeasesInvalidated: restoredLeases.length, restoredJobLeaseEvidenceSha256: hash(canonicalize(restoredLeases)),
+        jobOccurrences: "preserved-and-held",
         otherOutboxRecords: "unchanged-and-held",
         protectedTableCount: protectedTables.length };
     }).immediate();
@@ -239,7 +262,7 @@ function prepareRecoveryCredentials({
     const inspection = inspectDatabase(preparedPath);
     assertSourceUnchanged(source, restoredCandidate.plaintextSha256);
     const reportBase = {
-      reportVersion: 3, recoveryId, sourceBackupId: restoredCandidate.backupId,
+      reportVersion: 4, recoveryId, sourceBackupId: restoredCandidate.backupId,
       sourcePlaintextSha256: restoredCandidate.plaintextSha256, preparedPlaintextSha256: hashFile(preparedPath),
       preparedAtMs, ...counts, sourceDatabase: "unchanged", status: "credentials-prepared",
       normalRuntime: "blocked-by-durable-recovery-hold",

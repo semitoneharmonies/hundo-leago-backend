@@ -5,7 +5,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { loadBackupConfig } = require("../../src/config/loadBackupConfig");
 const { createObjectStorageAdapter } = require("../../src/infrastructure/backups/createObjectStorageAdapter");
-const { openReadonlyDatabase } = require("../../src/infrastructure/database/connection");
+const { openDatabase, openReadonlyDatabase } = require("../../src/infrastructure/database/connection");
 const { createEncryptedOffsiteBackup } = require("../../src/operations/backups/createEncryptedOffsiteBackup");
 const { restoreEncryptedBackupToCleanPath } = require("../../src/operations/backups/restoreEncryptedBackupToCleanPath");
 const { prepareRecoveryCredentials } = require("../../src/operations/backups/prepareRecoveryCredentials");
@@ -20,6 +20,7 @@ const { createAccountActionTokenService } = require("../../src/application/servi
 const { createSqliteUserRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteUserRepository");
 const { createSqliteSessionRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteSessionRepository");
 const { createSqliteAccountActionTokenRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteAccountActionTokenRepository");
+const { createSqliteStatisticsScheduleRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteStatisticsScheduleRepository");
 const { ACTION_LINK_EVENTS, CLEARED_PAYLOAD_JSON } = require("../../src/infrastructure/persistence/sqlite/SqliteOutboxEventRepository");
 const { createSecureRandom } = require("../../src/infrastructure/security/createSecureRandom");
 const { createSessionSecrets } = require("../../src/infrastructure/security/createSessionSecrets");
@@ -171,6 +172,9 @@ test("encrypted clean restore preparation invalidates credentials atomically and
     assert.equal(report.sessionsRevoked, 1);
     assert.equal(report.actionTokensInvalidated, 4);
     assert.equal(report.staleAccountLinksDiscarded, 7);
+    assert.equal(report.reportVersion, 4);
+    assert.equal(report.restoredJobLeasesInvalidated, 2);
+    assert.equal(report.jobOccurrences, "preserved-and-held");
     assert.equal(report.otherOutboxRecords, "unchanged-and-held");
     assert.equal(report.activationReady, false);
     assert.equal(report.sourceDatabase, "unchanged");
@@ -184,7 +188,7 @@ test("encrypted clean restore preparation invalidates credentials atomically and
     for (const purpose of PURPOSES) assert.equal(inventory.activeActionTokens[purpose], 0);
     preparedRows = allRows(database);
     for (const [table, rows] of Object.entries(sourceRows)) {
-      if (!["sessions", "account_action_tokens", "security_audit_events", "application_metadata", "outbox_events"].includes(table)) {
+      if (!["sessions", "account_action_tokens", "security_audit_events", "application_metadata", "outbox_events", "job_runs"].includes(table)) {
         assert.deepEqual(preparedRows[table], rows, table);
       }
     }
@@ -197,6 +201,15 @@ test("encrypted clean restore preparation invalidates credentials atomically and
     }
     const staleOriginal = originalOutbox.filter(row => staleIds.has(row.id)).sort((a, b) => a.id.localeCompare(b.id));
     assert.equal(report.staleAccountLinkEvidenceSha256, hash(canonicalize(staleOriginal)));
+    const originalJobs = sourceRows.job_runs.map(JSON.parse);
+    for (const row of originalJobs) {
+      const expected = !["leased", "running"].includes(row.status) ? row : {
+        ...row, lease_owner: null, lease_token: null, lease_expires_at_ms: 100, updated_at_ms: 100, version: row.version + 1,
+      };
+      assert.deepEqual(database.prepare("SELECT * FROM job_runs WHERE id=?").get(row.id), expected);
+    }
+    assert.equal(report.restoredJobLeaseEvidenceSha256,
+      hash(canonicalize(originalJobs.filter(row => ["leased", "running"].includes(row.status)).sort((a, b) => a.id.localeCompare(b.id)))));
     assert.deepEqual(preparedRows.application_metadata.filter((row) => JSON.parse(row).metadata_key !== RECOVERY_HOLD_KEY), sourceRows.application_metadata);
     const hold = database.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY);
     assert.equal(JSON.parse(hold.metadata_value).recoveryId, input.recoveryId);
@@ -239,7 +252,8 @@ test("encrypted clean restore preparation invalidates credentials atomically and
       assert.equal(plan.jobs.every(row => row.executionPermitted === false), true);
       assert.equal(plan.outbox.every(row => row.deliveryPermitted === false), true);
       assert.equal(plan.jobs.find(row => row.status === "leased").leaseExpired, true);
-      assert.equal(plan.jobs.find(row => row.status === "running").leaseExpired, null, "a missing expiry is unknown, not proof of expiration");
+      assert.equal(plan.jobs.find(row => row.status === "running").leaseExpired, true, "preparation explicitly invalidated even a missing restored expiry");
+      assert.equal(plan.jobs.find(row => row.status === "pending").leaseExpired, null, "pending work has no lease expiry evidence");
       for (const status of ["succeeded", "skipped"]) {
         assert.equal(plan.jobs.find(row => row.status === status).disposition, "preserve-recorded-result");
       }
@@ -347,6 +361,24 @@ test("encrypted clean restore preparation invalidates credentials atomically and
     } }), { code: "RECOVERY_PREPARATION_POSTCHECK_FAILED" });
     assert.equal(fs.existsSync(output), false);
   });
+  await t.test("a changed job lease or terminal result rejects and rolls back the entire candidate", () => {
+    for (const status of ["running", "succeeded"]) {
+      const output = path.join(input.temporaryRoot, `unexpected-job-${status}`);
+      let rollbackObserved = false;
+      assert.throws(() => prepareRecoveryCredentials({ ...input, outputDirectory: output, beforeCommit(database) {
+        database.prepare("UPDATE job_runs SET lease_token=? WHERE id=?").run("unexpected-worker", fixtureId(`recovery-preparation:job:${status}`));
+        const close = database.close.bind(database);
+        database.close = () => {
+          assert.equal(database.inTransaction, false);
+          assert.deepEqual(allRows(database), sourceRows);
+          rollbackObserved = true;
+          return close();
+        };
+      } }), { code: "RECOVERY_PREPARATION_POSTCHECK_FAILED" });
+      assert.equal(rollbackObserved, true);
+      assert.equal(fs.existsSync(output), false);
+    }
+  });
   assert.equal(readHash(input.restoredCandidate.targetDatabasePath), originalHash);
   assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
 });
@@ -435,7 +467,7 @@ test("restoring the selected backup excludes a later real buyout and restores ex
     assert.equal(database.prepare("SELECT COALESCE(SUM(penalty_cents),0) AS total FROM buyout_years").get().total, penaltyTotalAtBackup);
     const recovered = allRows(database);
     for (const [table, rows] of Object.entries(atBackup)) {
-      if (!["sessions", "account_action_tokens", "security_audit_events", "application_metadata", "outbox_events"].includes(table)) {
+      if (!["sessions", "account_action_tokens", "security_audit_events", "application_metadata", "outbox_events", "job_runs"].includes(table)) {
         assert.deepEqual(recovered[table], rows, table);
       }
     }
@@ -448,4 +480,34 @@ test("restoring the selected backup excludes a later real buyout and restores ex
   } finally { database.close(); }
   assert.deepEqual(source.serialize(), sourceAfterKnownChanges);
   assert.equal(source.prepare("SELECT status FROM contracts WHERE id=?").get(contractId).status, "eliminated");
+});
+
+test("a real statistics worker cannot use its restored lease after recovery preparation", async t => {
+  let lease;
+  const { started, input } = await candidate(t, database => {
+    const repository = createSqliteStatisticsScheduleRepository({ database });
+    lease = repository.claim({ occurrenceKey: "20260912:0", scheduledForMs: 30, nowMs: 50, owner: "synthetic-previous-worker" });
+    repository.assertLease(lease, 75);
+  });
+  const sourceBefore = started.runtime.database.serialize();
+  const report = prepareRecoveryCredentials({ ...input, outputDirectory: path.join(input.temporaryRoot, "lease-preparation") });
+  assert.equal(report.restoredJobLeasesInvalidated, 3);
+  const connection = openDatabase({ databasePath: report.preparedDatabasePath, environment: "test" });
+  const database = connection.database;
+  try {
+    const before = database.serialize();
+    const repository = createSqliteStatisticsScheduleRepository({ database });
+    assert.throws(() => repository.assertLease(lease, 110), { code: "NHL_STATISTICS_LEASE_LOST" });
+    assert.throws(() => repository.complete({ lease, nowMs: 110, result: { refreshed: true } }), { code: "NHL_STATISTICS_LEASE_LOST" });
+    assert.deepEqual(database.serialize(), before);
+    assert.equal(database.prepare("SELECT total_changes() AS n").get().n, 0);
+    const row = database.prepare("SELECT * FROM job_runs WHERE id=?").get(lease.id);
+    assert.equal(row.status, "running");
+    assert.equal(row.version, lease.version + 1);
+    assert.equal(row.lease_owner, null);
+    assert.equal(row.lease_expires_at_ms, 100);
+    assert.throws(() => createTargetRuntime({ database, migrationsDirectory: path.resolve(__dirname, "../../database/migrations") }),
+      { code: "DATABASE_RECOVERY_HELD" });
+  } finally { database.close(); }
+  assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
 });

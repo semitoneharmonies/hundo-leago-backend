@@ -37,7 +37,7 @@ function buildRecoveryReconciliationPlan({ database, credentialPreparation, obse
   if (!database?.open || database.readonly !== true || database.inTransaction || !path.isAbsolute(database.name || "") ||
       !Number.isSafeInteger(observedAtMs) || observedAtMs < 0 || !credentialPreparation ||
       !IDENTITY.test(expectedEnvironmentId || "") || !IDENTITY.test(expectedDatabaseId || "") ||
-      credentialPreparation.reportVersion !== 3 || credentialPreparation.status !== "credentials-prepared" ||
+      credentialPreparation.reportVersion !== 4 || credentialPreparation.status !== "credentials-prepared" ||
       credentialPreparation.activationReady !== false || credentialPreparation.normalRuntime !== "blocked-by-durable-recovery-hold" ||
       !UUID.test(credentialPreparation.recoveryId || "") || !UUID.test(credentialPreparation.sourceBackupId || "") ||
       !Number.isSafeInteger(credentialPreparation.preparedAtMs) || observedAtMs < credentialPreparation.preparedAtMs ||
@@ -64,6 +64,14 @@ function buildRecoveryReconciliationPlan({ database, credentialPreparation, obse
           database.prepare("SELECT 1 FROM sessions WHERE status='active' LIMIT 1").get() ||
           database.prepare("SELECT 1 FROM account_action_tokens WHERE status='active' LIMIT 1").get()) {
         fail("RECOVERY_PLAN_CREDENTIAL_BOUNDARY_INVALID");
+      }
+      const invalidatedLeases = database.prepare("SELECT * FROM job_runs WHERE status IN ('leased','running') ORDER BY id").all();
+      if (receipt.jobOccurrences !== "preserved-and-held" ||
+          receipt.restoredJobLeasesInvalidated !== invalidatedLeases.length ||
+          !DIGEST.test(receipt.restoredJobLeaseEvidenceSha256 || "") ||
+          invalidatedLeases.some(row => row.lease_owner !== null || row.lease_token !== null ||
+            row.lease_expires_at_ms !== receipt.preparedAtMs || row.updated_at_ms !== receipt.preparedAtMs || row.version < 2)) {
+        fail("RECOVERY_PLAN_LEASE_BOUNDARY_INVALID");
       }
       const tables = database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
       const tableSnapshots = Object.fromEntries(tables.map(({ name }) => {
