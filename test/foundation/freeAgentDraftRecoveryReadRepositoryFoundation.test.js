@@ -159,6 +159,7 @@ function createSchema(database) {
       opened_at_ms INTEGER NOT NULL,
       help_opens_at_ms INTEGER NOT NULL,
       candidate_deadline_at_ms INTEGER NOT NULL,
+      initial_rollover_times_json TEXT,
       deadline_locked_at_ms INTEGER,
       allocation_completed_at_ms INTEGER,
       first_matchup_starts_at_ms INTEGER NOT NULL,
@@ -952,6 +953,38 @@ function semanticHash(database) {
 }
 
 describe("FAD-11 SQLite recovery-read repository", () => {
+  test("reads commissioner-selected one, five and fourteen short rounds without writes and rejects clock drift", () => {
+    for (const count of [1, 5, 14]) {
+      const state = fixture();
+      try {
+        const times = Array.from({ length: count }, (_, index) => DEADLINE_AT_MS + (index + 1) * 30 * 60 * 1000);
+        state.database.prepare("UPDATE free_agent_drafts SET initial_rollover_times_json=? WHERE id=?").run(JSON.stringify(times), PRIMARY.fadId);
+        state.database.prepare("DELETE FROM free_agent_draft_rollovers WHERE fad_id=?").run(PRIMARY.fadId);
+        state.database.prepare("DELETE FROM job_runs WHERE job_type='fad_rollover' AND league_id=?").run(PRIMARY.leagueId);
+        for (const [index, time] of times.entries()) {
+          const opensAtMs = times[index - 1] ?? DEADLINE_AT_MS;
+          insert(state.database, "free_agent_draft_rollovers", {
+            id: uuid(1000 + index), league_id: PRIMARY.leagueId, season_id: PRIMARY.seasonId, fad_id: PRIMARY.fadId,
+            sequence: index + 1, opens_at_ms: opensAtMs, creation_cutoff_at_ms: opensAtMs, rolls_over_at_ms: time,
+            status: "scheduled", processing_job_run_id: null, processing_started_at_ms: null, completed_at_ms: null,
+            last_error_code: null, version: 1,
+          });
+          insert(state.database, "job_runs", pendingJob({ id: uuid(2000 + index), jobType: "fad_rollover",
+            occurrenceKey: buildFreeAgentDraftRolloverOccurrenceKey({ fadId: PRIMARY.fadId, sequence: index + 1, rolloverAtMs: time }), scheduledForMs: time }));
+        }
+        const repository = createSqliteFreeAgentDraftRecoveryReadRepository({ database: state.database });
+        const before = semanticHash(state.database);
+        const result = repository.readRecovery(commissionerInput());
+        assert.equal(result.rollovers.length, count);
+        assert.deepEqual(result.rollovers.map(row => row.rollsOverAtMs), times);
+        assert(result.rollovers.every(row => row.creationCutoffAtMs === row.opensAtMs));
+        assert.equal(semanticHash(state.database), before);
+        state.database.prepare("UPDATE free_agent_drafts SET initial_rollover_times_json=? WHERE id=?").run(JSON.stringify([...times.slice(0,-1), times.at(-1) + 1]), PRIMARY.fadId);
+        assert.throws(() => repository.readRecovery(commissionerInput()), error => error.code === REPOSITORY_ERROR_CODES.schemaIncompatible);
+      } finally { state.close(); }
+    }
+  });
+
   test("prepares every read against the real schema migrated through 56", () => {
     const directory = fs.mkdtempSync(
       path.join(os.tmpdir(), "hundo-fad-recovery-schema-")
