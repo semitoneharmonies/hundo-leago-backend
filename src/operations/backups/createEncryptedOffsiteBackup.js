@@ -164,15 +164,17 @@ async function createEncryptedOffsiteBackup({
   const createdAtMs = nowMs();
   let scheduleEvidence = null;
   if (scheduledOccurrence !== null) {
-    const { jobRunId, occurrenceKey, supersedesBackupId } = scheduledOccurrence;
+    const { jobRunId, occurrenceKey, supersedesBackupId, completionObjectKey } = scheduledOccurrence;
     if (!UUID_PATTERN.test(jobRunId || "") ||
         !/^(hourly|daily):[0-9]{1,16}$/.test(occurrenceKey || "") ||
         reason !== `scheduled-${occurrenceKey.split(":")[0]}` ||
         retentionClass !== occurrenceKey.split(":")[0] ||
-        (supersedesBackupId !== null && (!UUID_PATTERN.test(supersedesBackupId || "") || supersedesBackupId === backupId))) {
+        (supersedesBackupId !== null && (!UUID_PATTERN.test(supersedesBackupId || "") || supersedesBackupId === backupId)) ||
+        typeof completionObjectKey !== "string" || !completionObjectKey.startsWith(config.objectStorage.prefix) ||
+        completionObjectKey.length > 512 || completionObjectKey.includes("..") || !/^[A-Za-z0-9/_:.-]+$/.test(completionObjectKey)) {
       fail("BACKUP_INPUT_INVALID", "The scheduled backup occurrence is invalid.");
     }
-    scheduleEvidence = Object.freeze({ jobRunId, occurrenceKey, supersedesBackupId, catalogCommitRequired: true });
+    scheduleEvidence = Object.freeze({ jobRunId, occurrenceKey, supersedesBackupId, completionObjectKey, completionReceiptRequired: true });
   }
   const createdAt = new Date(createdAtMs).toISOString();
   const safeRequestedByType = bounded(requestedByType, "requester type", 64);

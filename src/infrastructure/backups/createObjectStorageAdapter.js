@@ -21,14 +21,14 @@ function createObjectStorageAdapter({ client } = {}) {
   }
 
   return Object.freeze({
-    async putPrivateObject({ objectKey, body, contentType, metadata = {} } = {}) {
+    async putPrivateObject({ objectKey, body, contentType, metadata = {}, ifAbsent = false } = {}) {
       if (
         !Buffer.isBuffer(body) ||
         typeof contentType !== "string" ||
         contentType.trim() === "" ||
         !metadata ||
         typeof metadata !== "object" ||
-        Array.isArray(metadata)
+        Array.isArray(metadata) || typeof ifAbsent !== "boolean"
       ) {
         throw new TypeError("object storage requires a private object payload");
       }
@@ -38,6 +38,7 @@ function createObjectStorageAdapter({ client } = {}) {
         contentType,
         metadata: Object.freeze({ ...metadata }),
         visibility: "private",
+        ...(ifAbsent ? { ifNoneMatch: "*" } : {}),
       });
     },
     async headPrivateObject({ objectKey } = {}) {

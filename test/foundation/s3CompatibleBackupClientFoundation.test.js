@@ -32,6 +32,26 @@ const {
 const ROOT = path.resolve(__dirname, "..", "..");
 const MIGRATIONS = path.join(ROOT, "database", "migrations");
 
+test("private conditional creation signs If-None-Match and preserves the winning object", async () => {
+  let saved = null;
+  const client = createS3CompatibleClient({ endpoint: "https://objects.example.test", region: "local-1", bucket: "test-backup",
+    accessKeyId: "fixture", secretAccessKey: "fixture-secret",
+    async fetchImplementation(_url, options) {
+      assert.equal(options.headers["if-none-match"], "*");
+      assert.match(options.headers.authorization, /SignedHeaders=[^ ]*if-none-match;/);
+      if (saved) return { ok: false, status: 412 };
+      saved = Buffer.from(options.body);
+      return { ok: true };
+    },
+  });
+  const adapter = createObjectStorageAdapter({ client });
+  const request = { objectKey: "occurrence.json", body: Buffer.from("first"), contentType: "application/json", ifAbsent: true };
+  assert.deepEqual(await adapter.putPrivateObject(request), { stored: true });
+  await assert.rejects(adapter.putPrivateObject({ ...request, body: Buffer.from("replacement") }), { code: "BACKUP_OBJECT_STORAGE_FAILED", status: 412 });
+  assert.equal(saved.toString(), "first");
+  await assert.rejects(adapter.putPrivateObject({ ...request, ifAbsent: "true" }), /private object payload/);
+});
+
 test("configured request deadlines abort a stalled object upload", async () => {
   const keepAlive = setTimeout(() => {}, 1000);
   try {
