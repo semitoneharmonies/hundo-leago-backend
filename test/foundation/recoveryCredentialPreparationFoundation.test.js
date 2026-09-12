@@ -12,6 +12,7 @@ const { restoreEncryptedBackupToCleanPath } = require("../../src/operations/back
 const { prepareRecoveryCredentials } = require("../../src/operations/backups/prepareRecoveryCredentials");
 const { buildRecoveryReconciliationPlan } = require("../../src/operations/backups/buildRecoveryReconciliationPlan");
 const { prepareRecoveryEmailReconciliation } = require("../../src/operations/backups/prepareRecoveryEmailReconciliation");
+const { prepareRecoveryStatisticsReconciliation } = require("../../src/operations/backups/prepareRecoveryStatisticsReconciliation");
 const { buildEmailReconciledRecoveryPlan } = require("../../src/operations/backups/buildEmailReconciledRecoveryPlan");
 const { createLeagueOutboxPublicationService } = require("../../src/application/services/activity/createLeagueOutboxPublicationService");
 const { createSqliteLeagueOutboxRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteLeagueOutboxRepository");
@@ -1029,6 +1030,118 @@ test("an expired restored completed-game occurrence replays once through the rea
   assert.equal(readHash(prepared.preparedDatabasePath), preparedHash);
   assert.equal(readHash(input.restoredCandidate.targetDatabasePath), originalCandidateHash);
   assert.deepEqual(started.runtime.database.serialize(), originalSource);
+});
+
+test("reviewed statistics recovery executes only its exact occurrence in a new held copy", async t => {
+  const { createRunCompletedGameStatisticsJob, latestEveningOccurrence } = require("../../src/jobs/definitions/runCompletedGameStatistics");
+  const nhlSeasonKey = "20272028", now = Date.parse("2027-10-12T01:20:00Z"), scheduledForMs = latestEveningOccurrence(now);
+  let oldLease,catalog;
+  const { started,input } = await candidate(t,database => {
+    catalog = database.prepare("SELECT id FROM players ORDER BY id").all().map((row,index) => ({ playerId: row.id,providerPlayerId: String(8478000+index) }));
+    const insert = database.prepare("INSERT INTO player_external_ids(id,player_id,provider,external_value,created_at_ms) VALUES(?,?,'nhl',?,?)");
+    for (const player of catalog) insert.run(fixtureId("reviewed-recovery-nhl:"+player.playerId),player.playerId,player.providerPlayerId,now-60_000);
+    oldLease = createSqliteStatisticsScheduleRepository({ database }).claim({ occurrenceKey: `${nhlSeasonKey}:${scheduledForMs}`,
+      scheduledForMs,nowMs: scheduledForMs+60_000,owner: "synthetic-old-worker" });
+  });
+  const sourceBytes = started.runtime.database.serialize(),restoredHash = readHash(input.restoredCandidate.targetDatabasePath);
+  const prepared = prepareRecoveryCredentials({ ...input,preparedAtMs: now,outputDirectory: path.join(input.temporaryRoot,"statistics-operation-input") });
+  const preparedHash = readHash(prepared.preparedDatabasePath);
+  const reviewPath = path.join(input.temporaryRoot,"statistics-operation-review.sqlite3");
+  fs.copyFileSync(prepared.preparedDatabasePath,reviewPath,fs.constants.COPYFILE_EXCL);
+  const reader = openReadonlyDatabase({ databasePath: reviewPath });
+  let plan,row,before;
+  try {
+    plan = buildRecoveryReconciliationPlan({ database: reader,credentialPreparation: prepared,observedAtMs: now,
+      expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID,expectedDatabaseId: FIXTURE_DATABASE_ID });
+    row = reader.prepare("SELECT * FROM job_runs WHERE id=?").get(oldLease.id); before = allRows(reader);
+  } finally { reader.close(); }
+  const requests = [];
+  const game = { id: 2027020001,season: 20272028,gameType: 2,easternStartTime: "2027-10-10T17:00:00",homeTeamId: 13,visitingTeamId: 16,gameStateId: 7 };
+  const skaters = Array.from({ length: 36 },(_,index) => ({ playerId: 8478000+index,gameId: game.id,homeRoad: index<18?"H":"R",
+    gamesPlayed: 1,goals: index===0?2:0,assists: index===0?1:0,points: index===0?3:0 }));
+  const fetchImpl = async uri => {
+    const url = new URL(uri); requests.push(url.href); assert.equal(url.origin,"https://api.nhle.com");
+    const games = url.pathname === "/stats/rest/en/game";
+    assert.ok(games || url.pathname === "/stats/rest/en/skater/summary");
+    const data = games?[game]:skaters;
+    return { ok: true,json: async () => ({ total: data.length,data: structuredClone(data) }) };
+  };
+  const review = { jobId: row.id,rowSha256: hash(canonicalize(row)),occurrenceKeySha256: hash(canonicalize([row.league_id,row.job_type,row.occurrence_key])),
+    nhlSeasonKey,reviewedByUserId: fixtureId("account:platformAdmin"),reconciliationId: crypto.randomUUID(),
+    reasonCode: "VERIFIED_STATISTICS_REFETCH",evidenceSha256: hash("synthetic reviewed recovery evidence") };
+  const options = { credentialPreparation: prepared,plan,review,executedAtMs: now,temporaryRoot: input.temporaryRoot,
+    minimumPlayerCount: catalog.length,fetchImpl };
+  const outputDirectory = path.join(input.temporaryRoot,"statistics-operation-output");
+  const report = await prepareRecoveryStatisticsReconciliation({ ...options,outputDirectory });
+  assert.equal(requests.length,2); assert.equal(report.status,"statistics-reconciled-held");
+  assert.equal(report.activationReady,false); assert.equal(report.completedJobId,row.id);
+  assert.equal(report.unresolvedJobs,plan.unresolvedJobs-1); assert.equal(report.unresolvedMessages,plan.unresolvedMessages);
+  assert.equal(report.protectedTableCount,125); assert.equal(report.otherJobs,"unchanged-and-held");
+  assert.equal(report.messages,"unchanged-and-held"); assert.equal(report.sourcePlaintextSha256,preparedHash);
+  assert.equal(report.reviewEvidence,"operator-supplied-not-current-authentication");
+  assert.equal(report.providerEvidence,"fetched-through-nhl-completed-game-adapter");
+  assert.ok(report.completedAtMs >= now); assert.equal(JSON.stringify(report).includes(PRIVATE_VALUE),false);
+  const receiptPath = path.join(outputDirectory,"statistics-reconciliation.json");
+  const { reconciledDatabasePath,inspection,...receipt } = report;
+  assert.deepEqual(JSON.parse(fs.readFileSync(receiptPath,"utf8")),receipt);
+  const { reportChecksum,...body } = receipt; assert.equal(hash(canonicalize(body)),reportChecksum);
+  assert.equal(readHash(reconciledDatabasePath),report.reconciledPlaintextSha256);
+  const workPath = path.join(input.temporaryRoot,"statistics-operation-restart.sqlite3");
+  fs.copyFileSync(reconciledDatabasePath,workPath,fs.constants.COPYFILE_EXCL);
+  const database = openDatabase({ databasePath: workPath,environment: "test" }).database;
+  try {
+    const after = allRows(database),changed = new Set(["job_runs","stat_sources","stat_refreshes","player_stat_totals","player_game_stat_observations",
+      "stat_refresh_player_game_sets","stat_refresh_player_game_coverage_entries","application_metadata","security_audit_events"]);
+    for (const [table,rows] of Object.entries(before)) if (!changed.has(table)) assert.deepEqual(after[table],rows,table);
+    assert.deepEqual(after.job_runs.filter(value => JSON.parse(value).id!==row.id),before.job_runs.filter(value => JSON.parse(value).id!==row.id));
+    const completed = database.prepare("SELECT * FROM job_runs WHERE id=?").get(row.id);
+    assert.equal(completed.status,"succeeded"); assert.equal(completed.attempt_count,row.attempt_count+1);
+    assert.equal(hash(canonicalize(completed)),report.completedJobRowSha256);
+    assert.equal(database.prepare("SELECT fantasy_points_hundredths n FROM player_stat_totals WHERE refresh_id=? AND player_id=?").get(report.result.refreshId,catalog[0].playerId).n,350);
+    const audit = database.prepare("SELECT * FROM security_audit_events WHERE id=?").get(review.reconciliationId);
+    assert.equal(audit.actor_user_id,review.reviewedByUserId); assert.equal(audit.event_type,"recovery.statistics_reconciled");
+    assertCredentialAccess(database,false);
+    const bytes = database.serialize(),repository = createSqliteStatisticsScheduleRepository({ database });
+    assert.throws(() => repository.complete({ lease: oldLease,nowMs: now,result: {} }),{ code: "NHL_STATISTICS_LEASE_LOST" });
+    const restarted = createRunCompletedGameStatisticsJob({ repository,nhlSeasonKey,clock: { nowMs: () => now },
+      statisticsService: { async refresh() { assert.fail("A completed recovered occurrence must not fetch or persist again"); } },logger: { error() {} } });
+    assert.equal((await restarted.run()).status,"skipped"); assert.deepEqual(database.serialize(),bytes);
+    assert.throws(() => createTargetRuntime({ database,migrationsDirectory: path.resolve(__dirname,"../../database/migrations") }),{ code: "DATABASE_RECOVERY_HELD" });
+    assert.deepEqual(database.pragma("foreign_key_check"),[]);
+  } finally { database.close(); }
+  const outputHashes = [readHash(reconciledDatabasePath),readHash(receiptPath)];
+  for (const [suffix,patch] of [
+    ["repeat",{ outputDirectory }],
+    ["wrong-row",{ review: { ...review,rowSha256: "f".repeat(64) } }],
+    ["wrong-occurrence",{ review: { ...review,occurrenceKeySha256: "f".repeat(64) } }],
+    ["wrong-reviewer",{ review: { ...review,reviewedByUserId: fixtureId("recovery-preparation:user") } }],
+    ["wrong-season",{ review: { ...review,nhlSeasonKey: "20262027" } }],
+    ["extra-approval",{ review: { ...review,approve: true } }],
+    ["wrong-plan",{ plan: { ...plan,unresolvedJobs: 0 } }],
+  ]) {
+    const target = path.join(input.temporaryRoot,"statistics-operation-"+suffix);
+    await assert.rejects(() => prepareRecoveryStatisticsReconciliation({ ...options,outputDirectory: target,...patch }),
+      error => /^RECOVERY_STATISTICS_/.test(error.code) && !error.message.includes(PRIVATE_VALUE));
+    if (suffix!=="repeat") assert.equal(fs.existsSync(target),false);
+  }
+  assert.equal(requests.length,2);
+  const tampered = path.join(input.temporaryRoot,"statistics-operation-unrelated-write");
+  await assert.rejects(() => prepareRecoveryStatisticsReconciliation({ ...options,outputDirectory: tampered,
+    beforeReceipt: db => db.prepare("UPDATE leagues SET name='invalid recovery write' WHERE id=?").run(fixtureId("league:leagueA")) }),
+    { code: "RECOVERY_STATISTICS_POSTCHECK_FAILED" });
+  assert.equal(requests.length,4); assert.equal(fs.existsSync(tampered),false);
+  const changedStatistics = path.join(input.temporaryRoot,"statistics-operation-changed-statistics");
+  await assert.rejects(() => prepareRecoveryStatisticsReconciliation({ ...options,outputDirectory: changedStatistics,
+    beforeReceipt: db => db.prepare("UPDATE player_stat_totals SET fantasy_points_hundredths=fantasy_points_hundredths+50 WHERE nhl_season_key=?").run(nhlSeasonKey) }),
+    error => ["RECOVERY_STATISTICS_POSTCHECK_FAILED","RECOVERY_STATISTICS_FAILED"].includes(error.code));
+  assert.equal(requests.length,6); assert.equal(fs.existsSync(changedStatistics),false);
+  const unavailable = path.join(input.temporaryRoot,"statistics-operation-provider-unavailable");
+  await assert.rejects(() => prepareRecoveryStatisticsReconciliation({ ...options,outputDirectory: unavailable,
+    fetchImpl: async () => ({ ok: false,status: 400 }) }),{ code: "RECOVERY_STATISTICS_FAILED" });
+  assert.equal(fs.existsSync(unavailable),false);
+  assert.deepEqual([readHash(reconciledDatabasePath),readHash(receiptPath)],outputHashes);
+  assert.equal(readHash(prepared.preparedDatabasePath),preparedHash); assert.equal(readHash(input.restoredCandidate.targetDatabasePath),restoredHash);
+  assert.deepEqual(started.runtime.database.serialize(),sourceBytes);
 });
 
 test("recovery review detects a real statistics occurrence completed after its selected encrypted backup", async t => {
