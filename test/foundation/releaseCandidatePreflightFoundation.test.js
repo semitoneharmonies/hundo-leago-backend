@@ -392,7 +392,7 @@ test("backend release-source inspection reports schema 56 while the historical a
     postBaseMigrationCount: 34,
     contiguous: true,
     checksumSetSha256:
-      "57050644979bf3aed2a4d657162ebc0931d4d3e1a85bc01208f8520e9bf2d133",
+      "582e39d5cb91d785d078b49a2594450fa245b34f81d095f1b6550da0e76de284",
   });
   assert.equal(EXPECTED_SCHEMA_VERSION, 54);
   assert.deepEqual(facts.repositorySource, {
