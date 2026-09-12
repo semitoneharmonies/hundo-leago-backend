@@ -4,6 +4,7 @@ const path = require("node:path");
 const { canonicalize } = require("../../infrastructure/migration/sourceInventory");
 const { assertDatabaseIdentity } = require("../../infrastructure/database/databaseIdentity");
 const { RecoveryFinancialSummaryError, summarizeRecoveryFinancialState } = require("./summarizeRecoveryFinancialState");
+const { RecoveryJobEvidenceError, summarizeRecoveryJobEvidence } = require("./summarizeRecoveryJobEvidence");
 
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 const DIGEST = /^[a-f0-9]{64}$/;
@@ -73,10 +74,10 @@ function snapshot(database, expectedHash, expectedIdentity) {
 // external delivery, nor permission to replay a lost transaction or occurrence.
 function compareRecoveryLossWindow({ restoredDatabase, preservedDatabase, restoredPlaintextSha256,
   preservedPlaintextSha256, sourceBackupId, expectedEnvironmentId, expectedDatabaseId, observedAtMs,
-  includeFinancialState = false } = {}) {
+  includeFinancialState = false, includeJobEvidence = false } = {}) {
   if (!UUID.test(sourceBackupId || "") || !IDENTITY.test(expectedEnvironmentId || "") ||
       !IDENTITY.test(expectedDatabaseId || "") || !Number.isSafeInteger(observedAtMs) || observedAtMs < 0 ||
-      typeof includeFinancialState !== "boolean") {
+      typeof includeFinancialState !== "boolean" || typeof includeJobEvidence !== "boolean") {
     fail("RECOVERY_COMPARISON_INPUT_INVALID");
   }
   try {
@@ -121,11 +122,12 @@ function compareRecoveryLossWindow({ restoredDatabase, preservedDatabase, restor
       tables, changedTables: Object.values(tables).filter(table => table.changes.length > 0).length,
       changedRecords: Object.values(tables).reduce((count, table) => count + table.changes.length, 0),
       ...(includeFinancialState ? { financialState: summarizeRecoveryFinancialState(before, after) } : {}),
+      ...(includeJobEvidence ? { jobEvidence: summarizeRecoveryJobEvidence(before, after, observedAtMs) } : {}),
       evidenceScope: "preserved-database-comparison", completeLossWindowEvidence: false,
       activationReady: false, executable: false };
     return Object.freeze({ ...report, reportChecksum: hash(canonicalize(report)) });
   } catch (error) {
-    if (error instanceof RecoveryLossWindowError || error instanceof RecoveryFinancialSummaryError) throw error;
+    if (error instanceof RecoveryLossWindowError || error instanceof RecoveryFinancialSummaryError || error instanceof RecoveryJobEvidenceError) throw error;
     fail("RECOVERY_COMPARISON_FAILED");
   }
 }

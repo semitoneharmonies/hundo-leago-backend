@@ -86,7 +86,7 @@ function runRecoveryReviewCommand({ argv, output = console } = {}) {
     }
     let lossWindow = null;
     if (request.lossWindow !== undefined) {
-      exactFields(request.lossWindow, ["restoredDatabasePath", "preservedDatabasePath", "preservedPlaintextSha256"], ["includeFinancialState"]);
+      exactFields(request.lossWindow, ["restoredDatabasePath", "preservedDatabasePath", "preservedPlaintextSha256"], ["includeFinancialState", "includeJobEvidence"]);
       if (!DIGEST.test(request.lossWindow.preservedPlaintextSha256)) fail("RECOVERY_REVIEW_REQUEST_INVALID");
       lossWindow = compareRecoveryLossWindow({ restoredDatabase: open(request.lossWindow.restoredDatabasePath),
         preservedDatabase: open(request.lossWindow.preservedDatabasePath),
@@ -94,7 +94,7 @@ function runRecoveryReviewCommand({ argv, output = console } = {}) {
         preservedPlaintextSha256: request.lossWindow.preservedPlaintextSha256,
         sourceBackupId: plan.sourceBackupId, expectedEnvironmentId: request.expectedEnvironmentId,
         expectedDatabaseId: request.expectedDatabaseId, observedAtMs: request.observedAtMs,
-        includeFinancialState: request.lossWindow.includeFinancialState });
+        includeFinancialState: request.lossWindow.includeFinancialState, includeJobEvidence: request.lossWindow.includeJobEvidence });
     }
     const report = { reviewVersion: 1, status: "held-candidate-reviewed", requestSha256: hash(canonicalize(request)),
       plan, lossWindow, evidenceScope: "offline-candidate-review", providerEvidenceFetched: false,

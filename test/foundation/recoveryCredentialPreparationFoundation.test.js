@@ -325,10 +325,12 @@ test("reviewed restored email suppression preserves source, jobs and every unrel
       assert.equal(initialReport.lossWindow.changedRecords, 0);
       assert.equal(initialReport.lossWindow.completeLossWindowEvidence, false);
       assert.equal(initialReport.lossWindow.financialState, undefined);
+      assert.equal(initialReport.lossWindow.jobEvidence, undefined);
       assert.equal(initialReport.plan.unresolvedMessages, plan.unresolvedMessages);
       request.emailReview = { originalPlanPath: write("original-plan.json", plan),
         emailReconciliationPath: write("email.json", result), reconciledDatabasePath: result.reconciledDatabasePath };
       request.lossWindow.includeFinancialState = true;
+      request.lossWindow.includeJobEvidence = true;
       const reviewed = invoke(request);
       assert.equal(reviewed.status, 0, reviewed.stderr); assert.equal(reviewed.stderr, "");
       const report = JSON.parse(reviewed.stdout);
@@ -340,13 +342,17 @@ test("reviewed restored email suppression preserves source, jobs and every unrel
       assert.equal(report.lossWindow.financialState.leagues.length, 2);
       assert.equal(report.lossWindow.financialState.completeReconciliation, false);
       assert.equal(report.lossWindow.financialState.capCalculationPerformed, false);
+      assert.equal(report.lossWindow.jobEvidence.changedOccurrences, 0);
+      assert.ok(report.lossWindow.jobEvidence.occurrences.length > 0);
+      assert.equal(report.lossWindow.jobEvidence.replayPermitted, false);
       const { reportChecksum, ...body } = report; assert.equal(hash(canonicalize(body)), reportChecksum);
       assert.equal(reviewed.stdout.includes(PRIVATE_VALUE), false);
       assert.equal(reviewed.stdout.includes(directory.replace(/\\/g, "\\\\")), false);
       for (const invalid of [{ ...request, expectedDatabaseId: "wrong-database-identity" },
         { ...request, emailReview: { ...request.emailReview, emailReconciliationPath: write("forged-email.json", { ...result, reportChecksum: "e".repeat(64) }) } },
         { ...request, lossWindow: { ...request.lossWindow, preservedPlaintextSha256: "e".repeat(64) } },
-        { ...request, lossWindow: { ...request.lossWindow, includeFinancialState: "true" } }]) {
+        { ...request, lossWindow: { ...request.lossWindow, includeFinancialState: "true" } },
+        { ...request, lossWindow: { ...request.lossWindow, includeJobEvidence: "true" } }]) {
         const failure = invoke(invalid); assert.equal(failure.status, 1); assert.equal(failure.stdout, "");
         assert.equal(JSON.parse(failure.stderr).error.message, "Recovery review failed safely. No activation was performed.");
         assert.equal(failure.stderr.includes(PRIVATE_VALUE), false);
@@ -971,6 +977,54 @@ test("an expired restored completed-game occurrence replays once through the rea
   assert.equal(readHash(prepared.preparedDatabasePath), preparedHash);
   assert.equal(readHash(input.restoredCandidate.targetDatabasePath), originalCandidateHash);
   assert.deepEqual(started.runtime.database.serialize(), originalSource);
+});
+
+test("recovery review detects a real statistics occurrence completed after its selected encrypted backup", async t => {
+  let lease;
+  const { started, input, backup } = await candidate(t, database => {
+    lease = createSqliteStatisticsScheduleRepository({ database }).claim({
+      occurrenceKey: "20262027:30", scheduledForMs: 30, nowMs: 50, owner: "synthetic-backup-worker" });
+  });
+  const source = started.runtime.database, beforeCompletion = allRows(source);
+  const result = { refreshId: crypto.randomUUID(), privateProviderReceipt: PRIVATE_VALUE };
+  createSqliteStatisticsScheduleRepository({ database: source }).complete({ lease, nowMs: 80, result });
+  const afterCompletion = allRows(source), sourceBytes = source.serialize();
+  for (const [table,rows] of Object.entries(beforeCompletion)) if (table !== "job_runs") assert.deepEqual(afterCompletion[table],rows,table);
+  assert.deepEqual(afterCompletion.job_runs.filter(row => JSON.parse(row).id !== lease.id), beforeCompletion.job_runs.filter(row => JSON.parse(row).id !== lease.id));
+  const prepared = prepareRecoveryCredentials({ ...input, outputDirectory: path.join(input.temporaryRoot,"completed-job-prepared") });
+  const preserved = await createVerifiedBackup({ databasePath: started.databasePath,
+    outputDirectory: path.join(input.temporaryRoot,"completed-job-preserved"), environment: "test",
+    reason: "incident-preservation", capturedAtMs: 100, temporaryRoot: input.temporaryRoot });
+  const restoredDatabase = openReadonlyDatabase({ databasePath: input.restoredCandidate.targetDatabasePath });
+  const preservedDatabase = openReadonlyDatabase({ databasePath: path.join(preserved.outputDirectory,BACKUP_FILE_NAME) });
+  try {
+    const options = { restoredDatabase,preservedDatabase,restoredPlaintextSha256: input.restoredCandidate.plaintextSha256,
+      preservedPlaintextSha256: preserved.plaintextSha256, sourceBackupId: backup.backupId,
+      expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID, expectedDatabaseId: FIXTURE_DATABASE_ID, observedAtMs: 100 };
+    const ordinary = compareRecoveryLossWindow(options); assert.equal(ordinary.jobEvidence,undefined);
+    const reviewed = compareRecoveryLossWindow({ ...options,includeJobEvidence: true });
+    assert.deepEqual(reviewed.tables,ordinary.tables); assert.equal(reviewed.jobEvidence.changedOccurrences,1);
+    assert.equal(reviewed.jobEvidence.recordedCompletionsAfterBackup,1);
+    const row = reviewed.jobEvidence.occurrences.find(row => row.jobId === lease.id);
+    assert.equal(row.restored.status,"running"); assert.equal(row.preserved.status,"succeeded");
+    assert.equal(row.preserved.resultSha256,hash(JSON.stringify(result))); assert.equal(row.replayPermitted,false);
+    assert.equal(row.externalOutcomeVerified,false); assert.equal(row.domainOutcomeVerified,false);
+    const { reportChecksum,...body } = reviewed; assert.equal(hash(canonicalize(body)),reportChecksum);
+    assert.equal(JSON.stringify(reviewed).includes(PRIVATE_VALUE),false);
+    const directory = path.join(input.temporaryRoot,"completed-job-command"); fs.mkdirSync(directory);
+    const credentials = path.join(directory,"credentials.json"), requestPath = path.join(directory,"request.json");
+    fs.writeFileSync(credentials,JSON.stringify(prepared),{ flag: "wx" });
+    fs.writeFileSync(requestPath,JSON.stringify({ requestVersion: 1, expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID,
+      expectedDatabaseId: FIXTURE_DATABASE_ID, observedAtMs: 100, preparedDatabasePath: prepared.preparedDatabasePath,
+      credentialPreparationPath: credentials, lossWindow: { restoredDatabasePath: restoredDatabase.name,
+        preservedDatabasePath: preservedDatabase.name, preservedPlaintextSha256: preserved.plaintextSha256,includeJobEvidence: true } }),{ flag: "wx" });
+    const command = spawnSync(process.execPath,[path.resolve(__dirname,"../../scripts/db-recovery-review.js"),"--request",requestPath],
+      { encoding: "utf8",timeout: 60_000,maxBuffer: 8*1024*1024 });
+    assert.equal(command.status,0,command.stderr); assert.equal(command.stderr,"");
+    assert.deepEqual(JSON.parse(command.stdout).lossWindow,reviewed); assert.equal(command.stdout.includes(PRIVATE_VALUE),false);
+    for (const database of [restoredDatabase,preservedDatabase]) assert.equal(database.prepare("SELECT total_changes() n").get().n,0);
+  } finally { restoredDatabase.close(); preservedDatabase.close(); }
+  assert.deepEqual(source.serialize(),sourceBytes);
 });
 
 test("a later recovery advances the prior epoch atomically without deleting idempotency history", async t => {
