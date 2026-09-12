@@ -1,0 +1,204 @@
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { openDatabase } = require("../../infrastructure/database/connection");
+const { assertDatabaseIdentity } = require("../../infrastructure/database/databaseIdentity");
+const { inspectDatabase } = require("../../infrastructure/database/sqliteBackup");
+const { canonicalize } = require("../../infrastructure/migration/sourceInventory");
+const { createSqliteSessionRepository } = require("../../infrastructure/persistence/sqlite/SqliteSessionRepository");
+const { createSqliteAccountActionTokenRepository } = require("../../infrastructure/persistence/sqlite/SqliteAccountActionTokenRepository");
+const { createSqliteSecurityAuditRepository } = require("../../infrastructure/persistence/sqlite/SqliteSecurityAuditRepository");
+
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const AUDIT_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const DIGEST = /^[a-f0-9]{64}$/;
+const IDENTITY = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
+const CHANGED_TABLES = new Set(["sessions", "account_action_tokens", "security_audit_events"]);
+
+class RecoveryCredentialPreparationError extends Error {
+  constructor(code, message, options = {}) {
+    super(message, options);
+    this.name = "RecoveryCredentialPreparationError";
+    this.code = code;
+  }
+}
+
+function fail(code, message, cause) {
+  throw new RecoveryCredentialPreparationError(code, message, cause ? { cause } : {});
+}
+function hash(bytes) {
+  return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+function hashFile(file) { return hash(fs.readFileSync(file)); }
+function inside(root, target) {
+  const relative = path.relative(root, target);
+  return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+function exists(entry) {
+  try { fs.lstatSync(entry); return true; } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+function fingerprint(database, tables) {
+  return Object.fromEntries(tables.map((table) => {
+    if (!/^[a-z][a-z0-9_]*$/.test(table)) throw new Error("Unsupported table name");
+    const rows = database.prepare(`SELECT * FROM "${table}"`).all();
+    return [table, hash(canonicalize(rows.map((row) => hash(canonicalize(row))).sort()))];
+  }));
+}
+function assertSourceUnchanged(source, expectedHash) {
+  if (["-wal", "-shm", "-journal"].some((suffix) => exists(`${source}${suffix}`)) || hashFile(source) !== expectedHash) {
+    fail("RECOVERY_SOURCE_CHANGED", "The verified restore source changed during preparation.");
+  }
+}
+
+// Creates an offline derivative of a verified restore. The selected restore and
+// the application database are never opened for writing or activated here.
+function prepareRecoveryCredentials({
+  restoredCandidate,
+  temporaryRoot,
+  outputDirectory,
+  expectedEnvironmentId,
+  expectedDatabaseId,
+  recoveryId,
+  preparedAtMs,
+  beforeCommit = null,
+} = {}) {
+  if (
+    restoredCandidate?.status !== "verified" || !UUID.test(restoredCandidate?.backupId || "") ||
+    !DIGEST.test(restoredCandidate?.plaintextSha256 || "") || !restoredCandidate?.inspection ||
+    !path.isAbsolute(restoredCandidate?.targetDatabasePath || "") ||
+    !path.isAbsolute(temporaryRoot || "") || !path.isAbsolute(outputDirectory || "") ||
+    !IDENTITY.test(expectedEnvironmentId || "") || !IDENTITY.test(expectedDatabaseId || "") ||
+    !AUDIT_UUID.test(recoveryId || "") || !Number.isSafeInteger(preparedAtMs) || preparedAtMs < 0 ||
+    (beforeCommit !== null && typeof beforeCommit !== "function")
+  ) {
+    fail("RECOVERY_PREPARATION_INPUT_INVALID", "Exact verified-candidate and recovery preparation evidence is required.");
+  }
+
+  let ownedDirectory = null;
+  let connection;
+  try {
+    const root = fs.realpathSync(temporaryRoot);
+    const source = fs.realpathSync(restoredCandidate.targetDatabasePath);
+    const output = path.join(fs.realpathSync(path.dirname(outputDirectory)), path.basename(outputDirectory));
+    if (
+      !inside(fs.realpathSync(os.tmpdir()), root) || !inside(root, source) || !inside(root, output) ||
+      fs.lstatSync(restoredCandidate.targetDatabasePath).isSymbolicLink() ||
+      !fs.statSync(source).isFile() || fs.statSync(source).nlink !== 1 || exists(output)
+    ) {
+      fail("RECOVERY_PREPARATION_PATH_UNSAFE", "Recovery preparation requires a new isolated temporary output.");
+    }
+    assertSourceUnchanged(source, restoredCandidate.plaintextSha256);
+    const sourceInspection = inspectDatabase(source);
+    if (canonicalize(sourceInspection) !== canonicalize(restoredCandidate.inspection) ||
+        sourceInspection.databaseIdentity.environmentId !== expectedEnvironmentId ||
+        sourceInspection.databaseIdentity.databaseId !== expectedDatabaseId) {
+      fail("RECOVERY_PREPARATION_IDENTITY_MISMATCH", "The verified candidate identity or inspection does not match.");
+    }
+    assertSourceUnchanged(source, restoredCandidate.plaintextSha256);
+    fs.mkdirSync(output, { recursive: false, mode: 0o700 });
+    ownedDirectory = output;
+    const preparedPath = path.join(output, "credentials-prepared.sqlite3");
+    fs.copyFileSync(source, preparedPath, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(preparedPath, 0o600);
+    if (hashFile(preparedPath) !== restoredCandidate.plaintextSha256) {
+      fail("RECOVERY_SOURCE_CHANGED", "The copied recovery candidate does not match its verified source.");
+    }
+    connection = openDatabase({
+      databasePath: preparedPath, environment: "staging", persistentRoot: root, requirePersistentRoot: true,
+    });
+    const database = connection.database;
+    const sessions = createSqliteSessionRepository({ database });
+    const tokens = createSqliteAccountActionTokenRepository({ database });
+    const audit = createSqliteSecurityAuditRepository({ database });
+
+    const counts = database.transaction(() => {
+      assertDatabaseIdentity(database, { environmentId: expectedEnvironmentId, databaseId: expectedDatabaseId });
+      if (audit.findById(recoveryId)) {
+        fail("RECOVERY_PREPARATION_ALREADY_RECORDED", "This recovery identifier is already recorded in the candidate.");
+      }
+      const protectedTables = database.prepare(
+        "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+      ).all().map(({ name }) => name).filter((name) => !CHANGED_TABLES.has(name));
+      const preserved = fingerprint(database, protectedTables);
+      const beforeSessions = database.prepare("SELECT * FROM sessions ORDER BY id").all();
+      const beforeTokens = database.prepare("SELECT * FROM account_action_tokens ORDER BY id").all();
+      const beforeAudit = database.prepare("SELECT * FROM security_audit_events ORDER BY id").all();
+      const activeSessions = beforeSessions.filter(({ status }) => status === "active");
+      const activeTokens = beforeTokens.filter(({ status }) => status === "active");
+      if ([...activeSessions, ...activeTokens].some(({ created_at_ms }) => preparedAtMs < created_at_ms)) {
+        fail("RECOVERY_PREPARATION_INPUT_INVALID", "The preparation time predates a restored active credential.");
+      }
+      const initialChanges = database.prepare("SELECT total_changes() AS count").get().count;
+      for (const session of activeSessions) {
+        sessions.revokeActive({
+          sessionId: session.id, expectedVersion: session.version, changedAtMs: preparedAtMs,
+          reason: "platform_security_action", transactionHook: null,
+        });
+      }
+      for (const token of activeTokens) {
+        tokens.invalidateActive({ tokenId: token.id, expectedVersion: token.version,
+          changedAtMs: preparedAtMs, transactionHook: null });
+      }
+      audit.append({
+        id: recoveryId, event_type: "recovery.credentials_invalidated", outcome: "success",
+        actor_user_id: null, target_user_id: null, league_id: null, session_id: null,
+        request_correlation_id: recoveryId,
+        reason_code: `restore_${restoredCandidate.backupId}_${restoredCandidate.plaintextSha256}`,
+        network_key_version: null, network_metadata_digest: null, unknown_account_digest: null,
+        client_metadata_json: '{"networkSourceCategory":"local"}',
+        occurred_at_ms: preparedAtMs,
+      });
+      if (beforeCommit && beforeCommit(database)?.then) {
+        fail("RECOVERY_PREPARATION_INPUT_INVALID", "Recovery preparation hooks must finish synchronously.");
+      }
+      const expectedSessions = beforeSessions.map((row) => row.status !== "active" ? row : {
+        ...row, status: "revoked", revoked_at_ms: preparedAtMs,
+        revocation_reason: "platform_security_action", version: row.version + 1,
+      });
+      const expectedTokens = beforeTokens.map((row) => row.status !== "active" ? row : {
+        ...row, status: "invalidated", invalidated_at_ms: preparedAtMs, version: row.version + 1,
+      });
+      if (
+        canonicalize(database.prepare("SELECT * FROM sessions ORDER BY id").all()) !== canonicalize(expectedSessions) ||
+        canonicalize(database.prepare("SELECT * FROM account_action_tokens ORDER BY id").all()) !== canonicalize(expectedTokens) ||
+        canonicalize(database.prepare("SELECT * FROM security_audit_events WHERE id <> ? ORDER BY id").all(recoveryId)) !== canonicalize(beforeAudit) ||
+        canonicalize(fingerprint(database, protectedTables)) !== canonicalize(preserved) ||
+        database.prepare("SELECT total_changes() AS count").get().count - initialChanges !== activeSessions.length + activeTokens.length + 1 ||
+        database.pragma("foreign_key_check").length !== 0
+      ) {
+        fail("RECOVERY_PREPARATION_POSTCHECK_FAILED", "The candidate preparation did not preserve its exact allowed changes.");
+      }
+      assertSourceUnchanged(source, restoredCandidate.plaintextSha256);
+      return { sessionsRevoked: activeSessions.length, actionTokensInvalidated: activeTokens.length,
+        protectedTableCount: protectedTables.length };
+    }).immediate();
+    connection.database.close();
+    connection = null;
+    const inspection = inspectDatabase(preparedPath);
+    assertSourceUnchanged(source, restoredCandidate.plaintextSha256);
+    const reportBase = {
+      reportVersion: 1, recoveryId, sourceBackupId: restoredCandidate.backupId,
+      sourcePlaintextSha256: restoredCandidate.plaintextSha256, preparedPlaintextSha256: hashFile(preparedPath),
+      preparedAtMs, ...counts, sourceDatabase: "unchanged", status: "credentials-prepared",
+      activationReady: false, remainingRecoveryGates: ["recovery-execution-boundary", "job-and-outbox-reconciliation", "financial-and-league-reconciliation", "controlled-reopening"],
+    };
+    const report = { ...reportBase, reportChecksum: hash(canonicalize(reportBase)) };
+    fs.writeFileSync(path.join(output, "credential-preparation.json"), `${canonicalize(report)}\n`, { flag: "wx", mode: 0o600 });
+    return Object.freeze({ ...report, preparedDatabasePath: preparedPath, inspection });
+  } catch (error) {
+    const cleanupErrors = [];
+    try { if (connection?.database?.open) connection.database.close(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+    try { if (ownedDirectory !== null) fs.rmSync(ownedDirectory, { recursive: true, force: true }); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+    if (cleanupErrors.length) {
+      fail("RECOVERY_PREPARATION_CLEANUP_FAILED", "The isolated recovery candidate could not be fully cleaned.", new AggregateError([error, ...cleanupErrors]));
+    }
+    if (error instanceof RecoveryCredentialPreparationError) throw error;
+    fail("RECOVERY_PREPARATION_FAILED", "The isolated recovery credential preparation failed safely.", error);
+  }
+}
+
+module.exports = { RecoveryCredentialPreparationError, prepareRecoveryCredentials };

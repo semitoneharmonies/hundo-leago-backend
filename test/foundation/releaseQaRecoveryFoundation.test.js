@@ -48,11 +48,20 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   assert.equal(report.objectCount, 2);
   assert.equal(report.sourceDatabase, "unchanged");
   assert.equal(report.wrongKeyRestore, "rejected-without-target");
-  assert.equal(report.reportVersion, 2);
+  assert.equal(report.reportVersion, 3);
   assert.equal(report.recoveryInventory.verificationScope, "read-only-inventory");
   assert.equal(report.recoveryInventory.activationReady, false);
   assert.equal(report.recoveryInventory.databaseIdentity.databaseId, FIXTURE_DATABASE_ID);
   assert.equal(report.recoveryInventory.remainingRecoveryGates.length, 6);
+  assert.equal(report.credentialPreparation.status, "credentials-prepared");
+  assert.equal(report.credentialPreparation.activationReady, false);
+  assert.equal(report.credentialPreparation.sourceDatabase, "unchanged");
+  assert.equal(report.credentialPreparation.preparedDatabasePath, undefined);
+  assert.equal(report.preparedInventory.sessions.active, 0);
+  assert.equal(Object.values(report.preparedInventory.activeActionTokens).every((count) => count === 0), true);
+  assert.deepEqual(report.preparedInventory.leagueOutbox, report.recoveryInventory.leagueOutbox);
+  assert.deepEqual(report.preparedInventory.accountEmailOutbox, report.recoveryInventory.accountEmailOutbox);
+  assert.deepEqual(report.preparedInventory.jobs, report.recoveryInventory.jobs);
   assert.match(report.reportChecksum, /^[0-9a-f]{64}$/);
   assert.equal(
     fs.existsSync(path.join(started.temporaryRoot, "recovery-rehearsal")),

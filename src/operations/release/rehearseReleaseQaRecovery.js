@@ -19,6 +19,9 @@ const {
   inspectRecoveryInventory,
 } = require("../backups/inspectRecoveryInventory");
 const {
+  prepareRecoveryCredentials,
+} = require("../backups/prepareRecoveryCredentials");
+const {
   openReadonlyDatabase,
 } = require("../../infrastructure/database/connection");
 const {
@@ -222,6 +225,17 @@ async function rehearseReleaseQaRecovery({
       targetDatabasePath: restoredPath,
       temporaryRoot: physicalRoot,
     });
+    // Prepare the closed restore before additional read-only connections create
+    // SQLite WAL sidecars. Preparation intentionally refuses any such sidecar.
+    const prepared = prepareRecoveryCredentials({
+      restoredCandidate: restored,
+      temporaryRoot: physicalRoot,
+      outputDirectory: path.join(rehearsalRoot, "credential-preparation"),
+      expectedEnvironmentId: config.environmentId,
+      expectedDatabaseId: config.databaseId,
+      recoveryId: crypto.randomUUID(),
+      preparedAtMs: Date.now(),
+    });
     const fixtureAfterRestore = verifyReleaseQaFixture({
       databasePath: restored.targetDatabasePath,
     });
@@ -247,8 +261,27 @@ async function rehearseReleaseQaRecovery({
     } finally {
       candidate.close();
     }
+    // Keep disposable filesystem paths and row counts out of the durable report.
+    const { preparedDatabasePath, inspection, ...credentialPreparation } = prepared;
+    const preparedCandidate = openReadonlyDatabase({ databasePath: preparedDatabasePath });
+    let preparedInventory;
+    try {
+      preparedInventory = inspectRecoveryInventory({
+        database: preparedCandidate,
+        expectedEnvironmentId: config.environmentId,
+        expectedDatabaseId: config.databaseId,
+        observedAtMs: prepared.preparedAtMs,
+      });
+    } finally {
+      preparedCandidate.close();
+    }
+    if (hash(fs.readFileSync(physicalDatabase)) !== sourceSha256Before ||
+        preparedInventory.sessions.active !== 0 ||
+        Object.values(preparedInventory.activeActionTokens).some((count) => count !== 0)) {
+      fail("RELEASE_QA_RECOVERY_VERIFICATION_FAILED", "Credential preparation or source-preservation proof failed.");
+    }
     const reportBase = Object.freeze({
-      reportVersion: 2,
+      reportVersion: 3,
       backup: "encrypted-private-object-verified",
       cleanRestore: "verified-to-new-path",
       fixtureManifestChecksum,
@@ -256,6 +289,8 @@ async function rehearseReleaseQaRecovery({
       sourceDatabase: "unchanged",
       wrongKeyRestore: "rejected-without-target",
       recoveryInventory,
+      credentialPreparation,
+      preparedInventory,
     });
     return Object.freeze({
       ...reportBase,
