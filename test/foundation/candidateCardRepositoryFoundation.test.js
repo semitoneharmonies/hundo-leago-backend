@@ -1771,6 +1771,21 @@ function publishEmptyCard(runtime) {
 describe(
   "SQLite Candidate Card private read boundary",
   () => {
+    test("closes annual Candidate Card edit and help controls and rejects a stale write without changes", (t) => {
+      const runtime = createRuntime(t);
+      const changed = runtime.database.prepare("UPDATE matchup_weeks SET status = 'live' WHERE league_id = ? AND season_id = ?")
+        .run(runtime.ids.league, runtime.ids.season);
+      assert.equal(changed.changes > 0, true);
+      const before = databaseBytes(runtime.database);
+      const changes = runtime.database.prepare("SELECT total_changes() AS n").get().n;
+      const card = readPrivateCurrent(runtime);
+      assert.deepEqual(card.capabilities.editCard, { allowed: false, reasonCode: "FAD_SEASON_CLOSED" });
+      assert.deepEqual(card.capabilities.requestHelp, { allowed: false, reasonCode: "FAD_SEASON_CLOSED" });
+      assert.throws(() => runtime.repository.mutateCurrent(currentAddCommand(runtime)), { code: "FAD_SEASON_CLOSED" });
+      assert.equal(databaseBytes(runtime.database), before);
+      assert.equal(runtime.database.prepare("SELECT total_changes() AS n").get().n, changes);
+    });
+
     test(
       "returns only an exact manager-scoped card, denies commissioner and competing-team reads before help, and performs byte-stable reads",
       (t) => {

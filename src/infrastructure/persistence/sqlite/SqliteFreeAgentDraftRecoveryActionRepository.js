@@ -1,5 +1,7 @@
 "use strict";
 
+const { requireFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
+
 const {
   FreeAgentDraftRecoveryPolicyError,
   getFreeAgentDraftRecoveryActionPolicy,
@@ -1149,6 +1151,11 @@ function createSqliteFreeAgentDraftRecoveryActionRepository({
       const replay = findReplay(command);
       if (replay) return replay;
       const fad = requireFad(command);
+      requireFreeAgentDraftCommissionerWindow(database, {
+        leagueId: command.leagueId,
+        seasonId: fad.season_id,
+        nowMs: command.acceptedAtMs,
+      });
       const recovery = requireRecovery(command, fad);
       return persist(command, actorAuthority, recovery);
     });

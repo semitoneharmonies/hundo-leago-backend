@@ -11,6 +11,8 @@ const CANDIDATE_WRITE_ACTION =
 const HELP_WRITE_ACTION = "fad_help_write";
 
 const SAFE_MESSAGES = Object.freeze({
+  FAD_SEASON_CLOSED: "Free Agent Draft changes are closed during the season. They become available for next season after the Entry Draft is complete.",
+  FAD_ENTRY_DRAFT_REQUIRED: "Complete the Entry Draft before changing the upcoming season's Free Agent Draft.",
   CANDIDATE_BENCH_AAV_EXCEEDED:
     "The proposed Bench contract exceeds the maximum allowed AAV.",
   CANDIDATE_CARD_CAP_EXCEEDED:
@@ -74,6 +76,8 @@ const NOT_FOUND_CODES = new Set([
   "LEAGUE_NOT_FOUND",
 ]);
 const CONFLICT_CODES = new Set([
+  "FAD_SEASON_CLOSED",
+  "FAD_ENTRY_DRAFT_REQUIRED",
   "CANDIDATE_CARRYOVER_LOCKED",
   "CANDIDATE_PLAYER_DUPLICATE",
   "CANDIDATE_SLOT_OCCUPIED",

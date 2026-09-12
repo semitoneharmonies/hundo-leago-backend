@@ -492,6 +492,37 @@ describe("M6-02 matchup schedule policy", () => {
 });
 
 describe("M6-02 atomic matchup schedule persistence", () => {
+  test("keeps seven full auction days and a future card deadline when setup is late", (t) => {
+    const runtime = createRuntime(t);
+    const input = { ...runtime.scope, ...explicitScheduleInput(), actorUserId: runtime.scope.commissionerId };
+    const deadline = FIRST_WEEK_MS - 7 * 24 * 60 * 60 * 1000;
+    const before = runtime.database.serialize();
+    assert.equal(runtime.service.preview({ ...input, nowMs: deadline - 1 }).plan.firstWeekStartsAtMs, FIRST_WEEK_MS);
+    for (const nowMs of [deadline, deadline + 1, FIRST_WEEK_MS - 1]) {
+      assert.throws(() => runtime.service.preview({ ...input, nowMs }), { code: "FAD_DEADLINE_NOT_FUTURE" });
+    }
+    assert.equal(runtime.service.preview({ ...input, firstWeekStartsAtMs: SECOND_WEEK_MS, nowMs: deadline }).plan.firstWeekStartsAtMs, SECOND_WEEK_MS);
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
+  test("rejects late schedule confirmation and a pre-draft shift with an elapsed card deadline", (t) => {
+    const runtime = createRuntime(t);
+    const deadline = FIRST_WEEK_MS - 7 * 24 * 60 * 60 * 1000;
+    const lateService = createShiftService(runtime, { nowMs: deadline });
+    const before = runtime.database.serialize();
+    assert.throws(() => lateService.generate(confirmedScheduleCommand(runtime.scope)), { code: "FAD_DEADLINE_NOT_FUTURE" });
+    assert.equal(before.equals(runtime.database.serialize()), true);
+    const result = runtime.service.generate(confirmedScheduleCommand(runtime.scope, {
+      input: { ...explicitScheduleInput({ firstWeekStartsAtMs: SECOND_WEEK_MS }), confirmed: true },
+    }));
+    const beforeShift = runtime.database.serialize();
+    assert.throws(() => lateService.shiftWeekOne(shiftWeekOneCommand(runtime.scope, {
+      weekId: result.firstWeekId, expectedWeekVersion: 1,
+      firstWeekStartsAtMs: FIRST_WEEK_MS, idempotencyKey: "late-week-one-shift",
+    })), { code: "FAD_DEADLINE_NOT_FUTURE" });
+    assert.equal(beforeShift.equals(runtime.database.serialize()), true);
+  });
+
   test("persists and replays the approved default with holiday gaps and a bounded Week 1 correction", (t) => {
     const runtime = createRuntime(t);
     runtime.database.prepare(`UPDATE seasons SET regular_season_starts_at_ms = NULL, regular_season_ends_at_ms = NULL,

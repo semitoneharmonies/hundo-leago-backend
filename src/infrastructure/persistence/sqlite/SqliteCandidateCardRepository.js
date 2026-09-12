@@ -1,3 +1,5 @@
+const { readFreeAgentDraftCommissionerWindow, requireFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
+
 const {
   createHash,
 } = require("node:crypto");
@@ -3724,7 +3726,7 @@ function createSqliteCandidateCardRepository({
       });
     const globalDenialReason =
       capabilityDenialReason === undefined
-        ? privateMutationDenialReason({
+        ? readFreeAgentDraftCommissionerWindow(database, { ...scope, nowMs }).reasonCode || privateMutationDenialReason({
             context,
             authority,
             nowMs,
@@ -5329,6 +5331,11 @@ function createSqliteCandidateCardRepository({
           requestHash,
       });
       if (replay) return replay;
+      requireFreeAgentDraftCommissionerWindow(database, {
+        leagueId: command.scope.leagueId,
+        seasonId: command.scope.seasonId,
+        nowMs: command.nowMs,
+      });
 
       insertStartedIdempotency({
         scope: command.scope,
@@ -5780,6 +5787,11 @@ function createSqliteCandidateCardRepository({
       requestHash,
     });
     if (replay) return replay;
+    requireFreeAgentDraftCommissionerWindow(database, {
+      leagueId: command.scope.leagueId,
+      seasonId: command.scope.seasonId,
+      nowMs: command.nowMs,
+    });
 
     insertStartedIdempotency({
       scope: command.scope,
@@ -7258,6 +7270,11 @@ function createSqliteCandidateCardRepository({
         requestHash,
       });
       if (replay) return replay;
+      requireFreeAgentDraftCommissionerWindow(database, {
+        leagueId: command.scope.leagueId,
+        seasonId: command.scope.seasonId,
+        nowMs: command.nowMs,
+      });
 
       ensureFreshHelpContext(
         context,

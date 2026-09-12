@@ -18,6 +18,8 @@ const RECOVERY_VALIDATION_REASON_CODES = new Set([
 ]);
 
 const SAFE_MESSAGES = Object.freeze({
+  FAD_SEASON_CLOSED: "Free Agent Draft changes are closed during the season. They become available for next season after the Entry Draft is complete.",
+  FAD_ENTRY_DRAFT_REQUIRED: "Complete the Entry Draft before changing the upcoming season's Free Agent Draft.",
   CANDIDATE_CARD_NOT_FOUND:
     "The Candidate Card was not found.",
   FAD_CARDS_NOT_PUBLISHED:
@@ -492,6 +494,9 @@ function createFreeAgentDraftRouter({
     { versionCode = "FAD_READINESS_PRECONDITION_FAILED" } = {}
   ) {
     const code = error?.code;
+    if (["FAD_SEASON_CLOSED", "FAD_ENTRY_DRAFT_REQUIRED"].includes(code)) {
+      return failure(request, response, 409, code);
+    }
     const reasonCode =
       error?.reasonCode ||
       error?.details?.reasonCode;

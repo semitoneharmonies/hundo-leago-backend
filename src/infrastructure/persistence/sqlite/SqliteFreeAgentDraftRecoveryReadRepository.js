@@ -1,5 +1,7 @@
 "use strict";
 
+const { readFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
+
 const {
   buildAuctionResolutionOccurrenceKey,
 } = require("../../../domain/auctions/auctionResolutionPolicy");
@@ -1217,6 +1219,9 @@ function createSqliteFreeAgentDraftRecoveryReadRepository({
         "The scoped FAD recovery view"
       );
       if (!fad) notFound();
+      const commissionerWindow = readFreeAgentDraftCommissionerWindow(database, {
+        leagueId: scope.leagueId, seasonId: fad.season_id, nowMs: scope.nowMs,
+      });
       const common = {
         leagueId: scope.leagueId,
         seasonId: fad.season_id,
@@ -1396,6 +1401,7 @@ function createSqliteFreeAgentDraftRecoveryReadRepository({
         .map(([key, binding]) => {
           const latest = recoveryIndex.latest(key);
           const enabled =
+            commissionerWindow.allowed &&
             latest !== null &&
             (["pending", "ready"].includes(latest.status) ||
               (latest.status === "correction_required" &&
@@ -1411,7 +1417,7 @@ function createSqliteFreeAgentDraftRecoveryReadRepository({
             enabled,
             reasonCode: enabled
               ? null
-              : "RECOVERY_NOT_AVAILABLE",
+              : commissionerWindow.reasonCode || "RECOVERY_NOT_AVAILABLE",
           };
         })
         .sort(

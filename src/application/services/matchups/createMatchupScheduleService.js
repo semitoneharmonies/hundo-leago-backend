@@ -50,6 +50,7 @@ const MATCHUP_SCHEDULE_SERVICE_CODES = Object.freeze({
   weekMissing: "MATCHUP_SCHEDULE_WEEK_MISSING",
   weekInvalid: "MATCHUP_SCHEDULE_WEEK_INVALID",
   fadWeekOneFrozen: "FAD_WEEK_ONE_FROZEN",
+  fadDeadlineNotFuture: "FAD_DEADLINE_NOT_FUTURE",
 });
 
 const REQUIRED_REPOSITORY_METHODS = Object.freeze([
@@ -74,6 +75,15 @@ function fail(code, message) {
     code,
     message
   );
+}
+
+function requireFutureCandidateDeadline(firstWeekStartsAtMs, nowMs) {
+  if (firstWeekStartsAtMs - 7 * 24 * 60 * 60 * 1000 <= nowMs) {
+    fail(
+      MATCHUP_SCHEDULE_SERVICE_CODES.fadDeadlineNotFuture,
+      "Choose a later Week 1 so the Candidate Card deadline is still ahead and rapid auctions have seven full days."
+    );
+  }
 }
 
 function requireMethod(
@@ -266,6 +276,7 @@ function inspectContext({
     timeZone: context.timezone,
     nowMs,
   });
+  requireFutureCandidateDeadline(plan.firstWeekStartsAtMs, nowMs);
   return Object.freeze({
     ...calendarState(context, plan),
     context,
@@ -999,6 +1010,7 @@ function inspectShiftContext({
       "The active team set changed after schedule creation."
     );
   }
+  requireFutureCandidateDeadline(schedulePlan.firstWeekStartsAtMs, nowMs);
   const oldJobs = inspectShiftJobs({
     context,
     generation,

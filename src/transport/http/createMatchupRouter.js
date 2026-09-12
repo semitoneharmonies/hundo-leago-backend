@@ -1,6 +1,8 @@
 const express = require("express");
 
 const SAFE_MESSAGES = Object.freeze({
+  FAD_DEADLINE_NOT_FUTURE:
+    "Choose a later Week 1 so the Candidate Card deadline is still ahead and rapid auctions have seven full days.",
   IDEMPOTENCY_KEY_REUSED:
     "The idempotency key was already used for a different request.",
   IDEMPOTENCY_REQUEST_UNAVAILABLE:
@@ -128,6 +130,9 @@ function createMatchupRouter({
 
   function mapError(request, response, error) {
     const code = error?.code || error?.reasonCode || "";
+    if (code === "FAD_DEADLINE_NOT_FUTURE") {
+      return failure(request, response, 409, code);
+    }
     if (
       code === "MATCHUP_INTEGRATION_INPUT_INVALID" ||
       code === "MATCHUP_SCHEDULE_CALENDAR_INVALID" ||

@@ -9315,6 +9315,24 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
     assertNoWrites(runtime.database, before);
   });
 
+  test("closes commissioner card help and recovery capabilities when competition has started with no read writes", (t) => {
+    const runtime = createRuntime(t);
+    openDraft(runtime.database, PRIMARY);
+    seedActiveHelpRequest(runtime.database);
+    runtime.database.prepare("UPDATE matchup_weeks SET status = 'live' WHERE league_id = ? AND season_id = ?")
+      .run(PRIMARY.leagueId, PRIMARY.seasonId);
+    const before = noWriteSnapshot(runtime.database);
+    const overview = runtime.readRepository.readOverview(overviewInput({
+      viewerUserId: PRIMARY.commissionerUserId,
+      viewerMembershipId: PRIMARY.commissionerMembershipId,
+      nowMs: PREPUBLICATION_NOW_MS,
+    }));
+    assert.deepEqual(overview.capabilities.completeRecoveryAction, { allowed: false, reasonCode: "FAD_SEASON_CLOSED" });
+    assert.equal(overview.viewer.commissionerCards.length > 0, true);
+    assert.equal(overview.viewer.commissionerCards.every((card) => card.openPrivateCard.reasonCode === "FAD_SEASON_CLOSED"), true);
+    assert.deepEqual(noWriteSnapshot(runtime.database), before);
+  });
+
   test("follows a live manager transfer for T-126 and T-129 authorization", (t) => {
     const runtime = createRuntime(t);
     openDraft(runtime.database, PRIMARY);

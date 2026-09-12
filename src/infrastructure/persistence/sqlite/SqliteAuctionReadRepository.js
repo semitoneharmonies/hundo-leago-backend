@@ -1,5 +1,7 @@
 "use strict";
 
+const { readFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
+
 const {
   COOLDOWN_MS,
   calculateAavCents,
@@ -1074,7 +1076,8 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
     head,
     context,
     nowMs,
-    leagueStatus
+    leagueStatus,
+    commissionerWindow
   ) {
     if (!administrative) return freeze([]);
     const participantByTeam = new Map(
@@ -1093,6 +1096,7 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
           incompatible("A restricted bid has no participant identity.");
         }
         const canAdminister =
+          commissionerWindow.allowed &&
           ["active", "frozen"].includes(
             leagueStatus
           ) &&
@@ -1103,7 +1107,7 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
           participant?.participant_status !== "removed";
         const capability = canAdminister
           ? allowedCapability()
-          : blockedCapability("PHASE_CLOSED");
+          : blockedCapability(commissionerWindow.reasonCode || "PHASE_CLOSED");
         return freeze({
           bidId: bid.bid_id,
           teamId: bid.team_id,
@@ -1267,7 +1271,10 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
       )
     );
     const administrative = authority.administrative;
-    const administrationOpen = [
+    const commissionerWindow = context.fad_id ? readFreeAgentDraftCommissionerWindow(database, {
+      leagueId: head.league_id, seasonId: head.season_id, nowMs,
+    }) : allowedCapability();
+    const administrationOpen = commissionerWindow.allowed && [
       "active",
       "frozen",
     ].includes(authority.league_status);
@@ -1362,7 +1369,8 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
         head,
         context,
         nowMs,
-        authority.league_status
+        authority.league_status,
+        commissionerWindow
       ),
       result,
       capabilities: freeze({
@@ -1371,14 +1379,14 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
           ? allowedCapability()
           : blockedCapability(
               administrative
-                ? "PHASE_CLOSED"
+                ? commissionerWindow.reasonCode || "PHASE_CLOSED"
                 : "NOT_AUTHORIZED"
             ),
         adminResolve: canResolve
           ? allowedCapability()
           : blockedCapability(
               administrative
-                ? "PHASE_CLOSED"
+                ? commissionerWindow.reasonCode || "PHASE_CLOSED"
                 : "NOT_AUTHORIZED"
             ),
       }),

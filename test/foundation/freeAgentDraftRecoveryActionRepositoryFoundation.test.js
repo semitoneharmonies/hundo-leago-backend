@@ -925,6 +925,18 @@ function job(database, id) {
 }
 
 describe("SQLite FAD recovery-action persistence", () => {
+  test("rejects every commissioner recovery write after competition starts without changing stored state", (t) => {
+    const runtime = createFixture(t, "fad-annual-lock-actions-", 650_000);
+    runtime.database.prepare("UPDATE matchup_weeks SET status = 'live' WHERE league_id = ? AND season_id = ?")
+      .run(runtime.fixtureIds.league, runtime.fixtureIds.season);
+    const before = databaseFingerprint(runtime.database);
+    const repository = createSqliteFreeAgentDraftRecoveryActionRepository({ database: runtime.database });
+    for (const [index, action] of runtime.actions.entries()) {
+      assert.throws(() => repository.acceptRecoveryAction(writeFor(runtime, action, index)), { code: "FAD_SEASON_CLOSED" });
+      assert.deepEqual(databaseFingerprint(runtime.database), before);
+    }
+  });
+
   test("maps all eight actions to exact canonical jobs and preserves pending, leased, and running identity", (t) => {
     const runtime = createFixture(
       t,

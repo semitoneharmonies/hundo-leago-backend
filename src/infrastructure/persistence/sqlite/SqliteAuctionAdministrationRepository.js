@@ -1,5 +1,7 @@
 "use strict";
 
+const { requireFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
+
 const { randomUUID } = require("node:crypto");
 
 const {
@@ -4353,6 +4355,13 @@ function createSqliteAuctionAdministrationRepository({
         command,
         loadedAuction
       );
+      if (auction.fad_id) {
+        requireFreeAgentDraftCommissionerWindow(database, {
+          leagueId: command.request.leagueId,
+          seasonId: auction.season_id,
+          nowMs: command.occurredAtMs,
+        });
+      }
       if (command.request.action === "edit_bid") {
         return executeEdit(
           command,

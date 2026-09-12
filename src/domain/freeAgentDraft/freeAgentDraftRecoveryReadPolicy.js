@@ -63,6 +63,8 @@ const FREE_AGENT_DRAFT_RECOVERY_READ_REASON_CODES =
     "EDIT_LIMIT_REACHED",
     "PLAYER_QUARANTINED",
     "RECOVERY_NOT_AVAILABLE",
+    "FAD_SEASON_CLOSED",
+    "FAD_ENTRY_DRAFT_REQUIRED",
     "PREVIEW_ONLY",
   ]);
 
@@ -906,11 +908,13 @@ function validateProjectionBindings(result) {
       (["pending", "ready"].includes(latest.status) ||
         (latest.status === "correction_required" &&
           operations.some((operation) => operation.operationId === latest.createdByOperationId && operation.status === "failed")));
-    if (
+    const seasonLocked = !action.enabled &&
+      ["FAD_SEASON_CLOSED", "FAD_ENTRY_DRAFT_REQUIRED"].includes(action.reasonCode);
+    if (!seasonLocked && (
       action.enabled !== enabled ||
       action.reasonCode !==
         (enabled ? null : "RECOVERY_NOT_AVAILABLE")
-    ) {
+    )) {
       fail("available_action_state_invalid");
     }
   }

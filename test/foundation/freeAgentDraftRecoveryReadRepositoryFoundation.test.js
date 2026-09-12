@@ -141,7 +141,14 @@ function createSchema(database) {
     CREATE TABLE seasons (
       id TEXT PRIMARY KEY,
       league_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      nhl_season_key TEXT NOT NULL DEFAULT '20262027',
       free_agent_draft_completed_at_ms INTEGER
+    );
+    CREATE TABLE matchups (league_id TEXT, season_id TEXT, status TEXT);
+    CREATE TABLE entry_drafts (league_id TEXT, season_id TEXT, status TEXT, completed_at_ms INTEGER);
+    CREATE TABLE free_agent_draft_readiness_operations (
+      league_id TEXT, season_id TEXT, trigger_kind TEXT, setup_exemption_id TEXT
     );
     CREATE TABLE free_agent_drafts (
       id TEXT PRIMARY KEY,
@@ -165,6 +172,7 @@ function createSchema(database) {
       id TEXT PRIMARY KEY,
       league_id TEXT NOT NULL,
       season_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'scheduled',
       sequence INTEGER NOT NULL,
       starts_at_ms INTEGER NOT NULL
     );

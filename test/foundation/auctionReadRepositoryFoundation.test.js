@@ -245,11 +245,18 @@ function createReadSchema(database) {
     CREATE TABLE seasons (
       id TEXT PRIMARY KEY,
       league_id TEXT NOT NULL,
+      nhl_season_key TEXT NOT NULL DEFAULT '20262027',
       status TEXT NOT NULL,
       regular_season_starts_at_ms INTEGER,
       regular_season_ends_at_ms INTEGER,
       fantasy_playoffs_start_at_ms INTEGER,
       free_agent_draft_completed_at_ms INTEGER
+    );
+    CREATE TABLE matchup_weeks (league_id TEXT, season_id TEXT, status TEXT, starts_at_ms INTEGER);
+    CREATE TABLE matchups (league_id TEXT, season_id TEXT, status TEXT);
+    CREATE TABLE entry_drafts (league_id TEXT, season_id TEXT, status TEXT, completed_at_ms INTEGER);
+    CREATE TABLE free_agent_draft_readiness_operations (
+      league_id TEXT, season_id TEXT, trigger_kind TEXT, setup_exemption_id TEXT
     );
     CREATE TABLE platform_roles (
       id TEXT PRIMARY KEY,
@@ -1065,6 +1072,27 @@ function seedFallbackAuction(database) {
 }
 
 describe("FAD-06 SQLite auction read repository", () => {
+  test("closes FAD auction administration after competition starts while preserving ordinary auction controls", (t) => {
+    const runtime = createRuntime(t);
+    seedOrdinaryActiveAuctions(runtime.database);
+    seedRestrictedAuction(runtime.database);
+    runtime.database.prepare("INSERT INTO matchup_weeks (league_id, season_id, status, starts_at_ms) VALUES (?, ?, 'live', ?)")
+      .run(IDS.league, IDS.season, NOW_MS);
+    const before = runtime.database.serialize();
+    const read = (auctionId) => runtime.repository.readAuction(detailInput(auctionId, {
+      viewerUserId: IDS.commissionerUser, viewerMembershipId: IDS.commissionerMembership,
+    }));
+    const fad = read(IDS.restrictedAuction);
+    assert.deepEqual(fad.capabilities.adminCancel, { allowed: false, reasonCode: "FAD_SEASON_CLOSED" });
+    assert.deepEqual(fad.capabilities.adminResolve, { allowed: false, reasonCode: "FAD_SEASON_CLOSED" });
+    assert.equal(fad.administrativeBids.length > 0, true);
+    assert.equal(fad.administrativeBids.every((bid) =>
+      bid.capabilities.adminEditBid.reasonCode === "FAD_SEASON_CLOSED" &&
+      bid.capabilities.adminRemoveBid.reasonCode === "FAD_SEASON_CLOSED"), true);
+    assert.equal(read(IDS.ordinaryAuction).capabilities.adminCancel.allowed, true);
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
   test("prepares every read statement against the complete current migration schema", (t) => {
     const temporaryRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "hundo-auction-read-schema-")

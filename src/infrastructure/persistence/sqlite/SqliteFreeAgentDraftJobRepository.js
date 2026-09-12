@@ -1,3 +1,5 @@
+const { requireFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
+
 const {
   parseFreeAgentDraftOccurrenceKey,
   UUID_PATTERN,
@@ -3550,6 +3552,11 @@ function createSqliteFreeAgentDraftJobRepository({
         requireReadinessRetryOperation(
           command
         );
+      requireFreeAgentDraftCommissionerWindow(database, {
+        leagueId: readiness.league_id,
+        seasonId: readiness.season_id,
+        nowMs: command.acceptedAtMs,
+      });
       const job = requireReadinessRetryJob(
         command,
         readiness

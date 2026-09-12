@@ -1,5 +1,7 @@
 "use strict";
 
+const { requireFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
+
 const {
   createHash,
   randomUUID,
@@ -2658,6 +2660,11 @@ function createSqliteFreeAgentDraftAllocationCorrectionRepository({
     const replay = findReplay(command);
     if (replay) return replay;
     const context = requireContext(command);
+    requireFreeAgentDraftCommissionerWindow(database, {
+      leagueId: command.leagueId,
+      seasonId: context.season_id,
+      nowMs: command.completedAtMs,
+    });
     if (
       context.deadline_locked_at_ms > command.completedAtMs
     ) {

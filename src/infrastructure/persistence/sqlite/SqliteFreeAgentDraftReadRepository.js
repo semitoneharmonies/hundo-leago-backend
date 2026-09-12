@@ -1,5 +1,7 @@
 "use strict";
 
+const { readFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
+
 const {
   createHash,
 } = require("node:crypto");
@@ -3240,6 +3242,7 @@ function createSqliteFreeAgentDraftReadRepository({
         scope,
         "The FAD readiness operation"
       );
+      const commissionerWindow = readFreeAgentDraftCommissionerWindow(database, scope);
       if (!readiness) {
         return deepFreeze({
           leagueId: scope.leagueId,
@@ -3266,7 +3269,7 @@ function createSqliteFreeAgentDraftReadRepository({
           warnings: [],
           resultFadId: null,
           retryReadiness: blockedCapability(
-            "RECOVERY_NOT_AVAILABLE"
+            commissionerWindow.reasonCode || "RECOVERY_NOT_AVAILABLE"
           ),
         });
       }
@@ -3346,7 +3349,7 @@ function createSqliteFreeAgentDraftReadRepository({
         blockers: projection?.blockers || [],
         warnings: projection?.warnings || [],
         resultFadId: readiness.created_fad_id,
-        retryReadiness: canonicalReadinessJob(
+        retryReadiness: !commissionerWindow.allowed ? commissionerWindow : canonicalReadinessJob(
           readiness,
           job,
           attempt,
@@ -3703,7 +3706,8 @@ function createSqliteFreeAgentDraftReadRepository({
   function commissionerCardProjection(
     row,
     fad,
-    nowMs
+    nowMs,
+    commissionerWindow
   ) {
     const status = helpRequestStatus(row, nowMs);
     const hasHelp = status !== "not_requested";
@@ -3729,7 +3733,7 @@ function createSqliteFreeAgentDraftReadRepository({
         hasHelp ? row.help_request_id : null,
       helpRequestedAtMs:
         hasHelp ? row.help_requested_at_ms : null,
-      openPrivateCard: activePrivateHelp
+      openPrivateCard: !commissionerWindow.allowed ? commissionerWindow : activePrivateHelp
         ? allowedCapability()
         : blockedCapability(
             hasHelp ? "PHASE_CLOSED" : "HELP_NOT_GRANTED"
@@ -3752,6 +3756,9 @@ function createSqliteFreeAgentDraftReadRepository({
         );
       }
       const phase = viewerPhase(fad, scope.nowMs);
+      const commissionerWindow = readFreeAgentDraftCommissionerWindow(database, {
+        leagueId: scope.leagueId, seasonId: fad.season_id, nowMs: scope.nowMs,
+      });
       const allRows = readAllCards(scope, fad);
       const managedRows = readManagedCards(
         scope,
@@ -3802,7 +3809,8 @@ function createSqliteFreeAgentDraftReadRepository({
               commissionerCardProjection(
                 row,
                 fad,
-                scope.nowMs
+                scope.nowMs,
+                commissionerWindow
               )
             )
           : [];
@@ -3935,6 +3943,7 @@ function createSqliteFreeAgentDraftReadRepository({
           completeRecoveryAction:
             !authority.administrative
               ? blockedCapability("NOT_AUTHORIZED")
+              : !commissionerWindow.allowed ? commissionerWindow
               : actionableRecoveries.length === 1
                 ? allowedCapability()
                 : blockedCapability(

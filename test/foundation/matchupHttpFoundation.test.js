@@ -1773,6 +1773,7 @@ describe("M6-12 isolated matchup HTTP contract", () => {
 
   test("maps Week 1 shift validation, authority, missing, frozen, conflict, and stale failures safely", async (t) => {
     const cases = [
+      ["FAD_DEADLINE_NOT_FUTURE", 409, "FAD_DEADLINE_NOT_FUTURE"],
       [
         "MATCHUP_SCHEDULE_COMMAND_INPUT_INVALID",
         400,

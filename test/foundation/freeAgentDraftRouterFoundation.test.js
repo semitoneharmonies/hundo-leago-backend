@@ -1613,6 +1613,9 @@ describe("FAD published-read HTTP boundary", () => {
 
   test("maps T-141/T-142 authorization, validation, availability, and internal failures without leaking service details", async (t) => {
     const actionCases = [
+      ...["FAD_SEASON_CLOSED", "FAD_ENTRY_DRAFT_REQUIRED"].map((code) => ({
+        body: RECOVERY_ACTION_BODY, error: codedError(code), status: 409, publicCode: code,
+      })),
       {
         body: {
           ...RECOVERY_ACTION_BODY,

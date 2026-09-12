@@ -1,6 +1,8 @@
 const express = require("express");
 
 const SAFE_MESSAGES = Object.freeze({
+  FAD_SEASON_CLOSED: "Free Agent Draft changes are closed during the season. They become available for next season after the Entry Draft is complete.",
+  FAD_ENTRY_DRAFT_REQUIRED: "Complete the Entry Draft before changing the upcoming season's Free Agent Draft.",
   AUCTION_BID_AUTHORIZATION_DENIED: "Current auction authority is required.",
   AUCTION_BID_COOLDOWN_ACTIVE: "This bid is still in its edit cooldown.",
   AUCTION_BID_EDIT_LIMIT_REACHED: "This bid has no manager edits remaining.",
@@ -130,6 +132,9 @@ function createAuctionRouter({
       )
         ? policyCode
         : error?.reasonCode || policyCode;
+    if (["FAD_SEASON_CLOSED", "FAD_ENTRY_DRAFT_REQUIRED"].includes(code)) {
+      return failure(request, response, 409, code);
+    }
     if (
       code ===
         "AUCTION_ADMINISTRATION_REQUEST_INVALID" ||
