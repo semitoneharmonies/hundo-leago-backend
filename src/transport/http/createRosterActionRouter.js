@@ -13,6 +13,7 @@ const SAFE_MESSAGES = Object.freeze({
   INJURED_RESERVE_FULL: "All injured-reserve slots are in use.",
   LEAGUE_COMMISSIONER_REQUIRED:
     "Current league-commissioner authority is required.",
+  LEAGUE_NOT_FOUND: "The league was not found.",
   PLAYER_NOT_IR_ELIGIBLE:
     "This player is not currently listed as injured-reserve eligible.",
   PROSPECT_DESTINATION_ILLEGAL:
@@ -147,7 +148,7 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
     ) {
       return errorResponse(request, response, 403, error.code);
     }
-    if (error?.code === "TEAM_NOT_FOUND") {
+    if (["LEAGUE_NOT_FOUND", "TEAM_NOT_FOUND"].includes(error?.code)) {
       return errorResponse(request, response, 404, error.code);
     }
     return errorResponse(
