@@ -54,6 +54,9 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   assert.equal(report.recoveryInventory.databaseIdentity.databaseId, FIXTURE_DATABASE_ID);
   assert.equal(report.recoveryInventory.remainingRecoveryGates.length, 6);
   assert.equal(report.credentialPreparation.status, "credentials-prepared");
+  assert.equal(report.credentialPreparation.reportVersion, 3);
+  assert.equal(report.credentialPreparation.staleAccountLinksDiscarded, 0);
+  assert.equal(report.credentialPreparation.otherOutboxRecords, "unchanged-and-held");
   assert.equal(report.credentialPreparation.normalRuntime, "blocked-by-durable-recovery-hold");
   assert.equal(report.credentialPreparation.activationReady, false);
   assert.equal(report.credentialPreparation.sourceDatabase, "unchanged");
@@ -69,7 +72,7 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   assert.equal(report.postPreparationBackup.originalCandidate, "unchanged");
   assert.equal(report.postPreparationBackup.activationReady, false);
   assert.notEqual(report.postPreparationBackup.backupId, report.credentialPreparation.sourceBackupId);
-  assert.equal(report.postPreparationBackup.tableCount, report.credentialPreparation.protectedTableCount + 4);
+  assert.equal(report.postPreparationBackup.tableCount, report.credentialPreparation.protectedTableCount + 5);
   assert.match(report.postPreparationBackup.rowSnapshotSha256, /^[a-f0-9]{64}$/);
   assert.match(report.reportChecksum, /^[0-9a-f]{64}$/);
   assert.equal(

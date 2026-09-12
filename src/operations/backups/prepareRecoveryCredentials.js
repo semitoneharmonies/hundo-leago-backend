@@ -10,12 +10,17 @@ const { canonicalize } = require("../../infrastructure/migration/sourceInventory
 const { createSqliteSessionRepository } = require("../../infrastructure/persistence/sqlite/SqliteSessionRepository");
 const { createSqliteAccountActionTokenRepository } = require("../../infrastructure/persistence/sqlite/SqliteAccountActionTokenRepository");
 const { createSqliteSecurityAuditRepository } = require("../../infrastructure/persistence/sqlite/SqliteSecurityAuditRepository");
+const { ACTION_LINK_EVENTS, CLEARED_PAYLOAD_JSON, createSqliteOutboxEventRepository } = require("../../infrastructure/persistence/sqlite/SqliteOutboxEventRepository");
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const AUDIT_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const IDENTITY = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
-const CHANGED_TABLES = new Set(["sessions", "account_action_tokens", "security_audit_events", "application_metadata"]);
+const CHANGED_TABLES = new Set(["sessions", "account_action_tokens", "security_audit_events", "application_metadata", "outbox_events"]);
+const LINK_EVENT_PURPOSES = Object.freeze(Object.fromEntries(Object.entries({
+  ...ACTION_LINK_EVENTS, email_verification: "account.email_verification_requested",
+}).map(([purpose, event]) => [event, purpose])));
+const STALE_LINK_REASON = "RECOVERY_STALE_ACCOUNT_LINK";
 
 class RecoveryCredentialPreparationError extends Error {
   constructor(code, message, options = {}) {
@@ -53,6 +58,28 @@ function assertSourceUnchanged(source, expectedHash) {
   if (["-wal", "-shm", "-journal"].some((suffix) => exists(`${source}${suffix}`)) || hashFile(source) !== expectedHash) {
     fail("RECOVERY_SOURCE_CHANGED", "The verified restore source changed during preparation.");
   }
+}
+
+function restoredAccountLinks(rows, tokens, preparedAtMs) {
+  const byToken = new Map(tokens.map(token => [token.id, token]));
+  return rows.filter(row => {
+    if (row.league_id !== null || !["pending", "failed", "publishing"].includes(row.status) ||
+        !Object.hasOwn(LINK_EVENT_PURPOSES, row.event_type)) return false;
+    if (row.created_at_ms > preparedAtMs || row.updated_at_ms > preparedAtMs) {
+      fail("RECOVERY_PREPARATION_INPUT_INVALID", "The preparation time predates a restored account link.");
+    }
+    let payload;
+    try { payload = JSON.parse(row.payload_json); } catch { /* Reject ambiguous restored records. */ }
+    const token = byToken.get(payload?.tokenId);
+    const purpose = LINK_EVENT_PURPOSES[row.event_type];
+    if (!token || payload.schemaVersion !== 1 || payload.purpose !== purpose || token.purpose !== purpose ||
+        payload.deliveryKind !== (purpose === "email_verification" ? "email_verification" : "account_action_link") ||
+        payload.recipientUserId !== token.user_id || row.aggregate_type !== "user" || row.aggregate_id !== token.user_id ||
+        payload.expiresAtMs !== token.expires_at_ms) {
+      fail("RECOVERY_ACCOUNT_LINK_INVALID", "A restored account link cannot be reconciled with its exact token and recipient.");
+    }
+    return true;
+  });
 }
 
 // Creates an offline derivative of a verified restore. The selected restore and
@@ -115,6 +142,7 @@ function prepareRecoveryCredentials({
     const sessions = createSqliteSessionRepository({ database });
     const tokens = createSqliteAccountActionTokenRepository({ database });
     const audit = createSqliteSecurityAuditRepository({ database });
+    const outbox = createSqliteOutboxEventRepository({ database });
 
     const counts = database.transaction(() => {
       assertDatabaseIdentity(database, { environmentId: expectedEnvironmentId, databaseId: expectedDatabaseId });
@@ -130,6 +158,9 @@ function prepareRecoveryCredentials({
       const beforeTokens = database.prepare("SELECT * FROM account_action_tokens ORDER BY id").all();
       const beforeAudit = database.prepare("SELECT * FROM security_audit_events ORDER BY id").all();
       const beforeMetadata = database.prepare("SELECT * FROM application_metadata ORDER BY metadata_key").all();
+      const beforeOutbox = database.prepare("SELECT * FROM outbox_events ORDER BY id").all();
+      const staleLinks = restoredAccountLinks(beforeOutbox, beforeTokens, preparedAtMs);
+      const staleLinkIds = new Set(staleLinks.map(row => row.id));
       const activeSessions = beforeSessions.filter(({ status }) => status === "active");
       const activeTokens = beforeTokens.filter(({ status }) => status === "active");
       if ([...activeSessions, ...activeTokens].some(({ created_at_ms }) => preparedAtMs < created_at_ms)) {
@@ -154,6 +185,13 @@ function prepareRecoveryCredentials({
         tokens.invalidateActive({ tokenId: token.id, expectedVersion: token.version,
           changedAtMs: preparedAtMs, transactionHook: null });
       }
+      // Every restored action link is stale after this credential boundary,
+      // including links for already consumed, expired or invalidated tokens.
+      // Other account notifications and every league event remain held intact.
+      for (const link of staleLinks) {
+        outbox.discard({ eventId: link.id, expectedVersion: link.version,
+          nowMs: preparedAtMs, errorCode: STALE_LINK_REASON });
+      }
       audit.append({
         id: recoveryId, event_type: "recovery.credentials_invalidated", outcome: "success",
         actor_user_id: null, target_user_id: null, league_id: null, session_id: null,
@@ -173,20 +211,27 @@ function prepareRecoveryCredentials({
       const expectedTokens = beforeTokens.map((row) => row.status !== "active" ? row : {
         ...row, status: "invalidated", invalidated_at_ms: preparedAtMs, version: row.version + 1,
       });
+      const expectedOutbox = beforeOutbox.map(row => !staleLinkIds.has(row.id) ? row : {
+        ...row, status: "discarded", payload_json: CLEARED_PAYLOAD_JSON, last_error_code: STALE_LINK_REASON,
+        updated_at_ms: preparedAtMs, version: row.version + 1,
+      });
       if (
         canonicalize(database.prepare("SELECT * FROM sessions ORDER BY id").all()) !== canonicalize(expectedSessions) ||
         canonicalize(database.prepare("SELECT * FROM account_action_tokens ORDER BY id").all()) !== canonicalize(expectedTokens) ||
+        canonicalize(database.prepare("SELECT * FROM outbox_events ORDER BY id").all()) !== canonicalize(expectedOutbox) ||
         canonicalize(database.prepare("SELECT * FROM security_audit_events WHERE id <> ? ORDER BY id").all(recoveryId)) !== canonicalize(beforeAudit) ||
         canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key <> ? ORDER BY metadata_key").all(RECOVERY_HOLD_KEY)) !== canonicalize(beforeMetadata) ||
         canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key = ?").get(RECOVERY_HOLD_KEY)) !== canonicalize(holdRecord) ||
         canonicalize(fingerprint(database, protectedTables)) !== canonicalize(preserved) ||
-        database.prepare("SELECT total_changes() AS count").get().count - initialChanges !== activeSessions.length + activeTokens.length + 2 ||
+        database.prepare("SELECT total_changes() AS count").get().count - initialChanges !== activeSessions.length + activeTokens.length + staleLinks.length + 2 ||
         database.pragma("foreign_key_check").length !== 0
       ) {
         fail("RECOVERY_PREPARATION_POSTCHECK_FAILED", "The candidate preparation did not preserve its exact allowed changes.");
       }
       assertSourceUnchanged(source, restoredCandidate.plaintextSha256);
       return { sessionsRevoked: activeSessions.length, actionTokensInvalidated: activeTokens.length,
+        staleAccountLinksDiscarded: staleLinks.length, staleAccountLinkEvidenceSha256: hash(canonicalize(staleLinks)),
+        otherOutboxRecords: "unchanged-and-held",
         protectedTableCount: protectedTables.length };
     }).immediate();
     connection.database.close();
@@ -194,7 +239,7 @@ function prepareRecoveryCredentials({
     const inspection = inspectDatabase(preparedPath);
     assertSourceUnchanged(source, restoredCandidate.plaintextSha256);
     const reportBase = {
-      reportVersion: 2, recoveryId, sourceBackupId: restoredCandidate.backupId,
+      reportVersion: 3, recoveryId, sourceBackupId: restoredCandidate.backupId,
       sourcePlaintextSha256: restoredCandidate.plaintextSha256, preparedPlaintextSha256: hashFile(preparedPath),
       preparedAtMs, ...counts, sourceDatabase: "unchanged", status: "credentials-prepared",
       normalRuntime: "blocked-by-durable-recovery-hold",
