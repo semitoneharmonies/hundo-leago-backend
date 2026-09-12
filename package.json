@@ -28,6 +28,7 @@
     "db:publish-reset-import-verification": "node scripts/db-publish-reset-import-verification.js",
     "db:rehearse-staging-cutover": "node scripts/db-rehearse-staging-cutover.js",
     "db:restore-verify": "node scripts/db-restore-verify.js",
+    "db:recovery:review": "node scripts/db-recovery-review.js",
     "db:verify-staging-import": "node scripts/db-verify-staging-import.js",
     "db:validate-reset": "node scripts/db-validate-reset.js",
     "db:validate-staging": "node scripts/db-validate-staging.js",

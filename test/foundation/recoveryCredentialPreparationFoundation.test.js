@@ -3,6 +3,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const { spawnSync } = require("node:child_process");
 const { loadBackupConfig } = require("../../src/config/loadBackupConfig");
 const { createObjectStorageAdapter } = require("../../src/infrastructure/backups/createObjectStorageAdapter");
 const { openDatabase, openReadonlyDatabase } = require("../../src/infrastructure/database/connection");
@@ -251,7 +252,7 @@ test("reviewed restored email suppression preserves source, jobs and every unrel
     reconciliationId: crypto.randomUUID(), reconciledAtMs: now, temporaryRoot: input.temporaryRoot };
   const sourceHash = readHash(prepared.preparedDatabasePath);
   let result;
-  await t.test("suppresses exact pending, failed and publishing account messages while keeping the hold", async () => {
+  await t.test("suppresses exact pending, failed and publishing account messages while keeping the hold", async suppressionTest => {
     result = prepareRecoveryEmailReconciliation({ ...options, outputDirectory: path.join(input.temporaryRoot, "email-reviewed") });
     assert.equal(result.suppressedMessages, 3); assert.equal(result.protectedTableCount, 131);
     assert.equal(result.activationReady, false); assert.equal(result.jobs, "unchanged-and-held");
@@ -298,6 +299,54 @@ test("reviewed restored email suppression preserves source, jobs and every unrel
       } finally { parentDb.close(); }
     } finally { db.close(); }
     assert.equal(JSON.stringify(result).includes(PRIVATE_VALUE), false);
+    await suppressionTest.test("operator command reviews actual candidates and receipts without exposing private state or changing source", () => {
+      const directory = path.join(input.temporaryRoot, "operator-review");
+      fs.mkdirSync(directory);
+      const write = (name, value) => {
+        const file = path.join(directory, name);
+        fs.writeFileSync(file, JSON.stringify(value), { flag: "wx" });
+        return file;
+      };
+      const preservedPath = path.join(directory, "preserved.sqlite3");
+      fs.copyFileSync(input.restoredCandidate.targetDatabasePath, preservedPath, fs.constants.COPYFILE_EXCL);
+      const request = { requestVersion: 1, expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID,
+        expectedDatabaseId: FIXTURE_DATABASE_ID, observedAtMs: now + 1,
+        preparedDatabasePath: reviewPath, credentialPreparationPath: write("credentials.json", prepared),
+        lossWindow: { restoredDatabasePath: input.restoredCandidate.targetDatabasePath,
+          preservedDatabasePath: preservedPath, preservedPlaintextSha256: readHash(preservedPath) } };
+      const files = [reviewPath, preservedPath, result.reconciledDatabasePath, input.restoredCandidate.targetDatabasePath];
+      const before = files.map(readHash);
+      const invoke = value => spawnSync(process.execPath, [path.resolve(__dirname, "../../scripts/db-recovery-review.js"),
+        "--request", write(`${crypto.randomUUID()}.json`, value)], { encoding: "utf8", timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });
+      const initial = invoke(request);
+      assert.equal(initial.status, 0, initial.stderr); assert.equal(initial.stderr, "");
+      const initialReport = JSON.parse(initial.stdout);
+      assert.equal(initialReport.plan.planVersion, 2);
+      assert.equal(initialReport.lossWindow.changedRecords, 0);
+      assert.equal(initialReport.lossWindow.completeLossWindowEvidence, false);
+      assert.equal(initialReport.plan.unresolvedMessages, plan.unresolvedMessages);
+      request.emailReview = { originalPlanPath: write("original-plan.json", plan),
+        emailReconciliationPath: write("email.json", result), reconciledDatabasePath: result.reconciledDatabasePath };
+      const reviewed = invoke(request);
+      assert.equal(reviewed.status, 0, reviewed.stderr); assert.equal(reviewed.stderr, "");
+      const report = JSON.parse(reviewed.stdout);
+      assert.equal(report.plan.planVersion, 3); assert.equal(report.plan.unresolvedMessages, plan.unresolvedMessages - 3);
+      assert.equal(report.plan.previousPlanChecksum, plan.planChecksum);
+      assert.equal(report.activationReady, false); assert.equal(report.executable, false);
+      assert.equal(report.providerEvidenceFetched, false);
+      const { reportChecksum, ...body } = report; assert.equal(hash(canonicalize(body)), reportChecksum);
+      assert.equal(reviewed.stdout.includes(PRIVATE_VALUE), false);
+      assert.equal(reviewed.stdout.includes(directory.replace(/\\/g, "\\\\")), false);
+      for (const invalid of [{ ...request, expectedDatabaseId: "wrong-database-identity" },
+        { ...request, emailReview: { ...request.emailReview, emailReconciliationPath: write("forged-email.json", { ...result, reportChecksum: "e".repeat(64) }) } },
+        { ...request, lossWindow: { ...request.lossWindow, preservedPlaintextSha256: "e".repeat(64) } }]) {
+        const failure = invoke(invalid); assert.equal(failure.status, 1); assert.equal(failure.stdout, "");
+        assert.equal(JSON.parse(failure.stderr).error.message, "Recovery review failed safely. No activation was performed.");
+        assert.equal(failure.stderr.includes(PRIVATE_VALUE), false);
+      }
+      assert.deepEqual(files.map(readHash), before);
+      assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
+    });
     const { reconciledDatabasePath, inspection, reportChecksum, ...receipt } = result;
     assert.equal(hash(canonicalize(receipt)), reportChecksum);
     const backup = await createEncryptedOffsiteBackup({ databasePath: reconciledDatabasePath, config, objectStorage,
