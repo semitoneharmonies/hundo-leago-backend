@@ -1281,10 +1281,7 @@ test(
           chain.push(current.code, current.details?.reasonCode);
         }
         assert.equal(
-          chain.some((code) => [
-            "FAD_PHASE_CONFLICT",
-            "CANDIDATE_CARD_SUMMARY_DRIFT",
-          ].includes(code)),
+          chain.includes("FAD_SEASON_CLOSED"),
           true,
           `${name}: ${JSON.stringify(chain)}`
         );
