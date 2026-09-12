@@ -1109,6 +1109,7 @@ function createSqliteMatchupScheduleRepository({
     );
   }
 
+  const supportsScheduleTiming = database.prepare("PRAGMA user_version").get().user_version >= 56 || database.prepare("SELECT name FROM pragma_table_info('season_matchup_schedule_generations') WHERE name = 'fad_timing_json'").get() !== undefined;
   const contextStatement = database.prepare(`
     SELECT
       leagues.id AS league_id,
@@ -1970,8 +1971,7 @@ function createSqliteMatchupScheduleRepository({
         status,
         created_at_ms,
         superseded_at_ms,
-        version,
-        fad_timing_json
+        version${supportsScheduleTiming ? ", fad_timing_json" : ""}
       ) VALUES (
         @leagueId,
         @seasonId,
@@ -1982,8 +1982,7 @@ function createSqliteMatchupScheduleRepository({
         'current',
         @nowMs,
         NULL,
-        1,
-        @fadTimingJson
+        1${supportsScheduleTiming ? ", @fadTimingJson" : ""}
       )
     `);
   const updateSeasonForWeekOneShift =
@@ -2163,8 +2162,7 @@ function createSqliteMatchupScheduleRepository({
         status,
         created_at_ms,
         superseded_at_ms,
-        version,
-        fad_timing_json
+        version${supportsScheduleTiming ? ", fad_timing_json" : ""}
       ) VALUES (
         @leagueId,
         @seasonId,
@@ -2175,8 +2173,7 @@ function createSqliteMatchupScheduleRepository({
         'current',
         @nowMs,
         NULL,
-        1,
-        @fadTimingJson
+        1${supportsScheduleTiming ? ", @fadTimingJson" : ""}
       )
     `);
   const insertJobOccurrence = database.prepare(`
@@ -3162,6 +3159,9 @@ function createSqliteMatchupScheduleRepository({
 
   function applyConfirmedSchedulePlan(plan) {
     try {
+      if (!supportsScheduleTiming && plan?.draftTiming !== undefined) {
+        throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible, "Configured draft timing requires the current SQLite schema.");
+      }
       if (database.inTransaction !== true) {
         throw repositoryError(
           REPOSITORY_ERROR_CODES.argumentInvalid,
@@ -3406,6 +3406,9 @@ function createSqliteMatchupScheduleRepository({
 
   function applyWeekOneShiftPlan(plan) {
     try {
+      if (!supportsScheduleTiming && plan?.draftTiming !== undefined) {
+        throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible, "Configured draft timing requires the current SQLite schema.");
+      }
       if (database.inTransaction !== true) {
         throw repositoryError(
           REPOSITORY_ERROR_CODES.argumentInvalid,

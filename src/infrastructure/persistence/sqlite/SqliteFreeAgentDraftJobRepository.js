@@ -959,6 +959,7 @@ function createSqliteFreeAgentDraftJobRepository({
     );
   }
 
+  const supportsDraftTiming = database.prepare("PRAGMA user_version").get().user_version >= 56 || database.prepare("SELECT name FROM pragma_table_info('free_agent_drafts') WHERE name = 'initial_rollover_times_json'").get() !== undefined;
   let dueStatement;
   let byIdStatement;
   let currentScopeStatement;
@@ -1487,7 +1488,7 @@ function createSqliteFreeAgentDraftJobRepository({
         WHERE league_id = @leagueId
           AND season_id = @seasonId
           AND fad_id = @fadId
-          AND sequence = (SELECT COALESCE(json_array_length(initial_rollover_times_json), 7)
+          AND sequence = (SELECT COALESCE(json_array_length(${supportsDraftTiming ? "initial_rollover_times_json" : "NULL"}), 7)
             FROM free_agent_drafts WHERE league_id = @leagueId AND season_id = @seasonId AND id = @fadId)
           AND window_kind = 'initial'
         LIMIT 2
