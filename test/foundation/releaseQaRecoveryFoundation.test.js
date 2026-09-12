@@ -45,10 +45,10 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   });
   assert.equal(report.backup, "encrypted-private-object-verified");
   assert.equal(report.cleanRestore, "verified-to-new-path");
-  assert.equal(report.objectCount, 2);
+  assert.equal(report.objectCount, 4);
   assert.equal(report.sourceDatabase, "unchanged");
   assert.equal(report.wrongKeyRestore, "rejected-without-target");
-  assert.equal(report.reportVersion, 3);
+  assert.equal(report.reportVersion, 4);
   assert.equal(report.recoveryInventory.verificationScope, "read-only-inventory");
   assert.equal(report.recoveryInventory.activationReady, false);
   assert.equal(report.recoveryInventory.databaseIdentity.databaseId, FIXTURE_DATABASE_ID);
@@ -63,6 +63,14 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   assert.deepEqual(report.preparedInventory.leagueOutbox, report.recoveryInventory.leagueOutbox);
   assert.deepEqual(report.preparedInventory.accountEmailOutbox, report.recoveryInventory.accountEmailOutbox);
   assert.deepEqual(report.preparedInventory.jobs, report.recoveryInventory.jobs);
+  assert.equal(report.postPreparationBackup.encryptedBackup, "verified");
+  assert.equal(report.postPreparationBackup.cleanRestore, "verified-to-new-path");
+  assert.equal(report.postPreparationBackup.preparedCredentialsAndHold, "preserved");
+  assert.equal(report.postPreparationBackup.originalCandidate, "unchanged");
+  assert.equal(report.postPreparationBackup.activationReady, false);
+  assert.notEqual(report.postPreparationBackup.backupId, report.credentialPreparation.sourceBackupId);
+  assert.equal(report.postPreparationBackup.tableCount, report.credentialPreparation.protectedTableCount + 4);
+  assert.match(report.postPreparationBackup.rowSnapshotSha256, /^[a-f0-9]{64}$/);
   assert.match(report.reportChecksum, /^[0-9a-f]{64}$/);
   assert.equal(
     fs.existsSync(path.join(started.temporaryRoot, "recovery-rehearsal")),

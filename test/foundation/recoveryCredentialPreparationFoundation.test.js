@@ -122,11 +122,11 @@ async function candidate(t) {
   const input = { restoredCandidate, temporaryRoot: started.temporaryRoot,
     expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID, expectedDatabaseId: FIXTURE_DATABASE_ID,
     recoveryId: crypto.randomUUID(), preparedAtMs: 100 };
-  return { started, input };
+  return { started, input, config, objectStorage, encryptionKey };
 }
 
 test("encrypted clean restore preparation invalidates credentials atomically and preserves both leagues", async (t) => {
-  const { started, input } = await candidate(t);
+  const { started, input, config, objectStorage, encryptionKey } = await candidate(t);
   const sourceBefore = started.runtime.database.serialize();
   const originalHash = readHash(input.restoredCandidate.targetDatabasePath);
   const sourceRows = allRows(started.runtime.database);
@@ -134,6 +134,7 @@ test("encrypted clean restore preparation invalidates credentials atomically and
   const outputDirectory = path.join(input.temporaryRoot, "prepared");
   const report = prepareRecoveryCredentials({ ...input, outputDirectory });
   const database = openReadonlyDatabase({ databasePath: report.preparedDatabasePath });
+  let preparedRows;
   try {
     assertCredentialAccess(database, false);
     assert.equal(report.sessionsRevoked, 1);
@@ -148,7 +149,7 @@ test("encrypted clean restore preparation invalidates credentials atomically and
       expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID, observedAtMs: 100 });
     assert.equal(inventory.sessions.active, 0);
     for (const purpose of PURPOSES) assert.equal(inventory.activeActionTokens[purpose], 0);
-    const preparedRows = allRows(database);
+    preparedRows = allRows(database);
     for (const [table, rows] of Object.entries(sourceRows)) {
       if (!["sessions", "account_action_tokens", "security_audit_events", "application_metadata"].includes(table)) {
         assert.deepEqual(preparedRows[table], rows, table);
@@ -180,6 +181,29 @@ test("encrypted clean restore preparation invalidates credentials atomically and
   } finally { database.close(); }
   assert.equal(readHash(input.restoredCandidate.targetDatabasePath), originalHash);
   assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
+
+  await t.test("a new encrypted backup preserves invalidated credentials, audit and hold across another restore", async () => {
+    const backup = await createEncryptedOffsiteBackup({
+      databasePath: report.preparedDatabasePath, config, objectStorage, reason: "pre-cutover-rehearsal",
+      requestedByType: "release_qa_automation", requestedById: "m7-local-post-preparation-rehearsal",
+      backendBuildId: "m7-local-backend", retentionClass: "incident-preservation",
+    });
+    const restored = await restoreEncryptedBackupToCleanPath({
+      manifestObjectKey: backup.manifestObjectKey, objectStorage, keyResolver: async () => encryptionKey,
+      expectedEnvironment: config.appEnv, expectedEnvironmentId: config.environmentId,
+      expectedDatabaseId: config.databaseId, targetDatabasePath: path.join(input.temporaryRoot, "prepared-restored.sqlite3"),
+      temporaryRoot: input.temporaryRoot,
+    });
+    const restoredDatabase = openReadonlyDatabase({ databasePath: restored.targetDatabasePath });
+    try {
+      assert.notEqual(backup.backupId, input.restoredCandidate.backupId);
+      assert.deepEqual(allRows(restoredDatabase), preparedRows);
+      assertCredentialAccess(restoredDatabase, false);
+      assert.throws(() => createTargetRuntime({ database: restoredDatabase,
+        migrationsDirectory: path.resolve(__dirname, "../../database/migrations") }), { code: "DATABASE_RECOVERY_HELD" });
+    } finally { restoredDatabase.close(); }
+    assert.equal(readHash(report.preparedDatabasePath), report.preparedPlaintextSha256);
+  });
 
   await t.test("a repeated output preserves the existing prepared files", () => {
     const preparedHash = readHash(report.preparedDatabasePath);
