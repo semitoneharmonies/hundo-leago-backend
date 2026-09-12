@@ -889,6 +889,90 @@ test("a real statistics worker cannot use its restored lease after recovery prep
   assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
 });
 
+test("an expired restored completed-game occurrence replays once through the real worker and remains complete after restart", async t => {
+  const { createNhlCompletedGameAdapter, PROVIDER_NAME, PLAYER_IDENTITY_PROVIDER } = require("../../src/infrastructure/nhl/NhlCompletedGameAdapter");
+  const { createLiveStatisticsService } = require("../../src/application/services/statistics/createLiveStatisticsService");
+  const { createSqliteStatisticsRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteStatisticsRepository");
+  const { createRunCompletedGameStatisticsJob, latestEveningOccurrence } = require("../../src/jobs/definitions/runCompletedGameStatistics");
+  // A separate synthetic NHL season keeps the existing two-league schedule and
+  // historical player-game requirements intact. This is a worker rehearsal,
+  // not an operator disposition or permission to release the durable hold.
+  const nhlSeasonKey = "20272028", now = Date.parse("2027-10-12T01:20:00Z");
+  const scheduledForMs = latestEveningOccurrence(now);
+  let oldLease, catalog;
+  const { started, input } = await candidate(t, database => {
+    catalog = database.prepare("SELECT id FROM players ORDER BY id").all().map((row,index) => ({
+      playerId: row.id, providerPlayerId: String(8478000 + index),
+    }));
+    const insert = database.prepare("INSERT INTO player_external_ids(id,player_id,provider,external_value,created_at_ms) VALUES(?,?,'nhl',?,?)");
+    for (const player of catalog) insert.run(fixtureId("recovery-nhl-identity:" + player.playerId), player.playerId, player.providerPlayerId, now - 60_000);
+    oldLease = createSqliteStatisticsScheduleRepository({ database }).claim({ occurrenceKey: `${nhlSeasonKey}:${scheduledForMs}`,
+      scheduledForMs, nowMs: scheduledForMs + 60_000, owner: "synthetic-pre-restore-worker" });
+  });
+  const originalSource = started.runtime.database.serialize(), originalCandidateHash = readHash(input.restoredCandidate.targetDatabasePath);
+  const prepared = prepareRecoveryCredentials({ ...input, preparedAtMs: now,
+    outputDirectory: path.join(input.temporaryRoot, "statistics-worker-rehearsal") });
+  const preparedHash = readHash(prepared.preparedDatabasePath);
+  const workPath = path.join(input.temporaryRoot, "statistics-worker-work.sqlite3");
+  fs.copyFileSync(prepared.preparedDatabasePath, workPath, fs.constants.COPYFILE_EXCL);
+  const requests = [];
+  const game = { id: 2027020001, season: 20272028, gameType: 2, easternStartTime: "2027-10-10T17:00:00",
+    homeTeamId: 13, visitingTeamId: 16, gameStateId: 7 };
+  const skaters = Array.from({ length: 36 }, (_,index) => ({ playerId: 8478000 + index, gameId: game.id,
+    homeRoad: index < 18 ? "H" : "R", gamesPlayed: 1, goals: index === 0 ? 2 : 0,
+    assists: index === 0 ? 1 : 0, points: index === 0 ? 3 : 0 }));
+  const open = () => openDatabase({ databasePath: workPath, environment: "test" }).database;
+  const worker = database => {
+    const statisticsRepository = createSqliteStatisticsRepository({ database });
+    const provider = createNhlCompletedGameAdapter({ nowMs: () => now, readCatalogPlayers: () => statisticsRepository.readNhlCatalogPlayers(),
+      retryDelay: async () => {}, fetchImpl: async uri => {
+        const url = new URL(uri); requests.push(url.href); assert.equal(url.origin, "https://api.nhle.com");
+        assert.equal(url.searchParams.get("start"), "0");
+        const games = url.pathname === "/stats/rest/en/game";
+        assert.ok(games || url.pathname === "/stats/rest/en/skater/summary");
+        assert.equal(url.searchParams.get("cayenneExp"), games ? "season=20272028 and gameType=2" : "gameId in (2027020001)");
+        const data = games ? [game] : skaters;
+        return { ok: true, json: async () => ({ total: data.length, data: structuredClone(data) }) };
+      } });
+    return createRunCompletedGameStatisticsJob({ repository: createSqliteStatisticsScheduleRepository({ database }),
+      statisticsService: createLiveStatisticsService({ repository: statisticsRepository, provider, nhlSeasonKey,
+        providerName: PROVIDER_NAME, playerIdentityProvider: PLAYER_IDENTITY_PROVIDER,
+        minimumPlayerCount: catalog.length, nowMs: () => now }), nhlSeasonKey, clock: { nowMs: () => now }, logger: { error() {} } });
+  };
+  let database = open();
+  try {
+    const before = allRows(database), hold = database.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY);
+    const result = await worker(database).run(); assert.equal(result.status, "succeeded", JSON.stringify(result));
+    assert.equal(requests.length, 2);
+    const job = database.prepare("SELECT * FROM job_runs WHERE id=?").get(oldLease.id);
+    assert.equal(job.status, "succeeded"); assert.equal(job.attempt_count, 2); assert.equal(job.version, oldLease.version + 3);
+    assert.equal(job.occurrence_key, oldLease.occurrence_key); assert.equal(job.scheduled_for_ms, oldLease.scheduled_for_ms);
+    assert.equal(JSON.parse(job.result_json).refreshId, result.refreshId);
+    const total = database.prepare("SELECT * FROM player_stat_totals WHERE refresh_id=? AND player_id=?").get(result.refreshId, catalog[0].playerId);
+    assert.equal(total.games_played, 1); assert.equal(total.goals, 2); assert.equal(total.assists, 1);
+    assert.equal(total.fantasy_points_hundredths, 350);
+    const after = allRows(database), changed = new Set(["job_runs", "stat_sources", "stat_refreshes", "player_stat_totals",
+      "player_game_stat_observations", "stat_refresh_player_game_sets", "stat_refresh_player_game_coverage_entries"]);
+    for (const [table,rows] of Object.entries(before)) if (!changed.has(table)) assert.deepEqual(after[table], rows, table);
+    assert.deepEqual(after.job_runs.filter(row => JSON.parse(row).id !== oldLease.id), before.job_runs.filter(row => JSON.parse(row).id !== oldLease.id));
+    const bytes = database.serialize(), repository = createSqliteStatisticsScheduleRepository({ database });
+    assert.throws(() => repository.assertLease(oldLease, now), { code: "NHL_STATISTICS_LEASE_LOST" });
+    assert.throws(() => repository.complete({ lease: oldLease, nowMs: now, result: { stale: true } }), { code: "NHL_STATISTICS_LEASE_LOST" });
+    assert.deepEqual(database.serialize(), bytes);
+    assert.deepEqual(database.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY), hold);
+    assert.throws(() => createTargetRuntime({ database, migrationsDirectory: path.resolve(__dirname, "../../database/migrations") }),
+      { code: "DATABASE_RECOVERY_HELD" });
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    database.close(); database = open();
+    const restarted = database.serialize(); assert.equal((await worker(database).run()).status, "skipped");
+    assert.equal(requests.length, 2); assert.deepEqual(database.serialize(), restarted);
+    assert.equal(database.prepare("SELECT total_changes() n").get().n, 0);
+  } finally { if (database.open) database.close(); }
+  assert.equal(readHash(prepared.preparedDatabasePath), preparedHash);
+  assert.equal(readHash(input.restoredCandidate.targetDatabasePath), originalCandidateHash);
+  assert.deepEqual(started.runtime.database.serialize(), originalSource);
+});
+
 test("a later recovery advances the prior epoch atomically without deleting idempotency history", async t => {
   const previous = { generation: 7, recoveryId: crypto.randomUUID() };
   const { started, input } = await candidate(t, database => database.prepare(
