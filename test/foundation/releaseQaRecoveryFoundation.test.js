@@ -12,6 +12,9 @@ const {
   rehearseReleaseQaRecovery,
 } = require("../../src/operations/release/rehearseReleaseQaRecovery");
 const {
+  FIXTURE_DATABASE_ID,
+} = require("../../src/operations/release/releaseQaFixtureContract");
+const {
   ReleaseQaRecoveryArgumentError,
   runReleaseQaRecoveryCommand,
 } = require("../../scripts/rehearse-m7-release-qa-recovery");
@@ -45,6 +48,11 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   assert.equal(report.objectCount, 2);
   assert.equal(report.sourceDatabase, "unchanged");
   assert.equal(report.wrongKeyRestore, "rejected-without-target");
+  assert.equal(report.reportVersion, 2);
+  assert.equal(report.recoveryInventory.verificationScope, "read-only-inventory");
+  assert.equal(report.recoveryInventory.activationReady, false);
+  assert.equal(report.recoveryInventory.databaseIdentity.databaseId, FIXTURE_DATABASE_ID);
+  assert.equal(report.recoveryInventory.remainingRecoveryGates.length, 6);
   assert.match(report.reportChecksum, /^[0-9a-f]{64}$/);
   assert.equal(
     fs.existsSync(path.join(started.temporaryRoot, "recovery-rehearsal")),

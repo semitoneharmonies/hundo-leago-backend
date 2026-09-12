@@ -16,6 +16,12 @@ const {
   restoreEncryptedBackupToCleanPath,
 } = require("../backups/restoreEncryptedBackupToCleanPath");
 const {
+  inspectRecoveryInventory,
+} = require("../backups/inspectRecoveryInventory");
+const {
+  openReadonlyDatabase,
+} = require("../../infrastructure/database/connection");
+const {
   FIXTURE_DATABASE_ID,
   canonicalize,
 } = require("./releaseQaFixtureContract");
@@ -229,14 +235,27 @@ async function rehearseReleaseQaRecovery({
         "The clean restore or source-preservation proof failed."
       );
     }
+    const candidate = openReadonlyDatabase({ databasePath: restored.targetDatabasePath });
+    let recoveryInventory;
+    try {
+      recoveryInventory = inspectRecoveryInventory({
+        database: candidate,
+        expectedEnvironmentId: config.environmentId,
+        expectedDatabaseId: config.databaseId,
+        observedAtMs: Date.now(),
+      });
+    } finally {
+      candidate.close();
+    }
     const reportBase = Object.freeze({
-      reportVersion: 1,
+      reportVersion: 2,
       backup: "encrypted-private-object-verified",
       cleanRestore: "verified-to-new-path",
       fixtureManifestChecksum,
       objectCount: storage.count(),
       sourceDatabase: "unchanged",
       wrongKeyRestore: "rejected-without-target",
+      recoveryInventory,
     });
     return Object.freeze({
       ...reportBase,
