@@ -441,6 +441,7 @@ function createSqliteRestrictedNoImprovementFallbackWriter({
       notificationWriter,
     });
 
+  const supportsDraftTiming = database.prepare("PRAGMA user_version").get().user_version >= 56 || database.prepare("SELECT name FROM pragma_table_info('free_agent_drafts') WHERE name = 'initial_rollover_times_json'").get() !== undefined;
   const findResolution = database.prepare(`
     SELECT *
     FROM auction_resolutions
@@ -581,7 +582,7 @@ function createSqliteRestrictedNoImprovementFallbackWriter({
     SELECT
       rollover.id,
       rollover.sequence,
-      (SELECT COALESCE(json_array_length(initial_rollover_times_json), 7) FROM free_agent_drafts
+      (SELECT COALESCE(json_array_length(${supportsDraftTiming ? "initial_rollover_times_json" : "NULL"}), 7) FROM free_agent_drafts
         WHERE league_id = @leagueId AND season_id = @seasonId AND id = @fadId) AS initialRolloverCount,
       rollover.predecessor_rollover_id AS predecessorRolloverId,
       rollover.opens_at_ms AS opensAtMs,

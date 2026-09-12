@@ -2138,6 +2138,8 @@ function createSqliteFreeAgentDraftRepository({
   let readinessAttemptByExecutionStatement;
   let insertReadinessAttemptStatement;
   let insertReadinessJobStatement;
+  const supportsDraftTiming = database.prepare("PRAGMA user_version").get().user_version >= 56 || database.prepare("SELECT name FROM pragma_table_info('free_agent_drafts') WHERE name = 'initial_rollover_times_json'").get() !== undefined;
+  const supportsScheduleTiming = database.prepare("PRAGMA user_version").get().user_version >= 56 || database.prepare("SELECT name FROM pragma_table_info('season_matchup_schedule_generations') WHERE name = 'fad_timing_json'").get() !== undefined;
   let insertReadinessStatement;
   let blockReadinessStatement;
   let failReadinessJobStatement;
@@ -2619,7 +2621,7 @@ function createSqliteFreeAgentDraftRepository({
           generation.schedule_version,
           generation.week_one_matchup_week_id,
           generation.week_one_starts_at_ms,
-          generation.fad_timing_json
+          ${supportsScheduleTiming ? "generation.fad_timing_json" : "NULL"} AS fad_timing_json
         FROM season_matchup_schedule_generations
           AS generation
         JOIN matchup_operations AS operation
@@ -2705,8 +2707,7 @@ function createSqliteFreeAgentDraftRepository({
         completed_at_ms,
         created_at_ms,
         updated_at_ms,
-        version,
-        initial_rollover_times_json
+        version${supportsDraftTiming ? ", initial_rollover_times_json" : ""}
       ) VALUES (
         @fadId,
         @leagueId,
@@ -2733,8 +2734,7 @@ function createSqliteFreeAgentDraftRepository({
         NULL,
         @openedAtMs,
         @openedAtMs,
-        1,
-        @initialRolloverTimesJson
+        1${supportsDraftTiming ? ", @initialRolloverTimesJson" : ""}
       )
     `);
     insertParticipantStatement =
@@ -6268,6 +6268,9 @@ function createSqliteFreeAgentDraftRepository({
     const command =
       normalizeOpeningCommand(input);
     try {
+      if ((!supportsDraftTiming || !supportsScheduleTiming) && command.schedule.draftTiming !== undefined) {
+        throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible, "Configured draft timing requires the current SQLite schema.");
+      }
       return openingTransaction.immediate(
         command
       );

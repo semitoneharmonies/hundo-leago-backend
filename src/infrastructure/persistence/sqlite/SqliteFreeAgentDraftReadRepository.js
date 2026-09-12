@@ -835,6 +835,7 @@ function createSqliteFreeAgentDraftReadRepository({
     );
   }
 
+  const supportsScheduleTiming = database.prepare("PRAGMA user_version").get().user_version >= 56 || database.prepare("SELECT name FROM pragma_table_info('season_matchup_schedule_generations') WHERE name = 'fad_timing_json'").get() !== undefined;
   let openingSeasonStatement;
   let openingLeagueSettingsStatement;
   let openingReadinessStatement;
@@ -1292,7 +1293,7 @@ function createSqliteFreeAgentDraftReadRepository({
         week_one_matchup_week_id AS week_id,
         week_one_starts_at_ms AS starts_at_ms,
         created_at_ms,
-        fad_timing_json
+        ${supportsScheduleTiming ? "fad_timing_json" : "NULL AS fad_timing_json"}
       FROM season_matchup_schedule_generations
       WHERE league_id = @leagueId
         AND season_id = @seasonId

@@ -508,6 +508,7 @@ function createSqliteFreeAgentDraftQueuedNominationActivationWriter({
     );
   }
 
+  const supportsDraftTiming = database.prepare("PRAGMA user_version").get().user_version >= 56 || database.prepare("SELECT name FROM pragma_table_info('free_agent_drafts') WHERE name = 'initial_rollover_times_json'").get() !== undefined;
   let activationStatement;
   let successorStatement;
   let recoveryStatement;
@@ -662,7 +663,7 @@ function createSqliteFreeAgentDraftQueuedNominationActivationWriter({
         league.current_season_id,
         season.status AS season_status,
         fad.status AS fad_status,
-        fad.initial_rollover_times_json,
+        ${supportsDraftTiming ? "fad.initial_rollover_times_json" : "NULL"} AS initial_rollover_times_json,
         team.status AS team_status,
         CASE WHEN fad_team.id IS NULL THEN 0 ELSE 1 END
           AS fad_team_participating,

@@ -571,6 +571,7 @@ function createSqliteFreeAgentDraftCompletionWriter({
     );
   }
 
+  const supportsDraftTiming = database.prepare("PRAGMA user_version").get().user_version >= 56 || database.prepare("SELECT name FROM pragma_table_info('free_agent_drafts') WHERE name = 'initial_rollover_times_json'").get() !== undefined;
   let notifications;
   let outbox;
   let candidateStatement;
@@ -659,7 +660,7 @@ function createSqliteFreeAgentDraftCompletionWriter({
         ON seventh.league_id = draft.league_id
        AND seventh.season_id = draft.season_id
        AND seventh.fad_id = draft.id
-       AND seventh.sequence = COALESCE(json_array_length(draft.initial_rollover_times_json), 7)
+       AND seventh.sequence = COALESCE(json_array_length(${supportsDraftTiming ? "draft.initial_rollover_times_json" : "NULL"}), 7)
        AND seventh.window_kind = 'initial'
        AND seventh.rolls_over_at_ms =
          job.scheduled_for_ms
@@ -3289,7 +3290,7 @@ function createSqliteFreeAgentDraftCompletionWriter({
         AND season.league_id = draft.league_id AND season.status = 'active'
       JOIN free_agent_draft_rollovers AS seventh
         ON seventh.league_id = draft.league_id AND seventh.season_id = draft.season_id
-        AND seventh.fad_id = draft.id AND seventh.sequence = COALESCE(json_array_length(draft.initial_rollover_times_json), 7)
+        AND seventh.fad_id = draft.id AND seventh.sequence = COALESCE(json_array_length(${supportsDraftTiming ? "draft.initial_rollover_times_json" : "NULL"}), 7)
         AND seventh.window_kind = 'initial'
       WHERE draft.status = 'rapid' AND draft.completed_at_ms IS NULL
         AND seventh.rolls_over_at_ms <= @nowMs

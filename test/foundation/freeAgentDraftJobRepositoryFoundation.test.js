@@ -424,6 +424,7 @@ function createSchema(database) {
       readiness_occurrence_key TEXT NOT NULL,
       opened_at_ms INTEGER NOT NULL,
       candidate_deadline_at_ms INTEGER NOT NULL,
+      initial_rollover_times_json TEXT,
       status TEXT NOT NULL
     ) STRICT;
 

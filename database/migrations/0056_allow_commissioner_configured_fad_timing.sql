@@ -1171,10 +1171,24 @@ BEGIN
         AND NEW.opened_at_ms >= NEW.created_at_ms
         AND NEW.opened_at_ms >= restricted_auction.resolves_at_ms
         AND NEW.opened_at_ms >= fad.candidate_deadline_at_ms
-        AND EXISTS (SELECT 1 FROM free_agent_draft_rollovers AS target
+        AND (EXISTS (SELECT 1 FROM free_agent_draft_rollovers AS target
           WHERE target.league_id = fad.league_id AND target.season_id = fad.season_id AND target.fad_id = fad.id
             AND target.opens_at_ms = NEW.opened_at_ms AND target.rolls_over_at_ms = NEW.resolves_at_ms
             AND target.status IN ('scheduled', 'processing'))
+          OR (
+            NEW.resolves_at_ms = NEW.opened_at_ms + 86400000
+            AND NOT EXISTS (SELECT 1 FROM free_agent_draft_rollovers AS existing_target
+              WHERE existing_target.league_id = fad.league_id AND existing_target.season_id = fad.season_id
+                AND existing_target.fad_id = fad.id AND existing_target.opens_at_ms = NEW.opened_at_ms)
+            AND EXISTS (SELECT 1 FROM free_agent_draft_rollovers AS predecessor
+              WHERE predecessor.league_id = fad.league_id AND predecessor.season_id = fad.season_id
+                AND predecessor.fad_id = fad.id AND predecessor.rolls_over_at_ms = NEW.opened_at_ms
+                AND predecessor.sequence >= COALESCE(json_array_length(fad.initial_rollover_times_json), 7)
+                AND predecessor.status IN ('processing', 'completed', 'recovery_required')
+                AND NOT EXISTS (SELECT 1 FROM free_agent_draft_rollovers AS later
+                  WHERE later.league_id = fad.league_id AND later.season_id = fad.season_id
+                    AND later.fad_id = fad.id AND later.sequence > predecessor.sequence))
+          ))
     )
   ) THEN RAISE(
     ABORT,
