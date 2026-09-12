@@ -122,7 +122,7 @@ async function candidate(t) {
   const input = { restoredCandidate, temporaryRoot: started.temporaryRoot,
     expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID, expectedDatabaseId: FIXTURE_DATABASE_ID,
     recoveryId: crypto.randomUUID(), preparedAtMs: 100 };
-  return { started, input, config, objectStorage, encryptionKey };
+  return { started, input, config, objectStorage, encryptionKey, backup };
 }
 
 test("encrypted clean restore preparation invalidates credentials atomically and preserves both leagues", async (t) => {
@@ -257,4 +257,54 @@ test("encrypted clean restore preparation invalidates credentials atomically and
   });
   assert.equal(readHash(input.restoredCandidate.targetDatabasePath), originalHash);
   assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
+});
+
+test("restoring the selected backup excludes a later real buyout and restores exact financial rows in both leagues", async (t) => {
+  const { started, input, config, objectStorage, encryptionKey, backup } = await candidate(t);
+  const source = started.runtime.database;
+  const atBackup = allRows(source);
+  const contractId = fixtureId("contract:leagueB:signedProspect");
+  const contractAtBackup = source.prepare("SELECT * FROM contracts WHERE id=?").get(contractId);
+  const otherLeagueAtBackup = source.prepare("SELECT * FROM contracts WHERE league_id=? ORDER BY id").all(fixtureId("league:leagueA"));
+  const penaltyTotalAtBackup = source.prepare("SELECT COALESCE(SUM(penalty_cents),0) AS total FROM buyout_years").get().total;
+  const issued = started.runtime.services.sessionService.issueForUser({ userId: fixtureId("account:leagueBManagerOne") });
+  const authenticated = started.runtime.services.sessionService.resolve(issued.rawSessionToken);
+  assert.equal(authenticated.valid, true);
+  const boughtOut = await started.runtime.services.league.rosterAction.buyOutContract({
+    authenticated, leagueId: fixtureId("league:leagueB"), teamId: fixtureId("team:leagueB:6"), contractId,
+    input: { confirmed: true, expectedContractVersion: 1, expectedOwnershipVersion: 1 },
+  });
+  assert.equal(boughtOut.code, "CONTRACT_BOUGHT_OUT");
+  assert.equal(source.prepare("SELECT status FROM contracts WHERE id=?").get(contractId).status, "eliminated");
+  assert.equal(source.prepare("SELECT COALESCE(SUM(penalty_cents),0) AS total FROM buyout_years").get().total,
+    penaltyTotalAtBackup + boughtOut.buyout.annualPenaltyCents * boughtOut.buyout.remainingYears);
+  assert.deepEqual(source.prepare("SELECT * FROM contracts WHERE league_id=? ORDER BY id").all(fixtureId("league:leagueA")), otherLeagueAtBackup);
+  assert.deepEqual(source.pragma("foreign_key_check"), []);
+  const sourceAfterKnownChanges = source.serialize();
+  const restored = await restoreEncryptedBackupToCleanPath({
+    manifestObjectKey: backup.manifestObjectKey, objectStorage, keyResolver: async () => encryptionKey,
+    expectedEnvironment: config.appEnv, expectedEnvironmentId: config.environmentId,
+    expectedDatabaseId: config.databaseId, targetDatabasePath: path.join(input.temporaryRoot, "loss-window-restored.sqlite3"),
+    temporaryRoot: input.temporaryRoot,
+  });
+  const prepared = prepareRecoveryCredentials({ ...input, restoredCandidate: restored,
+    outputDirectory: path.join(input.temporaryRoot, "loss-window-prepared") });
+  const database = openReadonlyDatabase({ databasePath: prepared.preparedDatabasePath });
+  try {
+    assert.deepEqual(database.prepare("SELECT * FROM contracts WHERE id=?").get(contractId), contractAtBackup);
+    assert.equal(database.prepare("SELECT * FROM buyout_obligations WHERE id=?").get(boughtOut.buyout.id), undefined);
+    assert.equal(database.prepare("SELECT * FROM sessions WHERE id=?").get(issued.session.id), undefined);
+    assert.equal(database.prepare("SELECT COALESCE(SUM(penalty_cents),0) AS total FROM buyout_years").get().total, penaltyTotalAtBackup);
+    const recovered = allRows(database);
+    for (const [table, rows] of Object.entries(atBackup)) {
+      if (!["sessions", "account_action_tokens", "security_audit_events", "application_metadata"].includes(table)) {
+        assert.deepEqual(recovered[table], rows, table);
+      }
+    }
+    assertCredentialAccess(database, false);
+    assert.equal(prepared.activationReady, false);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+  assert.deepEqual(source.serialize(), sourceAfterKnownChanges);
+  assert.equal(source.prepare("SELECT status FROM contracts WHERE id=?").get(contractId).status, "eliminated");
 });
