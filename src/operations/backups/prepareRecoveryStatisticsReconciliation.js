@@ -144,7 +144,7 @@ async function prepareRecoveryStatisticsReconciliation({ credentialPreparation,p
         completedTables.stat_refresh_player_game_coverage_entries.count !== beforeTables.stat_refresh_player_game_coverage_entries.count + result.playerGameCoverageEntryCount) fail("RECOVERY_STATISTICS_POSTCHECK_FAILED");
     const decisionChecksum = hash(canonicalize(decision));
     const metadata = { metadata_key: metadataKey,metadata_value: canonicalize({ recoveryId: verifiedPlan.recoveryId,
-      planChecksum: verifiedPlan.planChecksum,decisionChecksum,decision,executedAtMs,completedAtMs,refreshId: result.refreshId }),
+      planChecksum: verifiedPlan.planChecksum,decisionChecksum,decision,minimumPlayerCount,executedAtMs,completedAtMs,refreshId: result.refreshId }),
       created_at_ms: completedAtMs,updated_at_ms: completedAtMs };
     const audit = { id: decision.reconciliationId,event_type: "recovery.statistics_reconciled",outcome: "success",
       actor_user_id: decision.reviewedByUserId,target_user_id: null,league_id: null,session_id: null,
@@ -174,7 +174,7 @@ async function prepareRecoveryStatisticsReconciliation({ credentialPreparation,p
     assertSource(source,credential.preparedPlaintextSha256);
     const report = { reportVersion: 1,status: "statistics-reconciled-held",recoveryId: verifiedPlan.recoveryId,recoveryEpoch: verifiedPlan.recoveryEpoch,
       planChecksum: verifiedPlan.planChecksum,sourcePlaintextSha256: credential.preparedPlaintextSha256,
-      reconciledPlaintextSha256: hashFile(candidatePath),decision,decisionChecksum,executedAtMs,completedAtMs,result,
+      reconciledPlaintextSha256: hashFile(candidatePath),decision,decisionChecksum,minimumPlayerCount,executedAtMs,completedAtMs,result,
       completedJobId: row.id,completedJobRowSha256: hash(canonicalize(expectedJob)),tableSnapshots: afterTables,
       unresolvedJobs: verifiedPlan.unresolvedJobs - 1,unresolvedMessages: verifiedPlan.unresolvedMessages,
       protectedTableCount: Object.keys(beforeTables).filter(name => !CHANGED.has(name)).length,

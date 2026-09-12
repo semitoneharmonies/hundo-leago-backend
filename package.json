@@ -30,6 +30,7 @@
     "db:restore-verify": "node scripts/db-restore-verify.js",
     "db:restore:plan": "node scripts/db-restore-plan.js",
     "db:recovery:prepare": "node scripts/db-recovery-prepare.js",
+    "db:recovery:statistics": "node scripts/db-recovery-statistics.js",
     "db:recovery:review": "node scripts/db-recovery-review.js",
     "db:verify-staging-import": "node scripts/db-verify-staging-import.js",
     "db:validate-reset": "node scripts/db-validate-reset.js",

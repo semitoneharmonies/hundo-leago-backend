@@ -1139,6 +1139,40 @@ test("reviewed statistics recovery executes only its exact occurrence in a new h
   await assert.rejects(() => prepareRecoveryStatisticsReconciliation({ ...options,outputDirectory: unavailable,
     fetchImpl: async () => ({ ok: false,status: 400 }) }),{ code: "RECOVERY_STATISTICS_FAILED" });
   assert.equal(fs.existsSync(unavailable),false);
+  // Run the real operator entrypoint. Only the external HTTP transport is
+  // preloaded with captured synthetic responses; production accepts no hook.
+  const commandRoot = path.join(input.temporaryRoot,"statistics-command"); fs.mkdirSync(commandRoot);
+  const write = (name,value) => { const file = path.join(commandRoot,name); fs.writeFileSync(file,JSON.stringify(value),{ flag: "wx" }); return file; };
+  const credentialPreparationPath = path.join(path.dirname(prepared.preparedDatabasePath),"credential-preparation.json");
+  const reviewRequestPath = write("review-request.json",{ requestVersion: 1,expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID,
+    expectedDatabaseId: FIXTURE_DATABASE_ID,observedAtMs: now,preparedDatabasePath: reviewPath,credentialPreparationPath });
+  const reviewed = require("../../scripts/db-recovery-review").runRecoveryReviewCommand({ argv: ["--request",reviewRequestPath],output: { log() {} } });
+  assert.deepEqual(reviewed.plan,plan);
+  const preload = path.join(commandRoot,"captured-http.cjs");
+  write("responses.json",{ game,skaters });
+  fs.writeFileSync(preload,'const assert=require("node:assert/strict"),data=require("./responses.json"); globalThis.fetch=async uri=>{const url=new URL(uri); assert.equal(url.origin,"https://api.nhle.com"); const games=url.pathname==="/stats/rest/en/game"; assert(games||url.pathname==="/stats/rest/en/skater/summary"); const rows=games?[data.game]:data.skaters; return {ok:true,json:async()=>({total:rows.length,data:rows})};};\n',{ flag: "wx" });
+  const commandRequest = { requestVersion: 1,credentialPreparationPath,preparedDatabasePath: prepared.preparedDatabasePath,
+    candidateReviewPath: write("candidate-review.json",reviewed),decisionPath: write("decision.json",review),
+    executedAtMs: now,temporaryRoot: input.temporaryRoot,outputDirectory: path.join(input.temporaryRoot,"statistics-command-output"),minimumPlayerCount: catalog.length };
+  const invoke = request => spawnSync(process.execPath,["--require",preload,path.resolve(__dirname,"../../scripts/db-recovery-statistics.js"),
+    "--request",write(crypto.randomUUID()+".json",request)],{ encoding: "utf8",timeout: 60_000,maxBuffer: 8*1024*1024 });
+  const command = invoke(commandRequest); assert.equal(command.status,0,command.stderr); assert.equal(command.stderr,"");
+  const commandReport = JSON.parse(command.stdout); assert.equal(commandReport.status,"statistics-reconciled-held");
+  assert.equal(commandReport.completedJobId,row.id); assert.equal(commandReport.minimumPlayerCount,catalog.length);
+  assert.equal(commandReport.activationReady,false); assert.equal(commandReport.normalRuntime,"blocked-by-durable-recovery-hold");
+  assert.equal(command.stdout.includes(PRIVATE_VALUE),false);
+  const commandHash = readHash(commandReport.reconciledDatabasePath);
+  assert.equal(commandHash,commandReport.reconciledPlaintextSha256);
+  const alteredReview = write("altered-review.json",{ ...reviewed,plan: { ...reviewed.plan,unresolvedJobs: 0 } });
+  for (const request of [commandRequest,{ ...commandRequest,outputDirectory: path.join(input.temporaryRoot,"statistics-command-approval"),approve: true },
+    { ...commandRequest,outputDirectory: path.join(input.temporaryRoot,"statistics-command-altered-review"),candidateReviewPath: alteredReview }]) {
+    const rejected = invoke(request); assert.equal(rejected.status,1); assert.equal(rejected.stdout,"");
+    assert.equal(JSON.parse(rejected.stderr).error.message,"Statistics recovery failed safely. No activation was performed.");
+    assert.equal(rejected.stderr.includes(PRIVATE_VALUE),false);
+  }
+  assert.equal(fs.existsSync(path.join(input.temporaryRoot,"statistics-command-approval")),false);
+  assert.equal(fs.existsSync(path.join(input.temporaryRoot,"statistics-command-altered-review")),false);
+  assert.equal(readHash(commandReport.reconciledDatabasePath),commandHash);
   assert.deepEqual([readHash(reconciledDatabasePath),readHash(receiptPath)],outputHashes);
   assert.equal(readHash(prepared.preparedDatabasePath),preparedHash); assert.equal(readHash(input.restoredCandidate.targetDatabasePath),restoredHash);
   assert.deepEqual(started.runtime.database.serialize(),sourceBytes);
