@@ -15,6 +15,7 @@ const {
 );
 const {
   planExplicitMatchupSchedule,
+  defaultSeasonCalendar,
 } = require(
   "../../src/domain/matchups/matchupSchedulePolicy"
 );
@@ -176,8 +177,9 @@ function makeContext({
       calendar.firstWeekStartsAtMs,
     nowMs: calendar.firstWeekStartsAtMs - 1,
   });
-  const createdAtMs =
-    calendar.nhlRegularSeasonStartsAtMs;
+  const createdAtMs = Math.min(
+    calendar.nhlRegularSeasonStartsAtMs, recoveryAtMs
+  );
   const jobs = [];
   const weeks = schedule.weeks.map(
     (plannedWeek, weekIndex) => {
@@ -317,6 +319,35 @@ function plan(context, secureRandom = makeSecureRandom()) {
     secureRandom,
   };
 }
+
+test("approved partial first weeks complete early or recover to the next actual scoring week", () => {
+  const { scoringBreaks: unusedBreaks, ...defaults } = defaultSeasonCalendar("20262027", "America/Vancouver");
+  for (const firstWeekStartsAtMs of [defaults.firstWeekStartsAtMs, Date.parse("2026-12-21T08:00:00Z")]) {
+    const calendar = { ...defaults, firstWeekStartsAtMs, timeZone: "America/Vancouver" };
+    const early = makeContext({ calendar, recoveryKind: "completion", recoveryAtMs: firstWeekStartsAtMs - 1 });
+    assert.equal(plan(early).result.action, "no_op");
+    const atBoundary = makeContext({ calendar, recoveryKind: "completion", recoveryAtMs: firstWeekStartsAtMs });
+    const recovered = plan(atBoundary).result;
+    assert.equal(recovered.action, "stage_recovery");
+    assert.equal(recovered.decision.competitionFirstMatchupStartsAtMs, atBoundary.weeks[1].startsAtMs);
+    assert.equal(recovered.decision.removedRegularSeasonWeekCount, 1);
+    assert.equal(recovered.decision.frozenFadFirstMatchupStartsAtMs, firstWeekStartsAtMs);
+    if (firstWeekStartsAtMs !== defaults.firstWeekStartsAtMs) {
+      assert.equal(recovered.decision.competitionFirstMatchupStartsAtMs, Date.parse("2026-12-26T08:00:00Z"));
+    }
+    const exhausted = makeContext({ calendar, recoveryKind: "completion", recoveryAtMs: calendar.fantasyPlayoffsStartAtMs });
+    assertServiceError(() => plan(exhausted), {
+      code: FREE_AGENT_DRAFT_SCHEDULE_RECOVERY_SERVICE_CODES.stateInvalid,
+      reasonCode: "completion_scoring_week_unavailable",
+    });
+    const invalidFrozen = jsonClone(early);
+    invalidFrozen.recovery.frozenFadFirstMatchupStartsAtMs = defaults.firstWeekStartsAtMs - 24 * 60 * 60 * 1000;
+    assertServiceError(() => plan(invalidFrozen), {
+      code: FREE_AGENT_DRAFT_SCHEDULE_RECOVERY_SERVICE_CODES.stateInvalid,
+      reasonCode: "frozen_fad_week_one_invalid",
+    });
+  }
+});
 
 function pairKeys(matchups) {
   return matchups

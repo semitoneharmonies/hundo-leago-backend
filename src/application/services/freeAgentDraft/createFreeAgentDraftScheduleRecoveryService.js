@@ -18,6 +18,8 @@ const {
 const {
   MAXIMUM_UTC_TIMESTAMP_MS,
   MatchupSchedulePolicyError,
+  isDefaultSeasonCalendar,
+  isDefaultWeekStart,
   planExplicitMatchupSchedule,
 } = require(
   "../../../domain/matchups/matchupSchedulePolicy"
@@ -1016,6 +1018,41 @@ function recoveryDecision(inspected) {
       firstWeekStartsAtMs:
         inspected.generation.weekOneStartsAtMs,
       ...shared,
+    });
+  }
+  if (isDefaultSeasonCalendar(inspected.calendar, shared.timeZone)) {
+    const frozenFadFirstMatchupStartsAtMs =
+      inspected.recovery.frozenFadFirstMatchupStartsAtMs;
+    const previousCompetitionFirstMatchupStartsAtMs =
+      inspected.generation.weekOneStartsAtMs;
+    if (
+      frozenFadFirstMatchupStartsAtMs < inspected.calendar.nhlRegularSeasonStartsAtMs ||
+      frozenFadFirstMatchupStartsAtMs > previousCompetitionFirstMatchupStartsAtMs ||
+      !isDefaultWeekStart(frozenFadFirstMatchupStartsAtMs, inspected.calendar, shared.timeZone)
+    ) {
+      failState("frozen_fad_week_one_invalid");
+    }
+    // The validated calendar includes partial weeks around opening day and breaks.
+    const removedRegularSeasonWeekCount = inspected.weeks.findIndex(
+      (week) => week.startsAtMs > inspected.recovery.atMs
+    );
+    if (removedRegularSeasonWeekCount < 0) {
+      failState("completion_scoring_week_unavailable");
+    }
+    return Object.freeze({
+      recoveryKind: "completion",
+      recoveryRequired: removedRegularSeasonWeekCount > 0,
+      reasonCode: removedRegularSeasonWeekCount > 0
+        ? "completion_week_one_advanced"
+        : "completion_before_week_one",
+      proposedCompletionAtMs: inspected.recovery.atMs,
+      ...shared,
+      frozenFadFirstMatchupStartsAtMs,
+      previousCompetitionFirstMatchupStartsAtMs,
+      competitionFirstMatchupStartsAtMs: inspected.weeks[removedRegularSeasonWeekCount].startsAtMs,
+      historicalFadClockPreserved: true,
+      mondayAdvanceCount: removedRegularSeasonWeekCount,
+      removedRegularSeasonWeekCount,
     });
   }
   return planFreeAgentDraftCompletionScheduleRecovery({
