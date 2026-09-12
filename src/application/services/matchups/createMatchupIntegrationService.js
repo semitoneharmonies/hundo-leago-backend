@@ -56,7 +56,7 @@ function confirmation(value) {
 }
 
 function exactScheduleBody(value) {
-  const body = exactObject(value, MATCHUP_SCHEDULE_INPUT_FIELDS);
+  const body = exactObject(value, [...MATCHUP_SCHEDULE_INPUT_FIELDS, "draftTiming"]);
   if (
     MATCHUP_SCHEDULE_INPUT_FIELDS.some(
       (field) => !Object.hasOwn(body, field)
@@ -469,6 +469,7 @@ function createMatchupIntegrationService({
       fantasyPlayoffsEndAtMs:
         body.fantasyPlayoffsEndAtMs,
       firstWeekStartsAtMs: body.firstWeekStartsAtMs,
+      ...(Object.hasOwn(body, "draftTiming") ? { draftTiming: body.draftTiming } : {}),
       nowMs: clock.nowMs(),
     };
     const preview = scheduleService.preview(command);
@@ -486,6 +487,7 @@ function createMatchupIntegrationService({
         preview.plan.fantasyPlayoffsEndAtMs,
       calendarWillBePersisted:
         preview.calendarWillBePersisted,
+      ...(preview.draftTiming ? { draftTiming: preview.draftTiming } : {}),
       firstWeekStartsAtMs:
         preview.plan.firstWeekStartsAtMs,
       participantCount: preview.plan.teamIds.length,

@@ -241,7 +241,7 @@ const RECOVERY_TEAM_IDS = Object.freeze([
   uuid(403),
 ]);
 
-function seedBase(database) {
+function seedBase(database, draftTiming) {
   const insertLeague = database.prepare(`
     INSERT INTO leagues (
       id,
@@ -474,16 +474,18 @@ function seedBase(database) {
       status,
       created_at_ms,
       superseded_at_ms,
-      version
+      version,
+      fad_timing_json
     ) VALUES (
-      ?, ?, 1, ?, ?, ?, 'current', 4, NULL, 1
+      ?, ?, 1, ?, ?, ?, 'current', 4, NULL, 1, ?
     )
   `).run(
     IDS.league,
     IDS.season,
     IDS.scheduleOne,
     IDS.weekOne,
-    WEEK_ONE_AT_MS
+    WEEK_ONE_AT_MS,
+    draftTiming === undefined ? null : JSON.stringify(draftTiming)
   );
 }
 
@@ -888,6 +890,7 @@ function createRuntime(
   t,
   {
     beforeCommit,
+    draftTiming,
     omitCards = false,
     omitRevisions = false,
     omitCarryovers = false,
@@ -918,7 +921,7 @@ function createRuntime(
       "fad-repository-foundation",
     now: () => 1,
   });
-  seedBase(connection.database);
+  seedBase(connection.database, draftTiming);
   const repository =
     createSqliteFreeAgentDraftRepository({
       database: connection.database,
@@ -1211,6 +1214,7 @@ function readinessAttemptProjection({
     readinessTeamProjection(),
   ],
   warnings = [],
+  initialRollovers = readinessInitialRollovers(candidateDeadlineAtMs),
 } = {}) {
   return {
     blockers,
@@ -1222,10 +1226,7 @@ function readinessAttemptProjection({
       candidateDeadlineAtMs -
         48 * 60 * 60 * 1000
     ),
-    initialRollovers:
-      readinessInitialRollovers(
-        candidateDeadlineAtMs
-      ),
+    initialRollovers,
     observedSeasonVersion,
     participatingTeamCount,
     priorSeasonRollover: null,
@@ -1404,8 +1405,7 @@ function openingInput({
       }
     : schedule;
   const candidateDeadlineAtMs =
-    effectiveSchedule.weekOneStartsAtMs -
-    FREE_AGENT_DRAFT_INITIAL_WINDOW_MS;
+    schedule.draftTiming?.candidateDeadlineAtMs ?? effectiveSchedule.weekOneStartsAtMs - FREE_AGENT_DRAFT_INITIAL_WINDOW_MS;
   const teamProjections =
     readinessTeamProjections(
       evidence.participants,
@@ -1428,6 +1428,10 @@ function openingInput({
             readinessAttemptProjection({
               blockers: [],
               candidateDeadlineAtMs,
+              ...(schedule.draftTiming ? { initialRollovers: schedule.draftTiming.rolloverTimesAtMs.map((time, index, times) => ({
+                sequence: index + 1, opensAtMs: index ? times[index - 1] : candidateDeadlineAtMs,
+                creationCutoffAtMs: Math.max(index ? times[index - 1] : candidateDeadlineAtMs, time - 3600000), rollsOverAtMs: time,
+              })) } : {}),
               firstMatchupWeekBefore: {
                 sequence: 1,
                 startsAtMs:
@@ -3608,6 +3612,51 @@ function createRealCompletionRecoveryFixture(
 }
 
 describe("SQLite Free Agent Draft lifecycle repository", () => {
+  test("the real readiness service opens all cards and schedules the configured round count", (t) => {
+    const candidateDeadlineAtMs = WEEK_ONE_AT_MS - 2 * FREE_AGENT_DRAFT_DAY_MS;
+    const draftTiming = { candidateDeadlineAtMs, rolloverTimesAtMs: [24, 30, 36, 42, 48].map((hours) => candidateDeadlineAtMs + hours * 3600000) };
+    const { database, repository } = createRuntime(t, { draftTiming, useRealCandidateCardWriter: true });
+    seedCanonicalRecoverySchedule(database, uuid(90000));
+    seedCanonicalReadinessTeamProfiles(database);
+    repository.ensureReadinessOperation(readinessInput());
+    const claim = claimReadinessJob(database);
+    const service = createIntegratedReadinessService({ database, repository, nowMs: OPENED_AT_MS });
+    let result;
+    try { result = service.executeClaimedReadiness({ leagueId: IDS.league, seasonId: IDS.season,
+      occurrenceKey: buildFreeAgentDraftReadinessOccurrenceKey({ leagueId: IDS.league, seasonId: IDS.season, triggerResourceId: IDS.season }),
+      readinessOperationId: IDS.readiness, jobExecution: claim.jobExecution }); }
+    catch (error) { throw new Error(`Configured readiness: ${error.message}; ${error.reasonCode || ''}`, { cause: error }); }
+    assert.equal(result.outcome, 'succeeded');
+    assert.equal(result.scheduleRecoveryRequired, false);
+    assert.equal(database.prepare('SELECT count(*) AS n FROM candidate_cards').get().n, RECOVERY_TEAM_IDS.length);
+    assert.deepEqual(database.prepare('SELECT scheduled_for_ms AS time FROM job_runs WHERE job_type = \'fad_rollover\' ORDER BY scheduled_for_ms').all().map((r) => r.time), draftTiming.rolloverTimesAtMs);
+    assert.deepEqual(database.pragma('foreign_key_check'), []);
+  });
+  test("opens and replays a commissioner timetable with multiple final-day rounds", (t) => {
+    const candidateDeadlineAtMs = WEEK_ONE_AT_MS - 2 * FREE_AGENT_DRAFT_DAY_MS;
+    const draftTiming = { candidateDeadlineAtMs, rolloverTimesAtMs: [24, 30, 36, 42, 48].map((hours) => candidateDeadlineAtMs + hours * 3600000) };
+    const { database, repository } = createRuntime(t, { draftTiming, useRealCandidateCardWriter: true });
+    repository.ensureReadinessOperation(readinessInput());
+    const claim = claimReadinessJob(database);
+    const evidence = openingEvidence();
+    evidence.rolloverIds = evidence.rolloverIds.slice(0, 5);
+    evidence.rolloverJobRunIds = evidence.rolloverJobRunIds.slice(0, 5);
+    const command = openingInput({ claim, evidence, schedule: { operationId: IDS.scheduleOne, version: 1,
+      weekOneMatchupWeekId: IDS.weekOne, weekOneStartsAtMs: WEEK_ONE_AT_MS, draftTiming } });
+    let result;
+    try { result = repository.commitOpening(command); }
+    catch (error) { throw new Error(`Custom opening: ${error.message}`, { cause: error }); }
+    assert.equal(result.readiness.status, "succeeded");
+    assert.equal(result.draft.candidateDeadlineAtMs, candidateDeadlineAtMs);
+    assert.deepEqual(result.draft.initialRolloverTimesAtMs, draftTiming.rolloverTimesAtMs);
+    assert.deepEqual(database.prepare("SELECT rolls_over_at_ms AS time FROM free_agent_draft_rollovers ORDER BY sequence").all().map((r) => r.time), draftTiming.rolloverTimesAtMs);
+    assert.deepEqual(database.prepare("SELECT scheduled_for_ms AS time FROM job_runs WHERE job_type = 'fad_rollover' ORDER BY scheduled_for_ms").all().map((r) => r.time), draftTiming.rolloverTimesAtMs);
+    const before = database.serialize();
+    const restarted = createSqliteFreeAgentDraftRepository({ database });
+    assert.equal(restarted.commitOpening(command).replayed, true);
+    assert.equal(before.equals(database.serialize()), true);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  });
   test("exposes the bounded lifecycle surface", (t) => {
     const { repository } = createRuntime(t);
     assert.deepEqual(

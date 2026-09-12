@@ -564,7 +564,8 @@ function readinessWeekProjection(value, reasonCode) {
 
 function readinessInitialRollovers(
   value,
-  candidateDeadlineAtMs
+  candidateDeadlineAtMs,
+  firstMatchupStartsAtMs
 ) {
   const source = requireArray(
     value,
@@ -576,8 +577,7 @@ function readinessInitialRollovers(
     (!clockPresent && source.length !== 0) ||
     (
       clockPresent &&
-      source.length !==
-        FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT
+      (source.length < 1 || source.length > 1000)
     )
   ) {
     failResult("initial_rollovers_invalid");
@@ -621,11 +621,10 @@ function readinessInitialRollovers(
         (index === 0
           ? candidateDeadlineAtMs
           : priorRollsOverAtMs) ||
-      rollsOverAtMs !==
-        opensAtMs + FREE_AGENT_DRAFT_DAY_MS ||
+      rollsOverAtMs <= opensAtMs ||
+      rollsOverAtMs > firstMatchupStartsAtMs ||
       creationCutoffAtMs !==
-        rollsOverAtMs -
-          FREE_AGENT_DRAFT_CREATION_CUTOFF_MS
+        Math.max(opensAtMs, rollsOverAtMs - FREE_AGENT_DRAFT_CREATION_CUTOFF_MS)
     ) {
       failResult("initial_rollover_invalid");
     }
@@ -1117,16 +1116,15 @@ function readinessAttemptProjection(
     presentClockValues === 3 &&
     (
       firstMatchupWeekAfter === null ||
-      candidateDeadlineAtMs !==
-        firstMatchupWeekAfter.startsAtMs -
-          FREE_AGENT_DRAFT_INITIAL_WINDOW_MS
+      candidateDeadlineAtMs >= firstMatchupWeekAfter.startsAtMs
     )
   ) {
     failResult("readiness_clock_invalid");
   }
   const initialRollovers = readinessInitialRollovers(
     value.initialRollovers,
-    candidateDeadlineAtMs
+    candidateDeadlineAtMs,
+    firstMatchupWeekAfter?.startsAtMs
   );
   const teamProjections = readinessTeamProjections(
     value.teamProjections,

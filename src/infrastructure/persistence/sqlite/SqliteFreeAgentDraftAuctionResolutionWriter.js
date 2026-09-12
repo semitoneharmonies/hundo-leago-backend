@@ -1778,8 +1778,8 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
         AND target.opens_at_ms >= @nowMs
         AND predecessor.opens_at_ms <= @nowMs
         AND @nowMs <= predecessor.rolls_over_at_ms
-        AND target.rolls_over_at_ms = target.opens_at_ms + 86400000
-        AND target.creation_cutoff_at_ms = target.rolls_over_at_ms - 3600000
+        AND target.rolls_over_at_ms > target.opens_at_ms
+        AND target.creation_cutoff_at_ms = max(target.opens_at_ms, target.rolls_over_at_ms - 3600000)
         AND target.status IN ('scheduled', 'processing')
       ORDER BY target.opens_at_ms, target.id
     `);

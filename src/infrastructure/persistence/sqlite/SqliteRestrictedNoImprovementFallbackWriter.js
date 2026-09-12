@@ -550,10 +550,9 @@ function createSqliteRestrictedNoImprovementFallbackWriter({
       AND target.opens_at_ms >= @nowMs
       AND predecessor.opens_at_ms <= @nowMs
       AND @nowMs <= predecessor.rolls_over_at_ms
-      AND target.rolls_over_at_ms =
-          target.opens_at_ms + 86400000
+      AND target.rolls_over_at_ms > target.opens_at_ms
       AND target.creation_cutoff_at_ms =
-          target.rolls_over_at_ms - 3600000
+          max(target.opens_at_ms, target.rolls_over_at_ms - 3600000)
       AND target.status IN ('scheduled', 'processing')
     ORDER BY target.opens_at_ms, target.id
   `);
@@ -582,6 +581,8 @@ function createSqliteRestrictedNoImprovementFallbackWriter({
     SELECT
       rollover.id,
       rollover.sequence,
+      (SELECT COALESCE(json_array_length(initial_rollover_times_json), 7) FROM free_agent_drafts
+        WHERE league_id = @leagueId AND season_id = @seasonId AND id = @fadId) AS initialRolloverCount,
       rollover.predecessor_rollover_id AS predecessorRolloverId,
       rollover.opens_at_ms AS opensAtMs,
       rollover.creation_cutoff_at_ms AS cutoffAtMs,
@@ -1288,8 +1289,7 @@ function createSqliteRestrictedNoImprovementFallbackWriter({
         command.expectedAllocationVersion + 1 ||
       row.fallbackStatus !== "open" ||
       row.fallbackOpenedAtMs < resolution.resolved_at_ms ||
-      row.fallbackResolvesAtMs !==
-        row.fallbackOpenedAtMs + DAY_MS ||
+      row.fallbackResolvesAtMs <= row.fallbackOpenedAtMs ||
       row.fallbackOpenedByUserId !== null ||
       row.fallbackVersion !== 1 ||
       row.fallbackSourceKind !== "fad_open_rapid" ||
@@ -2111,7 +2111,7 @@ function createSqliteRestrictedNoImprovementFallbackWriter({
         findExtensionPredecessors.all(command);
       if (
         predecessors.length !== 1 ||
-        predecessors[0].sequence < 7
+        predecessors[0].sequence < predecessors[0].initialRolloverCount
       ) {
         conflict(
           "The missing fallback rollover requires one exact full-window predecessor."
@@ -2157,8 +2157,7 @@ function createSqliteRestrictedNoImprovementFallbackWriter({
     }
     if (
       fallbackOpensAtMs < command.nowMs ||
-      fallbackResolvesAtMs !==
-        fallbackOpensAtMs + DAY_MS
+      fallbackResolvesAtMs <= fallbackOpensAtMs
     ) {
       conflict(
         "The fallback auction requires one complete current or future window."

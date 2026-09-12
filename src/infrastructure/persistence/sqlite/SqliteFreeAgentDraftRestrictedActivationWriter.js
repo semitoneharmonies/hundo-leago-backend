@@ -855,8 +855,7 @@ function createSqliteFreeAgentDraftRestrictedActivationWriter({
       row.last_error_code !== null ||
       row.auction_status !== "open" ||
       row.opened_at_ms !== scope.activationAtMs ||
-      row.resolves_at_ms - row.opened_at_ms !==
-        24 * 60 * 60 * 1000 ||
+      row.resolves_at_ms <= row.opened_at_ms ||
       row.opened_by_user_id !== null ||
       row.auction_created_at_ms !==
         row.auction_updated_at_ms ||
@@ -1929,7 +1928,7 @@ function createSqliteFreeAgentDraftRestrictedActivationWriter({
     }
     if (
       row.resolves_at_ms - command.activatedAtMs <=
-      MINIMUM_FAIR_ACCESS_MS
+      Math.min(MINIMUM_FAIR_ACCESS_MS, (row.resolves_at_ms - row.opened_at_ms) / 2)
     ) {
       conflict(
         "The restricted activation would leave no more than sixty minutes of fair access.",

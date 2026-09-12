@@ -15,6 +15,7 @@ const {
   UUID_PATTERN,
   deriveFreeAgentDraftViewerPhase,
   parseFreeAgentDraftOccurrenceKey,
+  validateFreeAgentDraftTiming,
 } = require(
   "../../../domain/freeAgentDraft/freeAgentDraftPolicy"
 );
@@ -1246,10 +1247,25 @@ function createSqliteFreeAgentDraftRecoveryReadRepository({
       const queues = queueStatement.all(common);
       const rolloverRows =
         rolloverStatement.all(common);
+      let initialTimes = null;
+      if (fad.initial_rollover_times_json != null) {
+        try {
+          initialTimes = validateFreeAgentDraftTiming({
+            candidateDeadlineAtMs: fad.candidate_deadline_at_ms,
+            rolloverTimesAtMs: JSON.parse(fad.initial_rollover_times_json),
+          }, fad.first_matchup_starts_at_ms).rolloverTimesAtMs;
+        } catch (error) {
+          incompatible("The frozen FAD rollover timetable is invalid.", error);
+        }
+      }
       if (
-        rolloverRows.length < 7 ||
+        rolloverRows.length < (initialTimes?.length ?? 7) ||
         rolloverRows.some(
           (row, index) => row.sequence !== index + 1
+        ) ||
+        initialTimes?.some(
+          (time, index) => rolloverRows[index].rolls_over_at_ms !== time ||
+            rolloverRows[index].opens_at_ms !== (initialTimes[index - 1] ?? fad.candidate_deadline_at_ms)
         )
       ) {
         incompatible(

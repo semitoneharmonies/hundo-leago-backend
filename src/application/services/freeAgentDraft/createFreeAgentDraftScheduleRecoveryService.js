@@ -376,7 +376,7 @@ function cloneGeneration(
 ) {
   requireExactObject(
     value,
-    GENERATION_KEYS,
+    [...GENERATION_KEYS, ...(Object.hasOwn(value, "draftTiming") ? ["draftTiming"] : [])],
     "generation_fields_invalid"
   );
   const scheduleVersion =
@@ -394,6 +394,7 @@ function cloneGeneration(
     failState("generation_not_current");
   }
   return Object.freeze({
+    ...(value.draftTiming === undefined ? {} : { draftTiming: value.draftTiming }),
     leagueId,
     seasonId,
     scheduleVersion,
@@ -1010,6 +1011,7 @@ function recoveryDecision(inspected) {
   };
   if (inspected.recovery.kind === "pre_open") {
     return planFreeAgentDraftPreOpenScheduleRecovery({
+      ...(inspected.generation.draftTiming ? { draftTiming: inspected.generation.draftTiming } : {}),
       readinessAtMs: inspected.recovery.atMs,
       firstWeekStartsAtMs:
         inspected.generation.weekOneStartsAtMs,

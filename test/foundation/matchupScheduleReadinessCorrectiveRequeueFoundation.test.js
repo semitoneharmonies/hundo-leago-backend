@@ -1165,7 +1165,7 @@ function createRuntime(
         "SELECT MAX(migration_id) AS migrationId FROM schema_migrations"
       )
       .get().migrationId,
-    55
+    56
   );
   const context = createSqliteRepositoryContext({
     database: connection.database,

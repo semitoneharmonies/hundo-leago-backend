@@ -68,15 +68,16 @@ function makeUtcMsForTZ({ year, month, day, hour = 0, minute = 0 }, timeZone) {
 }
 
 class MatchupSchedulePolicyError extends Error {
-  constructor(code, message) {
+  constructor(code, message, calendarIssue) {
     super(message);
     this.name = "MatchupSchedulePolicyError";
     this.code = code;
+    if (calendarIssue !== undefined) this.calendarIssue = calendarIssue;
   }
 }
 
-function fail(code, message) {
-  throw new MatchupSchedulePolicyError(code, message);
+function fail(code, message, calendarIssue) {
+  throw new MatchupSchedulePolicyError(code, message, calendarIssue);
 }
 
 function stableTeams(value) {
@@ -599,7 +600,8 @@ function planExplicitMatchupSchedule({
   ) {
     fail(
       MATCHUP_SCHEDULE_CODES.calendarInvalid,
-      "The explicit NHL and fantasy playoff calendar is not ordered canonically."
+      "The explicit NHL and fantasy playoff calendar is not ordered canonically.",
+      "date_order"
     );
   }
   if (
@@ -608,7 +610,8 @@ function planExplicitMatchupSchedule({
   ) {
     fail(
       MATCHUP_SCHEDULE_CODES.calendarInvalid,
-      "Fantasy playoffs must reserve exactly 28 elapsed days."
+      "Fantasy playoffs must reserve exactly 28 elapsed days.",
+      "playoff_length"
     );
   }
 
@@ -621,13 +624,15 @@ function planExplicitMatchupSchedule({
   ) {
     fail(
       MATCHUP_SCHEDULE_CODES.calendarInvalid,
-      "The explicit calendar does not match the NHL season key."
+      "The explicit calendar does not match the NHL season key.",
+      "season_year"
     );
   }
   if (!isLocalMondayMidnight(playoffsStartAtMs, zone)) {
     fail(
       MATCHUP_SCHEDULE_CODES.calendarInvalid,
-      "Fantasy playoffs must begin at league-local Monday midnight."
+      "Fantasy playoffs must begin at league-local Monday midnight.",
+      "playoffs_start_day"
     );
   }
   if (usesDefaultCalendar
@@ -636,13 +641,15 @@ function planExplicitMatchupSchedule({
     : !isLocalMondayMidnight(selectedFirstWeekStartsAtMs, zone)) {
     fail(
       MATCHUP_SCHEDULE_CODES.calendarInvalid,
-      "Week 1 must begin at an eligible league-local midnight."
+      "Week 1 must begin at an eligible league-local midnight.",
+      "week_one_start_day"
     );
   }
   if (selectedFirstWeekStartsAtMs <= plannedAtMs) {
     fail(
       MATCHUP_SCHEDULE_CODES.calendarInvalid,
-      "Week 1 must begin strictly after the current server time."
+      "Week 1 must begin strictly after the current server time.",
+      "week_one_in_past"
     );
   }
   if (
@@ -652,7 +659,8 @@ function planExplicitMatchupSchedule({
   ) {
     fail(
       MATCHUP_SCHEDULE_CODES.calendarInvalid,
-      "Week 1 must fit wholly within the NHL regular-season scoring range."
+      "Week 1 must fit wholly within the NHL regular-season scoring range.",
+      "week_one_outside_season"
     );
   }
 

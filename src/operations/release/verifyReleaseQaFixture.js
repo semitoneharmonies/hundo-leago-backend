@@ -1558,7 +1558,7 @@ function verifyReleaseQaFixture({ databasePath } = {}) {
     assertEqual(database.pragma("integrity_check", { simple: true }), "ok", "SQLite integrity");
     assertEqual(database.pragma("foreign_key_check").length, 0, "foreign-key violation count");
     const schemaVersion = database.pragma("user_version", { simple: true });
-    assertEqual([54, 55].includes(schemaVersion), true, "supported fixture schema version");
+    assertEqual([54, 55, 56].includes(schemaVersion), true, "supported fixture schema version");
 
     const metadata = Object.fromEntries(database.prepare(`
       SELECT metadata_key, metadata_value FROM application_metadata

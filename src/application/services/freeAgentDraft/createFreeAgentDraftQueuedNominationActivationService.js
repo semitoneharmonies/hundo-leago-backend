@@ -345,7 +345,8 @@ function normalizeExecution(input) {
 function requireActivation(activation, execution) {
   const hasRecovery = activation?.recoveryId !== null;
   if (
-    !hasExactFields(activation, ACTIVATION_FIELDS) ||
+    !hasExactFields(activation, [...ACTIVATION_FIELDS, ...(activation && Object.hasOwn(activation, "resolvesAtMs") ? ["resolvesAtMs"] : [])]) ||
+    (activation.resolvesAtMs !== undefined && (!Number.isSafeInteger(activation.resolvesAtMs) || activation.resolvesAtMs <= execution.openingAtMs)) ||
     activation.leagueId !== execution.leagueId ||
     activation.seasonId !== execution.seasonId ||
     activation.fadId !== execution.fadId ||
@@ -396,6 +397,7 @@ function requireActivation(activation, execution) {
   ) {
     return Object.freeze({
       expectedQueueVersion: activation.queueVersion,
+      resolvesAtMs: activation.resolvesAtMs ?? execution.openingAtMs + DAY_MS,
       expectedJobVersion: activation.jobRunVersion,
       recoveryId: activation.recoveryId,
       recoveryVersion: activation.recoveryVersion,
@@ -416,6 +418,7 @@ function requireActivation(activation, execution) {
   ) {
     return Object.freeze({
       expectedQueueVersion: activation.queueVersion - 1,
+      resolvesAtMs: activation.resolvesAtMs ?? execution.openingAtMs + DAY_MS,
       expectedJobVersion: activation.jobRunVersion - 1,
       recoveryId: activation.recoveryId,
       recoveryVersion: activation.recoveryVersion,
@@ -480,7 +483,7 @@ function requireTerminal(
       opened
         ? (
             !UUID_PATTERN.test(result.resolutionRolloverId || "") ||
-            result.resolvesAtMs !== execution.openingAtMs + DAY_MS ||
+            result.resolvesAtMs !== expectation.resolvesAtMs ||
             !UUID_PATTERN.test(result.auctionId || "") ||
             !UUID_PATTERN.test(result.starterBidId || "") ||
             !UUID_PATTERN.test(result.drawId || "") ||
@@ -673,7 +676,7 @@ function createFreeAgentDraftQueuedNominationActivationService({
         ) {
           failState("claimed_lease_expired");
         }
-        if (activatedAtMs >= execution.openingAtMs + DAY_MS) {
+        if (activatedAtMs >= expectation.resolvesAtMs) {
           failDeterministic("activation_window_closed");
         }
       }

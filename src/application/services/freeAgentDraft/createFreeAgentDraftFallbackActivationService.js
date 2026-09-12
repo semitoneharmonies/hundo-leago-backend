@@ -350,12 +350,8 @@ function requireActivation(
       activation.auctionId ||
     activation.status !==
       "restricted_fallback_open" ||
-    activation.activationAtMs >
-      Number.MAX_SAFE_INTEGER -
-        FALLBACK_WINDOW_MS ||
-    activation.resolvesAtMs !==
-      activation.activationAtMs +
-        FALLBACK_WINDOW_MS ||
+    !safeStateTimestamp(activation.resolvesAtMs) ||
+    activation.resolvesAtMs <= activation.activationAtMs ||
     !Number.isSafeInteger(
       activation.allocationVersion
     ) ||
@@ -378,6 +374,7 @@ function requireActivation(
       sourceAuctionId:
         activation.sourceAuctionId,
       replayExpected: false,
+      resolvesAtMs: activation.resolvesAtMs,
     });
   }
   if (
@@ -394,6 +391,7 @@ function requireActivation(
       sourceAuctionId:
         activation.sourceAuctionId,
       replayExpected: true,
+      resolvesAtMs: activation.resolvesAtMs,
     });
   }
   failState("activation_not_claimed_or_replayable");
@@ -438,8 +436,7 @@ function requireTerminal(
     result.activatedAtMs <
       execution.activationAtMs ||
     result.activatedAtMs >=
-      execution.activationAtMs +
-        FALLBACK_WINDOW_MS ||
+      expectation.resolvesAtMs ||
     result.activatedAtMs > activatedAtMs ||
     (
       !expectation.replayExpected &&

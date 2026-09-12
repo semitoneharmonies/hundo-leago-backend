@@ -1773,6 +1773,7 @@ describe("M6-12 isolated matchup HTTP contract", () => {
 
   test("maps Week 1 shift validation, authority, missing, frozen, conflict, and stale failures safely", async (t) => {
     const cases = [
+      ["FAD_TIMING_INVALID", 400, "FAD_TIMING_INVALID"],
       ["FAD_DEADLINE_NOT_FUTURE", 409, "FAD_DEADLINE_NOT_FUTURE"],
       [
         "MATCHUP_SCHEDULE_COMMAND_INPUT_INVALID",
@@ -2112,6 +2113,8 @@ describe("M6-12 isolated matchup HTTP contract", () => {
         400,
         "MATCHUP_INPUT_INVALID",
       ],
+      ["MATCHUP_SCHEDULE_CALENDAR_INVALID", 400, "MATCHUP_INPUT_INVALID", null, "playoff_length"],
+      ["MATCHUP_SCHEDULE_CALENDAR_INVALID", 400, "MATCHUP_INPUT_INVALID", null, "private database detail"],
       [
         "MATCHUP_RESULT_CORRECTION_INPUT_INVALID",
         400,
@@ -2154,10 +2157,12 @@ describe("M6-12 isolated matchup HTTP contract", () => {
       status,
       publicCode,
       reasonCode,
+      calendarIssue,
     ] of cases) {
       const error = new Error("private database detail");
       error.code = errorCode;
       if (reasonCode) error.reasonCode = reasonCode;
+      if (calendarIssue) error.calendarIssue = calendarIssue;
       const baseUrl = await startApi(t, serviceStub([], {
         listWeeks() { throw error; },
       }));
@@ -2168,6 +2173,7 @@ describe("M6-12 isolated matchup HTTP contract", () => {
       const body = await response.json();
       assert.equal(response.status, status, errorCode);
       assert.equal(body.error.code, publicCode, errorCode);
+      assert.deepEqual(body.error.details, calendarIssue === "playoff_length" ? { calendarIssue } : undefined);
       assert.equal(JSON.stringify(body).includes("private database detail"), false);
     }
   });

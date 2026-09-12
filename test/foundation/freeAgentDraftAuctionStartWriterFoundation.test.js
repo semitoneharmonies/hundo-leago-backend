@@ -457,7 +457,7 @@ function createFixture(t, label, options = {}) {
     database: connection.database,
     migrations: discoverMigrations({
       migrationsDirectory: MIGRATIONS_DIRECTORY,
-    }),
+    }).filter((migration) => migration.id <= (options.migratePopulated55 ? 55 : Infinity)),
     applicationBuildId: `fad-start-writer-${label}`,
     now: () => 44,
   });
@@ -467,6 +467,19 @@ function createFixture(t, label, options = {}) {
       dualRole: true,
     });
   });
+  if (options.migratePopulated55) {
+    const db = connection.database;
+    const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations' ORDER BY name").all().map(({ name }) => name);
+    const before = tables.map((name) => ({ name, columns: db.pragma(`table_info(${name})`).map(({ name }) => name), rows: db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all() }));
+    applyMigrations({ database: db, migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }), applicationBuildId: 'populated-fad-timing-migration', now: () => 45 });
+    for (const { name, columns, rows } of before) {
+      const expected = name === 'application_metadata' ? rows.map(row => row.metadata_key === 'data_model_version' ? { ...row, metadata_value: '56', updated_at_ms: Math.max(row.updated_at_ms, 56) } : row) : rows;
+      assert.deepEqual(db.prepare(`SELECT ${columns.join(', ')} FROM ${name} ORDER BY rowid`).all(), expected, name);
+    }
+    assert.equal(db.pragma('user_version', { simple: true }), 56);
+    assert.deepEqual(db.pragma('foreign_key_check'), []);
+    assert.deepEqual(db.pragma('quick_check'), [{ quick_check: 'ok' }]);
+  }
   const generated = [];
   let next = options.idBase || 8_000;
   let nonceCalls = 0;
@@ -574,6 +587,32 @@ function assertRepositoryReason(action, code, reasonCode) {
 }
 
 describe("FAD-13 SQLite auction start/queue writer", () => {
+  test("migration56 preserves every original column and row in populated schema55 leagues", (t) => {
+    const fixture = createFixture(t, 'populated-55-to-56', { migratePopulated55: true });
+    assert.equal(fixture.database.prepare('SELECT count(*) AS n FROM free_agent_drafts WHERE initial_rollover_times_json IS NULL').get().n, 2);
+    assert.equal(fixture.writer.startOrQueue(command(PRIMARY, DIRECT_AT_MS, 'legacy-after-timing-migration')).kind, 'auction_opened');
+  });
+
+  test("uses custom rollover times for immediate and queued nominations and exact replay", (t) => {
+    const fixture = createFixture(t, 'custom-nomination-times');
+    const times = [2, 6].map((hours) => ROLLOVER_OPENS_AT_MS + hours * 3600000);
+    withoutTriggers(fixture.database, () => {
+      for (const ids of [PRIMARY, SECONDARY]) {
+        fixture.database.prepare('UPDATE free_agent_drafts SET initial_rollover_times_json = ? WHERE id = ?').run(JSON.stringify(times), ids.fad);
+        fixture.database.prepare('UPDATE free_agent_draft_rollovers SET rolls_over_at_ms = ?, creation_cutoff_at_ms = ? WHERE id = ?').run(times[0], times[0] - 3600000, ids.rollover);
+      }
+    });
+    const direct = fixture.writer.startOrQueue(command(PRIMARY, DIRECT_AT_MS, 'custom-direct'));
+    assert.equal(direct.resolvesAtMs, times[0]);
+    const queuedCommand = command(SECONDARY, times[0] - 1800000, 'custom-queued');
+    const queued = fixture.writer.startOrQueue(queuedCommand);
+    assert.equal(queued.kind, 'nomination_queued');
+    assert.equal(queued.opensAtMs, times[0]);
+    assert.equal(queued.resolvesAtMs, times[1]);
+    const before = databaseFingerprint(fixture.database);
+    assert.equal(fixture.writer.startOrQueue(queuedCommand).resolvesAtMs, times[1]);
+    assert.deepEqual(databaseFingerprint(fixture.database), before);
+  });
   test("exports a frozen two-method surface and returns policy-ready exact context", (t) => {
     const fixture = createFixture(t, "context");
     assert.deepEqual(

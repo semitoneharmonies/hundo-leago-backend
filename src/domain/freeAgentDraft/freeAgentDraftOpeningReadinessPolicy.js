@@ -8,6 +8,7 @@ const {
 } = require("../contracts/buyoutPolicy");
 const {
   createFreeAgentDraftClock,
+  validateFreeAgentDraftTiming,
   parseFreeAgentDraftOccurrenceKey,
   UUID_PATTERN,
 } = require("./freeAgentDraftPolicy");
@@ -2395,6 +2396,7 @@ function scheduleInspection({
     weekOneMatchupWeekId: schedule.weekId,
     weekOneStartsAtMs: schedule.startsAtMs,
     createdAtMs: schedule.createdAtMs,
+    ...(schedule.draftTiming ? { draftTiming: validateFreeAgentDraftTiming(schedule.draftTiming, schedule.startsAtMs) } : {}),
   });
   const firstMatchupWeekBefore = Object.freeze({
     sequence: 1,
@@ -2411,6 +2413,7 @@ function scheduleInspection({
         fantasyPlayoffsStartAtMs:
           context.season.fantasyPlayoffsStartAtMs,
         timeZone: context.league.timeZone,
+        ...(currentSchedule.draftTiming ? { draftTiming: currentSchedule.draftTiming } : {}),
       });
   } catch (error) {
     if (
@@ -2425,7 +2428,9 @@ function scheduleInspection({
           "firstMatchupStartsAtMs",
           "season",
           seasonId,
-          "No valid league-local Monday remains before the fantasy playoffs."
+          error.reasonCode === "pre_open_custom_deadline_expired"
+            ? "The configured Candidate Card deadline passed before cards could open. Review the draft dates."
+            : "No valid league-local Monday remains before the fantasy playoffs."
         )
       );
       return {
@@ -2813,6 +2818,7 @@ function normalizeTargetSchedule(value) {
       "version",
       "weekOneMatchupWeekId",
       "weekOneStartsAtMs",
+      ...(Object.hasOwn(value, "draftTiming") ? ["draftTiming"] : []),
     ],
     "target_schedule_fields_invalid",
     failResult
@@ -2828,6 +2834,7 @@ function normalizeTargetSchedule(value) {
     failResult("target_schedule_invalid");
   }
   return Object.freeze({
+    ...(value.draftTiming === undefined ? {} : { draftTiming: validateFreeAgentDraftTiming(value.draftTiming, value.weekOneStartsAtMs) }),
     operationId: value.operationId,
     version: value.version,
     weekOneMatchupWeekId:
@@ -2921,6 +2928,7 @@ function finalizeFreeAgentDraftOpeningReadiness(
               .fantasyPlayoffsStartAtMs,
           timeZone:
             inspection.scheduleDecision.timeZone,
+          ...(current.draftTiming ? { draftTiming: current.draftTiming } : {}),
         });
       if (freshness.recoveryRequired) {
         failResult("opening_schedule_became_stale");
@@ -2929,6 +2937,7 @@ function finalizeFreeAgentDraftOpeningReadiness(
         cardsOpenedAtMs: openedAtMs,
         firstMatchupStartsAtMs:
           targetSchedule.weekOneStartsAtMs,
+        ...(current.draftTiming ? { draftTiming: current.draftTiming } : {}),
       });
     } catch (error) {
       if (

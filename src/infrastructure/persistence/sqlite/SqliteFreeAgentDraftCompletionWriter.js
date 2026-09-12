@@ -659,7 +659,7 @@ function createSqliteFreeAgentDraftCompletionWriter({
         ON seventh.league_id = draft.league_id
        AND seventh.season_id = draft.season_id
        AND seventh.fad_id = draft.id
-       AND seventh.sequence = 7
+       AND seventh.sequence = COALESCE(json_array_length(draft.initial_rollover_times_json), 7)
        AND seventh.window_kind = 'initial'
        AND seventh.rolls_over_at_ms =
          job.scheduled_for_ms
@@ -1714,6 +1714,7 @@ function createSqliteFreeAgentDraftCompletionWriter({
     try {
       evaluation =
         evaluateFreeAgentDraftCompletionEligibility({
+          ...(root.initial_rollover_times_json == null ? {} : { initialRolloverTimesAtMs: JSON.parse(root.initial_rollover_times_json) }),
           status: root.status,
           nowMs: command.completedAtMs,
           candidateDeadlineAtMs:
@@ -3288,7 +3289,7 @@ function createSqliteFreeAgentDraftCompletionWriter({
         AND season.league_id = draft.league_id AND season.status = 'active'
       JOIN free_agent_draft_rollovers AS seventh
         ON seventh.league_id = draft.league_id AND seventh.season_id = draft.season_id
-        AND seventh.fad_id = draft.id AND seventh.sequence = 7
+        AND seventh.fad_id = draft.id AND seventh.sequence = COALESCE(json_array_length(draft.initial_rollover_times_json), 7)
         AND seventh.window_kind = 'initial'
       WHERE draft.status = 'rapid' AND draft.completed_at_ms IS NULL
         AND seventh.rolls_over_at_ms <= @nowMs

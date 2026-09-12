@@ -703,7 +703,7 @@ function validateRollover(value) {
       result.status
     ) ||
     typeof result.blocksCompletion !== "boolean" ||
-    result.opensAtMs >= result.creationCutoffAtMs ||
+    result.opensAtMs > result.creationCutoffAtMs ||
     result.creationCutoffAtMs >= result.rollsOverAtMs ||
     (
       ["processing", "completed", "recovery_required"].includes(
@@ -733,7 +733,7 @@ function validateRollovers(value) {
   if (!Array.isArray(value)) fail("rollovers_invalid");
   const result = value.map(validateRollover);
   if (
-    result.length < 7 ||
+    result.length < 1 ||
     result.some(
       (rollover, index) =>
         rollover.sequence !== index + 1

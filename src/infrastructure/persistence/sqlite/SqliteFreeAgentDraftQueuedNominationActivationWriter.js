@@ -662,6 +662,7 @@ function createSqliteFreeAgentDraftQueuedNominationActivationWriter({
         league.current_season_id,
         season.status AS season_status,
         fad.status AS fad_status,
+        fad.initial_rollover_times_json,
         team.status AS team_status,
         CASE WHEN fad_team.id IS NULL THEN 0 ELSE 1 END
           AS fad_team_participating,
@@ -1624,10 +1625,9 @@ function createSqliteFreeAgentDraftQueuedNominationActivationWriter({
       !Number.isSafeInteger(row.opening_sequence) ||
       row.opening_sequence < 1 ||
       !["initial", "extension"].includes(row.opening_window_kind) ||
-      row.opening_opens_at_ms !==
-        row.opening_rolls_over_at_ms - DAY_MS ||
+      row.opening_opens_at_ms >= row.opening_rolls_over_at_ms ||
       row.creation_cutoff_at_ms !==
-        row.opening_rolls_over_at_ms - HOUR_MS ||
+        Math.max(row.opening_opens_at_ms, row.opening_rolls_over_at_ms - HOUR_MS) ||
       !Number.isSafeInteger(row.queue_version) ||
       row.queue_version < 1 ||
       !Number.isSafeInteger(row.candidate_card_version_observed) ||
@@ -1740,6 +1740,7 @@ function createSqliteFreeAgentDraftQueuedNominationActivationWriter({
 
   function projection(row, recovery) {
     return deepFreeze({
+      ...(row.initial_rollover_times_json == null ? {} : { resolvesAtMs: JSON.parse(row.initial_rollover_times_json)[row.opening_sequence] ?? row.opening_rolls_over_at_ms + DAY_MS }),
       leagueId: row.league_id,
       seasonId: row.season_id,
       fadId: row.fad_id,
@@ -1801,7 +1802,8 @@ function createSqliteFreeAgentDraftQueuedNominationActivationWriter({
         "ACTIVATION_NOT_DUE"
       );
     }
-    if (command.activatedAtMs >= command.openingAtMs + DAY_MS) {
+    const successor = readSuccessor(row, { fresh: false });
+    if (command.activatedAtMs >= (successor?.rolls_over_at_ms ?? command.openingAtMs + DAY_MS)) {
       conflict(
         "The queued nomination can no longer receive a full auction window.",
         "ACTIVATION_WINDOW_CLOSED"
@@ -1891,9 +1893,10 @@ function createSqliteFreeAgentDraftQueuedNominationActivationWriter({
       successor.sequence !== row.opening_sequence + 1 ||
       successor.opens_at_ms !== row.opening_rolls_over_at_ms ||
       successor.creation_cutoff_at_ms !==
-        successor.rolls_over_at_ms - HOUR_MS ||
-      successor.rolls_over_at_ms !==
-        row.opening_rolls_over_at_ms + DAY_MS ||
+        Math.max(successor.opens_at_ms, successor.rolls_over_at_ms - HOUR_MS) ||
+      successor.rolls_over_at_ms !== (row.initial_rollover_times_json == null
+        ? row.opening_rolls_over_at_ms + DAY_MS
+        : JSON.parse(row.initial_rollover_times_json)[row.opening_sequence] ?? row.opening_rolls_over_at_ms + DAY_MS) ||
       (
         fresh
           ? successor.status !== "scheduled"
@@ -2433,7 +2436,7 @@ function createSqliteFreeAgentDraftQueuedNominationActivationWriter({
       const id = createIdentityFactory();
       let extensionRolloverId = null;
       if (!successor) {
-        if (row.opening_sequence < 7) {
+        if (row.opening_sequence < (row.initial_rollover_times_json == null ? 7 : JSON.parse(row.initial_rollover_times_json).length)) {
           conflict(
             "The queued nomination is missing its required initial successor rollover.",
             "RESOLUTION_ROLLOVER_MISSING"

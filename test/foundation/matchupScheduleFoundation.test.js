@@ -492,6 +492,36 @@ describe("M6-02 matchup schedule policy", () => {
 });
 
 describe("M6-02 atomic matchup schedule persistence", () => {
+  test("persists an independent deadline and custom rollover times, preserving them when Week 1 moves", (t) => {
+    const runtime = createRuntime(t);
+    const candidateDeadlineAtMs = FIRST_WEEK_MS - 2 * 86400000;
+    const draftTiming = { candidateDeadlineAtMs, rolloverTimesAtMs: [24, 30, 36, 42, 48].map((hours) => candidateDeadlineAtMs + hours * 3600000) };
+    const calendar = explicitScheduleInput({ draftTiming, firstWeekStartsAtMs: SECOND_WEEK_MS });
+    const before = runtime.database.serialize();
+    assert.deepEqual(runtime.service.preview({ ...runtime.scope, ...calendar, actorUserId: runtime.scope.commissionerId, nowMs: candidateDeadlineAtMs - 1 }).draftTiming, draftTiming);
+    assert.equal(before.equals(runtime.database.serialize()), true);
+    const command = confirmedScheduleCommand(runtime.scope, { input: { ...calendar, confirmed: true } });
+    const created = runtime.service.generate(command);
+    assert.deepEqual(JSON.parse(runtime.database.prepare("SELECT fad_timing_json FROM season_matchup_schedule_generations WHERE season_id = ? AND status = 'current'").get(runtime.scope.seasonId).fad_timing_json), draftTiming);
+    assert.deepEqual(runtime.service.generate(command), created);
+    const generation = runtime.database.prepare("SELECT * FROM season_matchup_schedule_generations WHERE season_id = ? AND status = 'current'").get(runtime.scope.seasonId);
+    const fields = Object.keys(generation);
+    const insertGeneration = runtime.database.prepare(`INSERT INTO season_matchup_schedule_generations (${fields.join(', ')}) VALUES (${fields.map(field => '@' + field).join(', ')})`);
+    const persisted = runtime.database.serialize();
+    for (const invalid of [
+      { candidateDeadlineAtMs, unexpected: [] },
+      { ...draftTiming, rolloverTimesAtMs: [] },
+      { ...draftTiming, rolloverTimesAtMs: [candidateDeadlineAtMs + 1, candidateDeadlineAtMs + 1] },
+      { ...draftTiming, rolloverTimesAtMs: [generation.week_one_starts_at_ms + 1] },
+      { ...draftTiming, extra: true },
+    ]) assert.throws(() => insertGeneration.run({ ...generation, fad_timing_json: JSON.stringify(invalid) }), /draft timetable must follow/);
+    assert.throws(() => runtime.database.prepare("UPDATE season_matchup_schedule_generations SET fad_timing_json = NULL WHERE season_id = ? AND status = 'current'").run(runtime.scope.seasonId), /immutable draft timing/);
+    assert.equal(persisted.equals(runtime.database.serialize()), true);
+    assert.throws(() => runtime.service.generate({ ...command, input: { ...command.input, draftTiming: { ...draftTiming, rolloverTimesAtMs: draftTiming.rolloverTimesAtMs.slice(1) } } }), { code: "IDEMPOTENCY_KEY_REUSED" });
+    runtime.service.shiftWeekOne(shiftWeekOneCommand(runtime.scope, { weekId: created.firstWeekId, expectedWeekVersion: 1, firstWeekStartsAtMs: FIRST_WEEK_MS, idempotencyKey: "independent-draft-week-shift" }));
+    assert.deepEqual(JSON.parse(runtime.database.prepare("SELECT fad_timing_json FROM season_matchup_schedule_generations WHERE season_id = ? AND status = 'current'").get(runtime.scope.seasonId).fad_timing_json), draftTiming);
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+  });
   test("keeps seven full auction days and a future card deadline when setup is late", (t) => {
     const runtime = createRuntime(t);
     const input = { ...runtime.scope, ...explicitScheduleInput(), actorUserId: runtime.scope.commissionerId };

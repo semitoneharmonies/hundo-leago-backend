@@ -1487,7 +1487,8 @@ function createSqliteFreeAgentDraftJobRepository({
         WHERE league_id = @leagueId
           AND season_id = @seasonId
           AND fad_id = @fadId
-          AND sequence = 7
+          AND sequence = (SELECT COALESCE(json_array_length(initial_rollover_times_json), 7)
+            FROM free_agent_drafts WHERE league_id = @leagueId AND season_id = @seasonId AND id = @fadId)
           AND window_kind = 'initial'
         LIMIT 2
       `);
@@ -2163,14 +2164,18 @@ function createSqliteFreeAgentDraftJobRepository({
     rollover,
     scope
   ) {
+    const root = readRoot(scope);
+    const times = root?.initial_rollover_times_json == null ? null : JSON.parse(root.initial_rollover_times_json);
+    const initialCount = times?.length ?? 7;
+    const customInitial = times !== null && rollover?.window_kind === "initial";
     if (
       !rollover ||
-      rollover.opens_at_ms !==
-        rollover.rolls_over_at_ms -
-          FAD_DAY_MS ||
+      (customInitial
+        ? rollover.rolls_over_at_ms !== times[rollover.sequence - 1] ||
+          rollover.opens_at_ms !== (rollover.sequence === 1 ? root.candidate_deadline_at_ms : times[rollover.sequence - 2])
+        : rollover.opens_at_ms !== rollover.rolls_over_at_ms - FAD_DAY_MS) ||
       rollover.creation_cutoff_at_ms !==
-        rollover.rolls_over_at_ms -
-          3_600_000 ||
+        Math.max(rollover.opens_at_ms, rollover.rolls_over_at_ms - 3_600_000) ||
       (
         rollover.sequence === 1 &&
         rollover.predecessor_rollover_id !==
@@ -2189,13 +2194,13 @@ function createSqliteFreeAgentDraftJobRepository({
           "initial" &&
         (
           rollover.sequence < 1 ||
-          rollover.sequence > 7
+          rollover.sequence > initialCount
         )
       ) ||
       (
         rollover.window_kind ===
           "extension" &&
-        rollover.sequence < 8
+        rollover.sequence <= initialCount
       ) ||
       (
         !["initial", "extension"].includes(

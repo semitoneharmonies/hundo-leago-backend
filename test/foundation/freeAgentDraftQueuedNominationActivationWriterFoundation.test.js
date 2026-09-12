@@ -743,6 +743,32 @@ function requeueRecovery(database, ids, acceptedAtMs, reason) {
 }
 
 describe("FAD-13 queued-nomination activation writer", () => {
+  test("opens a queued nomination into the configured two-hour final round", (t) => {
+    const fixture = createFixture(t, 'custom-final-round');
+    const resolutionAtMs = OPENING_AT_MS + 2 * HOUR_MS;
+    const times = [...Array.from({ length: 7 }, (_, i) => CANDIDATE_DEADLINE_AT_MS + (i + 1) * DAY_MS), resolutionAtMs];
+    const successorId = uuid(95000);
+    withoutTriggers(fixture.database, () => {
+      fixture.database.prepare('UPDATE free_agent_drafts SET initial_rollover_times_json = ?, first_matchup_starts_at_ms = ? WHERE id = ?').run(JSON.stringify(times), resolutionAtMs, PRIMARY.fad);
+      insert(fixture.database, 'free_agent_draft_rollovers', {
+        id: successorId, league_id: PRIMARY.league, season_id: PRIMARY.season, fad_id: PRIMARY.fad,
+        sequence: 8, window_kind: 'initial', predecessor_rollover_id: PRIMARY.rollovers[6], extension_reason: null,
+        extension_source_id: null, opens_at_ms: OPENING_AT_MS, creation_cutoff_at_ms: resolutionAtMs - HOUR_MS,
+        rolls_over_at_ms: resolutionAtMs, status: 'scheduled', processing_job_run_id: null, processing_started_at_ms: null,
+        completed_at_ms: null, last_error_code: null, created_at_ms: CANDIDATE_DEADLINE_AT_MS - 30 * DAY_MS,
+        updated_at_ms: CANDIDATE_DEADLINE_AT_MS - 30 * DAY_MS, version: 1,
+      });
+    });
+    assert.equal(fixture.writer.findActivation(lookup()).resolvesAtMs, resolutionAtMs);
+    claim(fixture.database);
+    const result = fixture.writer.executeClaimed(executeCommand());
+    assert.equal(result.outcome, 'opened');
+    assert.equal(result.resolvesAtMs, resolutionAtMs);
+    assert.equal(result.resolutionRolloverId, successorId);
+    assert.equal(result.evidence.extensionRolloverId, null);
+    assert.equal(fixture.writer.executeClaimed(executeCommand()).replayed, true);
+    assert.deepEqual(fixture.database.pragma('foreign_key_check'), []);
+  });
   test("exports the frozen surface and atomically opens a sequence-seven queue with exact private replay evidence", (t) => {
     const fixture = createFixture(t, "open");
     const commissionerUser = uuid(98_001);
