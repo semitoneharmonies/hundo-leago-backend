@@ -246,8 +246,10 @@ async function createVerifiedBackup({
   const sourceSidecarsBefore =
     captureSidecarState(physicalSource);
   let source;
+  let ownsTemporaryDirectory = false;
   try {
     fs.mkdirSync(temporary);
+    ownsTemporaryDirectory = true;
     const backupPath = path.join(temporary, BACKUP_FILE_NAME);
     source = openReadonlyDatabase({ databasePath });
     await source.backup(backupPath);
@@ -297,7 +299,9 @@ async function createVerifiedBackup({
     } catch {
       // Preserve the original backup failure.
     }
-    fs.rmSync(temporary, { recursive: true, force: true });
+    if (ownsTemporaryDirectory) {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
     if (error instanceof SqliteBackupError) throw error;
     throw backupError(BACKUP_ERROR_CODES.operationFailed,
       "The online SQLite backup failed safely.", { cause: error });
@@ -328,10 +332,12 @@ function restoreBackupToCleanPath({
   const verified = readAndVerifyManifest(
     physicalBackup, environment
   );
+  let ownsTarget = false;
   try {
     fs.copyFileSync(
       verified.backupPath, target, fs.constants.COPYFILE_EXCL
     );
+    ownsTarget = true;
     if (hashFile(target) !== verified.manifest.plaintextSha256) {
       throw backupError(BACKUP_ERROR_CODES.checksumMismatch,
         "The restored copy checksum does not match.");
@@ -349,7 +355,9 @@ function restoreBackupToCleanPath({
       inspection,
     });
   } catch (error) {
-    fs.rmSync(target, { force: true });
+    if (ownsTarget) {
+      fs.rmSync(target, { force: true });
+    }
     if (error instanceof SqliteBackupError) throw error;
     throw backupError(BACKUP_ERROR_CODES.operationFailed,
       "The clean-path restore failed safely.", { cause: error });

@@ -184,8 +184,10 @@ async function createEncryptedOffsiteBackup({
     `hundo-leago_${config.appEnv}_${backupTimestamp(createdAtMs)}_${backupId}`;
   const storageObjectKey = `${config.objectStorage.prefix}${baseName}.sqlite3.gz.enc`;
   const manifestObjectKey = `${config.objectStorage.prefix}${baseName}.manifest.json`;
+  let ownsWorkDirectory = false;
   try {
     fs.mkdirSync(workDirectory, { recursive: false });
+    ownsWorkDirectory = true;
     const verified = await createVerifiedBackup({
       databasePath,
       outputDirectory: verifiedDirectory,
@@ -319,7 +321,9 @@ async function createEncryptedOffsiteBackup({
       error
     );
   } finally {
-    fs.rmSync(workDirectory, { recursive: true, force: true });
+    if (ownsWorkDirectory) {
+      fs.rmSync(workDirectory, { recursive: true, force: true });
+    }
   }
 }
 
