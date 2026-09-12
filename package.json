@@ -12,7 +12,7 @@
     "dev": "nodemon server.js",
     "dev:compatibility": "nodemon server-compatibility.js",
     "dev:m3-browser-fixture": "node scripts/start-m3-browser-fixture.js",
-    "test": "node --test",
+    "test": "node --test --test-concurrency=2",
     "test:characterization": "node --test \"test/characterization/*.test.js\"",
     "check": "node --check server.js",
     "db:backup": "node scripts/db-backup.js",
