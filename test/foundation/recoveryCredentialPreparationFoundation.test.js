@@ -10,6 +10,8 @@ const { createEncryptedOffsiteBackup } = require("../../src/operations/backups/c
 const { restoreEncryptedBackupToCleanPath } = require("../../src/operations/backups/restoreEncryptedBackupToCleanPath");
 const { prepareRecoveryCredentials } = require("../../src/operations/backups/prepareRecoveryCredentials");
 const { buildRecoveryReconciliationPlan } = require("../../src/operations/backups/buildRecoveryReconciliationPlan");
+const { compareRecoveryLossWindow } = require("../../src/operations/backups/compareRecoveryLossWindow");
+const { createVerifiedBackup, BACKUP_FILE_NAME } = require("../../src/infrastructure/database/sqliteBackup");
 const { inspectRecoveryInventory } = require("../../src/operations/backups/inspectRecoveryInventory");
 const { createReleaseQaRuntime } = require("../../src/operations/release/createReleaseQaRuntime");
 const { fixtureId, canonicalize, FIXTURE_DATABASE_ID, FIXTURE_ENVIRONMENT_ID } = require("../../src/operations/release/releaseQaFixtureContract");
@@ -391,8 +393,40 @@ test("restoring the selected backup excludes a later real buyout and restores ex
     expectedDatabaseId: config.databaseId, targetDatabasePath: path.join(input.temporaryRoot, "loss-window-restored.sqlite3"),
     temporaryRoot: input.temporaryRoot,
   });
+  // Prepare before read-only inspection creates SQLite WAL sidecars. The
+  // original preparation guard must continue to reject those sidecars.
   const prepared = prepareRecoveryCredentials({ ...input, restoredCandidate: restored,
     outputDirectory: path.join(input.temporaryRoot, "loss-window-prepared") });
+  const preserved = await createVerifiedBackup({ databasePath: started.databasePath,
+    outputDirectory: path.join(input.temporaryRoot, "preserved-loss-window"), environment: "test",
+    reason: "incident-preservation", capturedAtMs: Date.now(), temporaryRoot: input.temporaryRoot });
+  const restoredDatabase = openReadonlyDatabase({ databasePath: restored.targetDatabasePath });
+  const preservedDatabase = openReadonlyDatabase({ databasePath: path.join(preserved.outputDirectory, BACKUP_FILE_NAME) });
+  try {
+    const comparison = compareRecoveryLossWindow({ restoredDatabase, preservedDatabase,
+      restoredPlaintextSha256: restored.plaintextSha256, preservedPlaintextSha256: preserved.plaintextSha256,
+      sourceBackupId: backup.backupId, expectedEnvironmentId: config.environmentId, expectedDatabaseId: config.databaseId,
+      observedAtMs: Date.now() });
+    assert.equal(Object.keys(comparison.tables).length, Object.keys(atBackup).length);
+    const keyHash = id => hash(canonicalize([id]));
+    const changedContract = comparison.tables.contracts.changes.find(row => row.keySha256 === keyHash(contractId));
+    assert.equal(changedContract.kind, "changed-after-backup");
+    assert.ok(changedContract.changedColumns.includes("status"));
+    assert.equal(changedContract.restoredRowSha256, hash(canonicalize(contractAtBackup)));
+    assert.equal(changedContract.preservedRowSha256, hash(canonicalize(source.prepare("SELECT * FROM contracts WHERE id=?").get(contractId))));
+    assert.equal(comparison.tables.buyout_obligations.changes.find(row => row.keySha256 === keyHash(boughtOut.buyout.id)).kind, "absent-from-backup");
+    assert.equal(comparison.tables.sessions.changes.find(row => row.keySha256 === keyHash(issued.session.id)).kind, "absent-from-backup");
+    assert.equal(comparison.tables.job_runs.changes.length, 0);
+    assert.equal(comparison.tables.contracts.changes.length, 1);
+    assert.equal(comparison.activationReady, false);
+    assert.equal(comparison.executable, false);
+    assert.equal(comparison.completeLossWindowEvidence, false);
+    assert.equal(JSON.stringify(comparison).includes(PRIVATE_VALUE), false);
+    assert.equal(JSON.stringify(comparison).includes(issued.rawSessionToken), false);
+    for (const connection of [restoredDatabase, preservedDatabase]) {
+      assert.equal(connection.prepare("SELECT total_changes() AS count").get().count, 0);
+    }
+  } finally { restoredDatabase.close(); preservedDatabase.close(); }
   const database = openReadonlyDatabase({ databasePath: prepared.preparedDatabasePath });
   try {
     assert.deepEqual(database.prepare("SELECT * FROM contracts WHERE id=?").get(contractId), contractAtBackup);

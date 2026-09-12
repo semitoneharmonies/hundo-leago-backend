@@ -48,7 +48,7 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   assert.equal(report.objectCount, 4);
   assert.equal(report.sourceDatabase, "unchanged");
   assert.equal(report.wrongKeyRestore, "rejected-without-target");
-  assert.equal(report.reportVersion, 5);
+  assert.equal(report.reportVersion, 6);
   assert.equal(report.recoveryInventory.verificationScope, "read-only-inventory");
   assert.equal(report.recoveryInventory.activationReady, false);
   assert.equal(report.recoveryInventory.databaseIdentity.databaseId, FIXTURE_DATABASE_ID);
@@ -76,6 +76,19 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   assert.equal(report.reconciliationPlan.unresolvedMessages, report.preparedInventory.leagueOutbox.pending);
   assert.equal(Object.keys(report.reconciliationPlan.tableSnapshots).length, report.postPreparationBackup.tableCount);
   assert.match(report.reconciliationPlan.planChecksum, /^[a-f0-9]{64}$/);
+  assert.equal(report.lossWindowComparison.reportVersion, 1);
+  assert.equal(report.lossWindowComparison.changedRecords, 0);
+  assert.equal(report.lossWindowComparison.changedTables, 0);
+  assert.equal(report.lossWindowComparison.sourceBackupId, report.credentialPreparation.sourceBackupId);
+  assert.equal(report.lossWindowComparison.restoredPlaintextSha256, report.credentialPreparation.sourcePlaintextSha256);
+  assert.equal(report.lossWindowComparison.preservedPlaintextSha256, report.preservedDatabaseEvidence.plaintextSha256);
+  assert.equal(report.lossWindowComparison.observedAtMs, report.preservedDatabaseEvidence.capturedAtMs);
+  assert.equal(report.lossWindowComparison.executable, false);
+  assert.equal(report.lossWindowComparison.activationReady, false);
+  assert.equal(report.lossWindowComparison.completeLossWindowEvidence, false);
+  assert.equal(Object.keys(report.lossWindowComparison.tables).length, report.postPreparationBackup.tableCount);
+  assert.match(report.lossWindowComparison.reportChecksum, /^[a-f0-9]{64}$/);
+  assert.match(report.preservedDatabaseEvidence.manifestChecksum, /^[a-f0-9]{64}$/);
   assert.equal(report.postPreparationBackup.encryptedBackup, "verified");
   assert.equal(report.postPreparationBackup.cleanRestore, "verified-to-new-path");
   assert.equal(report.postPreparationBackup.preparedCredentialsAndHold, "preserved");

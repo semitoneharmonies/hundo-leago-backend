@@ -24,6 +24,8 @@ const {
 const {
   buildRecoveryReconciliationPlan,
 } = require("../backups/buildRecoveryReconciliationPlan");
+const { compareRecoveryLossWindow } = require("../backups/compareRecoveryLossWindow");
+const { createVerifiedBackup, BACKUP_FILE_NAME } = require("../../infrastructure/database/sqliteBackup");
 const {
   openReadonlyDatabase,
 } = require("../../infrastructure/database/connection");
@@ -268,8 +270,13 @@ async function rehearseReleaseQaRecovery({
         "The clean restore or source-preservation proof failed."
       );
     }
+    const preservedAtMs = Date.now();
+    const preserved = await createVerifiedBackup({ databasePath: physicalDatabase,
+      outputDirectory: path.join(rehearsalRoot, "preserved-database"), environment: "staging",
+      reason: "incident-preservation", capturedAtMs: preservedAtMs, temporaryRoot: physicalRoot });
     const candidate = openReadonlyDatabase({ databasePath: restored.targetDatabasePath });
     let recoveryInventory;
+    let lossWindowComparison;
     try {
       recoveryInventory = inspectRecoveryInventory({
         database: candidate,
@@ -277,6 +284,13 @@ async function rehearseReleaseQaRecovery({
         expectedDatabaseId: config.databaseId,
         observedAtMs: Date.now(),
       });
+      const preservedDatabase = openReadonlyDatabase({ databasePath: path.join(preserved.outputDirectory, BACKUP_FILE_NAME) });
+      try {
+        lossWindowComparison = compareRecoveryLossWindow({ restoredDatabase: candidate, preservedDatabase,
+          restoredPlaintextSha256: restored.plaintextSha256, preservedPlaintextSha256: preserved.plaintextSha256,
+          sourceBackupId: restored.backupId, expectedEnvironmentId: config.environmentId,
+          expectedDatabaseId: config.databaseId, observedAtMs: preservedAtMs });
+      } finally { preservedDatabase.close(); }
     } finally {
       candidate.close();
     }
@@ -329,7 +343,7 @@ async function rehearseReleaseQaRecovery({
       fail("RELEASE_QA_RECOVERY_VERIFICATION_FAILED", "Credential preparation or source-preservation proof failed.");
     }
     const reportBase = Object.freeze({
-      reportVersion: 5,
+      reportVersion: 6,
       backup: "encrypted-private-object-verified",
       cleanRestore: "verified-to-new-path",
       fixtureManifestChecksum,
@@ -340,6 +354,9 @@ async function rehearseReleaseQaRecovery({
       credentialPreparation,
       preparedInventory,
       reconciliationPlan,
+      lossWindowComparison,
+      preservedDatabaseEvidence: Object.freeze({ manifestChecksum: preserved.manifestChecksum,
+        plaintextSha256: preserved.plaintextSha256, capturedAtMs: preservedAtMs }),
       postPreparationBackup: Object.freeze({
         backupId: preparedBackup.backupId,
         encryptedBackup: "verified",
