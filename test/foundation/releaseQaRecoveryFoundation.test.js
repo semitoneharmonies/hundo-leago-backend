@@ -54,7 +54,8 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   assert.equal(report.recoveryInventory.databaseIdentity.databaseId, FIXTURE_DATABASE_ID);
   assert.equal(report.recoveryInventory.remainingRecoveryGates.length, 6);
   assert.equal(report.credentialPreparation.status, "credentials-prepared");
-  assert.equal(report.credentialPreparation.reportVersion, 4);
+  assert.equal(report.credentialPreparation.reportVersion, 5);
+  assert.deepEqual(report.credentialPreparation.recoveryEpoch, { generation: 1, recoveryId: report.credentialPreparation.recoveryId });
   assert.equal(report.credentialPreparation.restoredJobLeasesInvalidated, 0);
   assert.equal(report.credentialPreparation.jobOccurrences, "preserved-and-held");
   assert.equal(report.credentialPreparation.staleAccountLinksDiscarded, 0);
@@ -68,7 +69,8 @@ test("M7 recovery rehearsal verifies encrypted backup, failure control, clean re
   assert.deepEqual(report.preparedInventory.leagueOutbox, report.recoveryInventory.leagueOutbox);
   assert.deepEqual(report.preparedInventory.accountEmailOutbox, report.recoveryInventory.accountEmailOutbox);
   assert.deepEqual(report.preparedInventory.jobs, report.recoveryInventory.jobs);
-  assert.equal(report.reconciliationPlan.planVersion, 1);
+  assert.equal(report.reconciliationPlan.planVersion, 2);
+  assert.deepEqual(report.reconciliationPlan.recoveryEpoch, report.credentialPreparation.recoveryEpoch);
   assert.equal(report.reconciliationPlan.executable, false);
   assert.equal(report.reconciliationPlan.activationReady, false);
   assert.equal(report.reconciliationPlan.credentialPreparationChecksum, report.credentialPreparation.reportChecksum);

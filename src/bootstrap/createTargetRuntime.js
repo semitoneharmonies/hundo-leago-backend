@@ -1,5 +1,6 @@
 const express = require("express");
 const { assertRecoveryRuntimeAllowed } = require("../infrastructure/database/recoveryHold");
+const { readRecoveryEpoch } = require("../infrastructure/database/recoveryEpoch");
 
 const {
   createLeagueWriteGate,
@@ -2950,6 +2951,7 @@ function createTargetRouters({
   services,
   securityFoundations,
   networkSourceResolver,
+  getRecoveryEpoch,
   stagingAccountAutoVerificationEnabled = false,
 } = {}) {
   const { config, secureRandom } = securityFoundations;
@@ -2966,6 +2968,7 @@ function createTargetRouters({
     sessionCookie,
     sessionService: services.sessionService,
     requestIdFactory: () => secureRandom.id(),
+    getRecoveryEpoch,
   });
   const sharedAudit = {
     requestSecurity,
@@ -3162,6 +3165,7 @@ function createTargetRuntime({
   const migrations = discoverMigrations({ migrationsDirectory });
   const migrationState = assertMigrationCompatibility(database, migrations);
   assertRecoveryRuntimeAllowed(database);
+  readRecoveryEpoch(database);
   let targetApplication = null;
   let socketRooms = null;
   const onSessionChanged = createSessionSocketInvalidator({
@@ -3205,6 +3209,10 @@ function createTargetRuntime({
     securityFoundations,
     networkSourceResolver,
     stagingAccountAutoVerificationEnabled,
+    getRecoveryEpoch() {
+      assertRecoveryRuntimeAllowed(database);
+      return readRecoveryEpoch(database);
+    },
   });
   const app = createTargetApplication({
     routers: transport.routers,

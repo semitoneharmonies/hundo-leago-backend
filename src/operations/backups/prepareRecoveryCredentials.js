@@ -5,6 +5,8 @@ const path = require("node:path");
 const { openDatabase } = require("../../infrastructure/database/connection");
 const { assertDatabaseIdentity } = require("../../infrastructure/database/databaseIdentity");
 const { RECOVERY_HOLD_KEY, assertRecoveryRuntimeAllowed } = require("../../infrastructure/database/recoveryHold");
+const { RECOVERY_EPOCH_KEY, readRecoveryEpoch } = require("../../infrastructure/database/recoveryEpoch");
+const { nextRecoveryEpoch } = require("../../domain/recovery/recoveryEpochPolicy");
 const { inspectDatabase } = require("../../infrastructure/database/sqliteBackup");
 const { canonicalize } = require("../../infrastructure/migration/sourceInventory");
 const { createSqliteSessionRepository } = require("../../infrastructure/persistence/sqlite/SqliteSessionRepository");
@@ -158,6 +160,12 @@ function prepareRecoveryCredentials({
       const beforeTokens = database.prepare("SELECT * FROM account_action_tokens ORDER BY id").all();
       const beforeAudit = database.prepare("SELECT * FROM security_audit_events ORDER BY id").all();
       const beforeMetadata = database.prepare("SELECT * FROM application_metadata ORDER BY metadata_key").all();
+      const previousRecoveryEpoch = readRecoveryEpoch(database);
+      const recoveryEpoch = nextRecoveryEpoch(previousRecoveryEpoch, recoveryId);
+      const previousEpochRow = beforeMetadata.find(row => row.metadata_key === RECOVERY_EPOCH_KEY);
+      if (previousEpochRow && (previousEpochRow.created_at_ms > preparedAtMs || previousEpochRow.updated_at_ms > preparedAtMs)) {
+        fail("RECOVERY_PREPARATION_INPUT_INVALID", "The preparation time predates the existing recovery boundary.");
+      }
       const beforeOutbox = database.prepare("SELECT * FROM outbox_events ORDER BY id").all();
       const beforeJobs = database.prepare("SELECT * FROM job_runs ORDER BY id").all();
       const restoredLeases = beforeJobs.filter(row => ["leased", "running"].includes(row.status));
@@ -176,11 +184,16 @@ function prepareRecoveryCredentials({
       const holdRecord = {
         metadata_key: RECOVERY_HOLD_KEY,
         metadata_value: canonicalize({ recoveryId, sourceBackupId: restoredCandidate.backupId,
-          sourcePlaintextSha256: restoredCandidate.plaintextSha256, state: "held" }),
+          sourcePlaintextSha256: restoredCandidate.plaintextSha256, recoveryEpoch, state: "held" }),
         created_at_ms: preparedAtMs, updated_at_ms: preparedAtMs,
       };
       database.prepare("INSERT INTO application_metadata (metadata_key,metadata_value,created_at_ms,updated_at_ms) " +
         "VALUES (@metadata_key,@metadata_value,@created_at_ms,@updated_at_ms)").run(holdRecord);
+      const epochRecord = { metadata_key: RECOVERY_EPOCH_KEY, metadata_value: canonicalize(recoveryEpoch),
+        created_at_ms: previousEpochRow?.created_at_ms ?? preparedAtMs, updated_at_ms: preparedAtMs };
+      database.prepare("INSERT INTO application_metadata (metadata_key,metadata_value,created_at_ms,updated_at_ms) " +
+        "VALUES (@metadata_key,@metadata_value,@created_at_ms,@updated_at_ms) ON CONFLICT(metadata_key) DO UPDATE SET " +
+        "metadata_value=excluded.metadata_value,updated_at_ms=excluded.updated_at_ms").run(epochRecord);
       for (const session of activeSessions) {
         sessions.revokeActive({
           sessionId: session.id, expectedVersion: session.version, changedAtMs: preparedAtMs,
@@ -241,16 +254,17 @@ function prepareRecoveryCredentials({
         canonicalize(database.prepare("SELECT * FROM outbox_events ORDER BY id").all()) !== canonicalize(expectedOutbox) ||
         canonicalize(database.prepare("SELECT * FROM job_runs ORDER BY id").all()) !== canonicalize(expectedJobs) ||
         canonicalize(database.prepare("SELECT * FROM security_audit_events WHERE id <> ? ORDER BY id").all(recoveryId)) !== canonicalize(beforeAudit) ||
-        canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key <> ? ORDER BY metadata_key").all(RECOVERY_HOLD_KEY)) !== canonicalize(beforeMetadata) ||
+        canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key NOT IN (?,?) ORDER BY metadata_key").all(RECOVERY_HOLD_KEY, RECOVERY_EPOCH_KEY)) !== canonicalize(beforeMetadata.filter(row => row.metadata_key !== RECOVERY_EPOCH_KEY)) ||
         canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key = ?").get(RECOVERY_HOLD_KEY)) !== canonicalize(holdRecord) ||
+        canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key = ?").get(RECOVERY_EPOCH_KEY)) !== canonicalize(epochRecord) ||
         canonicalize(fingerprint(database, protectedTables)) !== canonicalize(preserved) ||
-        database.prepare("SELECT total_changes() AS count").get().count - initialChanges !== activeSessions.length + activeTokens.length + staleLinks.length + restoredLeases.length + 2 ||
+        database.prepare("SELECT total_changes() AS count").get().count - initialChanges !== activeSessions.length + activeTokens.length + staleLinks.length + restoredLeases.length + 3 ||
         database.pragma("foreign_key_check").length !== 0
       ) {
         fail("RECOVERY_PREPARATION_POSTCHECK_FAILED", "The candidate preparation did not preserve its exact allowed changes.");
       }
       assertSourceUnchanged(source, restoredCandidate.plaintextSha256);
-      return { sessionsRevoked: activeSessions.length, actionTokensInvalidated: activeTokens.length,
+      return { previousRecoveryEpoch, recoveryEpoch, sessionsRevoked: activeSessions.length, actionTokensInvalidated: activeTokens.length,
         staleAccountLinksDiscarded: staleLinks.length, staleAccountLinkEvidenceSha256: hash(canonicalize(staleLinks)),
         restoredJobLeasesInvalidated: restoredLeases.length, restoredJobLeaseEvidenceSha256: hash(canonicalize(restoredLeases)),
         jobOccurrences: "preserved-and-held",
@@ -262,7 +276,7 @@ function prepareRecoveryCredentials({
     const inspection = inspectDatabase(preparedPath);
     assertSourceUnchanged(source, restoredCandidate.plaintextSha256);
     const reportBase = {
-      reportVersion: 4, recoveryId, sourceBackupId: restoredCandidate.backupId,
+      reportVersion: 5, recoveryId, sourceBackupId: restoredCandidate.backupId,
       sourcePlaintextSha256: restoredCandidate.plaintextSha256, preparedPlaintextSha256: hashFile(preparedPath),
       preparedAtMs, ...counts, sourceDatabase: "unchanged", status: "credentials-prepared",
       normalRuntime: "blocked-by-durable-recovery-hold",

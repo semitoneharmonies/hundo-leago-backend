@@ -4,6 +4,8 @@ const path = require("node:path");
 const { canonicalize } = require("../../infrastructure/migration/sourceInventory");
 const { RECOVERY_HOLD_KEY } = require("../../infrastructure/database/recoveryHold");
 const { assertDatabaseIdentity } = require("../../infrastructure/database/databaseIdentity");
+const { readRecoveryEpoch } = require("../../infrastructure/database/recoveryEpoch");
+const { nextRecoveryEpoch } = require("../../domain/recovery/recoveryEpochPolicy");
 
 const DIGEST = /^[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -37,7 +39,7 @@ function buildRecoveryReconciliationPlan({ database, credentialPreparation, obse
   if (!database?.open || database.readonly !== true || database.inTransaction || !path.isAbsolute(database.name || "") ||
       !Number.isSafeInteger(observedAtMs) || observedAtMs < 0 || !credentialPreparation ||
       !IDENTITY.test(expectedEnvironmentId || "") || !IDENTITY.test(expectedDatabaseId || "") ||
-      credentialPreparation.reportVersion !== 4 || credentialPreparation.status !== "credentials-prepared" ||
+      credentialPreparation.reportVersion !== 5 || credentialPreparation.status !== "credentials-prepared" ||
       credentialPreparation.activationReady !== false || credentialPreparation.normalRuntime !== "blocked-by-durable-recovery-hold" ||
       !UUID.test(credentialPreparation.recoveryId || "") || !UUID.test(credentialPreparation.sourceBackupId || "") ||
       !Number.isSafeInteger(credentialPreparation.preparedAtMs) || observedAtMs < credentialPreparation.preparedAtMs ||
@@ -53,8 +55,11 @@ function buildRecoveryReconciliationPlan({ database, credentialPreparation, obse
     const plan = database.transaction(() => {
       const hold = database.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY);
       const expectedHold = canonicalize({ recoveryId: receipt.recoveryId, sourceBackupId: receipt.sourceBackupId,
-        sourcePlaintextSha256: receipt.sourcePlaintextSha256, state: "held" });
+        sourcePlaintextSha256: receipt.sourcePlaintextSha256, recoveryEpoch: receipt.recoveryEpoch, state: "held" });
       if (hold?.metadata_value !== expectedHold) fail("RECOVERY_PLAN_HOLD_INVALID");
+      const recoveryEpoch = nextRecoveryEpoch(receipt.previousRecoveryEpoch, receipt.recoveryId);
+      if (canonicalize(recoveryEpoch) !== canonicalize(receipt.recoveryEpoch) ||
+          canonicalize(readRecoveryEpoch(database)) !== canonicalize(recoveryEpoch)) fail("RECOVERY_PLAN_EPOCH_INVALID");
       const databaseIdentity = { environmentId: expectedEnvironmentId, databaseId: expectedDatabaseId };
       assertDatabaseIdentity(database, databaseIdentity);
       const audit = database.prepare("SELECT * FROM security_audit_events WHERE id=?").get(receipt.recoveryId);
@@ -99,7 +104,7 @@ function buildRecoveryReconciliationPlan({ database, credentialPreparation, obse
           disposition: terminal ? "preserve-recorded-result" : "held-awaiting-delivery-evidence",
           deliveryPermitted: false });
       });
-      return { planVersion: 1, recoveryId: receipt.recoveryId, sourceBackupId: receipt.sourceBackupId,
+      return { planVersion: 2, recoveryId: receipt.recoveryId, recoveryEpoch, sourceBackupId: receipt.sourceBackupId,
         sourcePlaintextSha256: receipt.sourcePlaintextSha256, preparedPlaintextSha256: receipt.preparedPlaintextSha256,
         credentialPreparationChecksum: reportChecksum, observedAtMs, databaseIdentity,
         schemaVersion: database.pragma("user_version", { simple: true }), tableSnapshots,

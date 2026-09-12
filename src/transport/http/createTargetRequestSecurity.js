@@ -1,4 +1,7 @@
 const crypto = require("node:crypto");
+const { INITIAL_RECOVERY_EPOCH, RECOVERY_EPOCH_HEADER, validateRecoveryEpoch,
+  recoveryEpochHeaderValue, recoveryRequestKeyIsCurrent } = require("../../domain/recovery/recoveryEpochPolicy");
+const RECOVERY_EPOCH_STATE = Symbol("hundo.recoveryEpoch");
 
 const ALLOWED_METHODS = Object.freeze([
   "GET",
@@ -72,6 +75,10 @@ const SAFE_MESSAGES = Object.freeze({
     "A valid session is required.",
   CSRF_INVALID:
     "The request verification token is invalid.",
+  RECOVERY_CONTEXT_UNAVAILABLE:
+    "The app is temporarily unavailable. Try again shortly.",
+  RECOVERY_REQUEST_STALE:
+    "The app was restored after this action was prepared. Refresh the page and review the action before submitting it again.",
 });
 
 function sendError(request, response, status, code) {
@@ -130,6 +137,7 @@ function createTargetRequestSecurity({
   sessionCookie,
   sessionService,
   requestIdFactory = crypto.randomUUID,
+  getRecoveryEpoch = () => INITIAL_RECOVERY_EPOCH,
   preflightMaxAgeSeconds =
     DEFAULT_PREFLIGHT_MAX_AGE_SECONDS,
 } = {}) {
@@ -146,6 +154,7 @@ function createTargetRequestSecurity({
       "target request security requires a session cookie"
     );
   }
+  if (typeof getRecoveryEpoch !== "function") throw new TypeError("target request security requires a recovery-context reader");
   if (typeof requestIdFactory !== "function") {
     throw new TypeError(
       "target request security requires a request ID factory"
@@ -211,13 +220,24 @@ function createTargetRequestSecurity({
     );
   }
 
+  function requestRecoveryEpoch(request) {
+    if (!Object.hasOwn(request, RECOVERY_EPOCH_STATE)) {
+      defineInternalState(request, RECOVERY_EPOCH_STATE, validateRecoveryEpoch(getRecoveryEpoch()));
+    }
+    return request[RECOVERY_EPOCH_STATE];
+  }
+
   function securityHeaders(
     request,
     response,
     next
   ) {
     response.set(SECURITY_HEADERS);
-    next();
+    try {
+      response.set(RECOVERY_EPOCH_HEADER, recoveryEpochHeaderValue(requestRecoveryEpoch(request)));
+      response.set("Access-Control-Expose-Headers", RECOVERY_EPOCH_HEADER);
+    } catch { return sendError(request, response, 503, "RECOVERY_CONTEXT_UNAVAILABLE"); }
+    return next();
   }
 
   function credentialedCors(
@@ -368,6 +388,11 @@ function createTargetRequestSecurity({
         "FETCH_METADATA_INVALID"
       );
     }
+    try {
+      if (!recoveryRequestKeyIsCurrent(requestRecoveryEpoch(request), request.get("idempotency-key"))) {
+        return sendError(request, response, 409, "RECOVERY_REQUEST_STALE");
+      }
+    } catch { return sendError(request, response, 503, "RECOVERY_CONTEXT_UNAVAILABLE"); }
     return next();
   }
 

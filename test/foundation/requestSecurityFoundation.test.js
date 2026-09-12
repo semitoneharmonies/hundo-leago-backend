@@ -50,7 +50,7 @@ function internalBootstrap() {
   return Object.freeze(result);
 }
 
-async function startProbe(t) {
+async function startProbe(t, { getRecoveryEpoch } = {}) {
   const cookie = createSessionCookie({
     appEnv: "local",
     publicFrontendOrigin: ALLOWED_ORIGIN,
@@ -114,8 +114,10 @@ async function startProbe(t) {
       origin === ALLOWED_ORIGIN,
     sessionCookie: cookie,
     sessionService,
+    getRecoveryEpoch,
   });
   const app = express();
+  app.use(security.securityHeaders);
   app.use(security.securityHeaders);
   app.use(security.credentialedCors);
   app.use(express.json());
@@ -202,6 +204,33 @@ function browserHeaders(extra = {}) {
     ...extra,
   };
 }
+
+test("recovered request security rejects stale keys before authentication and samples one boundary across composed routers", async t => {
+  const recoveryId = "11111111-1111-4111-8111-111111111111";
+  let reads = 0;
+  const runtime = await startProbe(t, { getRecoveryEpoch() { reads += 1; return { generation: 1, recoveryId }; } });
+  const anonymous = await request(runtime.baseUrl, "/bootstrap", { headers: { Origin: ALLOWED_ORIGIN } });
+  assert.equal(anonymous.status, 401); assert.equal(reads, 1);
+  assert.equal(anonymous.headers.get("X-Hundo-Recovery-Epoch"), recoveryId);
+  assert.equal(anonymous.headers.get("Access-Control-Expose-Headers"), "X-Hundo-Recovery-Epoch");
+  const unsafe = key => request(runtime.baseUrl, "/unsafe", { method: "POST", body: "{}",
+    headers: browserHeaders({ "Content-Type": "application/json", "X-CSRF-Token": RAW_CSRF_TOKEN, "Idempotency-Key": key }) });
+  const denied = await unsafe("previous-intent");
+  assert.equal(denied.status, 409); assert.equal(denied.json.error.code, "RECOVERY_REQUEST_STALE");
+  assert.equal(runtime.calls.length, 0); assert.equal(reads, 2);
+  const accepted = await unsafe(`recovery:${recoveryId}:new-intent`);
+  assert.equal(accepted.status, 200); assert.equal(reads, 3);
+  assert.equal(runtime.calls.length, 1);
+});
+
+test("an unavailable recovery context returns a generic failure before authenticated command handling", async t => {
+  const runtime = await startProbe(t, { getRecoveryEpoch() { throw new Error("private database path"); } });
+  const denied = await request(runtime.baseUrl, "/unsafe", { method: "POST", body: "{}",
+    headers: browserHeaders({ "Content-Type": "application/json", "X-CSRF-Token": RAW_CSRF_TOKEN }) });
+  assert.equal(denied.status, 503); assert.equal(denied.json.error.code, "RECOVERY_CONTEXT_UNAVAILABLE");
+  assert.equal(denied.text.includes("private database path"), false);
+  assert.equal(runtime.calls.length, 0);
+});
 
 function assertSecurityHeaders(response) {
   assert.equal(

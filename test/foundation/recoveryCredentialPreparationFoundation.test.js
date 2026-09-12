@@ -26,6 +26,7 @@ const { createSecureRandom } = require("../../src/infrastructure/security/create
 const { createSessionSecrets } = require("../../src/infrastructure/security/createSessionSecrets");
 const { createOpaqueActionTokens } = require("../../src/infrastructure/security/createOpaqueActionTokens");
 const { RECOVERY_HOLD_KEY } = require("../../src/infrastructure/database/recoveryHold");
+const { RECOVERY_EPOCH_KEY, readRecoveryEpoch } = require("../../src/infrastructure/database/recoveryEpoch");
 const { createTargetRuntime } = require("../../src/bootstrap/createTargetRuntime");
 
 const PURPOSES = ["email_verification", "administrator_setup", "password_reset", "self_reactivation"];
@@ -172,7 +173,10 @@ test("encrypted clean restore preparation invalidates credentials atomically and
     assert.equal(report.sessionsRevoked, 1);
     assert.equal(report.actionTokensInvalidated, 4);
     assert.equal(report.staleAccountLinksDiscarded, 7);
-    assert.equal(report.reportVersion, 4);
+    assert.equal(report.reportVersion, 5);
+    assert.deepEqual(report.previousRecoveryEpoch, { generation: 0, recoveryId: null });
+    assert.deepEqual(report.recoveryEpoch, { generation: 1, recoveryId: input.recoveryId });
+    assert.deepEqual(readRecoveryEpoch(database), report.recoveryEpoch);
     assert.equal(report.restoredJobLeasesInvalidated, 2);
     assert.equal(report.jobOccurrences, "preserved-and-held");
     assert.equal(report.otherOutboxRecords, "unchanged-and-held");
@@ -210,10 +214,11 @@ test("encrypted clean restore preparation invalidates credentials atomically and
     }
     assert.equal(report.restoredJobLeaseEvidenceSha256,
       hash(canonicalize(originalJobs.filter(row => ["leased", "running"].includes(row.status)).sort((a, b) => a.id.localeCompare(b.id)))));
-    assert.deepEqual(preparedRows.application_metadata.filter((row) => JSON.parse(row).metadata_key !== RECOVERY_HOLD_KEY), sourceRows.application_metadata);
+    assert.deepEqual(preparedRows.application_metadata.filter((row) => ![RECOVERY_HOLD_KEY, RECOVERY_EPOCH_KEY].includes(JSON.parse(row).metadata_key)), sourceRows.application_metadata);
     const hold = database.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY);
     assert.equal(JSON.parse(hold.metadata_value).recoveryId, input.recoveryId);
     assert.equal(JSON.parse(hold.metadata_value).sourcePlaintextSha256, originalHash);
+    assert.deepEqual(JSON.parse(hold.metadata_value).recoveryEpoch, report.recoveryEpoch);
     assert.throws(() => createTargetRuntime({ database,
       migrationsDirectory: path.resolve(__dirname, "../../database/migrations") }), { code: "DATABASE_RECOVERY_HELD" });
     assert.equal(database.prepare("SELECT total_changes() AS count").get().count, 0);
@@ -246,6 +251,8 @@ test("encrypted clean restore preparation invalidates credentials atomically and
       assert.deepEqual(buildRecoveryReconciliationPlan(options), plan);
       assert.equal(plan.activationReady, false);
       assert.equal(plan.executable, false);
+      assert.equal(plan.planVersion, 2);
+      assert.deepEqual(plan.recoveryEpoch, report.recoveryEpoch);
       assert.equal(plan.preparedPlaintextSha256, report.preparedPlaintextSha256);
       assert.equal(Object.keys(plan.tableSnapshots).length, Object.keys(preparedRows).length);
       assert.equal(plan.unresolvedJobs, 4);
@@ -510,4 +517,40 @@ test("a real statistics worker cannot use its restored lease after recovery prep
       { code: "DATABASE_RECOVERY_HELD" });
   } finally { database.close(); }
   assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
+});
+
+test("a later recovery advances the prior epoch atomically without deleting idempotency history", async t => {
+  const previous = { generation: 7, recoveryId: crypto.randomUUID() };
+  const { started, input } = await candidate(t, database => database.prepare(
+    "INSERT INTO application_metadata (metadata_key,metadata_value,created_at_ms,updated_at_ms) VALUES(?,?,10,20)"
+  ).run(RECOVERY_EPOCH_KEY, canonicalize(previous)));
+  const sourceBefore = started.runtime.database.serialize();
+  const history = allRows(started.runtime.database).idempotency_requests;
+  const report = prepareRecoveryCredentials({ ...input, outputDirectory: path.join(input.temporaryRoot, "later-epoch") });
+  const reader = openReadonlyDatabase({ databasePath: report.preparedDatabasePath });
+  try {
+    assert.deepEqual(report.previousRecoveryEpoch, previous);
+    assert.deepEqual(report.recoveryEpoch, { generation: 8, recoveryId: input.recoveryId });
+    assert.deepEqual(readRecoveryEpoch(reader), report.recoveryEpoch);
+    const row = reader.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(RECOVERY_EPOCH_KEY);
+    assert.equal(row.created_at_ms, 10); assert.equal(row.updated_at_ms, 100);
+    assert.deepEqual(allRows(reader).idempotency_requests, history);
+    const plan = buildRecoveryReconciliationPlan({ database: reader, credentialPreparation: report, observedAtMs: 100,
+      expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID, expectedDatabaseId: FIXTURE_DATABASE_ID });
+    assert.deepEqual(plan.recoveryEpoch, report.recoveryEpoch);
+    assert.equal(plan.executable, false);
+  } finally { reader.close(); }
+  assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
+  const output = path.join(input.temporaryRoot, "tampered-epoch");
+  let rollbackObserved = false;
+  assert.throws(() => prepareRecoveryCredentials({ ...input, outputDirectory: output, beforeCommit(database) {
+    database.prepare("UPDATE application_metadata SET metadata_value=? WHERE metadata_key=?").run(canonicalize(previous), RECOVERY_EPOCH_KEY);
+    const close = database.close.bind(database);
+    database.close = () => {
+      assert.deepEqual(readRecoveryEpoch(database), previous);
+      assert.deepEqual(allRows(database).idempotency_requests, history);
+      rollbackObserved = true; return close();
+    };
+  } }), { code: "RECOVERY_PREPARATION_POSTCHECK_FAILED" });
+  assert.equal(rollbackObserved, true); assert.equal(fs.existsSync(output), false);
 });

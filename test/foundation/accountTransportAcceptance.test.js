@@ -1,6 +1,9 @@
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const { test } = require("node:test");
+const crypto = require("node:crypto");
+const { RECOVERY_EPOCH_KEY } = require("../../src/infrastructure/database/recoveryEpoch");
+const { canonicalize } = require("../../src/infrastructure/migration/sourceInventory");
 const { createReleaseQaRuntime } = require("../../src/operations/release/createReleaseQaRuntime");
 const { fixtureEmail, fixtureId } = require("../../src/operations/release/releaseQaFixtureContract");
 
@@ -18,6 +21,58 @@ function headers(session, extra = {}) {
     ...extra,
   };
 }
+
+test("a fresh session cannot submit a pre-recovery intent while new scoped requests retain isolation and exact replay", { timeout: 90_000 }, async t => {
+  const started = await createReleaseQaRuntime({ migrationsDirectory: MIGRATIONS, password: PASSWORD, port: 0 });
+  t.after(() => started.close());
+  const database = started.runtime.database;
+  await signIn(started, "leagueBManagerOne");
+  const oldKey = `recovery-trade:${crypto.randomUUID()}`;
+  const epoch = { generation: 1, recoveryId: crypto.randomUUID() };
+  // This isolated HTTP fixture represents a previously prepared/reopened
+  // database. The separate encrypted preparation tests prove its transaction.
+  database.prepare("INSERT INTO application_metadata(metadata_key,metadata_value,created_at_ms,updated_at_ms) VALUES(?,?,10,10)")
+    .run(RECOVERY_EPOCH_KEY, canonicalize(epoch));
+  const anonymous = await fetch(`${started.baseUrl}/api/v1/session`, { headers: headers(null), signal: AbortSignal.timeout(15_000) });
+  assert.equal(anonymous.status, 401);
+  assert.equal(anonymous.headers.get("X-Hundo-Recovery-Epoch"), epoch.recoveryId);
+  assert.equal(anonymous.headers.get("Access-Control-Expose-Headers"), "X-Hundo-Recovery-Epoch");
+  assert.equal(anonymous.headers.get("Cache-Control"), "no-store");
+  await anonymous.text();
+  const fresh = await signIn(started, "leagueBManagerOne");
+  const outsider = await signIn(started, "leagueAManagerOne");
+  const leagueId = fixtureId("league:leagueB");
+  const url = `/api/v1/leagues/${leagueId}/trades`;
+  const body = { proposingTeamId: fixtureId("team:leagueB:6"), receivingTeamId: fixtureId("team:leagueB:2"),
+    proposingAssets: [{ type: "prospect_right", playerId: fixtureId("player:signedProspect") }],
+    receivingAssets: [{ type: "contract", contractId: fixtureId("contract:leagueB:activeForward2") }] };
+  const before = database.serialize();
+  const previousIdempotency = database.prepare("SELECT * FROM idempotency_requests ORDER BY id").all();
+  const otherLeague = database.prepare("SELECT * FROM contracts WHERE league_id=? ORDER BY id").all(fixtureId("league:leagueA"));
+  for (const key of [oldKey, `recovery:${crypto.randomUUID()}:${oldKey}`]) {
+    const result = await request(started, url, { method: "POST", session: fresh, body, extraHeaders: { "Idempotency-Key": key } });
+    assert.equal(result.status, 409); assert.equal(result.body.error.code, "RECOVERY_REQUEST_STALE");
+    assert.deepEqual(database.serialize(), before);
+  }
+  const newKey = `recovery:${epoch.recoveryId}:${oldKey}`;
+  const denied = await request(started, url, { method: "POST", session: outsider, body, extraHeaders: { "Idempotency-Key": newKey } });
+  assert.equal(denied.status, 404); assert.deepEqual(database.serialize(), before);
+  const accepted = await request(started, url, { method: "POST", session: fresh, body, extraHeaders: { "Idempotency-Key": newKey } });
+  assert.equal(accepted.status, 201, accepted.body.error?.code);
+  const after = database.serialize();
+  const replay = await request(started, url, { method: "POST", session: fresh, body, extraHeaders: { "Idempotency-Key": newKey } });
+  assert.equal(replay.status, 201);
+  assert.deepEqual(replay.body.data, { ...accepted.body.data, code: "TRADE_PROPOSAL_REPLAYED", replayed: true });
+  assert.deepEqual(database.serialize(), after);
+  for (const row of previousIdempotency) assert.deepEqual(database.prepare("SELECT * FROM idempotency_requests WHERE id=?").get(row.id), row);
+  assert.deepEqual(database.prepare("SELECT * FROM contracts WHERE league_id=? ORDER BY id").all(fixtureId("league:leagueA")), otherLeague);
+  database.prepare("UPDATE application_metadata SET metadata_value='private-invalid-epoch' WHERE metadata_key=?").run(RECOVERY_EPOCH_KEY);
+  const damagedBefore = database.serialize();
+  const damaged = await request(started, "/api/v1/session", { session: fresh });
+  assert.equal(damaged.status, 503); assert.equal(damaged.body.error.code, "RECOVERY_CONTEXT_UNAVAILABLE");
+  assert.equal(JSON.stringify(damaged.body).includes("private-invalid-epoch"), false);
+  assert.deepEqual(database.serialize(), damagedBefore);
+});
 
 async function request(started, pathname, { session, method = "GET", body, csrf = true, extraHeaders = {} } = {}) {
   const response = await fetch(`${started.baseUrl}${pathname}`, {
