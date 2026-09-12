@@ -714,9 +714,10 @@ test("restoring the selected backup excludes a later real buyout and restores ex
   // original preparation guard must continue to reject those sidecars.
   const prepared = prepareRecoveryCredentials({ ...input, restoredCandidate: restored,
     outputDirectory: path.join(input.temporaryRoot, "loss-window-prepared") });
+  const mutationsStoppedAtMs = Date.now();
   const preserved = await createVerifiedBackup({ databasePath: started.databasePath,
-    outputDirectory: path.join(input.temporaryRoot, "preserved-loss-window"), environment: "test",
-    reason: "incident-preservation", capturedAtMs: Date.now(), temporaryRoot: input.temporaryRoot });
+    outputDirectory: path.join(input.temporaryRoot, "preserved-loss-window"), environment: config.appEnv,
+    reason: "incident-preservation", capturedAtMs: mutationsStoppedAtMs, temporaryRoot: input.temporaryRoot });
   const restoredDatabase = openReadonlyDatabase({ databasePath: restored.targetDatabasePath });
   const preservedDatabase = openReadonlyDatabase({ databasePath: path.join(preserved.outputDirectory, BACKUP_FILE_NAME) });
   try {
@@ -762,6 +763,75 @@ test("restoring the selected backup excludes a later real buyout and restores ex
     assert.equal(comparison.completeLossWindowEvidence, false);
     assert.equal(JSON.stringify(comparison).includes(PRIVATE_VALUE), false);
     assert.equal(JSON.stringify(comparison).includes(issued.rawSessionToken), false);
+    await t.test("restore planning binds actual manifests, financial loss and administrator review without execution", async () => {
+      const { buildRecoveryRestorePlan } = require("../../src/operations/backups/buildRecoveryRestorePlan");
+      const backupManifestBytes = (await objectStorage.getPrivateObject({ objectKey: backup.manifestObjectKey })).body;
+      const preservationManifestPath = path.join(preserved.outputDirectory, "backup-manifest.json");
+      const preservationManifestBytes = fs.readFileSync(preservationManifestPath);
+      const options = { restoredDatabase, preservedDatabase, restoredVerification: restored, backupManifestBytes,
+        expectedBackupManifestSha256: hash(backupManifestBytes), preservationManifestBytes,
+        expectedPreservationManifestSha256: hash(preservationManifestBytes), targetEnvironment: config.appEnv,
+        expectedEnvironmentId: config.environmentId, expectedDatabaseId: config.databaseId, incidentId: crypto.randomUUID(),
+        requestedByUserId: fixtureId("account:platformAdmin"), requestedScope: "whole-database", mutationsStoppedAtMs,
+        plannedAtMs: Date.now(), currentBackendBuildId: "m7-current-backend", selectedBackendBuildId: "m7-candidate-backend",
+        frontendBuildId: "m7-current-frontend", migrationsDirectory: path.resolve(__dirname, "../../database/migrations"),
+        maintenancePlanSha256: hash("fixture maintenance plan"), communicationPlanSha256: hash("fixture communication plan") };
+      const before = [restoredDatabase,preservedDatabase].map(database => database.serialize());
+      const plan = buildRecoveryRestorePlan(options);
+      assert.equal(plan.restorePlanVersion, 1); assert.equal(plan.status, "awaiting-platform-approval");
+      assert.equal(plan.approval.status, "required"); assert.equal(plan.approval.approvedByUserId, null);
+      assert.equal(plan.approval.strongReauthentication, "required-at-execution");
+      assert.equal(plan.activationReady, false); assert.equal(plan.executable, false);
+      assert.equal(plan.providerEvidenceFetched, false); assert.equal(plan.buildCompatibility.applicationBehaviorVerified, false);
+      assert.equal(plan.selectedBackup.backupId, backup.backupId);
+      assert.equal(plan.rollbackArtifact.plaintextSha256, preserved.plaintextSha256);
+      assert.equal(plan.rollbackArtifact.manifestChecksum, preserved.manifestChecksum);
+      assert.equal(plan.expectedDataLossWindow.endsAtMs, mutationsStoppedAtMs);
+      assert.equal(plan.expectedDataLossWindow.startsAtMs, Date.parse(JSON.parse(backupManifestBytes).completedAt));
+      assert.deepEqual(plan.buildCompatibility.requiredMigrations, []);
+      assert.equal(plan.comparison.financialState.changedLeagues, 1);
+      assert.deepEqual(plan.comparison.financialState, financial);
+      assert.deepEqual(plan.affectedLeagueIds, [fixtureId("league:leagueA"),fixtureId("league:leagueB")].sort());
+      assert.equal(plan.current.rowCounts.buyout_obligations, plan.candidate.rowCounts.buyout_obligations + 1);
+      const { planChecksum, ...body } = plan; assert.equal(hash(canonicalize(body)), planChecksum);
+      assert.equal(JSON.stringify(plan).includes(PRIVATE_VALUE), false);
+      assert.equal(JSON.stringify(plan).includes(issued.rawSessionToken), false);
+      for (const [change, code] of [
+        [{ requestedByUserId: fixtureId("account:leagueBManagerOne") }, "RECOVERY_RESTORE_PLAN_REQUESTER_INVALID"],
+        [{ requestedScope: "league" }, "RECOVERY_RESTORE_PLAN_INPUT_INVALID"],
+        [{ expectedBackupManifestSha256: "0".repeat(64) }, "RECOVERY_RESTORE_PLAN_MANIFEST_INVALID"],
+        [{ expectedPreservationManifestSha256: "0".repeat(64) }, "RECOVERY_RESTORE_PLAN_MANIFEST_INVALID"],
+        [{ plannedAtMs: mutationsStoppedAtMs - 1 }, "RECOVERY_RESTORE_PLAN_INPUT_INVALID"],
+        [{ mutationsStoppedAtMs: plan.expectedDataLossWindow.startsAtMs - 1 }, "RECOVERY_RESTORE_PLAN_TIME_INVALID"],
+        [{ restoredDatabase: preservedDatabase }, "RECOVERY_RESTORE_PLAN_FAILED"],
+      ]) assert.throws(() => buildRecoveryRestorePlan({ ...options, ...change }), { code });
+      const pendingDirectory = path.join(input.temporaryRoot, "unapproved-migrations");
+      fs.mkdirSync(pendingDirectory);
+      for (const entry of fs.readdirSync(options.migrationsDirectory)) fs.copyFileSync(
+        path.join(options.migrationsDirectory, entry), path.join(pendingDirectory, entry), fs.constants.COPYFILE_EXCL);
+      fs.writeFileSync(path.join(pendingDirectory, "0057_unapproved_recovery.sql"), "SELECT 1;\n", { flag: "wx" });
+      assert.throws(() => buildRecoveryRestorePlan({ ...options, migrationsDirectory: pendingDirectory }),
+        { code: "RECOVERY_RESTORE_PLAN_FAILED" });
+      const commandDirectory = path.join(input.temporaryRoot, "restore-plan-command"); fs.mkdirSync(commandDirectory);
+      const write = (name, value) => { const file = path.join(commandDirectory, name); fs.writeFileSync(file, value, { flag: "wx" }); return file; };
+      const { restoredDatabase: ignoredRestored, preservedDatabase: ignoredPreserved, restoredVerification,
+        backupManifestBytes: ignoredBackup, preservationManifestBytes: ignoredPreservation, migrationsDirectory, ...requestInput } = options;
+      const request = { requestVersion: 1, ...requestInput, restoredDatabasePath: restoredDatabase.name,
+        preservedDatabasePath: preservedDatabase.name, restoredVerificationPath: write("restored.json", JSON.stringify(restoredVerification)),
+        backupManifestPath: write("backup-manifest.json", backupManifestBytes), preservationManifestPath };
+      const invoke = value => spawnSync(process.execPath, [path.resolve(__dirname, "../../scripts/db-restore-plan.js"),
+        "--request", write(crypto.randomUUID() + ".json", JSON.stringify(value))],
+        { encoding: "utf8", timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });
+      const result = invoke(request); assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, "");
+      assert.deepEqual(JSON.parse(result.stdout), plan);
+      for (const value of [{ ...request, requestedScope: "league" }, { ...request, approve: true },
+        { ...request, expectedBackupManifestSha256: "0".repeat(64) }]) {
+        const rejected = invoke(value); assert.equal(rejected.status, 1); assert.equal(rejected.stdout, "");
+        assert.equal(JSON.parse(rejected.stderr).error.message, "Restore planning failed safely. No execution was performed.");
+      }
+      for (const [index,database] of [restoredDatabase,preservedDatabase].entries()) assert.deepEqual(database.serialize(), before[index]);
+      assert.deepEqual(source.serialize(), sourceAfterKnownChanges);
+    });
     for (const connection of [restoredDatabase, preservedDatabase]) {
       assert.equal(connection.prepare("SELECT total_changes() AS count").get().count, 0);
     }
