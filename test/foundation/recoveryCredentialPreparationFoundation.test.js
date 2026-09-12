@@ -11,6 +11,7 @@ const { restoreEncryptedBackupToCleanPath } = require("../../src/operations/back
 const { prepareRecoveryCredentials } = require("../../src/operations/backups/prepareRecoveryCredentials");
 const { buildRecoveryReconciliationPlan } = require("../../src/operations/backups/buildRecoveryReconciliationPlan");
 const { prepareRecoveryEmailReconciliation } = require("../../src/operations/backups/prepareRecoveryEmailReconciliation");
+const { buildEmailReconciledRecoveryPlan } = require("../../src/operations/backups/buildEmailReconciledRecoveryPlan");
 const { createLeagueOutboxPublicationService } = require("../../src/application/services/activity/createLeagueOutboxPublicationService");
 const { createSqliteLeagueOutboxRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteLeagueOutboxRepository");
 const { compareRecoveryLossWindow } = require("../../src/operations/backups/compareRecoveryLossWindow");
@@ -269,6 +270,32 @@ test("reviewed restored email suppression preserves source, jobs and every unrel
       assert.equal(audit.event_type, "recovery.email_reconciled"); assert.equal(audit.actor_user_id, options.reviewedByUserId);
       assert.equal(audit.reason_code, `delivery_${result.decisionChecksum}`);
       assertCredentialAccess(db, false);
+      const parentDb = openReadonlyDatabase({ databasePath: reviewPath });
+      try {
+        const planInput = { preparedDatabase: parentDb, reconciledDatabase: db, credentialPreparation: prepared,
+          originalPlan: plan, emailReconciliation: result, observedAtMs: now + 1 };
+        const bytesBefore = db.serialize();
+        const next = buildEmailReconciledRecoveryPlan(planInput);
+        assert.equal(next.planVersion, 3); assert.equal(next.previousPlanChecksum, plan.planChecksum);
+        assert.equal(next.emailReconciliationChecksum, result.reportChecksum);
+        assert.equal(next.credentialPreparedPlaintextSha256, prepared.preparedPlaintextSha256);
+        assert.equal(next.preparedPlaintextSha256, result.reconciledPlaintextSha256);
+        assert.equal(next.unresolvedMessages, plan.unresolvedMessages - 3);
+        assert.deepEqual(next.jobs, plan.jobs); assert.deepEqual(next.tableSnapshots, result.tableSnapshots);
+        assert.equal(next.activationReady, false); assert.equal(next.executable, false);
+        for (const delivery of deliveries) {
+          const entry = next.outbox.find(row => row.id === delivery.eventId);
+          assert.equal(entry.status, "discarded"); assert.equal(entry.disposition, "preserve-recorded-result");
+          assert.equal(entry.deliveryPermitted, false); assert.notEqual(entry.rowSha256, delivery.rowSha256);
+        }
+        const { planChecksum, ...body } = next; assert.equal(hash(canonicalize(body)), planChecksum);
+        assert.equal(JSON.stringify(next).includes(PRIVATE_VALUE), false);
+        assert.throws(() => buildEmailReconciledRecoveryPlan({ ...planInput, observedAtMs: now - 1 }), { code: "RECOVERY_RECONCILED_INPUT_INVALID" });
+        assert.throws(() => buildEmailReconciledRecoveryPlan({ ...planInput, originalPlan: { ...plan, unresolvedMessages: 0 } }), { code: "RECOVERY_RECONCILED_PARENT_INVALID" });
+        assert.throws(() => buildEmailReconciledRecoveryPlan({ ...planInput, emailReconciliation: { ...result, reportChecksum: "e".repeat(64) } }), { code: "RECOVERY_RECONCILED_RECEIPT_INVALID" });
+        assert.throws(() => buildEmailReconciledRecoveryPlan({ ...planInput, reconciledDatabase: parentDb }), { code: "RECOVERY_RECONCILED_INPUT_INVALID" });
+        assert.deepEqual(db.serialize(), bytesBefore);
+      } finally { parentDb.close(); }
     } finally { db.close(); }
     assert.equal(JSON.stringify(result).includes(PRIVATE_VALUE), false);
     const { reconciledDatabasePath, inspection, reportChecksum, ...receipt } = result;
@@ -282,6 +309,29 @@ test("reviewed restored email suppression preserves source, jobs and every unrel
     const restoredDb = openReadonlyDatabase({ databasePath: restored.targetDatabasePath });
     const candidateDb = openReadonlyDatabase({ databasePath: reconciledDatabasePath });
     try { assert.deepEqual(allRows(restoredDb), allRows(candidateDb)); } finally { restoredDb.close(); candidateDb.close(); }
+  });
+  await t.test("rejects a self-consistent replacement receipt that conceals an unrelated league change", () => {
+    const alteredPath = path.join(input.temporaryRoot, "email-altered-review.sqlite3");
+    fs.copyFileSync(result.reconciledDatabasePath, alteredPath, fs.constants.COPYFILE_EXCL);
+    const writer = openDatabase({ databasePath: alteredPath, environment: "staging", persistentRoot: input.temporaryRoot, requirePersistentRoot: true }).database;
+    let tableSnapshots;
+    try {
+      writer.prepare("UPDATE teams SET version=version+1 WHERE id=(SELECT id FROM teams ORDER BY id LIMIT 1)").run();
+      tableSnapshots = Object.fromEntries(Object.entries(allRows(writer)).map(([name, rows]) =>
+        [name, { count: rows.length, sha256: hash(canonicalize(rows.map(row => hash(row)).sort())) }]));
+    } finally { writer.close(); }
+    const spoofed = { ...result, reconciledPlaintextSha256: readHash(alteredPath), tableSnapshots };
+    for (const field of ["reconciledDatabasePath", "inspection", "reportChecksum"]) delete spoofed[field];
+    const emailReconciliation = { ...spoofed, reportChecksum: hash(canonicalize(spoofed)) };
+    const parentDb = openReadonlyDatabase({ databasePath: reviewPath });
+    const alteredDb = openReadonlyDatabase({ databasePath: alteredPath });
+    try {
+      const beforeBytes = alteredDb.serialize();
+      assert.throws(() => buildEmailReconciledRecoveryPlan({ preparedDatabase: parentDb, reconciledDatabase: alteredDb,
+        credentialPreparation: prepared, originalPlan: plan, emailReconciliation, observedAtMs: now + 1 }),
+      { code: "RECOVERY_RECONCILED_DELTA_INVALID" });
+      assert.deepEqual(alteredDb.serialize(), beforeBytes);
+    } finally { parentDb.close(); alteredDb.close(); }
   });
   await t.test("rejects stale plans, mismatched evidence, duplicate decisions and non-administrators", () => {
     const mismatched = (changes) => [{ ...deliveries[0], ...changes }, ...deliveries.slice(1)];
