@@ -10,6 +10,7 @@ const { createEncryptedOffsiteBackup } = require("../../src/operations/backups/c
 const { restoreEncryptedBackupToCleanPath } = require("../../src/operations/backups/restoreEncryptedBackupToCleanPath");
 const { prepareRecoveryCredentials } = require("../../src/operations/backups/prepareRecoveryCredentials");
 const { buildRecoveryReconciliationPlan } = require("../../src/operations/backups/buildRecoveryReconciliationPlan");
+const { prepareRecoveryEmailReconciliation } = require("../../src/operations/backups/prepareRecoveryEmailReconciliation");
 const { compareRecoveryLossWindow } = require("../../src/operations/backups/compareRecoveryLossWindow");
 const { createVerifiedBackup, BACKUP_FILE_NAME } = require("../../src/infrastructure/database/sqliteBackup");
 const { inspectRecoveryInventory } = require("../../src/operations/backups/inspectRecoveryInventory");
@@ -157,6 +158,114 @@ async function candidate(t, alterSource = null) {
     recoveryId: crypto.randomUUID(), preparedAtMs: 100 };
   return { started, input, config, objectStorage, encryptionKey, backup };
 }
+
+test("reviewed restored email suppression preserves source, jobs and every unrelated row", async t => {
+  const { started, input, config, objectStorage, encryptionKey } = await candidate(t, database => {
+    const original = database.prepare("SELECT * FROM outbox_events WHERE id=?").get(fixtureId("recovery-preparation:outbox:security"));
+    for (const status of ["failed", "publishing"]) database.prepare("INSERT INTO outbox_events(" + Object.keys(original).join(",") + ") VALUES(" + Object.keys(original).map(key => `@${key}`).join(",") + ")")
+      .run({ ...original, id: fixtureId(`recovery-email:${status}`), status });
+  });
+  const sourceBefore = started.runtime.database.serialize();
+  const prepared = prepareRecoveryCredentials({ ...input, outputDirectory: path.join(input.temporaryRoot, "email-input") });
+  // Keep the offline input free of SQLite reader sidecars by reviewing an
+  // exact separate copy. The operation independently verifies another copy.
+  const reviewPath = path.join(input.temporaryRoot, "email-review-source.sqlite3");
+  fs.copyFileSync(prepared.preparedDatabasePath, reviewPath, fs.constants.COPYFILE_EXCL);
+  const reader = openReadonlyDatabase({ databasePath: reviewPath });
+  let plan; let beforeRows; let messages;
+  try {
+    plan = buildRecoveryReconciliationPlan({ database: reader, credentialPreparation: prepared, observedAtMs: 100,
+      expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID, expectedDatabaseId: FIXTURE_DATABASE_ID });
+    beforeRows = allRows(reader);
+    messages = reader.prepare("SELECT * FROM outbox_events WHERE league_id IS NULL AND status IN ('pending','failed','publishing') ORDER BY id").all();
+  } finally { reader.close(); }
+  const now = Date.now();
+  const deliveries = messages.map(row => ({ eventId: row.id, rowSha256: hash(canonicalize(row)), payloadSha256: hash(row.payload_json),
+    providerMessageSha256: hash(`synthetic-provider-message:${row.id}`), providerReceiptSha256: hash(`synthetic-delivery-receipt:${row.id}`), deliveredAtMs: 90 }));
+  assert.equal(deliveries.length, 3);
+  const options = { credentialPreparation: prepared, plan, deliveries, reviewedByUserId: fixtureId("account:platformAdmin"),
+    reconciliationId: crypto.randomUUID(), reconciledAtMs: now, temporaryRoot: input.temporaryRoot };
+  const sourceHash = readHash(prepared.preparedDatabasePath);
+  let result;
+  await t.test("suppresses exact pending, failed and publishing account messages while keeping the hold", async () => {
+    result = prepareRecoveryEmailReconciliation({ ...options, outputDirectory: path.join(input.temporaryRoot, "email-reviewed") });
+    assert.equal(result.suppressedMessages, 3); assert.equal(result.protectedTableCount, 131);
+    assert.equal(result.activationReady, false); assert.equal(result.jobs, "unchanged-and-held");
+    assert.equal(result.providerEvidence, "reviewer-supplied-not-independently-fetched");
+    assert.equal(result.unresolvedMessages, plan.unresolvedMessages - 3);
+    const db = openReadonlyDatabase({ databasePath: result.reconciledDatabasePath });
+    try {
+      const after = allRows(db);
+      for (const [table, rows] of Object.entries(beforeRows)) if (!["outbox_events", "security_audit_events", "application_metadata"].includes(table)) assert.deepEqual(after[table], rows, table);
+      const ids = new Set(deliveries.map(item => item.eventId));
+      for (const row of beforeRows.outbox_events.map(JSON.parse)) assert.deepEqual(db.prepare("SELECT * FROM outbox_events WHERE id=?").get(row.id), !ids.has(row.id) ? row : {
+        ...row, status: "discarded", payload_json: CLEARED_PAYLOAD_JSON, last_error_code: "RECOVERY_DELIVERY_RECONCILED", updated_at_ms: now, version: row.version + 1 });
+      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY).n, 1);
+      assert.deepEqual(readRecoveryEpoch(db), prepared.recoveryEpoch);
+      const audit = db.prepare("SELECT * FROM security_audit_events WHERE id=?").get(options.reconciliationId);
+      assert.equal(audit.event_type, "recovery.email_reconciled"); assert.equal(audit.actor_user_id, options.reviewedByUserId);
+      assert.equal(audit.reason_code, `delivery_${result.decisionChecksum}`);
+      assertCredentialAccess(db, false);
+    } finally { db.close(); }
+    assert.equal(JSON.stringify(result).includes(PRIVATE_VALUE), false);
+    const { reconciledDatabasePath, inspection, reportChecksum, ...receipt } = result;
+    assert.equal(hash(canonicalize(receipt)), reportChecksum);
+    const backup = await createEncryptedOffsiteBackup({ databasePath: reconciledDatabasePath, config, objectStorage,
+      reason: "pre-cutover-rehearsal", requestedByType: "release_qa_automation", requestedById: "m7-local-release-rehearsal",
+      backendBuildId: "recovery-email-local", retentionClass: "incident-preservation" });
+    const restored = await restoreEncryptedBackupToCleanPath({ manifestObjectKey: backup.manifestObjectKey, objectStorage,
+      keyResolver: async () => encryptionKey, expectedEnvironment: config.appEnv, expectedEnvironmentId: config.environmentId,
+      expectedDatabaseId: config.databaseId, temporaryRoot: input.temporaryRoot, targetDatabasePath: path.join(input.temporaryRoot, "email-roundtrip.sqlite3") });
+    const restoredDb = openReadonlyDatabase({ databasePath: restored.targetDatabasePath });
+    const candidateDb = openReadonlyDatabase({ databasePath: reconciledDatabasePath });
+    try { assert.deepEqual(allRows(restoredDb), allRows(candidateDb)); } finally { restoredDb.close(); candidateDb.close(); }
+  });
+  await t.test("rejects stale plans, mismatched evidence, duplicate decisions and non-administrators", () => {
+    const mismatched = (changes) => [{ ...deliveries[0], ...changes }, ...deliveries.slice(1)];
+    for (const [index, overrides, code] of [
+      [0, { plan: { ...plan, planChecksum: "e".repeat(64) } }, "RECOVERY_EMAIL_PLAN_INVALID"],
+      [1, { deliveries: mismatched({ rowSha256: "e".repeat(64) }) }, "RECOVERY_EMAIL_DELIVERY_MISMATCH"],
+      [2, { deliveries: mismatched({ payloadSha256: "e".repeat(64) }) }, "RECOVERY_EMAIL_DELIVERY_MISMATCH"],
+      [3, { deliveries: mismatched({ deliveredAtMs: 9 }) }, "RECOVERY_EMAIL_DELIVERY_MISMATCH"],
+      [4, { deliveries: [deliveries[0], deliveries[0]] }, "RECOVERY_EMAIL_INPUT_INVALID"],
+      [5, { deliveries: mismatched({ providerMessageSha256: deliveries[1].providerMessageSha256 }) }, "RECOVERY_EMAIL_INPUT_INVALID"],
+      [6, { reviewedByUserId: fixtureId("account:leagueACommissioner") }, "RECOVERY_EMAIL_REVIEWER_INVALID"],
+      [7, { deliveries: mismatched({ deliveredAtMs: now + 1 }) }, "RECOVERY_EMAIL_INPUT_INVALID"],
+      [8, { deliveries: mismatched({ eventId: plan.outbox.find(row => row.leagueId !== null).id }) }, "RECOVERY_EMAIL_DELIVERY_MISMATCH"],
+      [9, { deliveries: mismatched({ eventId: fixtureId("recovery-preparation:outbox:published") }) }, "RECOVERY_EMAIL_DELIVERY_MISMATCH"],
+    ]) {
+      const outputDirectory = path.join(input.temporaryRoot, `email-rejected-${index}`);
+      assert.throws(() => prepareRecoveryEmailReconciliation({ ...options, ...overrides, outputDirectory }), { code });
+      assert.equal(fs.existsSync(outputDirectory), false);
+    }
+  });
+  await t.test("rolls back every row before cleanup after interruption or an unexpected write", () => {
+    for (const tamper of [false, true]) {
+      let rollbackObserved = false;
+      const outputDirectory = path.join(input.temporaryRoot, `email-rollback-${tamper}`);
+      assert.throws(() => prepareRecoveryEmailReconciliation({ ...options, outputDirectory, beforeCommit(db) {
+        const close = db.close.bind(db);
+        db.close = () => { assert.equal(db.inTransaction, false); assert.deepEqual(allRows(db), beforeRows); rollbackObserved = true; return close(); };
+        if (tamper) db.prepare("UPDATE teams SET version=version+1 WHERE id=(SELECT id FROM teams ORDER BY id LIMIT 1)").run();
+        else throw new Error("simulated interruption");
+      } }), { code: tamper ? "RECOVERY_EMAIL_POSTCHECK_FAILED" : "RECOVERY_EMAIL_FAILED" });
+      assert.equal(rollbackObserved, true); assert.equal(fs.existsSync(outputDirectory), false);
+    }
+  });
+  await t.test("preserves colliding output and active-source sidecars without reusing a receipt", () => {
+    const outputDirectory = path.join(input.temporaryRoot, "email-collision"); fs.mkdirSync(outputDirectory);
+    const marker = path.join(outputDirectory, "owned-by-other-attempt.txt"); fs.writeFileSync(marker, "preserve", { flag: "wx" });
+    assert.throws(() => prepareRecoveryEmailReconciliation({ ...options, outputDirectory }), { code: "RECOVERY_EMAIL_PATH_UNSAFE" });
+    assert.equal(fs.readFileSync(marker, "utf8"), "preserve");
+    const wal = `${prepared.preparedDatabasePath}-wal`; fs.writeFileSync(wal, "active-writer", { flag: "wx" });
+    try {
+      assert.throws(() => prepareRecoveryEmailReconciliation({ ...options, outputDirectory: path.join(input.temporaryRoot, "email-wal-rejected") }), { code: "RECOVERY_EMAIL_SOURCE_CHANGED" });
+      assert.equal(fs.readFileSync(wal, "utf8"), "active-writer");
+    } finally { fs.unlinkSync(wal); }
+  });
+  assert.equal(readHash(prepared.preparedDatabasePath), sourceHash);
+  assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
+});
 
 test("encrypted clean restore preparation invalidates credentials atomically and preserves both leagues", async (t) => {
   const { started, input, config, objectStorage, encryptionKey } = await candidate(t);
