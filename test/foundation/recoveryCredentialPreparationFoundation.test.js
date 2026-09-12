@@ -674,6 +674,58 @@ test("encrypted clean restore preparation invalidates credentials atomically and
   assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
 });
 
+test("the recovery preparation command creates a held derivative and preserves sources and rejected outputs", async t => {
+  const { started,input } = await candidate(t);
+  const sourceBefore = started.runtime.database.serialize(), restoredHash = readHash(input.restoredCandidate.targetDatabasePath);
+  const directory = path.join(input.temporaryRoot,"preparation-command"); fs.mkdirSync(directory);
+  const write = (name,value) => { const file = path.join(directory,name); fs.writeFileSync(file,JSON.stringify(value),{ flag: "wx" }); return file; };
+  const { restoredCandidate,...requestInput } = input;
+  const request = { requestVersion: 1,...requestInput,restoredVerificationPath: write("restored.json",restoredCandidate),
+    outputDirectory: path.join(input.temporaryRoot,"command-prepared") };
+  const invoke = value => spawnSync(process.execPath,[path.resolve(__dirname,"../../scripts/db-recovery-prepare.js"),
+    "--request",write(crypto.randomUUID()+".json",value)],{ encoding: "utf8",timeout: 60_000,maxBuffer: 8*1024*1024 });
+  const prepared = invoke(request); assert.equal(prepared.status,0,prepared.stderr); assert.equal(prepared.stderr,"");
+  const report = JSON.parse(prepared.stdout);
+  assert.equal(report.status,"credentials-prepared"); assert.equal(report.sourceBackupId,restoredCandidate.backupId);
+  assert.equal(report.recoveryId,input.recoveryId); assert.equal(report.sourcePlaintextSha256,restoredHash);
+  assert.equal(report.activationReady,false); assert.equal(report.normalRuntime,"blocked-by-durable-recovery-hold");
+  assert.equal(report.sessionsRevoked,1); assert.equal(report.actionTokensInvalidated,4); assert.equal(report.staleAccountLinksDiscarded,7);
+  assert.equal(prepared.stdout.includes(PRIVATE_VALUE),false);
+  const receiptPath = path.join(request.outputDirectory,"credential-preparation.json");
+  const stored = JSON.parse(fs.readFileSync(receiptPath,"utf8")), { preparedDatabasePath,inspection,...receipt } = report;
+  assert.deepEqual(receipt,stored); assert.equal(readHash(preparedDatabasePath),report.preparedPlaintextSha256);
+  const { reportChecksum,...body } = receipt; assert.equal(hash(canonicalize(body)),reportChecksum);
+  const database = openReadonlyDatabase({ databasePath: preparedDatabasePath });
+  try {
+    assertCredentialAccess(database,false);
+    const plan = buildRecoveryReconciliationPlan({ database,credentialPreparation: report,observedAtMs: 100,
+      expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID,expectedDatabaseId: FIXTURE_DATABASE_ID });
+    assert.equal(plan.activationReady,false); assert.equal(plan.executable,false);
+    assert.ok(plan.unresolvedJobs > 0); assert.ok(plan.unresolvedMessages > 0);
+    assert.throws(() => createTargetRuntime({ database,migrationsDirectory: path.resolve(__dirname,"../../database/migrations") }),
+      { code: "DATABASE_RECOVERY_HELD" });
+    assert.equal(database.prepare("SELECT total_changes() n").get().n,0);
+  } finally { database.close(); }
+  const collision = path.join(input.temporaryRoot,"command-collision"); fs.mkdirSync(collision);
+  const marker = path.join(collision,"preserve.txt"); fs.writeFileSync(marker,"preserve",{ flag: "wx" });
+  const safeBefore = [readHash(preparedDatabasePath),readHash(receiptPath)];
+  for (const value of [request,{ ...request,outputDirectory: collision },
+    { ...request,outputDirectory: path.join(input.temporaryRoot,"command-wrong-identity"),expectedDatabaseId: "wrong-database-id" },
+    { ...request,outputDirectory: path.join(input.temporaryRoot,"command-no-approval"),approve: true },
+    { ...request,outputDirectory: "relative-output" }]) {
+    const rejected = invoke(value); assert.equal(rejected.status,1); assert.equal(rejected.stdout,"");
+    assert.equal(JSON.parse(rejected.stderr).error.message,"Recovery preparation failed safely. No activation was performed.");
+    assert.equal(rejected.stderr.includes(PRIVATE_VALUE),false);
+    assert.equal(rejected.stderr.includes(directory.replace(/\\/g,"\\\\")),false);
+  }
+  assert.equal(fs.readFileSync(marker,"utf8"),"preserve");
+  assert.equal(fs.existsSync(path.join(input.temporaryRoot,"command-wrong-identity")),false);
+  assert.equal(fs.existsSync(path.join(input.temporaryRoot,"command-no-approval")),false);
+  assert.deepEqual([readHash(preparedDatabasePath),readHash(receiptPath)],safeBefore);
+  assert.equal(readHash(restoredCandidate.targetDatabasePath),restoredHash);
+  assert.deepEqual(started.runtime.database.serialize(),sourceBefore);
+});
+
 test("an account link bound to a different recipient rejects recovery preparation without changing its verified source", async (t) => {
   const { started, input } = await candidate(t, database => {
     database.prepare("UPDATE outbox_events SET payload_json=json_set(payload_json,'$.recipientUserId',?) WHERE id=?")
