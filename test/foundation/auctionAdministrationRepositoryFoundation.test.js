@@ -6982,6 +6982,19 @@ describe(
           }
         );
 
+        const invalidExtension = runtime.database.prepare(`
+          INSERT INTO auctions (
+            id, league_id, season_id, player_id, status, opened_at_ms,
+            resolves_at_ms, opened_by_user_id, created_at_ms, updated_at_ms, version
+          ) VALUES (?, ?, ?, ?, 'open', ?, ?, NULL, ?, ?, 1)
+        `);
+        for (const duration of [HOUR_MS, DAY_MS - 1, DAY_MS + 1]) {
+          assert.throws(() => invalidExtension.run(
+            IDS.fallbackAuction, IDS.league, IDS.season, IDS.player,
+            execution.nowMs, execution.nowMs + duration, execution.nowMs, execution.nowMs
+          ), /active auction overlap requires one exact restricted fallback handoff/);
+        }
+
         const result = openRestrictedFallback(
           runtime,
           command
