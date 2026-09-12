@@ -125,9 +125,9 @@ function deepFreeze(value) {
 function selectRow(row, fields) {
   if (row === null || row === undefined) return null;
   return Object.fromEntries(
-    fields.map(([output, stored]) => [
+    fields.map(([output, stored, transform]) => [
       output,
-      row[stored],
+      transform ? transform(row[stored]) : row[stored],
     ])
   );
 }
@@ -1291,7 +1291,8 @@ function createSqliteFreeAgentDraftReadRepository({
         version AS generation_version,
         week_one_matchup_week_id AS week_id,
         week_one_starts_at_ms AS starts_at_ms,
-        created_at_ms
+        created_at_ms,
+        fad_timing_json
       FROM season_matchup_schedule_generations
       WHERE league_id = @leagueId
         AND season_id = @seasonId
@@ -2822,6 +2823,9 @@ function createSqliteFreeAgentDraftReadRepository({
             ["weekId", "week_id"],
             ["startsAtMs", "starts_at_ms"],
             ["createdAtMs", "created_at_ms"],
+            ...(currentSchedule?.fad_timing_json == null ? [] : [
+              ["draftTiming", "fad_timing_json", JSON.parse],
+            ]),
           ]
         ),
         currentScheduleOperation: selectRow(

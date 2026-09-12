@@ -9,6 +9,7 @@ const {
   buildFreeAgentDraftReminderOccurrenceKey,
   buildFreeAgentDraftRolloverOccurrenceKey,
   createFreeAgentDraftClock,
+  validateFreeAgentDraftTiming,
   parseFreeAgentDraftOccurrenceKey,
   validateFreeAgentDraftRolloverSequence,
   validateFreeAgentDraftStatusTransition,
@@ -1024,10 +1025,12 @@ function normalizeScheduleBinding(
       "version",
       "weekOneMatchupWeekId",
       "weekOneStartsAtMs",
+      ...(input && Object.hasOwn(input, "draftTiming") ? ["draftTiming"] : []),
     ],
     description
   );
   return Object.freeze({
+    ...(input.draftTiming === undefined ? {} : { draftTiming: validateFreeAgentDraftTiming(input.draftTiming, input.weekOneStartsAtMs) }),
     operationId: stableId(
       input.operationId,
       "schedule-operation identifier"
@@ -1073,6 +1076,7 @@ function scheduleBindingFromGeneration(
 
 function schedulesMatch(left, right) {
   return (
+    JSON.stringify(left.draftTiming ?? null) === JSON.stringify(right.draftTiming ?? null) &&
     left.operationId === right.operationId &&
     left.version === right.version &&
     left.weekOneMatchupWeekId ===
@@ -1332,13 +1336,13 @@ function normalizeOpeningCommand(input) {
   }
   const rolloverIds = normalizeIdArray(
     input.evidence.rolloverIds,
-    FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT,
+    schedule.draftTiming?.rolloverTimesAtMs.length ?? FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT,
     "initial rollover identifiers"
   );
   const rolloverJobRunIds =
     normalizeIdArray(
       input.evidence.rolloverJobRunIds,
-      FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT,
+      schedule.draftTiming?.rolloverTimesAtMs.length ?? FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT,
       "initial rollover job-run identifiers"
     );
   const evidence = Object.freeze({
@@ -1433,6 +1437,7 @@ function normalizeOpeningCommand(input) {
   let clock;
   try {
     clock = createFreeAgentDraftClock({
+      ...(schedule.draftTiming ? { draftTiming: schedule.draftTiming } : {}),
       cardsOpenedAtMs: openedAtMs,
       firstMatchupStartsAtMs:
         recoveryBoundary.targetSchedule
@@ -1940,6 +1945,7 @@ function requireCanonicalBlockerNotification(
 function draftRecord(row) {
   if (!row) return null;
   return Object.freeze({
+    ...(row.initial_rollover_times_json == null ? {} : { initialRolloverTimesAtMs: JSON.parse(row.initial_rollover_times_json) }),
     id: row.id,
     leagueId: row.league_id,
     seasonId: row.season_id,
@@ -2612,7 +2618,8 @@ function createSqliteFreeAgentDraftRepository({
           generation.schedule_operation_id,
           generation.schedule_version,
           generation.week_one_matchup_week_id,
-          generation.week_one_starts_at_ms
+          generation.week_one_starts_at_ms,
+          generation.fad_timing_json
         FROM season_matchup_schedule_generations
           AS generation
         JOIN matchup_operations AS operation
@@ -2698,7 +2705,8 @@ function createSqliteFreeAgentDraftRepository({
         completed_at_ms,
         created_at_ms,
         updated_at_ms,
-        version
+        version,
+        initial_rollover_times_json
       ) VALUES (
         @fadId,
         @leagueId,
@@ -2725,7 +2733,8 @@ function createSqliteFreeAgentDraftRepository({
         NULL,
         @openedAtMs,
         @openedAtMs,
-        1
+        1,
+        @initialRolloverTimesJson
       )
     `);
     insertParticipantStatement =
@@ -4025,7 +4034,7 @@ function createSqliteFreeAgentDraftRepository({
       durable.cards.length !==
         durable.draft.participatingTeamCount ||
       durable.rollovers.length !==
-        FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT ||
+        (durable.draft.initialRolloverTimesAtMs?.length ?? FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT) ||
       JSON.stringify(projectedTeamIds) !==
         JSON.stringify(durableTeamIds) ||
       (
@@ -4747,7 +4756,8 @@ function createSqliteFreeAgentDraftRepository({
       current.week_one_matchup_week_id !==
         expected.weekOneMatchupWeekId ||
       current.week_one_starts_at_ms !==
-        expected.weekOneStartsAtMs
+        expected.weekOneStartsAtMs ||
+      (command.clock !== undefined && JSON.stringify(current.fad_timing_json == null ? null : JSON.parse(current.fad_timing_json)) !== JSON.stringify(expected.draftTiming ?? null))
     ) {
       conflict(
         afterWriter
@@ -4756,6 +4766,7 @@ function createSqliteFreeAgentDraftRepository({
       );
     }
     return Object.freeze({
+      ...(command.clock === undefined || current.fad_timing_json == null ? {} : { draftTiming: JSON.parse(current.fad_timing_json) }),
       operationId:
         current.schedule_operation_id,
       version: current.schedule_version,
@@ -4812,6 +4823,7 @@ function createSqliteFreeAgentDraftRepository({
     const opening = finalized.opening;
     const currentSchedule = opening
       ? Object.freeze({
+          ...(opening.currentSchedule.draftTiming ? { draftTiming: opening.currentSchedule.draftTiming } : {}),
           operationId:
             opening.currentSchedule.operationId,
           version:
@@ -5318,6 +5330,7 @@ function createSqliteFreeAgentDraftRepository({
       .map(rolloverRecord);
     try {
       validateFreeAgentDraftRolloverSequence({
+        ...(draft.initialRolloverTimesAtMs ? { initialRolloverTimesAtMs: draft.initialRolloverTimesAtMs } : {}),
         candidateDeadlineAtMs:
           draft.candidateDeadlineAtMs,
         rollovers: rollovers.map(
@@ -5547,7 +5560,7 @@ function createSqliteFreeAgentDraftRepository({
           durable.draft.readinessOccurrenceKey !==
             readiness.occurrenceKey ||
           durable.rollovers.length !==
-            FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT
+            (durable.draft.initialRolloverTimesAtMs?.length ?? FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT)
         ) {
           incompatible(
             "The succeeded FAD readiness result is incomplete."
@@ -5707,6 +5720,7 @@ function createSqliteFreeAgentDraftRepository({
       }
 
       insertDraftStatement.run({
+        initialRolloverTimesJson: command.schedule.draftTiming ? JSON.stringify(command.schedule.draftTiming.rolloverTimesAtMs) : null,
         fadId: command.evidence.fadId,
         leagueId: command.leagueId,
         seasonId: command.seasonId,
@@ -5890,7 +5904,7 @@ function createSqliteFreeAgentDraftRepository({
       for (
         let index = 0;
         index <
-        FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT;
+        command.clock.initialRollovers.length;
         index += 1
       ) {
         const clock =
@@ -6210,7 +6224,7 @@ function createSqliteFreeAgentDraftRepository({
         !succeeded ||
         succeeded.status !== "succeeded" ||
         durable.rollovers.length !==
-          FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT
+          (durable.draft.initialRolloverTimesAtMs?.length ?? FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT)
       ) {
         incompatible(
           "The committed FAD opening result is incomplete."

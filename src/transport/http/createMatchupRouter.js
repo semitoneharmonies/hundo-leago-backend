@@ -1,8 +1,15 @@
 const express = require("express");
 
+const PUBLIC_CALENDAR_ISSUES = new Set([
+  "date_order", "playoff_length", "season_year", "playoffs_start_day",
+  "week_one_start_day", "week_one_in_past", "week_one_outside_season",
+]);
+
 const SAFE_MESSAGES = Object.freeze({
   FAD_DEADLINE_NOT_FUTURE:
-    "Choose a later Week 1 so the Candidate Card deadline is still ahead and rapid auctions have seven full days.",
+    "Choose a Candidate Card deadline in the future, before Week 1.",
+  FAD_TIMING_INVALID:
+    "Check the Candidate Card deadline and rollover times. Each rollover must follow the deadline and the previous round, and finish by Week 1.",
   IDEMPOTENCY_KEY_REUSED:
     "The idempotency key was already used for a different request.",
   IDEMPOTENCY_REQUEST_UNAVAILABLE:
@@ -92,12 +99,12 @@ function createMatchupRouter({
       });
   }
 
-  function failure(request, response, status, code) {
+  function failure(request, response, status, code, details) {
     return response
       .status(status)
       .set("Cache-Control", "no-store")
       .json({
-        error: { code, message: SAFE_MESSAGES[code], requestId: requestId(request) },
+        error: { code, message: SAFE_MESSAGES[code], requestId: requestId(request), ...(details ? { details } : {}) },
       });
   }
 
@@ -130,6 +137,12 @@ function createMatchupRouter({
 
   function mapError(request, response, error) {
     const code = error?.code || error?.reasonCode || "";
+    if (code === "MATCHUP_SCHEDULE_CALENDAR_INVALID" && PUBLIC_CALENDAR_ISSUES.has(error.calendarIssue)) {
+      return failure(request, response, 400, "MATCHUP_INPUT_INVALID", { calendarIssue: error.calendarIssue });
+    }
+    if (code === "FAD_TIMING_INVALID") {
+      return failure(request, response, 400, code);
+    }
     if (code === "FAD_DEADLINE_NOT_FUTURE") {
       return failure(request, response, 409, code);
     }

@@ -318,11 +318,11 @@ function assertRuntime(runtime) {
     !runtime ||
     !runtime.database ||
     runtime.database.open !== true ||
-    ![54, 55].includes(runtime.database.pragma("user_version", { simple: true }))
+    ![54, 55, 56].includes(runtime.database.pragma("user_version", { simple: true }))
   ) {
     fail(
       "FREE_AGENT_DRAFT_BROWSER_FIXTURE_RUNTIME_INVALID",
-      "The local FAD browser fixture requires an open schema-54 or schema-55 release-QA runtime."
+      "The local FAD browser fixture requires an open schema-54, schema-55 or schema-56 release-QA runtime."
     );
   }
   requireMethod(

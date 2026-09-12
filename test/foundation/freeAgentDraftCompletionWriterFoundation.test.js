@@ -406,7 +406,7 @@ function seedLeague(database) {
   `).run(IDS.membership, IDS.season, IDS.league);
 }
 
-function seedSchedule(database) {
+function seedSchedule(database, draftTiming) {
   const calendar = {
     nhlSeasonKey: "20262027",
     nhlRegularSeasonStartsAtMs: Date.parse(
@@ -567,16 +567,17 @@ function seedSchedule(database) {
       league_id, season_id, schedule_version,
       schedule_operation_id, week_one_matchup_week_id,
       week_one_starts_at_ms, status, created_at_ms,
-      superseded_at_ms, version
+      superseded_at_ms, version, fad_timing_json
     ) VALUES (
-      ?, ?, 1, ?, ?, ?, 'current', 3, NULL, 1
+      ?, ?, 1, ?, ?, ?, 'current', 3, NULL, 1, ?
     )
   `).run(
     IDS.league,
     IDS.season,
     IDS.scheduleOperation,
     IDS.weekOne,
-    WEEK_ONE_AT_MS
+    WEEK_ONE_AT_MS,
+    draftTiming === undefined ? null : JSON.stringify(draftTiming)
   );
   const serviceJobs = [];
   weeks.forEach((week, weekIndex) => {
@@ -704,7 +705,7 @@ function insertJob(database, values) {
   `).run(values);
 }
 
-function seedTerminalFad(database) {
+function seedTerminalFad(database, draftTiming) {
   database.exec(`
     DROP TRIGGER IF EXISTS free_agent_drafts_valid_insert;
     DROP TRIGGER IF EXISTS free_agent_draft_teams_participant_insert;
@@ -751,12 +752,12 @@ function seedTerminalFad(database) {
       help_opens_at_ms, candidate_deadline_at_ms,
       first_matchup_starts_at_ms, deadline_locked_at_ms,
       allocation_completed_at_ms, completed_at_ms,
-      created_at_ms, updated_at_ms, version
+      created_at_ms, updated_at_ms, version, initial_rollover_times_json
     ) VALUES (
       ?, ?, ?, ?, 'test-readiness', ?, ?, NULL, 2,
       'rapid', 'no_draft_inaugural', NULL, NULL, NULL,
       'completion fixture', 'system', ?, ?, ?, ?, ?, ?,
-      NULL, ?, ?, 7
+      NULL, ?, ?, 7, ?
     )
   `).run(
     IDS.fad,
@@ -772,7 +773,8 @@ function seedTerminalFad(database) {
     DEADLINE_AT_MS,
     DEADLINE_AT_MS + 1,
     OPENED_AT_MS,
-    DEADLINE_AT_MS + 1
+    DEADLINE_AT_MS + 1,
+    draftTiming === undefined ? null : JSON.stringify(draftTiming.rolloverTimesAtMs)
   );
   database.prepare(`
     INSERT INTO free_agent_draft_teams (
@@ -1011,14 +1013,14 @@ function seedTerminalFad(database) {
   );
 
   let predecessorId = null;
-  for (let index = 0; index < 7; index += 1) {
+  for (let index = 0; index < (draftTiming?.rolloverTimesAtMs.length ?? 7); index += 1) {
     const sequence = index + 1;
     const rolloverId = uuid(100 + sequence);
     const rolloverJobId = uuid(200 + sequence);
     const opensAtMs =
-      DEADLINE_AT_MS + index * FREE_AGENT_DRAFT_DAY_MS;
+      draftTiming ? (index ? draftTiming.rolloverTimesAtMs[index - 1] : DEADLINE_AT_MS) : DEADLINE_AT_MS + index * FREE_AGENT_DRAFT_DAY_MS;
     const rollsOverAtMs =
-      opensAtMs + FREE_AGENT_DRAFT_DAY_MS;
+      draftTiming?.rolloverTimesAtMs[index] ?? opensAtMs + FREE_AGENT_DRAFT_DAY_MS;
     insertJob(database, {
       id: rolloverJobId,
       leagueId: IDS.league,
@@ -1573,7 +1575,7 @@ function fixture(t, options = {}) {
     ["terminal FAD", seedTerminalFad],
   ]) {
     try {
-      const seeded = seed(database);
+      const seeded = seed(database, options.draftTiming);
       if (name === "schedule") {
         schedule = seeded;
       }
@@ -1782,6 +1784,23 @@ function installPriorScheduleRecovery({
 }
 
 describe("SQLite Free Agent Draft completion writer", () => {
+  for (const count of [5, 14]) test(`completes only after the configured final round among ${count} rounds`, (t) => {
+    const times = Array.from({ length: count }, (_, i) => DEADLINE_AT_MS + Math.floor(7 * FREE_AGENT_DRAFT_DAY_MS * (i + 1) / count));
+    const draftTiming = { candidateDeadlineAtMs: DEADLINE_AT_MS, rolloverTimesAtMs: times };
+    const { database, writer, lifecycleRepository } = fixture(t, { draftTiming, realRecovery: true });
+    assert.deepEqual(writer.listCandidates({ nowMs: times.at(-1) - 1, limit: 10 }), []);
+    const candidates = writer.listCandidates({ nowMs: COMPLETED_AT_MS, limit: 10 });
+    assert.equal(candidates.length, 1);
+    const claim = claimCompletion(database);
+    assert.equal(claim.acquired, true);
+    const command = completionCommand(claim.occurrence);
+    const result = writer.executeClaimed(command, lifecycleRepository);
+    assert.equal(result.outcome, 'succeeded');
+    assert.equal(database.prepare('SELECT status FROM free_agent_drafts WHERE id = ?').get(IDS.fad).status, 'completed');
+    assert.deepEqual(JSON.parse(database.prepare('SELECT initial_rollover_times_json FROM free_agent_drafts WHERE id = ?').get(IDS.fad).initial_rollover_times_json), times);
+    assert.equal(writer.executeClaimed(command, lifecycleRepository).replayed, true);
+    assert.deepEqual(database.pragma('foreign_key_check'), []);
+  });
   test("ensures a missing due completion job exactly once while candidate reads remain read-only", (t) => {
     const { database, writer } = fixture(t);
     database.prepare("DELETE FROM job_runs WHERE id = ?").run(IDS.completionJob);

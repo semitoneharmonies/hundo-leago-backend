@@ -1117,17 +1117,17 @@ function createSqliteFreeAgentDraftRolloverWriter({
     if (
       scope.rolloverAtMs > MAX_TIMESTAMP_MS - FREE_AGENT_DRAFT_DAY_MS ||
       successor.sequence !== scope.sequence + 1 ||
-      successor.window_kind !== "extension" ||
+      !["initial", "extension"].includes(successor.window_kind) ||
       successor.predecessor_rollover_id !== scope.rolloverId ||
-      !["queued_nomination", "restricted_auction", "fallback_auction", "recovery"]
-        .includes(successor.extension_reason) ||
-      !UUID_PATTERN.test(successor.extension_source_id || "") ||
+      (successor.window_kind === "extension"
+        ? !["queued_nomination", "restricted_auction", "fallback_auction", "recovery"].includes(successor.extension_reason) || !UUID_PATTERN.test(successor.extension_source_id || "")
+        : successor.extension_reason !== null || successor.extension_source_id !== null) ||
       successor.opens_at_ms !== scope.rolloverAtMs ||
-      successor.rolls_over_at_ms !==
-        scope.rolloverAtMs + FREE_AGENT_DRAFT_DAY_MS ||
+      (successor.window_kind === "extension"
+        ? successor.rolls_over_at_ms !== scope.rolloverAtMs + FREE_AGENT_DRAFT_DAY_MS
+        : successor.rolls_over_at_ms <= scope.rolloverAtMs) ||
       successor.creation_cutoff_at_ms !==
-        successor.rolls_over_at_ms -
-          FREE_AGENT_DRAFT_CREATION_CUTOFF_MS
+        Math.max(successor.opens_at_ms, successor.rolls_over_at_ms - FREE_AGENT_DRAFT_CREATION_CUTOFF_MS)
     ) {
       incompatible(
         "The rollover successor is not a contiguous canonical window.",

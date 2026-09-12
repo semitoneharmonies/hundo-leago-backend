@@ -3128,6 +3128,27 @@ describe("SQLite FAD auction resolution writer foundation", () => {
     );
   });
 
+  test("creates the restricted fallback in the configured thirty-minute next round", (t) => {
+    const runtime = createScenarioRuntime(t, "restricted_zero");
+    const end = RESOLVES_AT_MS + 30 * 60 * 1000;
+    const triggers = captureAndDropTriggers(runtime.database);
+    try {
+      runtime.database.prepare("UPDATE free_agent_drafts SET initial_rollover_times_json = ? WHERE id = ?")
+        .run(JSON.stringify([AUCTION_OPENS_AT_MS, RESOLVES_AT_MS, end]), IDS.fad);
+      runtime.database.prepare("UPDATE free_agent_draft_rollovers SET rolls_over_at_ms = ?, creation_cutoff_at_ms = opens_at_ms WHERE id = ?")
+        .run(end, IDS.rolloverThree);
+    } finally { restoreTriggers(runtime.database, triggers); }
+    const { result } = claimAndExecute(runtime);
+    assert.equal(result.outcome, "restricted_fallback");
+    const fallback = runtime.database.prepare("SELECT opened_at_ms, resolves_at_ms FROM auctions WHERE id = ?").get(result.fallbackAuctionId);
+    assert.deepEqual(fallback, { opened_at_ms: RESOLVES_AT_MS, resolves_at_ms: end });
+    const job = runtime.database.prepare("SELECT scheduled_for_ms FROM job_runs WHERE occurrence_key = ?")
+      .get(`auction:${result.fallbackAuctionId}:${end}`);
+    assert.equal(job.scheduled_for_ms, end);
+    assert.equal(runtime.writer.findResolution({ leagueId: IDS.league, auctionId: runtime.auctionId, occurrenceKey: runtime.key }).replayed, true);
+    assert.deepEqual(runtime.database.prepare("PRAGMA foreign_key_check").all(), []);
+  });
+
   test("delegates zero restricted improvements to the shared full-window fallback in the same transaction", (t) => {
     const runtime = createScenarioRuntime(t, "restricted_zero");
     const { result } = claimAndExecute(runtime);

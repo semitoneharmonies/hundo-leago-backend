@@ -1070,6 +1070,25 @@ function sideEffectCounts(database) {
 }
 
 describe("SQLite delayed FAD fallback activation writer", () => {
+  test("activates and replays a fallback in a configured thirty-minute round", (t) => {
+    const { database, writer, command } = createRuntime(t);
+    const end = ACTIVATION_AT_MS + 30 * 60 * 1000;
+    withoutTriggers(database, () => {
+      database.prepare("UPDATE auctions SET resolves_at_ms = ? WHERE id = ?").run(end, IDS.fallbackAuction);
+      database.prepare("UPDATE free_agent_draft_rollovers SET rolls_over_at_ms = ?, creation_cutoff_at_ms = opens_at_ms WHERE id = ?").run(end, IDS.targetRollover);
+      database.prepare("UPDATE job_runs SET scheduled_for_ms = ?, next_attempt_at_ms = ?, occurrence_key = ? WHERE id = ?")
+        .run(end, end, `auction:${IDS.fallbackAuction}:${end}`, IDS.resolutionJob);
+    });
+    assert.equal(writer.findActivation({ leagueId: IDS.league, seasonId: IDS.season, fadId: IDS.fad, allocationId: IDS.allocation, activationAtMs: ACTIVATION_AT_MS }).resolvesAtMs, end);
+    const result = writer.executeClaimed(command);
+    assert.equal(result.outcome, "succeeded");
+    assert.equal(database.prepare("SELECT resolves_at_ms FROM auctions WHERE id = ?").get(IDS.fallbackAuction).resolves_at_ms, end);
+    const counts = sideEffectCounts(database);
+    assert.equal(writer.executeClaimed(command).replayed, true);
+    assert.deepEqual(sideEffectCounts(database), counts);
+    assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
+  });
+
   test("exports the exact uncomposed writer surface", () => {
     assert.deepEqual(
       FREE_AGENT_DRAFT_FALLBACK_ACTIVATION_WRITER_METHODS,

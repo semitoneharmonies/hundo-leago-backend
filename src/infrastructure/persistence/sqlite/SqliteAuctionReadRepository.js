@@ -494,7 +494,7 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
       !UUID_PATTERN.test(context.fad_rollover_id || "") ||
       context.target_rollover_at_ms !== head.resolves_at_ms ||
       context.creation_cutoff_at_ms !==
-        context.target_rollover_at_ms - 3_600_000
+        Math.max(context.rollover_opens_at_ms, context.target_rollover_at_ms - 3_600_000)
     ) {
       incompatible("The FAD auction rollover context is inconsistent.");
     }
@@ -1923,6 +1923,7 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
         free_agent_draft_rollovers.rolls_over_at_ms
           AS target_rollover_at_ms,
         free_agent_draft_rollovers.creation_cutoff_at_ms,
+        free_agent_draft_rollovers.opens_at_ms AS rollover_opens_at_ms,
         free_agent_draft_player_allocations.restricted_minimum_total_cents
           AS minimum_total_value_cents,
         free_agent_draft_player_allocations.restricted_minimum_term_years

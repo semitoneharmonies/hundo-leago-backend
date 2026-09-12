@@ -527,8 +527,7 @@ function normalizeSuccessor(value, rollover) {
     successor.sequence !== rollover.sequence + 1 ||
     successor.predecessorRolloverId !== rollover.id ||
     successor.opensAtMs !== rollover.rollsOverAtMs ||
-    successor.rollsOverAtMs !==
-      rollover.rollsOverAtMs + DAY_MS
+    successor.rollsOverAtMs <= rollover.rollsOverAtMs
   ) {
     invalid("successor_contiguity_invalid");
   }

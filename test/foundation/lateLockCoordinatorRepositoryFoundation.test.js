@@ -452,7 +452,7 @@ function createRuntime(t) {
           "FROM schema_migrations"
       )
       .get().migration_id,
-    55
+    56
   );
   seedStatistics(connection.database);
   const repository =

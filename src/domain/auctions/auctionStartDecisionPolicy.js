@@ -219,10 +219,12 @@ function canonicalRapidContext(value, nowMs) {
       "rollsOverAtMs",
       "seasonId",
       "status",
+      ...(Object.hasOwn(value.rollover, "followingRolloverAtMs") ? ["followingRolloverAtMs"] : []),
     ],
     AUCTION_CREATION_CODES.inputInvalid
   );
   const rollover = {
+    ...(Object.hasOwn(value.rollover, "followingRolloverAtMs") ? { followingRolloverAtMs: safeTimestamp(value.rollover.followingRolloverAtMs) } : {}),
     id: stableId(value.rollover.id),
     leagueId: stableId(value.rollover.leagueId),
     seasonId: stableId(value.rollover.seasonId),
@@ -250,6 +252,7 @@ function canonicalRapidContext(value, nowMs) {
   let timing;
   try {
     timing = classifyFreeAgentDraftNominationTiming({
+      ...(rollover.followingRolloverAtMs === undefined ? {} : { followingRolloverAtMs: rollover.followingRolloverAtMs }),
       acceptedAtMs: nowMs,
       opensAtMs: rollover.opensAtMs,
       creationCutoffAtMs:

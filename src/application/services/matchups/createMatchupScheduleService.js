@@ -34,6 +34,8 @@ const {
   "../../../domain/matchups/matchupScheduleCommandPolicy"
 );
 
+const { validateFreeAgentDraftTiming } = require("../../../domain/freeAgentDraft/freeAgentDraftPolicy");
+
 const MATCHUP_SCHEDULE_SERVICE_CODES = Object.freeze({
   contextMissing: "MATCHUP_SCHEDULE_CONTEXT_MISSING",
   commissionerRequired:
@@ -77,13 +79,16 @@ function fail(code, message) {
   );
 }
 
-function requireFutureCandidateDeadline(firstWeekStartsAtMs, nowMs) {
-  if (firstWeekStartsAtMs - 7 * 24 * 60 * 60 * 1000 <= nowMs) {
+function requireFutureCandidateDeadline(firstWeekStartsAtMs, nowMs, draftTiming) {
+  const timing = draftTiming === undefined ? undefined
+    : validateFreeAgentDraftTiming(draftTiming, firstWeekStartsAtMs);
+  if ((timing?.candidateDeadlineAtMs ?? firstWeekStartsAtMs - 7 * 24 * 60 * 60 * 1000) <= nowMs) {
     fail(
       MATCHUP_SCHEDULE_SERVICE_CODES.fadDeadlineNotFuture,
-      "Choose a later Week 1 so the Candidate Card deadline is still ahead and rapid auctions have seven full days."
+      "Choose a Candidate Card deadline in the future, before Week 1."
     );
   }
+  return timing;
 }
 
 function requireMethod(
@@ -276,11 +281,12 @@ function inspectContext({
     timeZone: context.timezone,
     nowMs,
   });
-  requireFutureCandidateDeadline(plan.firstWeekStartsAtMs, nowMs);
+  const draftTiming = requireFutureCandidateDeadline(plan.firstWeekStartsAtMs, nowMs, input.draftTiming);
   return Object.freeze({
     ...calendarState(context, plan),
     context,
     plan,
+    ...(draftTiming ? { draftTiming } : {}),
   });
 }
 
@@ -1010,7 +1016,7 @@ function inspectShiftContext({
       "The active team set changed after schedule creation."
     );
   }
-  requireFutureCandidateDeadline(schedulePlan.firstWeekStartsAtMs, nowMs);
+  const draftTiming = requireFutureCandidateDeadline(schedulePlan.firstWeekStartsAtMs, nowMs, generation.draftTiming);
   const oldJobs = inspectShiftJobs({
     context,
     generation,
@@ -1021,6 +1027,7 @@ function inspectShiftContext({
     oldJobs,
     schedulePlan,
     targetWeek,
+    ...(draftTiming ? { draftTiming } : {}),
   });
 }
 
@@ -1301,6 +1308,7 @@ function createMatchupScheduleService({
     fantasyPlayoffsStartAtMs,
     fantasyPlayoffsEndAtMs,
     firstWeekStartsAtMs,
+    draftTiming,
     nowMs,
   }) {
     return inspectContext({
@@ -1314,6 +1322,7 @@ function createMatchupScheduleService({
         fantasyPlayoffsStartAtMs,
         fantasyPlayoffsEndAtMs,
         firstWeekStartsAtMs,
+        ...(draftTiming !== undefined ? { draftTiming } : {}),
       },
       actorUserId,
       authorizedAsPlatformAdministrator,
@@ -1503,6 +1512,7 @@ function createMatchupScheduleService({
           operationId,
           participantTeamIds:
             inspected.plan.teamIds,
+          ...(inspected.draftTiming ? { draftTiming: inspected.draftTiming } : {}),
           result,
           responseHash,
           seasonId: canonicalSeasonId,
@@ -1810,6 +1820,7 @@ function createMatchupScheduleService({
           operationId,
           participantTeamIds:
             inspected.schedulePlan.teamIds,
+          ...(inspected.draftTiming ? { draftTiming: inspected.draftTiming } : {}),
           responseHash,
           result,
           seasonId: canonicalSeasonId,

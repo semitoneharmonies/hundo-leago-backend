@@ -592,6 +592,7 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
         fad.id AS fad_id,
         fad.status AS fad_status,
         fad.candidate_deadline_at_ms AS candidate_deadline_at_ms,
+        fad.initial_rollover_times_json,
         fad.deadline_locked_at_ms AS deadline_locked_at_ms,
         fad.allocation_completed_at_ms AS allocation_completed_at_ms,
         team.status AS team_status,
@@ -659,6 +660,7 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
     findRollover = database.prepare(`
       SELECT
         id,
+        sequence,
         league_id,
         season_id,
         fad_id,
@@ -1053,6 +1055,8 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
         queue_source.normalized_position AS source_position_group,
         rollover.creation_cutoff_at_ms AS creation_cutoff_at_ms,
         rollover.rolls_over_at_ms AS opens_at_ms,
+        (SELECT COALESCE(json_extract(draft.initial_rollover_times_json, '$[' || rollover.sequence || ']'), rollover.rolls_over_at_ms + 86400000)
+          FROM free_agent_drafts AS draft WHERE draft.league_id = rollover.league_id AND draft.season_id = rollover.season_id AND draft.id = rollover.fad_id) AS following_rollover_at_ms,
         job.id AS job_run_id
       FROM idempotency_requests AS request
       JOIN free_agent_draft_nomination_queue AS queue
@@ -1430,6 +1434,9 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
           seasonId: root.season_id,
           seasonStatus: root.season_status,
           rollover: {
+            ...(root.initial_rollover_times_json == null ? {} : {
+              followingRolloverAtMs: JSON.parse(root.initial_rollover_times_json)[rollover.sequence] ?? rollover.rolls_over_at_ms + 86_400_000,
+            }),
             creationCutoffAtMs:
               rollover.creation_cutoff_at_ms,
             fadId: rollover.fad_id,
@@ -1640,7 +1647,7 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
         resolutionRolloverId: null,
         acceptedAtMs: row.accepted_at_ms,
         opensAtMs: row.opens_at_ms,
-        resolvesAtMs: row.opens_at_ms + 86_400_000,
+        resolvesAtMs: row.following_rollover_at_ms,
         bindingIllegalityConfirmedAtMs:
           row.accepted_at_ms,
         body: {

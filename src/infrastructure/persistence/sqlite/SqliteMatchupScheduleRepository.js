@@ -1021,6 +1021,7 @@ function mapShiftGeneration(row) {
     status: row.status,
     supersededAtMs: row.superseded_at_ms,
     version: row.version,
+    ...(row.fad_timing_json == null ? {} : { draftTiming: JSON.parse(row.fad_timing_json) }),
   });
 }
 
@@ -1969,7 +1970,8 @@ function createSqliteMatchupScheduleRepository({
         status,
         created_at_ms,
         superseded_at_ms,
-        version
+        version,
+        fad_timing_json
       ) VALUES (
         @leagueId,
         @seasonId,
@@ -1980,7 +1982,8 @@ function createSqliteMatchupScheduleRepository({
         'current',
         @nowMs,
         NULL,
-        1
+        1,
+        @fadTimingJson
       )
     `);
   const updateSeasonForWeekOneShift =
@@ -2160,7 +2163,8 @@ function createSqliteMatchupScheduleRepository({
         status,
         created_at_ms,
         superseded_at_ms,
-        version
+        version,
+        fad_timing_json
       ) VALUES (
         @leagueId,
         @seasonId,
@@ -2171,7 +2175,8 @@ function createSqliteMatchupScheduleRepository({
         'current',
         @nowMs,
         NULL,
-        1
+        1,
+        @fadTimingJson
       )
     `);
   const insertJobOccurrence = database.prepare(`
@@ -3179,6 +3184,7 @@ function createSqliteMatchupScheduleRepository({
         result,
       } = plan;
       const parameters = {
+        fadTimingJson: plan.draftTiming === undefined ? null : JSON.stringify(plan.draftTiming),
         actorAuthority: actor?.authority,
         actorMembershipId: stableId(
           actor?.membershipId
@@ -3424,6 +3430,7 @@ function createSqliteMatchupScheduleRepository({
         result,
       } = plan;
       const parameters = {
+        fadTimingJson: plan.draftTiming === undefined ? null : JSON.stringify(plan.draftTiming),
         actorAuthority: actor?.authority,
         actorMembershipId: stableId(
           actor?.membershipId

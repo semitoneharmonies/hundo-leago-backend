@@ -1088,6 +1088,24 @@ function assertReason(callback, reasonCode) {
 describe(
   "SQLite Free Agent Draft restricted activation writer",
   () => {
+    test("activates and replays a restricted auction in a configured thirty-minute round", (t) => {
+      const { database, writer, command } = createRuntime(t);
+      const end = ACTIVATION_AT_MS + 30 * 60 * 1000;
+      withoutTriggers(database, () => {
+        database.prepare("UPDATE auctions SET resolves_at_ms = ? WHERE id = ?").run(end, IDS.auction);
+        database.prepare("UPDATE free_agent_draft_rollovers SET rolls_over_at_ms = ?, creation_cutoff_at_ms = opens_at_ms WHERE id = ?").run(end, IDS.rolloverTwo);
+      });
+      assert.equal(writer.findActivation({ leagueId: IDS.league, seasonId: IDS.season, fadId: IDS.fad, allocationId: IDS.allocation, activationAtMs: ACTIVATION_AT_MS }).resolvesAtMs, end);
+      assertReason(() => writer.executeClaimed({ ...command, activatedAtMs: end - 15 * 60 * 1000 }), "ACTIVATION_FAIR_ACCESS_INSUFFICIENT");
+      const result = writer.executeClaimed(command);
+      assert.equal(result.outcome, "succeeded");
+      assert.equal(database.prepare("SELECT resolves_at_ms FROM auctions WHERE id = ?").get(IDS.auction).resolves_at_ms, end);
+      const counts = stateCounts(database);
+      assert.equal(writer.executeClaimed(command).replayed, true);
+      assert.deepEqual(stateCounts(database), counts);
+      assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
+    });
+
     test("notifies only the current replacement manager at actual activation with exact replay-safe evidence", (t) => {
       const runtime = createRuntime(t);
       replaceScheduledManager(runtime.database);

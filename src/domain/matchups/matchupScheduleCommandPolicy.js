@@ -2,6 +2,7 @@ const {
   hashCanonicalJsonV1,
   serializeCanonicalJsonV1,
 } = require("../leagues/seasonRolloverEvidencePolicy");
+const { validateFreeAgentDraftTiming } = require("../freeAgentDraft/freeAgentDraftPolicy");
 
 const MATCHUP_SCHEDULE_COMMAND_OPERATION =
   "matchup.schedule.generate.v1";
@@ -164,15 +165,18 @@ function validateMatchupScheduleCommandIdempotencyKey(value) {
 }
 
 function validateMatchupScheduleConfirmedInput(value) {
+  const fields = isPlainObject(value) && Object.hasOwn(value, "draftTiming")
+    ? [...INPUT_FIELDS, "draftTiming"].sort()
+    : INPUT_FIELDS;
   if (
     !isPlainObject(value) ||
     Object.keys(value).sort().length !==
-      INPUT_FIELDS.length ||
+      fields.length ||
     Object.keys(value)
       .sort()
       .some(
         (field, index) =>
-          field !== INPUT_FIELDS[index]
+          field !== fields[index]
       )
   ) {
     fail("body_fields_invalid");
@@ -207,6 +211,9 @@ function validateMatchupScheduleConfirmedInput(value) {
         "first_week_starts_at_ms_invalid"
       ),
     confirmed: true,
+    ...(Object.hasOwn(value, "draftTiming") ? {
+      draftTiming: validateFreeAgentDraftTiming(value.draftTiming, value.firstWeekStartsAtMs),
+    } : {}),
   });
 }
 

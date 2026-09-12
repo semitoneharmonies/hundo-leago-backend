@@ -421,6 +421,7 @@ function scheduleRecoveryContext({
       current.weekOneMatchupWeekId ||
     generation.weekOneStartsAtMs !==
       current.weekOneStartsAtMs ||
+    JSON.stringify(generation.draftTiming ?? null) !== JSON.stringify(current.draftTiming ?? null) ||
     generation.version !== current.generationVersion ||
     generation.status !== "current" ||
     generation.supersededAtMs !== null
@@ -793,10 +794,10 @@ function createFreeAgentDraftReadinessService({
       reminderJobRunId: allocateId(),
       deadlineJobRunId: allocateId(),
       rolloverIds: Object.freeze(
-        Array.from({ length: 7 }, allocateId)
+        Array.from({ length: finalized.opening.clock.initialRollovers.length }, allocateId)
       ),
       rolloverJobRunIds: Object.freeze(
-        Array.from({ length: 7 }, allocateId)
+        Array.from({ length: finalized.opening.clock.initialRollovers.length }, allocateId)
       ),
       activityId: allocateId(),
       outboxEventId: allocateId(),
@@ -804,6 +805,7 @@ function createFreeAgentDraftReadinessService({
     });
     const opening = finalized.opening;
     const currentSchedule = Object.freeze({
+      ...(opening.currentSchedule.draftTiming ? { draftTiming: opening.currentSchedule.draftTiming } : {}),
       operationId: opening.currentSchedule.operationId,
       version: opening.currentSchedule.version,
       weekOneMatchupWeekId:

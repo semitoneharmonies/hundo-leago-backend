@@ -5,6 +5,7 @@ const {
   FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT,
   FREE_AGENT_DRAFT_INITIAL_WINDOW_MS,
   UUID_PATTERN,
+  validateFreeAgentDraftTiming,
 } = require("./freeAgentDraftPolicy");
 const {
   MAXIMUM_UTC_TIMESTAMP_MS,
@@ -347,6 +348,7 @@ function planFreeAgentDraftPreOpenScheduleRecovery(
       "firstWeekStartsAtMs",
       "fantasyPlayoffsStartAtMs",
       "timeZone",
+      ...(Object.hasOwn(input, "draftTiming") ? ["draftTiming"] : []),
     ],
     failInput,
     "pre_open_fields_invalid"
@@ -368,6 +370,26 @@ function planFreeAgentDraftPreOpenScheduleRecovery(
   const timeZone = validateTimeZone(
     input.timeZone
   );
+
+  if (Object.hasOwn(input, "draftTiming")) {
+    const timing = validateFreeAgentDraftTiming(input.draftTiming, previousFirstWeekStartsAtMs);
+    if (timing.candidateDeadlineAtMs <= readinessAtMs) {
+      failUnavailable("pre_open_custom_deadline_expired");
+    }
+    if (previousFirstWeekStartsAtMs >= fantasyPlayoffsStartAtMs) {
+      failUnavailable("pre_open_custom_week_unavailable");
+    }
+    return deepFreeze({
+      recoveryKind: "pre_open", recoveryRequired: false,
+      reasonCode: "pre_open_week_one_unchanged", readinessAtMs, timeZone,
+      fantasyPlayoffsStartAtMs, previousFirstWeekStartsAtMs,
+      firstWeekStartsAtMs: previousFirstWeekStartsAtMs,
+      candidateDeadlineAtMs: timing.candidateDeadlineAtMs,
+      initialPeriodEndsAtMs: timing.rolloverTimesAtMs.at(-1),
+      initialRolloverCount: timing.rolloverTimesAtMs.length,
+      mondayAdvanceCount: 0, removedRegularSeasonWeekCount: 0,
+    });
+  }
 
   requireWeekFitsBeforePlayoffs({
     firstWeekStartsAtMs:
