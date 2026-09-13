@@ -1,0 +1,30 @@
+{
+  "descriptorVersion": 1,
+  "environment": "staging",
+  "resourceIds": {
+    "service": "hundo-leago-backend-staging-v1",
+    "disk": "hundo-leago-staging-disk-v1",
+    "database": "hundo-leago-staging-database-v1",
+    "sourceBundle": "hundo-leago-staging-source-v1",
+    "reports": "hundo-leago-staging-reports-v1",
+    "backups": "hundo-leago-staging-backups-v1"
+  },
+  "paths": {
+    "persistentRoot": "/srv/hundo-leago-staging",
+    "database": "/srv/hundo-leago-staging/database/hundo-leago.sqlite3",
+    "sourceBundles": "/srv/hundo-leago-staging/migration-sources",
+    "reports": "/srv/hundo-leago-staging/migration-reports",
+    "backups": "/srv/hundo-leago-staging/backups"
+  },
+  "backupNamespace": "hundo-leago/staging",
+  "secretScope": "staging",
+  "secretReferences": [
+    "AUDIT_METADATA_SECRET",
+    "BACKUP_ENCRYPTION_KEY",
+    "RATE_LIMIT_KEY_SECRET"
+  ],
+  "applicationAuthority": "json",
+  "sqliteApplicationAuthorityEnabled": false,
+  "productionStorageAccessible": false,
+  "productionSecretsAccessible": false
+}

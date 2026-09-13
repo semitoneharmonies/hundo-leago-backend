@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "meta": {
+    "createdAt": 1700000000000,
+    "lastSavedAt": null,
+    "lastSavedBy": null
+  },
+  "teams": [
+    {
+      "name": "Test Team Alpha",
+      "roster": [
+        {
+          "id": 1001,
+          "playerId": 1001,
+          "name": "Test Forward",
+          "position": "F",
+          "salary": 1
+        }
+      ],
+      "buyouts": []
+    },
+    {
+      "name": "Test Team Beta",
+      "roster": [
+        {
+          "id": 1002,
+          "playerId": 1002,
+          "name": "Test Defender",
+          "position": "D",
+          "salary": 2
+        }
+      ],
+      "buyouts": []
+    }
+  ],
+  "freeAgents": [],
+  "leagueLog": [],
+  "tradeProposals": [],
+  "tradeBlock": [],
+  "matchups": {
+    "seasonId": "test-season",
+    "scheduleWeeks": [
+      {
+        "weekId": "test-week-1",
+        "weekStartAtMs": 1700000000000,
+        "baselineAtMs": 1700000001000,
+        "lockAtMs": 1700000002000,
+        "weekEndAtMs": 4102444700000,
+        "rolloverAtMs": 4102444800000,
+        "pairs": [
+          [
+            "Test Team Alpha",
+            "Test Team Beta"
+          ]
+        ]
+      }
+    ],
+    "currentWeekIndex": 0,
+    "currentWeekId": "test-week-1",
+    "locksByTeam": {},
+    "baselineByPlayerId": {},
+    "baselineByWeekId": {},
+    "resultsByWeek": {},
+    "lastRolloverWeekId": null
+  },
+  "settings": {
+    "frozen": false
+  },
+  "nextAuctionDeadline": null,
+  "lastAutoWeeklySnapshotId": null,
+  "lastAutoAuctionRolloverId": null
+}
