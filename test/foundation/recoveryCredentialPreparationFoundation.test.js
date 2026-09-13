@@ -254,6 +254,57 @@ test("reviewed restored email suppression preserves source, jobs and every unrel
     reconciliationId: crypto.randomUUID(), reconciledAtMs: now, temporaryRoot: input.temporaryRoot };
   const sourceHash = readHash(prepared.preparedDatabasePath);
   let result;
+  await t.test("email recovery command suppresses the exact reviewed messages and preserves rejected outputs", () => {
+    const directory = path.join(input.temporaryRoot,"email-command-inputs"); fs.mkdirSync(directory);
+    const write = (name,value) => {
+      const file = path.join(directory,name);fs.writeFileSync(file,JSON.stringify(value),{ flag: "wx" });return file;
+    };
+    const credentialPreparationPath = write("credentials.json",prepared);
+    const reviewRequest = { requestVersion: 1,expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID,expectedDatabaseId: FIXTURE_DATABASE_ID,
+      observedAtMs: plan.observedAtMs,preparedDatabasePath: reviewPath,credentialPreparationPath };
+    const reviewed = spawnSync(process.execPath,[path.resolve(__dirname,"../../scripts/db-recovery-review.js"),"--request",write("review.json",reviewRequest)],
+      { encoding: "utf8",timeout: 60_000,maxBuffer: 8*1024*1024 });
+    assert.equal(reviewed.status,0,reviewed.stderr);assert.equal(reviewed.stderr,"");
+    const candidateReview = JSON.parse(reviewed.stdout);assert.deepEqual(candidateReview.plan,plan);
+    const request = { requestVersion: 1,credentialPreparationPath,preparedDatabasePath: prepared.preparedDatabasePath,
+      candidateReviewPath: write("candidate.json",candidateReview),deliveryReviewPath: write("deliveries.json",{ deliveries }),
+      reviewedByUserId: options.reviewedByUserId,reconciliationId: crypto.randomUUID(),reconciledAtMs: now,
+      temporaryRoot: input.temporaryRoot,outputDirectory: path.join(input.temporaryRoot,"email-command-output") };
+    const invoke = value => spawnSync(process.execPath,[path.resolve(__dirname,"../../scripts/db-recovery-email.js"),"--request",
+      write(crypto.randomUUID()+".json",value)],{ encoding: "utf8",timeout: 60_000,maxBuffer: 8*1024*1024 });
+    const success = invoke(request);assert.equal(success.status,0,success.stderr);assert.equal(success.stderr,"");
+    const output = JSON.parse(success.stdout),receiptPath = path.join(request.outputDirectory,"email-reconciliation.json");
+    assert.equal(output.suppressedMessages,3);assert.equal(output.unresolvedMessages,plan.unresolvedMessages-3);
+    assert.equal(output.activationReady,false);assert.equal(output.normalRuntime,"blocked-by-durable-recovery-hold");
+    assert.equal(output.providerEvidence,"reviewer-supplied-not-independently-fetched");assert.equal(success.stdout.includes(PRIVATE_VALUE),false);
+    const outputHash = readHash(output.reconciledDatabasePath),receiptHash = readHash(receiptPath);
+    const outputReader = openReadonlyDatabase({ databasePath: output.reconciledDatabasePath });
+    const originalReader = openReadonlyDatabase({ databasePath: reviewPath });
+    try {
+      const next = buildEmailReconciledRecoveryPlan({ preparedDatabase: originalReader,reconciledDatabase: outputReader,
+        credentialPreparation: prepared,originalPlan: plan,emailReconciliation: JSON.parse(fs.readFileSync(receiptPath,"utf8")),observedAtMs: now+1 });
+      assert.equal(next.unresolvedMessages,plan.unresolvedMessages-3);assert.deepEqual(next.jobs,plan.jobs);
+      assert.equal(next.preparedPlaintextSha256,outputHash);assert.equal(next.activationReady,false);
+      assertCredentialAccess(outputReader,false);assert.equal(outputReader.prepare("SELECT total_changes() n").get().n,0);
+    } finally { originalReader.close();outputReader.close(); }
+    const alteredReview = { ...candidateReview,plan: { ...plan,unresolvedMessages: 0 } };
+    delete alteredReview.reportChecksum;alteredReview.reportChecksum = hash(canonicalize(alteredReview));
+    const failures = [
+      [request,"RECOVERY_EMAIL_PATH_UNSAFE"],
+      [{ ...request,outputDirectory: path.join(input.temporaryRoot,"email-command-extra"),approve: true },"RECOVERY_EMAIL_REQUEST_INVALID"],
+      [{ ...request,outputDirectory: path.join(input.temporaryRoot,"email-command-reviewer"),reviewedByUserId: fixtureId("account:leagueACommissioner") },"RECOVERY_EMAIL_REVIEWER_INVALID"],
+      [{ ...request,outputDirectory: path.join(input.temporaryRoot,"email-command-stale"),candidateReviewPath: write("altered-candidate.json",alteredReview) },"RECOVERY_EMAIL_PLAN_INVALID"],
+      [{ ...request,outputDirectory: path.join(input.temporaryRoot,"email-command-delivery"),deliveryReviewPath: write("altered-deliveries.json",{ deliveries: [{ ...deliveries[0],rowSha256: "f".repeat(64) }] }) },"RECOVERY_EMAIL_DELIVERY_MISMATCH"],
+      [{ ...request,outputDirectory: path.join(input.temporaryRoot,"email-command-provider"),deliveryReviewPath: write("extra-deliveries.json",{ deliveries,send: true }) },"RECOVERY_EMAIL_REQUEST_INVALID"],
+    ];
+    for (const [invalid,code] of failures) {
+      const failure = invoke(invalid);assert.equal(failure.status,1);assert.equal(failure.stdout,"");
+      assert.equal(JSON.parse(failure.stderr).error.code,code);assert.equal(failure.stderr.includes(PRIVATE_VALUE),false);
+      if (invalid.outputDirectory !== request.outputDirectory) assert.equal(fs.existsSync(invalid.outputDirectory),false);
+    }
+    assert.equal(readHash(output.reconciledDatabasePath),outputHash);assert.equal(readHash(receiptPath),receiptHash);
+    assert.equal(readHash(prepared.preparedDatabasePath),sourceHash);assert.deepEqual(started.runtime.database.serialize(),sourceBefore);
+  });
   await t.test("suppresses exact pending, failed and publishing account messages while keeping the hold", async suppressionTest => {
     result = prepareRecoveryEmailReconciliation({ ...options, outputDirectory: path.join(input.temporaryRoot, "email-reviewed") });
     assert.equal(result.suppressedMessages, 3); assert.equal(result.protectedTableCount, 131);
