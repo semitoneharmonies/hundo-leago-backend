@@ -939,7 +939,7 @@ function seedCommissionerInvitationScenario(runtime) {
 
 function seedComposedLeagueStartScenario(
   runtime,
-  { teamCount = 4 } = {}
+  { teamCount = 4, unselectedTeamColours = false } = {}
 ) {
   const repositories = runtime.repositories.context.repositories;
   const commissionerUserId = uuid(91_001);
@@ -1072,8 +1072,8 @@ function seedComposedLeagueStartScenario(
       name: `FAD Runtime Team ${index + 1}`,
       name_normalized: `fad runtime team ${index + 1}`,
       status: "setup",
-      primary_colour: "#102030",
-      secondary_colour: "#f0a020",
+      primary_colour: unselectedTeamColours ? null : "#102030",
+      secondary_colour: unselectedTeamColours ? null : "#f0a020",
       tertiary_colour: null,
       pattern_template: "even-two",
       logo_reference: null,
@@ -2516,7 +2516,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {
     const database = createDatabase(t);
     const runtime = createTargetRuntime({ ...runtimeOptions(database), stagingDailyAuctionsEnabled: dailyStaging });
-    const scenario = seedComposedLeagueStartScenario(runtime);
+    const scenario = seedComposedLeagueStartScenario(runtime, { unselectedTeamColours: dailyStaging });
     const authenticated =
       runtime.services.sessionService.resolveWithoutActivity(
         scenario.session.rawSessionToken
@@ -2611,6 +2611,9 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(readiness.schedule_recovery_id, null);
     assert.equal(readiness.terminal_at_ms, NOW_MS);
     assert.equal(readiness.version, 3);
+    if (dailyStaging) {
+      assert.equal(database.prepare('SELECT count(*) n FROM teams WHERE league_id=? AND primary_colour IS NULL AND secondary_colour IS NULL').get(scenario.leagueId).n, 4);
+    }
     assert.deepEqual(
       database.prepare(`
         SELECT status, attempt_count
@@ -2794,6 +2797,10 @@ describe("M3-19 exact-schema target dependency composition", () => {
       scenario.seasonId
     );
     assert.equal(navigation.data.phase, "cards_open");
+    if (dailyStaging) {
+      assert.equal(navigation.data.managedCards[0].team.primaryColour, '#16324f');
+      assert.equal(navigation.data.managedCards[0].team.secondaryColour, '#f7f7f7');
+    }
     assert.equal(
       navigation.data.showMainNavigation,
       true

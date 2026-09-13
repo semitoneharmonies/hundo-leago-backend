@@ -1095,6 +1095,15 @@ after(() => {
 describe(
   "Free Agent Draft allocation-correction preview repository foundation",
   () => {
+    test("previews draft corrections for teams with no selected colours without changing profiles", (t) => {
+      const runtime = createRuntime(t, seedWrongCompletedResult);
+      runtime.database.prepare('UPDATE teams SET primary_colour=NULL, secondary_colour=NULL, tertiary_colour=NULL WHERE league_id=?').run(IDS.league);
+      const before = noWriteSnapshot(runtime);
+      const preview = runtime.repository.previewAllocationCorrection(commissionerInput());
+      assert.equal(preview.reversible, true);
+      assert.deepEqual(noWriteSnapshot(runtime), before);
+      assert.equal(runtime.database.prepare('SELECT count(*) n FROM teams WHERE league_id=? AND primary_colour IS NOT NULL').get(IDS.league).n, 0);
+    });
     test("recomputes from full current evidence while T-140 stays redacted and the preview remains byte-for-byte read-only", (t) => {
       const runtime = createRuntime(
         t,

@@ -1,5 +1,7 @@
 "use strict";
 
+const { resolveTeamDisplayColours } = require("../../../domain/leagues/teamDisplayPolicy");
+
 const {
   CandidateAllocationPolicyError,
   decideCandidateAllocation,
@@ -173,9 +175,8 @@ function teamProjection(row) {
   return Object.freeze({
     teamId: row.team_id,
     name: row.team_name,
-    primaryColour: row.primary_colour,
-    secondaryColour: row.secondary_colour,
-    tertiaryColour: row.tertiary_colour,
+    ...resolveTeamDisplayColours({ primaryColour: row.primary_colour,
+      secondaryColour: row.secondary_colour, tertiaryColour: row.tertiary_colour }),
     patternTemplate: row.pattern_template,
     logoReference: row.logo_reference,
   });

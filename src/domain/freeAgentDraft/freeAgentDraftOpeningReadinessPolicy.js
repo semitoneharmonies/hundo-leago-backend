@@ -1,3 +1,4 @@
+const { resolveTeamDisplayColours } = require("../leagues/teamDisplayPolicy");
 const {
   CANDIDATE_CARD_BENCH_MAXIMUM_AAV_CENTS,
   CandidateCardPolicyError,
@@ -262,6 +263,7 @@ function boundedText(
 
 function safeTeam(team) {
   requireObject(team, "participating_team_invalid");
+  const colours = resolveTeamDisplayColours(team);
   return Object.freeze({
     logoReference:
       team.logoReference === null
@@ -282,12 +284,12 @@ function safeTeam(team) {
       "team_pattern_template_invalid"
     ),
     primaryColour: boundedText(
-      team.primaryColour,
+      colours.primaryColour,
       100,
       "team_primary_colour_invalid"
     ),
     secondaryColour: boundedText(
-      team.secondaryColour,
+      colours.secondaryColour,
       100,
       "team_secondary_colour_invalid"
     ),
