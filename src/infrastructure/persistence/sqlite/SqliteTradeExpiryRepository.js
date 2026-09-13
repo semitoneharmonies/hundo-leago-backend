@@ -327,7 +327,24 @@ function createSqliteTradeExpiryRepository({
   });
 
   const expireTransaction = database.transaction((rawCommand) => {
-    const command = validateTradeExpiryCommand(rawCommand);
+    const { execution, ...input } = rawCommand || {};
+    const command = validateTradeExpiryCommand(input);
+    exactObject(execution, ["runId", "leaseOwner", "expectedVersion"]);
+    const lease = {
+      runId: stableId(execution.runId),
+      leaseOwner: boundedText(execution.leaseOwner, 128),
+      expectedVersion: positiveVersion(execution.expectedVersion),
+    };
+    const run = unique(findRunStatement, command, "A trade-expiry occurrence is not unique.");
+    // Check the claim in the same transaction as the trade and its events.
+    // Completion fencing alone is too late to prevent a stale worker's write.
+    if (!run || run.id !== lease.runId || run.season_id !== command.seasonId ||
+        run.scheduled_for_ms !== command.effectiveDeadlineAtMs || run.status !== "leased" ||
+        run.lease_owner !== lease.leaseOwner || run.version !== lease.expectedVersion ||
+        !Number.isSafeInteger(run.lease_expires_at_ms) || run.lease_expires_at_ms <= command.occurredAtMs ||
+        !Number.isSafeInteger(run.started_at_ms) || run.started_at_ms > command.occurredAtMs) {
+      throw repositoryError(REPOSITORY_ERROR_CODES.versionConflict, "The trade-expiry execution lease is stale.");
+    }
     const context = unique(
       findTradeStatement,
       command,

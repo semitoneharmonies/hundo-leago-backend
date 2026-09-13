@@ -2,6 +2,7 @@ const {
   buildTradeExpiryOccurrenceKey,
 } = require("../../domain/trades/tradeLifecyclePolicy");
 const { createJobRunner } = require("../runJob");
+const { REPOSITORY_ERROR_CODES } = require("../../infrastructure/persistence/sqlite/SqliteRepositoryError");
 
 const JOB_NAME = "trades:expire:target";
 const DEFAULT_LEASE_MS = 5 * 60 * 1000;
@@ -104,8 +105,9 @@ function createExpireTradeProposalsJob({
             seasonId: proposal.seasonId,
             expectedVersion: proposal.tradeVersion,
             effectiveDeadlineAtMs: proposal.effectiveDeadlineAtMs,
-            occurredAtMs: nowMs,
+            occurredAtMs: safeTimestamp(clock.nowMs()),
             occurrenceKey,
+            execution: { runId: claim.runId, leaseOwner, expectedVersion: claim.version },
           });
           const outcome = result.completed ? "expired" : "terminal";
           if (result.completed) expired += 1;
@@ -120,6 +122,10 @@ function createExpireTradeProposalsJob({
             outcome,
           });
         } catch (error) {
+          if (error?.code === REPOSITORY_ERROR_CODES.versionConflict) {
+            skipped += 1;
+            continue;
+          }
           repository.failRun({
             leagueId: proposal.leagueId,
             runId: claim.runId,

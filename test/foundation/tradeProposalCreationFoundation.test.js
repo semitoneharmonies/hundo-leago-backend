@@ -3134,6 +3134,66 @@ describe("M5-07 atomic proposal response and cancellation", () => {
 });
 
 describe("M5-07 durable proposal expiry", () => {
+  test("requires the exact live occurrence claim before any trade expiry write", t => {
+    const runtime = createRuntime(t),proposal = create(runtime,"proposal-expiry-claim-evidence");
+    const occurrenceKey = `trade-expiry:${proposal.proposal.id}:${TRADE_DEADLINE_MS}`;
+    const claim = runtime.expiryRepository.claimRun({ jobRunId: crypto.randomUUID(),leagueId: IDS.league,seasonId: IDS.currentSeason,
+      occurrenceKey,scheduledForMs: TRADE_DEADLINE_MS,leaseOwner: "reviewed-worker",nowMs: TRADE_DEADLINE_MS,leaseExpiresAtMs: TRADE_DEADLINE_MS+20 });
+    assert.equal(claim.acquired,true);
+    const command = { tradeId: proposal.proposal.id,eventId: crypto.randomUUID(),leagueId: IDS.league,seasonId: IDS.currentSeason,
+      expectedVersion: proposal.proposal.version,effectiveDeadlineAtMs: TRADE_DEADLINE_MS,occurredAtMs: TRADE_DEADLINE_MS,occurrenceKey,
+      execution: { runId: claim.runId,leaseOwner: "reviewed-worker",expectedVersion: claim.version } };
+    const before = runtime.database.serialize();
+    for (const patch of [{ execution: undefined },{ execution: { ...command.execution,approve: true } },
+      { execution: { ...command.execution,runId: crypto.randomUUID() } },{ execution: { ...command.execution,leaseOwner: "other-worker" } },
+      { execution: { ...command.execution,expectedVersion: claim.version+1 } },{ seasonId: IDS.futureSeason },{ occurredAtMs: TRADE_DEADLINE_MS+20 }]) {
+      assert.throws(() => runtime.expiryRepository.expireProposal({ ...command,...patch }),error => /^REPOSITORY_/.test(error.code));
+      assert.deepEqual(runtime.database.serialize(),before);
+    }
+    assert.equal(runtime.expiryRepository.expireProposal(command).completed,true);
+    const completed = runtime.database.serialize();
+    assert.equal(runtime.expiryRepository.expireProposal(command).reason,"terminal");
+    assert.deepEqual(runtime.database.serialize(),completed);
+  });
+  for (const lostLease of ["recovery-invalidated","reclaimed","expired"]) {
+    test(`prevents a ${lostLease} worker from expiring a trade before lease completion`, async t => {
+      const runtime = createRuntime(t);
+      const proposal = create(runtime,"proposal-stale-expiry-"+lostLease);
+      runtime.setNow(TRADE_DEADLINE_MS);
+      let protectedBytes;
+      const repository = { ...runtime.expiryRepository,claimRun(command) {
+        const claim = runtime.expiryRepository.claimRun(command);
+        assert.equal(claim.acquired,true);
+        if (lostLease === "recovery-invalidated") {
+          runtime.database.prepare("UPDATE job_runs SET lease_owner=NULL,lease_token=NULL,lease_expires_at_ms=?,updated_at_ms=?,version=version+1 WHERE id=?")
+            .run(TRADE_DEADLINE_MS+1,TRADE_DEADLINE_MS+1,claim.runId);
+          runtime.setNow(TRADE_DEADLINE_MS+1);
+        } else if (lostLease === "reclaimed") {
+          const replacement = runtime.expiryRepository.claimRun({ ...command,jobRunId: crypto.randomUUID(),leaseOwner: "replacement-worker",
+            nowMs: TRADE_DEADLINE_MS+20,leaseExpiresAtMs: TRADE_DEADLINE_MS+40 });
+          assert.equal(replacement.acquired,true);assert.equal(replacement.runId,claim.runId);
+          runtime.setNow(TRADE_DEADLINE_MS+20);
+        } else runtime.setNow(TRADE_DEADLINE_MS+20);
+        protectedBytes = runtime.database.serialize();
+        return claim;
+      } };
+      const stale = createExpireTradeProposalsJob({ repository,clock: runtime.clock,secureRandom: runtime.secureRandom,
+        leaseOwner: "stale-worker",leaseDurationMs: 20,logger: { error() {} } });
+      const result = await stale.run();
+      assert.equal(runtime.database.prepare("SELECT status FROM trades WHERE id=?").get(proposal.proposal.id).status,"proposed");
+      assert.deepEqual(runtime.database.serialize(),protectedBytes);
+      assert.equal(result.status,"succeeded");assert.equal(result.skipped,1);assert.equal(result.expired,0);
+      runtime.setNow(TRADE_DEADLINE_MS+41);
+      const recovered = await runtime.expiryJob.run();
+      assert.equal(recovered.status,"succeeded");assert.equal(recovered.expired,1);
+      assert.equal(runtime.database.prepare("SELECT COUNT(*) n FROM trade_events WHERE trade_id=? AND event_type='proposal_expired'").get(proposal.proposal.id).n,1);
+      assert.equal(count(runtime.database,"job_runs"),1);
+      const beforeRestart = runtime.database.serialize();
+      const restarted = createExpireTradeProposalsJob({ repository: createSqliteTradeExpiryRepository({ database: runtime.database }),
+        clock: runtime.clock,secureRandom: runtime.secureRandom,leaseOwner: "restarted-worker",logger: { error() {} } });
+      assert.equal((await restarted.run()).due,0);assert.deepEqual(runtime.database.serialize(),beforeRestart);
+    });
+  }
   test("expires an awaiting-commissioner-approval proposal without transfers", async (t) => {
     const runtime = createRuntime(t);
     const proposal = create(
