@@ -5,7 +5,7 @@ const path = require("node:path");
 const { openDatabase, openReadonlyDatabase } = require("../../infrastructure/database/connection");
 const { inspectDatabase } = require("../../infrastructure/database/sqliteBackup");
 const { canonicalize } = require("../../infrastructure/migration/sourceInventory");
-const { buildRecoveryReconciliationPlan } = require("./buildRecoveryReconciliationPlan");
+const { buildRecoveryPlanFromLineage } = require("./buildRecoveryReconciliationLineage");
 const { createSqliteStatisticsScheduleRepository, JOB_TYPE, LEASE_MS } = require("../../infrastructure/persistence/sqlite/SqliteStatisticsScheduleRepository");
 const { createSqliteStatisticsRepository } = require("../../infrastructure/persistence/sqlite/SqliteStatisticsRepository");
 const { createSqliteSecurityAuditRepository } = require("../../infrastructure/persistence/sqlite/SqliteSecurityAuditRepository");
@@ -53,7 +53,7 @@ function snapshots(database) {
 // The administrator attribution/evidence is operator supplied, not current
 // authentication. No auction, matchup, message or normal runtime is released.
 async function prepareRecoveryStatisticsReconciliation({ credentialPreparation,plan,review,executedAtMs,
-  temporaryRoot,outputDirectory,minimumPlayerCount = 200,fetchImpl = globalThis.fetch,beforeReceipt = null } = {}) {
+  temporaryRoot,outputDirectory,lineage = null,minimumPlayerCount = 200,fetchImpl = globalThis.fetch,beforeReceipt = null } = {}) {
   if (!review || Object.keys(review).sort().join(",") !== REVIEW_FIELDS ||
       ![review.jobId,review.reviewedByUserId,review.reconciliationId].every(value => UUID.test(value || "")) ||
       ![review.rowSha256,review.occurrenceKeySha256,review.evidenceSha256].every(value => DIGEST.test(value || "")) ||
@@ -63,6 +63,7 @@ async function prepareRecoveryStatisticsReconciliation({ credentialPreparation,p
       !path.isAbsolute(temporaryRoot || "") || !path.isAbsolute(outputDirectory || "") ||
       !path.isAbsolute(credentialPreparation?.preparedDatabasePath || "") ||
       !DIGEST.test(credentialPreparation?.preparedPlaintextSha256 || "") || !DIGEST.test(plan?.planChecksum || "") ||
+      !DIGEST.test(plan?.preparedPlaintextSha256 || "") ||
       (beforeReceipt !== null && typeof beforeReceipt !== "function")) fail("RECOVERY_STATISTICS_INPUT_INVALID");
   const decision = Object.freeze({ ...review });
   let ownedDirectory = null,physicalRoot,database;
@@ -70,18 +71,19 @@ async function prepareRecoveryStatisticsReconciliation({ credentialPreparation,p
     assertNhlSeasonKey(decision.nhlSeasonKey);
     // Snapshot all JSON evidence before provider awaits can run other code.
     const credential = JSON.parse(JSON.stringify(credentialPreparation)),originalPlan = JSON.parse(JSON.stringify(plan));
+    const lineageEvidence = lineage === null ? null : JSON.parse(JSON.stringify(lineage));
     physicalRoot = fs.realpathSync(temporaryRoot);
     const source = fs.realpathSync(credential.preparedDatabasePath);
     const output = path.join(fs.realpathSync(path.dirname(outputDirectory)),path.basename(outputDirectory));
     if (!inside(fs.realpathSync(os.tmpdir()),physicalRoot) || !inside(physicalRoot,source) || !inside(physicalRoot,output) ||
         fs.lstatSync(credential.preparedDatabasePath).isSymbolicLink() || !fs.statSync(source).isFile() ||
         fs.statSync(source).nlink !== 1 || exists(output)) fail("RECOVERY_STATISTICS_PATH_UNSAFE");
-    assertSource(source,credential.preparedPlaintextSha256);
+    assertSource(source,originalPlan.preparedPlaintextSha256);
     fs.mkdirSync(output,{ recursive: false,mode: 0o700 }); ownedDirectory = output;
     const candidatePath = path.join(output,"statistics-reconciled.sqlite3");
     fs.copyFileSync(source,candidatePath,fs.constants.COPYFILE_EXCL); fs.chmodSync(candidatePath,0o600);
     database = openReadonlyDatabase({ databasePath: candidatePath });
-    const verifiedPlan = buildRecoveryReconciliationPlan({ database,credentialPreparation: credential,
+    const verifiedPlan = buildRecoveryPlanFromLineage({ database,credentialPreparation: credential,lineage: lineageEvidence,
       observedAtMs: originalPlan.observedAtMs,expectedEnvironmentId: originalPlan.databaseIdentity?.environmentId,
       expectedDatabaseId: originalPlan.databaseIdentity?.databaseId });
     if (!same(verifiedPlan,originalPlan) || executedAtMs < verifiedPlan.observedAtMs) fail("RECOVERY_STATISTICS_PLAN_INVALID");
@@ -168,12 +170,12 @@ async function prepareRecoveryStatisticsReconciliation({ credentialPreparation,p
         !same(database.prepare("SELECT * FROM application_metadata WHERE metadata_key<>? ORDER BY metadata_key").all(metadataKey),beforeMetadata) ||
         !same(database.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(metadataKey),metadata) ||
         database.pragma("foreign_key_check").length !== 0) fail("RECOVERY_STATISTICS_POSTCHECK_FAILED");
-    assertSource(source,credential.preparedPlaintextSha256);
+    assertSource(source,originalPlan.preparedPlaintextSha256);
     database.close(); database = null;
     const inspection = inspectDatabase(candidatePath);
-    assertSource(source,credential.preparedPlaintextSha256);
+    assertSource(source,originalPlan.preparedPlaintextSha256);
     const report = { reportVersion: 1,status: "statistics-reconciled-held",recoveryId: verifiedPlan.recoveryId,recoveryEpoch: verifiedPlan.recoveryEpoch,
-      planChecksum: verifiedPlan.planChecksum,sourcePlaintextSha256: credential.preparedPlaintextSha256,
+      planChecksum: verifiedPlan.planChecksum,sourcePlaintextSha256: verifiedPlan.preparedPlaintextSha256,
       reconciledPlaintextSha256: hashFile(candidatePath),decision,decisionChecksum,minimumPlayerCount,executedAtMs,completedAtMs,result,
       completedJobId: row.id,completedJobRowSha256: hash(canonicalize(expectedJob)),tableSnapshots: afterTables,
       unresolvedJobs: verifiedPlan.unresolvedJobs - 1,unresolvedMessages: verifiedPlan.unresolvedMessages,

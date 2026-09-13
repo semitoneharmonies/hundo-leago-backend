@@ -7,7 +7,7 @@ const { inspectDatabase } = require("../../infrastructure/database/sqliteBackup"
 const { canonicalize } = require("../../infrastructure/migration/sourceInventory");
 const { createSqliteOutboxEventRepository, CLEARED_PAYLOAD_JSON } = require("../../infrastructure/persistence/sqlite/SqliteOutboxEventRepository");
 const { createSqliteSecurityAuditRepository } = require("../../infrastructure/persistence/sqlite/SqliteSecurityAuditRepository");
-const { buildRecoveryReconciliationPlan } = require("./buildRecoveryReconciliationPlan");
+const { buildRecoveryPlanFromLineage } = require("./buildRecoveryReconciliationLineage");
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
@@ -44,13 +44,13 @@ function snapshots(database) {
 // This offline operation records a reviewer's evidence, not an independent
 // provider-delivery lookup. It can only suppress; it cannot send, replay or reopen.
 function prepareRecoveryEmailReconciliation({ credentialPreparation, plan, deliveries,
-  reviewedByUserId, reconciliationId, reconciledAtMs, temporaryRoot, outputDirectory, beforeCommit = null } = {}) {
+  reviewedByUserId, reconciliationId, reconciledAtMs, temporaryRoot, outputDirectory, lineage = null, beforeCommit = null } = {}) {
   if (!UUID.test(reviewedByUserId || "") || !UUID.test(reconciliationId || "") ||
       !Number.isSafeInteger(reconciledAtMs) || reconciledAtMs < 0 ||
       !path.isAbsolute(temporaryRoot || "") || !path.isAbsolute(outputDirectory || "") ||
       !path.isAbsolute(credentialPreparation?.preparedDatabasePath || "") ||
       !DIGEST.test(credentialPreparation?.preparedPlaintextSha256 || "") ||
-      !DIGEST.test(plan?.planChecksum || "") || !Array.isArray(deliveries) || deliveries.length < 1 || deliveries.length > 1000 ||
+      !DIGEST.test(plan?.planChecksum || "") || !DIGEST.test(plan?.preparedPlaintextSha256 || "") || !Array.isArray(deliveries) || deliveries.length < 1 || deliveries.length > 1000 ||
       (beforeCommit !== null && typeof beforeCommit !== "function")) fail("RECOVERY_EMAIL_INPUT_INVALID");
   // Copy primitive input before any callback can change the reviewed decision.
   const decisions = deliveries.map(item => {
@@ -69,12 +69,12 @@ function prepareRecoveryEmailReconciliation({ credentialPreparation, plan, deliv
     if (!inside(fs.realpathSync(os.tmpdir()), physicalRoot) || !inside(physicalRoot, source) || !inside(physicalRoot, output) ||
         fs.lstatSync(credentialPreparation.preparedDatabasePath).isSymbolicLink() || !fs.statSync(source).isFile() ||
         fs.statSync(source).nlink !== 1 || exists(output)) fail("RECOVERY_EMAIL_PATH_UNSAFE");
-    assertSource(source, credentialPreparation.preparedPlaintextSha256);
+    assertSource(source, plan.preparedPlaintextSha256);
     fs.mkdirSync(output, { recursive: false, mode: 0o700 }); ownedDirectory = output;
     const candidatePath = path.join(output, "email-reconciled.sqlite3");
     fs.copyFileSync(source, candidatePath, fs.constants.COPYFILE_EXCL); fs.chmodSync(candidatePath, 0o600);
     database = openReadonlyDatabase({ databasePath: candidatePath });
-    const verifiedPlan = buildRecoveryReconciliationPlan({ database, credentialPreparation,
+    const verifiedPlan = buildRecoveryPlanFromLineage({ database, credentialPreparation, lineage,
       observedAtMs: plan.observedAtMs, expectedEnvironmentId: plan.databaseIdentity?.environmentId,
       expectedDatabaseId: plan.databaseIdentity?.databaseId });
     database.close(); database = null;
@@ -121,16 +121,16 @@ function prepareRecoveryEmailReconciliation({ credentialPreparation, plan, deliv
           canonicalize(database.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(metadataKey)) !== canonicalize(metadata) ||
           database.prepare("SELECT total_changes() AS count").get().count - initialChanges !== decisions.length + 2 ||
           database.pragma("foreign_key_check").length !== 0) fail("RECOVERY_EMAIL_POSTCHECK_FAILED");
-      assertSource(source, credentialPreparation.preparedPlaintextSha256);
+      assertSource(source, plan.preparedPlaintextSha256);
       return { decisionChecksum, deliveries: decisions, suppressedMessages: decisions.length, protectedTableCount: preserved.length,
         tableSnapshots: afterTables, unresolvedMessages: expectedOutbox.filter(row => ["pending", "publishing", "failed"].includes(row.status)).length };
     }).immediate();
     database.close(); database = null;
     const inspection = inspectDatabase(candidatePath);
-    assertSource(source, credentialPreparation.preparedPlaintextSha256);
+    assertSource(source, plan.preparedPlaintextSha256);
     const report = { reportVersion: 1, status: "email-reconciled-held", recoveryId: plan.recoveryId, recoveryEpoch: plan.recoveryEpoch,
       reconciliationId, reviewedByUserId, reconciledAtMs, planChecksum: plan.planChecksum,
-      sourcePlaintextSha256: credentialPreparation.preparedPlaintextSha256, reconciledPlaintextSha256: hashFile(candidatePath),
+      sourcePlaintextSha256: verifiedPlan.preparedPlaintextSha256, reconciledPlaintextSha256: hashFile(candidatePath),
       ...result, sourceDatabase: "unchanged", jobs: "unchanged-and-held", normalRuntime: "blocked-by-durable-recovery-hold",
       providerEvidence: "reviewer-supplied-not-independently-fetched", activationReady: false };
     const receipt = { ...report, reportChecksum: hash(canonicalize(report)) };

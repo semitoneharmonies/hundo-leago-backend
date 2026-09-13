@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { canonicalize } = require("../../infrastructure/migration/sourceInventory");
 const { buildRecoveryReconciliationPlan } = require("./buildRecoveryReconciliationPlan");
+const { readVerifiedRecoveryParent } = require("./buildRecoveryReconciliationLineage");
 const { createSqliteStatisticsRepository } = require("../../infrastructure/persistence/sqlite/SqliteStatisticsRepository");
 const { PROVIDER_NAME, PLAYER_IDENTITY_PROVIDER } = require("../../infrastructure/nhl/NhlCompletedGameAdapter");
 const { assertNhlSeasonKey, normalizeStatisticsRows } = require("../../domain/statistics/statisticsPolicy");
@@ -102,9 +103,9 @@ function verifyStatistics(database,before,after,receipt) {
 // Recomputes the recorded statistics evidence and exact allowed database delta.
 // This read-only next plan never grants replay, delivery or activation authority.
 function buildStatisticsReconciledRecoveryPlan({ preparedDatabase,reconciledDatabase,credentialPreparation,
-  originalPlan,statisticsReconciliation,observedAtMs } = {}) {
+  originalPlan,statisticsReconciliation,observedAtMs,parentProof } = {}) {
   if ([preparedDatabase,reconciledDatabase].some(database => !database?.open || database.readonly !== true || database.inTransaction ||
-      !path.isAbsolute(database.name || "")) || !time(observedAtMs) || originalPlan?.planVersion !== 2 ||
+      !path.isAbsolute(database.name || "")) || !time(observedAtMs) || (parentProof === undefined && originalPlan?.planVersion !== 2) ||
       statisticsReconciliation?.reportVersion !== 1 || statisticsReconciliation.status !== "statistics-reconciled-held" ||
       statisticsReconciliation.activationReady !== false || statisticsReconciliation.normalRuntime !== "blocked-by-durable-recovery-hold" ||
       statisticsReconciliation.reviewEvidence !== "operator-supplied-not-current-authentication" ||
@@ -113,7 +114,7 @@ function buildStatisticsReconciledRecoveryPlan({ preparedDatabase,reconciledData
       ![statisticsReconciliation.reconciledPlaintextSha256,statisticsReconciliation.reportChecksum].every(value => DIGEST.test(value || ""))) fail("RECOVERY_STATISTICS_PLAN_INPUT_INVALID");
   try {
     if (fs.realpathSync(preparedDatabase.name) === fs.realpathSync(reconciledDatabase.name)) fail("RECOVERY_STATISTICS_PLAN_INPUT_INVALID");
-    const parent = buildRecoveryReconciliationPlan({ database: preparedDatabase,credentialPreparation,observedAtMs: originalPlan.observedAtMs,
+    const parent = parentProof !== undefined ? readVerifiedRecoveryParent({ parentProof,database: preparedDatabase,originalPlan,credentialPreparation }) : buildRecoveryReconciliationPlan({ database: preparedDatabase,credentialPreparation,observedAtMs: originalPlan.observedAtMs,
       expectedEnvironmentId: originalPlan.databaseIdentity?.environmentId,expectedDatabaseId: originalPlan.databaseIdentity?.databaseId });
     if (!same(parent,originalPlan)) fail("RECOVERY_STATISTICS_PLAN_PARENT_INVALID");
     const { reconciledDatabasePath,inspection,reportChecksum,...receipt } = statisticsReconciliation;
@@ -171,11 +172,11 @@ function buildStatisticsReconciledRecoveryPlan({ preparedDatabase,reconciledData
       const jobs = parent.jobs.map(row => row.id !== decision.jobId ? row : { ...row,status: completed.status,version: completed.version,
         rowSha256: hash(canonicalize(completed)),leaseExpired: null,disposition: "preserve-recorded-result",executionPermitted: false });
       const { planChecksum,...original } = parent;
-      return { ...original,planVersion: 4,observedAtMs,previousPlanChecksum: planChecksum,credentialPreparedPlaintextSha256: parent.preparedPlaintextSha256,
+      return { ...original,planVersion: 4,observedAtMs,previousPlanChecksum: planChecksum,credentialPreparedPlaintextSha256: credentialPreparation.preparedPlaintextSha256,
         preparedPlaintextSha256: receipt.reconciledPlaintextSha256,statisticsReconciliationChecksum: reportChecksum,
         tableSnapshots,snapshotSha256: hash(canonicalize(tableSnapshots)),jobs,unresolvedJobs: receipt.unresolvedJobs,activationReady: false,executable: false };
     }).deferred();
-    unchanged(preparedDatabase,credentialPreparation.preparedPlaintextSha256);unchanged(reconciledDatabase,receipt.reconciledPlaintextSha256);
+    unchanged(preparedDatabase,parent.preparedPlaintextSha256);unchanged(reconciledDatabase,receipt.reconciledPlaintextSha256);
     if (reconciledDatabase.prepare("SELECT total_changes() n").get().n !== initialChanges) fail("RECOVERY_STATISTICS_PLAN_WRITE_DETECTED");
     return Object.freeze({ ...plan,planChecksum: hash(canonicalize(plan)) });
   } catch (error) {

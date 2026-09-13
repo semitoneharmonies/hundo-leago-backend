@@ -15,6 +15,7 @@ const { prepareRecoveryEmailReconciliation } = require("../../src/operations/bac
 const { prepareRecoveryStatisticsReconciliation } = require("../../src/operations/backups/prepareRecoveryStatisticsReconciliation");
 const { buildEmailReconciledRecoveryPlan } = require("../../src/operations/backups/buildEmailReconciledRecoveryPlan");
 const { buildStatisticsReconciledRecoveryPlan } = require("../../src/operations/backups/buildStatisticsReconciledRecoveryPlan");
+const { buildRecoveryPlanFromLineage,readVerifiedRecoveryParent } = require("../../src/operations/backups/buildRecoveryReconciliationLineage");
 const { createLeagueOutboxPublicationService } = require("../../src/application/services/activity/createLeagueOutboxPublicationService");
 const { createSqliteLeagueOutboxRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteLeagueOutboxRepository");
 const { compareRecoveryLossWindow } = require("../../src/operations/backups/compareRecoveryLossWindow");
@@ -1094,6 +1095,9 @@ test("reviewed statistics recovery executes only its exact occurrence in a new h
     for (const player of catalog) insert.run(fixtureId("reviewed-recovery-nhl:"+player.playerId),player.playerId,player.providerPlayerId,now-60_000);
     oldLease = createSqliteStatisticsScheduleRepository({ database }).claim({ occurrenceKey: `${nhlSeasonKey}:${scheduledForMs}`,
       scheduledForMs,nowMs: scheduledForMs+60_000,owner: "synthetic-old-worker" });
+    const message = database.prepare("SELECT * FROM outbox_events WHERE id=?").get(fixtureId("recovery-preparation:outbox:security"));
+    for (const suffix of ["second","third"]) database.prepare("INSERT INTO outbox_events("+Object.keys(message).join(",")+") VALUES("+Object.keys(message).map(key => `@${key}`).join(",")+")")
+      .run({ ...message,id: fixtureId("recovery-lineage-email:"+suffix) });
   });
   const sourceBytes = started.runtime.database.serialize(),restoredHash = readHash(input.restoredCandidate.targetDatabasePath);
   const prepared = prepareRecoveryCredentials({ ...input,preparedAtMs: now,outputDirectory: path.join(input.temporaryRoot,"statistics-operation-input") });
@@ -1284,6 +1288,91 @@ test("reviewed statistics recovery executes only its exact occurrence in a new h
       statisticsReconciliation: forgedReceipt }),{ code: "RECOVERY_STATISTICS_PLAN_DELTA_INVALID" });
     assert.equal(changedReader.prepare("SELECT total_changes() n").get().n,0);
   } finally { originalAgain.close(); changedReader.close(); }
+  await t.test("actual recovery commands verify email and statistics lineage in both orders and preserve every predecessor", async () => {
+    const copy = file => { const target = path.join(input.temporaryRoot,crypto.randomUUID()+"-lineage-review.sqlite3");fs.copyFileSync(file,target,fs.constants.COPYFILE_EXCL);return target; };
+    const readReceipt = (result,kind) => JSON.parse(fs.readFileSync(path.join(path.dirname(result.reconciledDatabasePath),kind+"-reconciliation.json"),"utf8"));
+    const messages = before.outbox_events.map(JSON.parse).filter(row => row.league_id === null && ["pending","failed","publishing"].includes(row.status));
+    assert.equal(messages.length,3);
+    const deliveries = messages.map(message => ({ eventId: message.id,rowSha256: hash(canonicalize(message)),payloadSha256: hash(message.payload_json),
+      providerMessageSha256: hash("synthetic-lineage-message:"+message.id),providerReceiptSha256: hash("synthetic-lineage-delivery:"+message.id),deliveredAtMs: now-1 }));
+    const { statisticsReview: unused,...commonReview } = nextReviewRequest;
+    const reviewLineage = (lineage,currentPath,at) => {
+      const execution = invokeReview({ ...commonReview,preparedDatabasePath: currentPath,observedAtMs: at,lineagePath: write(crypto.randomUUID()+"-lineage.json",lineage) });
+      assert.equal(execution.status,0,execution.stderr);assert.equal(execution.stderr,"");assert.equal(execution.stdout.includes(PRIVATE_VALUE),false);
+      return JSON.parse(execution.stdout);
+    };
+    const emailCommand = ({ source,candidate,lineage,selected,at }) => {
+      const request = { requestVersion: 1,credentialPreparationPath,preparedDatabasePath: source,candidateReviewPath: write(crypto.randomUUID()+"-candidate.json",candidate),
+        deliveryReviewPath: write(crypto.randomUUID()+"-delivery.json",{ deliveries: selected }),reviewedByUserId: review.reviewedByUserId,
+        reconciliationId: crypto.randomUUID(),reconciledAtMs: at,temporaryRoot: input.temporaryRoot,outputDirectory: path.join(input.temporaryRoot,crypto.randomUUID()+"-email-output"),
+        ...(lineage ? { lineagePath: write(crypto.randomUUID()+"-lineage.json",lineage) } : {}) };
+      const execution = spawnSync(process.execPath,[path.resolve(__dirname,"../../scripts/db-recovery-email.js"),"--request",write(crypto.randomUUID()+"-request.json",request)],
+        { encoding: "utf8",timeout: 60_000,maxBuffer: 8*1024*1024 });
+      assert.equal(execution.status,0,execution.stderr);assert.equal(execution.stderr,"");assert.equal(execution.stdout.includes(PRIVATE_VALUE),false);
+      return JSON.parse(execution.stdout);
+    };
+    const statsLineage = { initialDatabasePath: reviewPath,initialPlan: plan,
+      steps: [{ kind: "statistics",reconciledDatabasePath: reconciledReviewPath,receipt: statisticsReceipt,observedAtMs }] };
+    const statsReview = reviewLineage(statsLineage,reconciledReviewPath,observedAtMs);assert.deepEqual(statsReview.plan,nextPlan);
+    const firstEmail = emailCommand({ source: commandReport.reconciledDatabasePath,candidate: statsReview,lineage: statsLineage,selected: deliveries.slice(0,1),at: observedAtMs+1 });
+    const firstEmailPath = copy(firstEmail.reconciledDatabasePath),firstEmailAt = firstEmail.reconciledAtMs+1;
+    const statsThenEmail = { ...statsLineage,steps: [...statsLineage.steps,{ kind: "email",reconciledDatabasePath: firstEmailPath,receipt: readReceipt(firstEmail,"email"),observedAtMs: firstEmailAt }] };
+    const firstEmailReview = reviewLineage(statsThenEmail,firstEmailPath,firstEmailAt);
+    const secondEmail = emailCommand({ source: firstEmail.reconciledDatabasePath,candidate: firstEmailReview,lineage: statsThenEmail,selected: deliveries.slice(1),at: firstEmailAt+1 });
+    const secondEmailPath = copy(secondEmail.reconciledDatabasePath),secondEmailAt = secondEmail.reconciledAtMs+1;
+    const completeLineage = { ...statsThenEmail,steps: [...statsThenEmail.steps,{ kind: "email",reconciledDatabasePath: secondEmailPath,receipt: readReceipt(secondEmail,"email"),observedAtMs: secondEmailAt }] };
+    const completed = reviewLineage(completeLineage,secondEmailPath,secondEmailAt);
+    assert.equal(completed.plan.unresolvedMessages,plan.unresolvedMessages-3);assert.equal(completed.plan.unresolvedJobs,plan.unresolvedJobs-1);
+    assert.equal(completed.plan.credentialPreparedPlaintextSha256,preparedHash);assert.equal(completed.activationReady,false);
+    assert.equal(completed.plan.statisticsReconciliationChecksum,statisticsReceipt.reportChecksum);
+
+    const emailFirst = emailCommand({ source: prepared.preparedDatabasePath,candidate: reviewed,selected: deliveries,at: now });
+    const emailFirstPath = copy(emailFirst.reconciledDatabasePath),emailFirstAt = now+1;
+    const emailLineage = { initialDatabasePath: reviewPath,initialPlan: plan,
+      steps: [{ kind: "email",reconciledDatabasePath: emailFirstPath,receipt: readReceipt(emailFirst,"email"),observedAtMs: emailFirstAt }] };
+    const emailFirstReview = reviewLineage(emailLineage,emailFirstPath,emailFirstAt);
+    const chainedStatistics = invoke({ ...commandRequest,preparedDatabasePath: emailFirst.reconciledDatabasePath,
+      candidateReviewPath: write("email-first-candidate.json",emailFirstReview),lineagePath: write("email-first-lineage.json",emailLineage),
+      decisionPath: write("email-first-statistics-decision.json",{ ...review,reconciliationId: crypto.randomUUID() }),
+      outputDirectory: path.join(input.temporaryRoot,"email-first-statistics-output"),executedAtMs: emailFirstAt+1 });
+    assert.equal(chainedStatistics.status,0,chainedStatistics.stderr);assert.equal(chainedStatistics.stderr,"");
+    const finalStatistics = JSON.parse(chainedStatistics.stdout),finalStatisticsPath = copy(finalStatistics.reconciledDatabasePath),finalStatisticsAt = finalStatistics.completedAtMs+1;
+    const emailThenStats = { ...emailLineage,steps: [...emailLineage.steps,{ kind: "statistics",reconciledDatabasePath: finalStatisticsPath,
+      receipt: readReceipt(finalStatistics,"statistics"),observedAtMs: finalStatisticsAt }] };
+    const reversed = reviewLineage(emailThenStats,finalStatisticsPath,finalStatisticsAt);
+    assert.equal(reversed.plan.unresolvedMessages,plan.unresolvedMessages-3);assert.equal(reversed.plan.unresolvedJobs,plan.unresolvedJobs-1);
+    assert.equal(reversed.plan.credentialPreparedPlaintextSha256,preparedHash);assert.equal(reversed.activationReady,false);
+    assert.equal(reversed.plan.emailReconciliationChecksum,emailFirst.reportChecksum);
+    const files = [prepared.preparedDatabasePath,reviewPath,commandReport.reconciledDatabasePath,reconciledReviewPath,firstEmail.reconciledDatabasePath,
+      firstEmailPath,secondEmail.reconciledDatabasePath,secondEmailPath,emailFirst.reconciledDatabasePath,emailFirstPath,finalStatistics.reconciledDatabasePath,finalStatisticsPath];
+    const hashes = files.map(readHash);
+    for (const invalid of [
+      { ...completeLineage,steps: [...completeLineage.steps].reverse() },
+      { ...completeLineage,steps: completeLineage.steps.slice(1) },
+      { ...completeLineage,steps: [completeLineage.steps[0],completeLineage.steps[0]] },
+      { ...completeLineage,steps: Array(33).fill(completeLineage.steps[0]) },
+      { ...completeLineage,initialPlan: { ...plan,unresolvedJobs: 0 } },
+      { ...completeLineage,approve: true },
+    ]) {
+      const rejected = invokeReview({ ...commonReview,preparedDatabasePath: secondEmailPath,observedAtMs: secondEmailAt,lineagePath: write(crypto.randomUUID()+"-invalid-lineage.json",invalid) });
+      assert.equal(rejected.status,1);assert.equal(rejected.stdout,"");assert.match(JSON.parse(rejected.stderr).error.code,/^RECOVERY_LINEAGE_/);
+    }
+    const held = openReadonlyDatabase({ databasePath: secondEmailPath });
+    try {
+      assertCredentialAccess(held,false);assert.equal(held.prepare("SELECT total_changes() n").get().n,0);
+      assert.throws(() => readVerifiedRecoveryParent({ parentProof: {},database: held,originalPlan: completed.plan,credentialPreparation: prepared }),{ code: "RECOVERY_LINEAGE_PARENT_INVALID" });
+      assert.throws(() => buildRecoveryPlanFromLineage({ database: held,credentialPreparation: prepared,lineage: statsLineage,
+        observedAtMs,expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID,expectedDatabaseId: FIXTURE_DATABASE_ID }),{ code: "RECOVERY_LINEAGE_CANDIDATE_MISMATCH" });
+      assert.equal(held.prepare("SELECT total_changes() n").get().n,0);
+    } finally { held.close(); }
+    let attemptedProviderReads = 0;
+    const rejectedOutput = path.join(input.temporaryRoot,"invalid-lineage-statistics-output");
+    await assert.rejects(() => prepareRecoveryStatisticsReconciliation({ ...options,credentialPreparation: { ...prepared,preparedDatabasePath: emailFirst.reconciledDatabasePath },
+      plan: emailFirstReview.plan,lineage: { ...emailLineage,steps: [] },executedAtMs: emailFirstAt+1,outputDirectory: rejectedOutput,
+      fetchImpl: async () => { attemptedProviderReads++;throw Error("invalid lineage must not contact provider"); } }),{ code: "RECOVERY_STATISTICS_FAILED" });
+    assert.equal(attemptedProviderReads,0);assert.equal(fs.existsSync(rejectedOutput),false);
+    assert.deepEqual(files.map(readHash),hashes);assert.deepEqual(started.runtime.database.serialize(),sourceBytes);
+  });
   assert.equal(readHash(commandReport.reconciledDatabasePath),commandHash); assert.equal(readHash(reconciledReviewPath),commandHash);
   assert.deepEqual([readHash(reconciledDatabasePath),readHash(receiptPath)],outputHashes);
   assert.equal(readHash(prepared.preparedDatabasePath),preparedHash); assert.equal(readHash(input.restoredCandidate.targetDatabasePath),restoredHash);

@@ -4,6 +4,7 @@ const path = require("node:path");
 const { canonicalize } = require("../../infrastructure/migration/sourceInventory");
 const { CLEARED_PAYLOAD_JSON } = require("../../infrastructure/persistence/sqlite/SqliteOutboxEventRepository");
 const { buildRecoveryReconciliationPlan } = require("./buildRecoveryReconciliationPlan");
+const { readVerifiedRecoveryParent } = require("./buildRecoveryReconciliationLineage");
 
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 const DIGEST = /^[a-f0-9]{64}$/;
@@ -26,10 +27,10 @@ function unchanged(database, digest) {
 // Revalidates both physical candidates and their exact permitted delta. This
 // report grants no delivery, job execution, hold removal or activation authority.
 function buildEmailReconciledRecoveryPlan({ preparedDatabase, reconciledDatabase, credentialPreparation,
-  originalPlan, emailReconciliation, observedAtMs } = {}) {
+  originalPlan, emailReconciliation, observedAtMs, parentProof } = {}) {
   if ([preparedDatabase, reconciledDatabase].some(database => !database?.open || database.readonly !== true ||
       database.inTransaction || !path.isAbsolute(database.name || "")) ||
-      !Number.isSafeInteger(observedAtMs) || observedAtMs < 0 || originalPlan?.planVersion !== 2 ||
+      !Number.isSafeInteger(observedAtMs) || observedAtMs < 0 || (parentProof === undefined && originalPlan?.planVersion !== 2) ||
       emailReconciliation?.reportVersion !== 1 || emailReconciliation.status !== "email-reconciled-held" ||
       emailReconciliation.activationReady !== false || emailReconciliation.jobs !== "unchanged-and-held" ||
       emailReconciliation.normalRuntime !== "blocked-by-durable-recovery-hold" ||
@@ -42,7 +43,7 @@ function buildEmailReconciledRecoveryPlan({ preparedDatabase, reconciledDatabase
   }
   try {
     if (fs.realpathSync(preparedDatabase.name) === fs.realpathSync(reconciledDatabase.name)) fail("RECOVERY_RECONCILED_INPUT_INVALID");
-    const verified = buildRecoveryReconciliationPlan({ database: preparedDatabase, credentialPreparation,
+    const verified = parentProof !== undefined ? readVerifiedRecoveryParent({ parentProof,database: preparedDatabase,originalPlan,credentialPreparation }) : buildRecoveryReconciliationPlan({ database: preparedDatabase, credentialPreparation,
       observedAtMs: originalPlan.observedAtMs, expectedEnvironmentId: originalPlan.databaseIdentity?.environmentId,
       expectedDatabaseId: originalPlan.databaseIdentity?.databaseId });
     if (!same(verified, originalPlan)) fail("RECOVERY_RECONCILED_PARENT_INVALID");
@@ -109,11 +110,11 @@ function buildEmailReconciledRecoveryPlan({ preparedDatabase, reconciledDatabase
       if (unresolvedMessages !== email.unresolvedMessages) fail("RECOVERY_RECONCILED_RECEIPT_INVALID");
       const { planChecksum, ...parent } = verified;
       return { ...parent, planVersion: 3, observedAtMs, previousPlanChecksum: planChecksum,
-        credentialPreparedPlaintextSha256: verified.preparedPlaintextSha256, preparedPlaintextSha256: email.reconciledPlaintextSha256,
+        credentialPreparedPlaintextSha256: credentialPreparation.preparedPlaintextSha256, preparedPlaintextSha256: email.reconciledPlaintextSha256,
         emailReconciliationChecksum: reportChecksum, tableSnapshots, snapshotSha256: hash(canonicalize(tableSnapshots)),
         outbox, unresolvedMessages, activationReady: false, executable: false };
     }).deferred();
-    unchanged(preparedDatabase, credentialPreparation.preparedPlaintextSha256);
+    unchanged(preparedDatabase, verified.preparedPlaintextSha256);
     unchanged(reconciledDatabase, email.reconciledPlaintextSha256);
     if (reconciledDatabase.prepare("SELECT total_changes() n").get().n !== initialChanges) fail("RECOVERY_RECONCILED_WRITE_DETECTED");
     return Object.freeze({ ...result, planChecksum: hash(canonicalize(result)) });

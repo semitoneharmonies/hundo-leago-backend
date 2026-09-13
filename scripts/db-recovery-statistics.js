@@ -25,14 +25,15 @@ function readJson(file) {
 async function runRecoveryStatisticsCommand({ argv,output = console } = {}) {
   if (!Array.isArray(argv) || argv.length !== 2 || argv[0] !== "--request") fail();
   const request = readJson(argv[1]);
-  if (request.requestVersion !== 1 || Object.keys(request).length !== FIELDS.length ||
+  if (request.requestVersion !== 1 || Object.keys(request).some(field => !FIELDS.includes(field) && field !== "lineagePath") ||
       FIELDS.some(field => !Object.hasOwn(request,field))) fail();
-  const { requestVersion,credentialPreparationPath,preparedDatabasePath,candidateReviewPath,decisionPath,...input } = request;
+  const { requestVersion,credentialPreparationPath,preparedDatabasePath,candidateReviewPath,decisionPath,lineagePath,...input } = request;
   const candidate = readJson(candidateReviewPath),{ reportChecksum,...body } = candidate;
   if (candidate.reviewVersion !== 1 || candidate.status !== "held-candidate-reviewed" ||
       candidate.activationReady !== false || candidate.executable !== false ||
       crypto.createHash("sha256").update(canonicalize(body)).digest("hex") !== reportChecksum) fail();
   const result = await prepareRecoveryStatisticsReconciliation({ ...input,
+    lineage: lineagePath === undefined ? null : readJson(lineagePath),
     credentialPreparation: { ...readJson(credentialPreparationPath),preparedDatabasePath },plan: candidate.plan,review: readJson(decisionPath) });
   output.log(JSON.stringify(result));
   return result;
