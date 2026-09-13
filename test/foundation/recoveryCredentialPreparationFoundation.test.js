@@ -13,6 +13,8 @@ const { prepareRecoveryCredentials } = require("../../src/operations/backups/pre
 const { buildRecoveryReconciliationPlan } = require("../../src/operations/backups/buildRecoveryReconciliationPlan");
 const { prepareRecoveryEmailReconciliation } = require("../../src/operations/backups/prepareRecoveryEmailReconciliation");
 const { prepareRecoveryStatisticsReconciliation } = require("../../src/operations/backups/prepareRecoveryStatisticsReconciliation");
+const { prepareRecoveryInvalidationReconciliation } = require("../../src/operations/backups/prepareRecoveryInvalidationReconciliation");
+const { buildInvalidationReconciledRecoveryPlan } = require("../../src/operations/backups/buildInvalidationReconciledRecoveryPlan");
 const { buildEmailReconciledRecoveryPlan } = require("../../src/operations/backups/buildEmailReconciledRecoveryPlan");
 const { buildStatisticsReconciledRecoveryPlan } = require("../../src/operations/backups/buildStatisticsReconciledRecoveryPlan");
 const { buildRecoveryPlanFromLineage,readVerifiedRecoveryParent } = require("../../src/operations/backups/buildRecoveryReconciliationLineage");
@@ -225,6 +227,186 @@ test("selected restored league invalidations publish once without repeating doma
   } finally { database.close(); }
   assert.equal(readHash(prepared.preparedDatabasePath), preparedHash);
   assert.deepEqual(started.runtime.database.serialize(), sourceBefore);
+});
+
+test("reviewed restored invalidations suppress only exact refresh hints and preserve authoritative records", async t => {
+  const now = Date.now()+60_000;
+  const fixtures = [];
+  const { started,input } = await candidate(t,database => {
+    const originals = database.prepare("SELECT * FROM outbox_events WHERE league_id IS NOT NULL AND status='pending' ORDER BY id").all();
+    const templates = [...new Map(originals.map(row => [row.league_id,row])).values()];
+    assert.equal(templates.length,2);
+    for (const [leagueIndex,template] of templates.entries()) {
+      for (const kind of ["pending","failed","publishing",...(leagueIndex === 0 ? ["notification","activity","published","future","malformed"] : [])]) {
+        const id = fixtureId(`recovery-invalidations:${leagueIndex}:${kind}`);
+        const eventType = kind === "notification" ? "notification.created" : kind === "activity" ? "activity.created" : "league.changed";
+        const createdAt = kind === "future" ? now+1000 : now-1000;
+        const row = { ...template,id,event_type: eventType,status: ["pending","failed","publishing","published"].includes(kind) ? kind : "pending",
+          published_at_ms: kind === "published" ? now-500 : null,created_at_ms: createdAt,updated_at_ms: createdAt,available_at_ms: createdAt,
+          payload_json: kind === "malformed" ? "{}" : JSON.stringify({ kind: "invalidation",eventType,scope: "league",scopeId: template.league_id,version: 1,changedAtMs: createdAt }) };
+        database.prepare("INSERT INTO outbox_events("+Object.keys(row).join(",")+") VALUES("+Object.keys(row).map(key => `@${key}`).join(",")+")").run(row);
+        const audiences = database.prepare("SELECT * FROM outbox_event_audiences WHERE outbox_event_id=? ORDER BY id").all(template.id);
+        assert.ok(audiences.length > 0);
+        for (const [index,audience] of audiences.entries()) {
+          const copy = { ...audience,id: fixtureId(`recovery-invalidations:audience:${id}:${index}`),outbox_event_id: id };
+          database.prepare("INSERT INTO outbox_event_audiences("+Object.keys(copy).join(",")+") VALUES("+Object.keys(copy).map(key => `@${key}`).join(",")+")").run(copy);
+        }
+        fixtures.push({ id,kind });
+      }
+    }
+  });
+  input.preparedAtMs = now;
+  const sourceBefore = started.runtime.database.serialize();
+  const prepared = prepareRecoveryCredentials({ ...input,outputDirectory: path.join(input.temporaryRoot,"invalidation-input") });
+  const sourceHash = readHash(prepared.preparedDatabasePath);
+  const copy = file => { const target = path.join(input.temporaryRoot,crypto.randomUUID()+"-review.sqlite3");fs.copyFileSync(file,target,fs.constants.COPYFILE_EXCL);return target; };
+  const reviewPath = copy(prepared.preparedDatabasePath),reader = openReadonlyDatabase({ databasePath: reviewPath });
+  let plan,beforeRows,decisions;
+  try {
+    plan = buildRecoveryReconciliationPlan({ database: reader,credentialPreparation: prepared,observedAtMs: now,
+      expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID,expectedDatabaseId: FIXTURE_DATABASE_ID });
+    beforeRows = allRows(reader);
+    decisions = fixtures.map(({ id,kind }) => {
+      const row = reader.prepare("SELECT * FROM outbox_events WHERE id=?").get(id);
+      const audiences = reader.prepare("SELECT * FROM outbox_event_audiences WHERE outbox_event_id=? ORDER BY id").all(id);
+      return { kind,event: { eventId: id,leagueId: row.league_id,rowSha256: hash(canonicalize(row)),payloadSha256: hash(row.payload_json),
+        audienceSha256: hash(canonicalize(audiences.map(row => hash(canonicalize(row))).sort())),
+        reasonCode: "RESTORED_REFRESH_REVIEWED",evidenceSha256: hash("synthetic-invalidation-review:"+id) } };
+    });
+  } finally { reader.close(); }
+  const events = decisions.filter(row => ["pending","failed","publishing"].includes(row.kind)).map(row => row.event);
+  assert.equal(events.length,6);assert.equal(new Set(events.map(row => row.leagueId)).size,2);
+  const options = { credentialPreparation: prepared,plan,events,reviewedByUserId: fixtureId("account:platformAdmin"),
+    reconciliationId: crypto.randomUUID(),reconciledAtMs: now+2000,temporaryRoot: input.temporaryRoot };
+  const result = prepareRecoveryInvalidationReconciliation({ ...options,outputDirectory: path.join(input.temporaryRoot,"invalidations-output") });
+  assert.equal(result.suppressedEvents,6);assert.equal(result.unresolvedMessages,plan.unresolvedMessages-6);
+  assert.equal(result.activationReady,false);assert.equal(result.deliveryPerformed,false);
+  assert.equal(JSON.stringify(result).includes(PRIVATE_VALUE),false);
+  await t.test("preserves all authoritative rows, message history and the hold without delivery", async () => {
+    const db = openDatabase({ databasePath: copy(result.reconciledDatabasePath),environment: "staging",persistentRoot: input.temporaryRoot,requirePersistentRoot: true }).database;
+    try {
+      const after = allRows(db),ids = new Set(events.map(row => row.eventId));
+      for (const [name,rows] of Object.entries(beforeRows)) if (!["outbox_events","application_metadata","security_audit_events"].includes(name)) assert.deepEqual(after[name],rows,name);
+      for (const row of beforeRows.outbox_events.map(JSON.parse)) assert.deepEqual(db.prepare("SELECT * FROM outbox_events WHERE id=?").get(row.id),ids.has(row.id) ? {
+        ...row,status: "discarded",last_error_code: "RECOVERY_INVALIDATION_SUPPRESSED",updated_at_ms: options.reconciledAtMs,version: row.version+1 } : row);
+      assertCredentialAccess(db,false);assert.deepEqual(readRecoveryEpoch(db),prepared.recoveryEpoch);
+      assert.ok(db.prepare("SELECT 1 FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY));
+      assert.equal(db.prepare("SELECT event_type FROM security_audit_events WHERE id=?").get(options.reconciliationId).event_type,"recovery.invalidations_suppressed");
+      const publisher = createLeagueOutboxPublicationService({ repository: createSqliteLeagueOutboxRepository({ database: db }),
+        publisher: { publish() { assert.fail("Suppression must not deliver a refresh hint."); } },clock: { nowMs: () => now+3000 } });
+      const before = db.serialize();
+      for (const event of events) {
+        const row = db.prepare("SELECT * FROM outbox_events WHERE id=?").get(event.eventId);
+        assert.equal((await publisher.publishExact({ eventId: row.id,leagueId: row.league_id,expectedVersion: row.version })).outcome,"state_changed");
+      }
+      assert.deepEqual(db.serialize(),before);
+    } finally { db.close(); }
+  });
+  await t.test("rebuilds exact review and rejects forged receipts and unrelated data changes", () => {
+    const parent = openReadonlyDatabase({ databasePath: reviewPath }),current = openReadonlyDatabase({ databasePath: copy(result.reconciledDatabasePath) });
+    const input = { preparedDatabase: parent,reconciledDatabase: current,credentialPreparation: prepared,originalPlan: plan,
+      invalidationReconciliation: result,observedAtMs: now+3000 };
+    try {
+      const next = buildInvalidationReconciledRecoveryPlan(input);
+      assert.equal(next.planVersion,5);assert.equal(next.previousPlanChecksum,plan.planChecksum);
+      assert.equal(next.unresolvedMessages,plan.unresolvedMessages-6);assert.deepEqual(next.jobs,plan.jobs);
+      assert.equal(next.executable,false);assert.equal(next.activationReady,false);assert.equal(current.prepare("SELECT total_changes() n").get().n,0);
+      for (const patch of [{ observedAtMs: now },{ parentProof: {} },{ invalidationReconciliation: { ...result,reportChecksum: "e".repeat(64) } }])
+        assert.throws(() => buildInvalidationReconciledRecoveryPlan({ ...input,...patch }),error => /^RECOVERY_/.test(error.code));
+      const alteredPath = copy(result.reconciledDatabasePath);
+      const writer = openDatabase({ databasePath: alteredPath,environment: "staging",persistentRoot: path.dirname(reviewPath),requirePersistentRoot: true }).database;
+      let tableSnapshots;
+      try {
+        writer.prepare("UPDATE teams SET version=version+1 WHERE id=(SELECT id FROM teams ORDER BY id LIMIT 1)").run();
+        tableSnapshots = Object.fromEntries(Object.entries(allRows(writer)).map(([name,rows]) => [name,{ count: rows.length,sha256: hash(canonicalize(rows.map(hash).sort())) }]));
+      } finally { writer.close(); }
+      const spoofed = { ...result,reconciledPlaintextSha256: readHash(alteredPath),tableSnapshots };
+      for (const key of ["reportChecksum","reconciledDatabasePath","inspection"]) delete spoofed[key];
+      const altered = openReadonlyDatabase({ databasePath: alteredPath });
+      try { assert.throws(() => buildInvalidationReconciledRecoveryPlan({ ...input,reconciledDatabase: altered,
+        invalidationReconciliation: { ...spoofed,reportChecksum: hash(canonicalize(spoofed)) } }),{ code: "RECOVERY_INVALIDATION_PLAN_DELTA_INVALID" }); }
+      finally { altered.close(); }
+    } finally { parent.close();current.close(); }
+  });
+  await t.test("rejects wrong evidence, other leagues, protected notifications, future events and non-administrators", () => {
+    const change = patch => ({ events: [{ ...events[0],...patch }] });
+    const cases = [
+      [change({ rowSha256: "e".repeat(64) }),"EVENT_MISMATCH"],[change({ payloadSha256: "e".repeat(64) }),"EVENT_MISMATCH"],
+      [change({ audienceSha256: "e".repeat(64) }),"AUDIENCE_MISMATCH"],
+      [change({ leagueId: events.find(row => row.leagueId !== events[0].leagueId).leagueId }),"EVENT_MISMATCH"],
+      [{ events: [events[0],events[0]] },"INPUT_INVALID"],[change({ approve: true }),"INPUT_INVALID"],
+      [{ reviewedByUserId: fixtureId("account:leagueACommissioner") },"REVIEWER_INVALID"],
+      [{ plan: { ...plan,planChecksum: "e".repeat(64) } },"PLAN_INVALID"],
+      ...["notification","activity","published","future","malformed"].map(kind => [{ events: [decisions.find(row => row.kind === kind).event] },
+        ["notification","activity"].includes(kind) ? "NOT_REFRESH_HINT" : kind === "malformed" ? "PAYLOAD_INVALID" : "EVENT_MISMATCH"]),
+      [change({ eventId: fixtureId("recovery-preparation:outbox:security") }),"EVENT_MISMATCH"],
+    ];
+    for (const [patch,code] of cases) {
+      const outputDirectory = path.join(input.temporaryRoot,crypto.randomUUID()+"-rejected");
+      assert.throws(() => prepareRecoveryInvalidationReconciliation({ ...options,...patch,outputDirectory }),{ code: "RECOVERY_INVALIDATION_"+code });
+      assert.equal(fs.existsSync(outputDirectory),false);
+    }
+  });
+  await t.test("rolls back interrupted and unexpected writes, and preserves collisions and active sources", () => {
+    for (const tamper of [false,true]) {
+      let rolledBack = false;
+      const outputDirectory = path.join(input.temporaryRoot,crypto.randomUUID()+"-rollback");
+      assert.throws(() => prepareRecoveryInvalidationReconciliation({ ...options,outputDirectory,beforeCommit(db) {
+        const close = db.close.bind(db);db.close = () => { assert.equal(db.inTransaction,false);assert.deepEqual(allRows(db),beforeRows);rolledBack = true;return close(); };
+        if (tamper) db.prepare("UPDATE teams SET version=version+1 WHERE id=(SELECT id FROM teams ORDER BY id LIMIT 1)").run();
+        else throw Error("fixture interruption");
+      } }),{ code: tamper ? "RECOVERY_INVALIDATION_POSTCHECK_FAILED" : "RECOVERY_INVALIDATION_FAILED" });
+      assert.equal(rolledBack,true);assert.equal(fs.existsSync(outputDirectory),false);
+    }
+    const existing = path.dirname(result.reconciledDatabasePath),digest = readHash(result.reconciledDatabasePath);
+    assert.throws(() => prepareRecoveryInvalidationReconciliation({ ...options,outputDirectory: existing }),{ code: "RECOVERY_INVALIDATION_PATH_UNSAFE" });
+    assert.equal(readHash(result.reconciledDatabasePath),digest);
+    const wal = prepared.preparedDatabasePath+"-wal";fs.writeFileSync(wal,"fixture active writer",{ flag: "wx" });
+    try {
+      assert.throws(() => prepareRecoveryInvalidationReconciliation({ ...options,outputDirectory: path.join(input.temporaryRoot,"wal-rejected") }),{ code: "RECOVERY_INVALIDATION_SOURCE_CHANGED" });
+      assert.equal(fs.readFileSync(wal,"utf8"),"fixture active writer");
+    } finally { fs.unlinkSync(wal); }
+  });
+  await t.test("actual commands compose invalidation, email and another invalidation batch with immutable predecessors", () => {
+    const write = value => { const file = path.join(input.temporaryRoot,crypto.randomUUID()+".json");fs.writeFileSync(file,JSON.stringify(value),{ flag: "wx" });return file; };
+    const invoke = (script,request) => spawnSync(process.execPath,[path.resolve(__dirname,"../../scripts/"+script),"--request",write(request)],
+      { encoding: "utf8",timeout: 60_000,maxBuffer: 8*1024*1024 });
+    const success = (script,request) => { const run = invoke(script,request);assert.equal(run.status,0,run.stderr);assert.equal(run.stderr,"");assert.equal(run.stdout.includes(PRIVATE_VALUE),false);return JSON.parse(run.stdout); };
+    const credentialPreparationPath = write(prepared);
+    const review = (source,at,lineage) => success("db-recovery-review.js",{ requestVersion: 1,credentialPreparationPath,preparedDatabasePath: source,
+      expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID,expectedDatabaseId: FIXTURE_DATABASE_ID,observedAtMs: at,...(lineage ? { lineagePath: write(lineage) } : {}) });
+    const originalReview = review(reviewPath,now);
+    const request = { requestVersion: 1,credentialPreparationPath,preparedDatabasePath: prepared.preparedDatabasePath,candidateReviewPath: write(originalReview),
+      invalidationReviewPath: write({ events: events.slice(0,3) }),reviewedByUserId: options.reviewedByUserId,reconciliationId: crypto.randomUUID(),
+      reconciledAtMs: now+2000,temporaryRoot: input.temporaryRoot,outputDirectory: path.join(input.temporaryRoot,"invalidation-command-first") };
+    const first = success("db-recovery-invalidations.js",request),firstCopy = copy(first.reconciledDatabasePath);
+    const lineage = { initialDatabasePath: reviewPath,initialPlan: plan,steps: [{ kind: "invalidation",reconciledDatabasePath: firstCopy,receipt: first,observedAtMs: now+3000 }] };
+    const firstReview = review(firstCopy,now+3000,lineage);assert.equal(firstReview.plan.planVersion,5);
+    const security = beforeRows.outbox_events.map(JSON.parse).find(row => row.id === fixtureId("recovery-preparation:outbox:security"));
+    const deliveries = [{ eventId: security.id,rowSha256: hash(canonicalize(security)),payloadSha256: hash(security.payload_json),
+      providerMessageSha256: hash("synthetic-invalidation-email-message"),providerReceiptSha256: hash("synthetic-invalidation-email-receipt"),deliveredAtMs: 90 }];
+    const email = success("db-recovery-email.js",{ requestVersion: 1,credentialPreparationPath,preparedDatabasePath: first.reconciledDatabasePath,
+      candidateReviewPath: write(firstReview),deliveryReviewPath: write({ deliveries }),lineagePath: write(lineage),reviewedByUserId: options.reviewedByUserId,
+      reconciliationId: crypto.randomUUID(),reconciledAtMs: now+4000,temporaryRoot: input.temporaryRoot,outputDirectory: path.join(input.temporaryRoot,"invalidation-command-email") });
+    const emailCopy = copy(email.reconciledDatabasePath);
+    lineage.steps.push({ kind: "email",reconciledDatabasePath: emailCopy,receipt: email,observedAtMs: now+5000 });
+    const emailReview = review(emailCopy,now+5000,lineage);
+    const second = success("db-recovery-invalidations.js",{ ...request,preparedDatabasePath: email.reconciledDatabasePath,candidateReviewPath: write(emailReview),
+      invalidationReviewPath: write({ events: events.slice(3) }),lineagePath: write(lineage),reconciliationId: crypto.randomUUID(),reconciledAtMs: now+6000,
+      outputDirectory: path.join(input.temporaryRoot,"invalidation-command-second") });
+    const secondCopy = copy(second.reconciledDatabasePath);
+    lineage.steps.push({ kind: "invalidation",reconciledDatabasePath: secondCopy,receipt: second,observedAtMs: now+7000 });
+    const final = review(secondCopy,now+7000,lineage);
+    assert.equal(final.plan.planVersion,5);assert.equal(final.plan.unresolvedMessages,plan.unresolvedMessages-7);
+    assert.deepEqual(final.plan.jobs,plan.jobs);assert.equal(final.activationReady,false);assert.equal(final.executable,false);
+    for (const receipt of [first,email,second]) assert.equal(readHash(receipt.reconciledDatabasePath),receipt.reconciledPlaintextSha256);
+    for (const patch of [{ approve: true },{ invalidationReviewPath: write({ events,send: true }) },{ invalidationReviewPath: write({ events: [{ ...events[0],audienceSha256: "e".repeat(64) }] }) }]) {
+      const invalid = { ...request,...patch,outputDirectory: path.join(input.temporaryRoot,crypto.randomUUID()+"-cli-rejected") },run = invoke("db-recovery-invalidations.js",invalid);
+      assert.equal(run.status,1);assert.equal(run.stdout,"");assert.match(JSON.parse(run.stderr).error.code,/^RECOVERY_INVALIDATION_/);
+      assert.equal(run.stderr.includes(PRIVATE_VALUE),false);assert.equal(fs.existsSync(invalid.outputDirectory),false);
+    }
+  });
+  assert.equal(readHash(prepared.preparedDatabasePath),sourceHash);assert.deepEqual(started.runtime.database.serialize(),sourceBefore);
 });
 
 test("reviewed restored email suppression preserves source, jobs and every unrelated row", async t => {
