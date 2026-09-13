@@ -87,8 +87,8 @@ describe("M5-03 target auction resolution job foundation", () => {
     const job = createJob({
       repository,
       resolutionService: {
-        async resolveDue(input) {
-          calls.push(["resolveDue", input]);
+        async resolveClaimedDue(input) {
+          calls.push(["resolveClaimedDue", input]);
           return {
             completed: true,
             status: "resolved",
@@ -123,13 +123,14 @@ describe("M5-03 target auction resolution job foundation", () => {
         },
       ],
       [
-        "resolveDue",
+        "resolveClaimedDue",
         {
           leagueId: IDS.league,
           auctionId: IDS.auction,
           occurrenceKey: `auction:${IDS.auction}:${NOW_MS}`,
           expectedAuctionVersion: 7,
           nowMs: NOW_MS,
+          execution: { runId: IDS.run, leaseOwner: "m5-03-worker", expectedVersion: 1 },
         },
       ],
       [
@@ -159,7 +160,7 @@ describe("M5-03 target auction resolution job foundation", () => {
     const job = createJob({
       repository,
       resolutionService: {
-        async resolveDue() {
+        async resolveClaimedDue() {
           const error = new Error(
             "private bid values and a database connection string"
           );
@@ -204,7 +205,7 @@ describe("M5-03 target auction resolution job foundation", () => {
     const job = createJob({
       repository,
       resolutionService: {
-        async resolveDue() {
+        async resolveClaimedDue() {
           return { completed: false, status: "resolved" };
         },
       },
@@ -222,7 +223,7 @@ describe("M5-03 target auction resolution job foundation", () => {
     const job = createJob({
       repository: createRepository(),
       resolutionService: {
-        async resolveDue() {
+        async resolveClaimedDue() {
           await gate;
           return { completed: true, status: "no_winner" };
         },

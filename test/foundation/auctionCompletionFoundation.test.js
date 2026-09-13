@@ -533,6 +533,69 @@ function directCompletion(overrides = {}) {
 }
 
 describe("M5-04 atomic SQLite auction completion", () => {
+  test("requires exact current claim evidence for scheduled auction completion without falling back to direct completion", async t => {
+    const runtime = createPersistenceRuntime(t);
+    const initial = runtime.database.serialize();
+    await assert.rejects(() => runtime.service.resolveClaimedDue({ leagueId: PERSISTED.league,auctionId: PERSISTED.auction,
+      occurrenceKey: occurrenceKey(),expectedAuctionVersion: 1,nowMs: NOW_MS }),{ code: REPOSITORY_ERROR_CODES.argumentInvalid });
+    assert.deepEqual(runtime.database.serialize(),initial);
+    const claim = runtime.repository.claimRun({ jobRunId: runtime.secureRandom.id(),leagueId: PERSISTED.league,seasonId: PERSISTED.season,
+      occurrenceKey: occurrenceKey(),scheduledForMs: NOW_MS,leaseOwner: "reviewed-worker",nowMs: NOW_MS,leaseExpiresAtMs: NOW_MS+20 });
+    assert.equal(claim.acquired,true);
+    const command = directCompletion({ execution: { runId: claim.runId,leaseOwner: "reviewed-worker",expectedVersion: claim.version } });
+    const before = runtime.database.serialize();
+    for (const patch of [{ execution: undefined },{ execution: { ...command.execution,approve: true } },
+      { execution: { ...command.execution,runId: crypto.randomUUID() } },{ execution: { ...command.execution,leaseOwner: "other-worker" } },
+      { execution: { ...command.execution,expectedVersion: claim.version+1 } },{ leagueId: crypto.randomUUID() },
+      { occurrenceKey: occurrenceKey(NOW_MS+1) },{ nowMs: NOW_MS+20 }]) {
+      assert.throws(() => runtime.repository.completeClaimedDue({ ...command,...patch }),error => /^REPOSITORY_/.test(error.code));
+      assert.deepEqual(runtime.database.serialize(),before);
+    }
+    assert.equal(runtime.repository.completeClaimedDue(command).completed,true);
+    const completed = runtime.database.serialize();
+    assert.equal(runtime.repository.completeClaimedDue(command).replayed,true);
+    assert.deepEqual(runtime.database.serialize(),completed);
+  });
+  for (const lostLease of ["recovery-invalidated", "reclaimed", "expired"]) {
+    test(`prevents a ${lostLease} auction worker from creating a contract or ownership`, async t => {
+      const runtime = createPersistenceRuntime(t);
+      let nowMs = NOW_MS, protectedBytes;
+      const contractsBefore = runtime.database.prepare("SELECT COUNT(*) n FROM contracts").get().n;
+      const ownershipsBefore = runtime.database.prepare("SELECT COUNT(*) n FROM player_ownerships").get().n;
+      const repository = { ...runtime.repository, claimRun(command) {
+        const claim = runtime.repository.claimRun(command);
+        assert.equal(claim.acquired, true);
+        if (lostLease === "recovery-invalidated") {
+          nowMs = NOW_MS+1;
+          runtime.database.prepare("UPDATE job_runs SET lease_owner=NULL,lease_token=NULL,lease_expires_at_ms=?,updated_at_ms=?,version=version+1 WHERE id=?")
+            .run(nowMs,nowMs,claim.runId);
+        } else if (lostLease === "reclaimed") {
+          nowMs = NOW_MS+20;
+          const replacement = runtime.repository.claimRun({ ...command,jobRunId: runtime.secureRandom.id(),leaseOwner: "replacement-worker",
+            nowMs,leaseExpiresAtMs: NOW_MS+40 });
+          assert.equal(replacement.acquired,true);assert.equal(replacement.runId,claim.runId);
+        } else nowMs = NOW_MS+20;
+        protectedBytes = runtime.database.serialize();
+        return claim;
+      } };
+      const makeJob = (repository,leaseOwner) => createResolveTargetAuctionsJob({ repository,resolutionService: runtime.service,
+        clock: { nowMs: () => nowMs },secureRandom: runtime.secureRandom,leaseOwner,leaseDurationMs: 20,logger: { error() {} } });
+      const stale = await makeJob(repository,"stale-worker").run();
+      assert.equal(runtime.database.prepare("SELECT status FROM auctions WHERE id=?").get(PERSISTED.auction).status,"open");
+      assert.deepEqual(runtime.database.serialize(),protectedBytes);
+      assert.equal(runtime.lateLockCalls.length,0);assert.equal(runtime.summerSynchronizationCalls.length,0);
+      assert.equal(stale.status,"succeeded");assert.equal(stale.completed,0);assert.equal(stale.skipped,1);
+      nowMs = NOW_MS+41;
+      const recovered = await makeJob(runtime.repository,"current-worker").run();
+      assert.equal(recovered.status,"succeeded");assert.equal(recovered.completed,1);
+      assert.equal(runtime.database.prepare("SELECT COUNT(*) n FROM contracts").get().n,contractsBefore+1);
+      assert.equal(runtime.database.prepare("SELECT COUNT(*) n FROM player_ownerships").get().n,ownershipsBefore+1);
+      assert.equal(runtime.database.prepare("SELECT COUNT(*) n FROM auction_resolutions WHERE auction_id=?").get(PERSISTED.auction).n,1);
+      const after = runtime.database.serialize();
+      assert.equal((await makeJob(runtime.repository,"restarted-worker").run()).due,0);
+      assert.deepEqual(runtime.database.serialize(),after);
+    });
+  }
   test("commits one winner, contract schedule, ownership, activity, and metadata-only outbox", async (t) => {
     const runtime = createPersistenceRuntime(t);
     const result = await resolve(runtime.service);

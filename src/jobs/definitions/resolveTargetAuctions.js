@@ -2,6 +2,7 @@ const {
   buildAuctionResolutionOccurrenceKey,
 } = require("../../domain/auctions/auctionResolutionPolicy");
 const { createJobRunner } = require("../runJob");
+const { REPOSITORY_ERROR_CODES } = require("../../infrastructure/persistence/sqlite/SqliteRepositoryError");
 
 const JOB_NAME = "auctions:resolve:target";
 const DEFAULT_LEASE_MS = 5 * 60 * 1000;
@@ -48,7 +49,7 @@ function createResolveTargetAuctionsJob({
   }
   assertMethod(
     resolutionService,
-    "resolveDue",
+    "resolveClaimedDue",
     "an atomic resolution completion service"
   );
   assertMethod(clock, "nowMs", "a clock");
@@ -103,12 +104,13 @@ function createResolveTargetAuctionsJob({
         }
         acquired += 1;
         try {
-          const result = await resolutionService.resolveDue({
+          const result = await resolutionService.resolveClaimedDue({
             leagueId: auction.leagueId,
             auctionId: auction.auctionId,
             occurrenceKey,
             expectedAuctionVersion: auction.auctionVersion,
-            nowMs,
+            nowMs: safeTimestamp(clock.nowMs()),
+            execution: { runId: claim.runId, leaseOwner, expectedVersion: claim.version },
           });
           if (
             !result ||
@@ -132,6 +134,10 @@ function createResolveTargetAuctionsJob({
           });
           completed += 1;
         } catch (error) {
+          if (error?.code === REPOSITORY_ERROR_CODES.versionConflict) {
+            skipped += 1;
+            continue;
+          }
           repository.failRun({
             leagueId: auction.leagueId,
             runId: claim.runId,

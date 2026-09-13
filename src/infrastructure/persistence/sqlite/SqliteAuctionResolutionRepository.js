@@ -724,9 +724,22 @@ function createSqliteAuctionResolutionRepository({
         attemptCount: existing.attempt_count + 1,
       });
     });
-    completeTransaction = database.transaction((command) =>
-      completeAtomic(command)
-    );
+    completeTransaction = database.transaction((command, execution = null) => {
+      if (execution !== null) {
+        const run = unique(findRunStatement, command, "An auction occurrence is not unique.");
+        const auction = unique(findAuctionStatement, command, "An auction candidate is not unique.");
+        // Fence before replay lookup, contract/ownership writes or callbacks.
+        // Both the claim check and completion share the same immediate lock.
+        if (!run || !auction || run.id !== execution.runId || run.season_id !== auction.season_id ||
+            run.status !== "leased" || run.lease_owner !== execution.leaseOwner || run.version !== execution.expectedVersion ||
+            !Number.isSafeInteger(run.lease_expires_at_ms) || run.lease_expires_at_ms <= command.nowMs ||
+            !Number.isSafeInteger(run.started_at_ms) || run.started_at_ms > command.nowMs ||
+            buildAuctionResolutionOccurrenceKey({ auctionId: command.auctionId, dueAtMs: run.scheduled_for_ms }) !== command.occurrenceKey) {
+          throw repositoryError(REPOSITORY_ERROR_CODES.versionConflict, "The auction execution lease is stale.");
+        }
+      }
+      return completeAtomic(command);
+    });
   } catch (error) {
     throw mapRepositoryError(error, {
       operation: "prepareAuctionResolutionRepository",
@@ -1462,6 +1475,19 @@ function createSqliteAuctionResolutionRepository({
           operation: "completeDueAuctionResolution",
           tableName: "auction_resolutions",
         });
+      }
+    },
+
+    completeClaimedDue(input) {
+      const { execution, ...completion } = input || {};
+      const command = validateCompletionCommand(completion);
+      exactObject(execution, ["runId", "leaseOwner", "expectedVersion"]);
+      const lease = freeze({ runId: stableId(execution.runId), leaseOwner: boundedText(execution.leaseOwner, 128),
+        expectedVersion: positiveVersion(execution.expectedVersion) });
+      try {
+        return completeTransaction.immediate(command, lease);
+      } catch (error) {
+        throw mapRepositoryError(error, { operation: "completeClaimedAuctionResolution", tableName: "auction_resolutions" });
       }
     },
 

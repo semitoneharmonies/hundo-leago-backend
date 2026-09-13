@@ -893,9 +893,12 @@ describe(
         const resolutionService =
           createAuctionResolutionService({
             repository: {
-              completeDue(input) {
+              completeDue() {
+                assert.fail("The scheduled worker must use completion with its current claim.");
+              },
+              completeClaimedDue(input) {
                 completionCalls.push(input);
-                return resolutionRepository.completeDue(
+                return resolutionRepository.completeClaimedDue(
                   input
                 );
               },

@@ -64,20 +64,23 @@ function createAuctionResolutionService({
   );
   assertMethod(secureRandom, "id", "secure stable identifiers");
 
-  return Object.freeze({
-    async resolveDue({
+  function resolver(completionMethod) {
+    return async function resolveDue({
       leagueId,
       auctionId,
       occurrenceKey,
       expectedAuctionVersion,
       nowMs,
+      execution,
     } = {}) {
-      const result = repository.completeDue({
+      assertMethod(repository, completionMethod, "the selected atomic completion repository");
+      const result = repository[completionMethod]({
         leagueId,
         auctionId,
         occurrenceKey,
         expectedAuctionVersion,
         nowMs,
+        ...(completionMethod === "completeClaimedDue" ? { execution } : {}),
         resolutionId: secureRandom.id(),
         contractId: secureRandom.id(),
         contractYearIds: [
@@ -109,7 +112,11 @@ function createAuctionResolutionService({
         lateLock = AWAITING_DATA_LATE_LOCK;
       }
       return Object.freeze({ ...result, lateLock });
-    },
+    };
+  }
+  return Object.freeze({
+    resolveDue: resolver("completeDue"),
+    resolveClaimedDue: resolver("completeClaimedDue"),
   });
 }
 
