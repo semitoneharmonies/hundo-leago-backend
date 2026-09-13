@@ -1153,6 +1153,317 @@ test("restoring the selected backup excludes a later real buyout and restores ex
   assert.equal(source.prepare("SELECT status FROM contracts WHERE id=?").get(contractId).status, "eliminated");
 });
 
+test("an exact restored trade expiry rejects its previous worker and replays once in a held copy", async t => {
+  const { createSqliteTradeExpiryRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteTradeExpiryRepository");
+  const { createExpireTradeProposalsJob } = require("../../src/jobs/definitions/expireTradeProposals");
+  const { buildTradeExpiryOccurrenceKey } = require("../../src/domain/trades/tradeLifecyclePolicy");
+  const { REPOSITORY_ERROR_CODES } = require("../../src/infrastructure/persistence/sqlite/SqliteRepositoryError");
+  let trade, oldClaim, occurrenceKey, now;
+  const oldOwner = "synthetic-before-trade-recovery";
+  const { started, input } = await candidate(t, database => {
+    // Select a real pending proposal created by the deterministic release
+    // fixture's service. Never invent or change its persisted deadline.
+    trade = database.prepare("SELECT * FROM trades WHERE league_id=? AND status='proposed' " +
+      "AND proposal_model_version=2 AND effective_deadline_at_ms IS NOT NULL ORDER BY id LIMIT 1")
+      .get(fixtureId("league:leagueA"));
+    assert.ok(trade);
+    occurrenceKey = buildTradeExpiryOccurrenceKey({ tradeId: trade.id, effectiveDeadlineAtMs: trade.effective_deadline_at_ms });
+    now = trade.effective_deadline_at_ms + 1000;
+    oldClaim = createSqliteTradeExpiryRepository({ database }).claimRun({
+      jobRunId: crypto.randomUUID(), leagueId: trade.league_id, seasonId: trade.season_id, occurrenceKey,
+      scheduledForMs: trade.effective_deadline_at_ms, leaseOwner: oldOwner,
+      nowMs: now - 1000, leaseExpiresAtMs: now + 60_000,
+    });
+    assert.equal(oldClaim.acquired, true);
+  });
+  const sourceBytes = started.runtime.database.serialize(), restoredHash = readHash(input.restoredCandidate.targetDatabasePath);
+  const prepared = prepareRecoveryCredentials({ ...input, preparedAtMs: now,
+    outputDirectory: path.join(input.temporaryRoot, "trade-expiry-preparation") });
+  const preparedHash = readHash(prepared.preparedDatabasePath);
+  const workPath = path.join(input.temporaryRoot, "trade-expiry-working-copy.sqlite3");
+  fs.copyFileSync(prepared.preparedDatabasePath, workPath, fs.constants.COPYFILE_EXCL);
+  const open = () => openDatabase({ databasePath: workPath, environment: "test" }).database;
+  const worker = (database, previousWorker = false) => {
+    const repository = createSqliteTradeExpiryRepository({ database });
+    return createExpireTradeProposalsJob({ repository: {
+      ...repository,
+      // This isolated rehearsal selects only the reviewed fixture occurrence.
+      // Production recovery still requires an attributed operation and receipt.
+      listDue(query) { return repository.listDue({ ...query, limit: 100 }).filter(row => row.tradeId === trade.id); },
+      ...(previousWorker ? { claimRun() { return oldClaim; } } : {}),
+    }, clock: { nowMs: () => now }, secureRandom: { id: () => crypto.randomUUID() },
+    leaseOwner: previousWorker ? oldOwner : "synthetic-after-trade-recovery", logger: { error() {} } });
+  };
+  let database = open();
+  try {
+    const before = allRows(database), beforeBytes = database.serialize();
+    const restoredJob = database.prepare("SELECT * FROM job_runs WHERE id=?").get(oldClaim.runId);
+    assert.equal(restoredJob.status, "leased"); assert.equal(restoredJob.lease_owner, null);
+    assert.equal(restoredJob.lease_expires_at_ms, now); assert.equal(restoredJob.version, oldClaim.version + 1);
+    const stale = await worker(database, true).run();
+    assert.equal(stale.status, "succeeded"); assert.equal(stale.expired, 0); assert.equal(stale.skipped, 1);
+    assert.equal(stale.failed, 0); assert.deepEqual(database.serialize(), beforeBytes);
+    assert.equal(database.prepare("SELECT total_changes() n").get().n, 0);
+
+    const result = await worker(database).run();
+    assert.deepEqual(result, { job: "trades:expire:target", status: "succeeded", due: 1,
+      acquired: 1, expired: 1, terminal: 0, failed: 0, skipped: 0 });
+    const after = allRows(database), changed = new Set(["trades", "job_runs", "trade_events", "league_activity", "outbox_events", "outbox_event_audiences"]);
+    for (const [table, rows] of Object.entries(before)) if (!changed.has(table)) assert.deepEqual(after[table], rows, table);
+    const currentTrade = database.prepare("SELECT * FROM trades WHERE id=?").get(trade.id);
+    assert.deepEqual(currentTrade, { ...trade, status: "expired", responded_at_ms: now, updated_at_ms: now, version: trade.version + 1 });
+    const currentJob = database.prepare("SELECT * FROM job_runs WHERE id=?").get(oldClaim.runId);
+    assert.deepEqual(currentJob, { ...restoredJob, status: "succeeded", attempt_count: oldClaim.attemptCount + 1,
+      lease_owner: null, lease_expires_at_ms: null, started_at_ms: now, completed_at_ms: now,
+      result_json: JSON.stringify({ tradeId: trade.id, outcome: "expired" }), last_error_code: null,
+      updated_at_ms: now, version: oldClaim.version + 3 });
+    for (const [table, id] of [["trades", trade.id], ["job_runs", oldClaim.runId]]) {
+      assert.deepEqual(after[table].filter(row => JSON.parse(row).id !== id), before[table].filter(row => JSON.parse(row).id !== id), table);
+    }
+    const additions = {};
+    for (const table of ["trade_events", "league_activity", "outbox_events", "outbox_event_audiences"]) {
+      const oldIds = new Set(before[table].map(row => JSON.parse(row).id));
+      assert.deepEqual(after[table].filter(row => oldIds.has(JSON.parse(row).id)), before[table], table);
+      additions[table] = after[table].map(JSON.parse).filter(row => !oldIds.has(row.id));
+      assert.equal(additions[table].length, 1, table);
+      assert.equal(additions[table][0].league_id, trade.league_id, table);
+    }
+    const event = additions.trade_events[0], activity = additions.league_activity[0], message = additions.outbox_events[0];
+    assert.equal(event.trade_id, trade.id); assert.equal(event.season_id, trade.season_id);
+    assert.equal(event.actor_user_id, null); assert.equal(event.event_type, "proposal_expired");
+    assert.equal(event.reason, "effective_deadline_elapsed"); assert.equal(event.occurred_at_ms, now);
+    assert.deepEqual(JSON.parse(event.metadata_json), { schemaVersion: 1, occurrenceKey,
+      effectiveDeadlineAtMs: trade.effective_deadline_at_ms, fromStatus: "proposed", toStatus: "expired" });
+    assert.equal(activity.event_type, "trade_proposal_expired"); assert.equal(activity.related_id, trade.id);
+    assert.equal(activity.actor_authority, "system"); assert.equal(activity.occurred_at_ms, now);
+    assert.equal(message.event_type, "trade.changed"); assert.equal(message.aggregate_type, "trade");
+    assert.equal(message.aggregate_id, trade.id); assert.equal(message.status, "pending");
+    assert.equal(message.published_at_ms, null); assert.equal(message.attempt_count, 0);
+    assert.equal(JSON.parse(message.payload_json).version, trade.version + 1);
+    assert.deepEqual(additions.outbox_event_audiences[0], { id: message.id, outbox_event_id: message.id,
+      league_id: trade.league_id, audience_kind: "league", team_id: null, user_id: null, created_at_ms: now });
+    assert.ok(database.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY));
+    assert.throws(() => createTargetRuntime({ database, migrationsDirectory: path.resolve(__dirname, "../../database/migrations") }),
+      { code: "DATABASE_RECOVERY_HELD" });
+    const completedBytes = database.serialize();
+    assert.throws(() => createSqliteTradeExpiryRepository({ database }).succeedRun({ leagueId: trade.league_id,
+      runId: oldClaim.runId, leaseOwner: oldOwner, expectedVersion: oldClaim.version, completedAtMs: now,
+      tradeId: trade.id, outcome: "expired" }), { code: REPOSITORY_ERROR_CODES.versionConflict });
+    assert.deepEqual(database.serialize(), completedBytes);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    assert.deepEqual(database.pragma("integrity_check"), [{ integrity_check: "ok" }]);
+    database.close(); database = open();
+    const restartBytes = database.serialize(), restarted = await worker(database).run();
+    assert.equal(restarted.status, "succeeded"); assert.equal(restarted.due, 0); assert.equal(restarted.expired, 0);
+    assert.deepEqual(database.serialize(), restartBytes); assert.deepEqual(allRows(database), after);
+    assert.equal(database.prepare("SELECT total_changes() n").get().n, 0);
+  } finally { if (database.open) database.close(); }
+  await t.test("the reviewed offline trade operation records exact domain changes and rejects unsafe evidence", async operationTest => {
+    const { prepareRecoveryTradeExpiryReconciliation } = require("../../src/operations/backups/prepareRecoveryTradeExpiryReconciliation");
+    const reviewPath = path.join(input.temporaryRoot, "trade-expiry-review.sqlite3");
+    fs.copyFileSync(prepared.preparedDatabasePath, reviewPath, fs.constants.COPYFILE_EXCL);
+    const reader = openReadonlyDatabase({ databasePath: reviewPath });
+    let plan, row, initial;
+    try {
+      plan = buildRecoveryReconciliationPlan({ database: reader, credentialPreparation: prepared, observedAtMs: now,
+        expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID, expectedDatabaseId: FIXTURE_DATABASE_ID });
+      row = reader.prepare("SELECT * FROM job_runs WHERE id=?").get(oldClaim.runId); initial = allRows(reader);
+    } finally { reader.close(); }
+    const review = { reconciliationId: crypto.randomUUID(), reviewedByUserId: fixtureId("account:platformAdmin"),
+      reasonCode: "REVIEWED_ORIGINAL_TRADE_DEADLINE", evidenceSha256: hash("synthetic commissioner deadline and loss-window review"),
+      jobId: row.id, leagueId: trade.league_id, seasonId: trade.season_id, tradeId: trade.id,
+      deadlineAtMs: trade.effective_deadline_at_ms, rowSha256: hash(canonicalize(row)), tradeRowSha256: hash(canonicalize(trade)),
+      occurrenceKeySha256: hash(canonicalize([row.league_id, row.job_type, row.occurrence_key])) };
+    const options = { credentialPreparation: prepared, plan, review, executedAtMs: now,
+      temporaryRoot: input.temporaryRoot, outputDirectory: path.join(input.temporaryRoot, "trade-expiry-operation") };
+    const report = await prepareRecoveryTradeExpiryReconciliation(options);
+    assert.equal(report.status, "trade-expiry-reconciled-held"); assert.equal(report.activationReady, false);
+    assert.equal(report.unresolvedJobs, plan.unresolvedJobs - 1); assert.equal(report.unresolvedMessages, plan.unresolvedMessages + 1);
+    assert.equal(report.createdMessage, "pending-and-held"); assert.equal(report.previousMessages, "unchanged-and-held");
+    assert.equal(report.sourcePlaintextSha256, preparedHash);
+    assert.equal(report.reconciledPlaintextSha256, readHash(report.reconciledDatabasePath));
+    const receipt = JSON.parse(fs.readFileSync(path.join(options.outputDirectory, "trade-expiry-reconciliation.json"), "utf8"));
+    const { reportChecksum, ...receiptBody } = receipt;
+    assert.equal(hash(canonicalize(receiptBody)), reportChecksum); assert.deepEqual(receipt.decision, review);
+    const resultHash = readHash(report.reconciledDatabasePath), restartPath = path.join(input.temporaryRoot, "trade-operation-restart.sqlite3");
+    fs.copyFileSync(report.reconciledDatabasePath, restartPath, fs.constants.COPYFILE_EXCL);
+    const resultDatabase = openDatabase({ databasePath: restartPath, environment: "test" }).database;
+    try {
+      const rows = allRows(resultDatabase);
+      for (const [table, values] of Object.entries(initial)) {
+        if (!["job_runs", "trades", "trade_events", "league_activity", "outbox_events", "outbox_event_audiences", "security_audit_events", "application_metadata"].includes(table)) assert.deepEqual(rows[table], values, table);
+      }
+      const completed = resultDatabase.prepare("SELECT * FROM job_runs WHERE id=?").get(row.id);
+      assert.equal(completed.status, "succeeded"); assert.equal(completed.version, row.version + 2);
+      assert.equal(hash(canonicalize(completed)), report.completedJobRowSha256);
+      const event = resultDatabase.prepare("SELECT * FROM trade_events WHERE id=?").get(report.eventId);
+      assert.equal(event.trade_id, trade.id); assert.equal(event.event_type, "proposal_expired");
+      const message = resultDatabase.prepare("SELECT * FROM outbox_events WHERE id=?").get(report.createdOutboxId);
+      assert.equal(message.aggregate_id, trade.id); assert.equal(message.status, "pending");
+      const audit = resultDatabase.prepare("SELECT * FROM security_audit_events WHERE id=?").get(review.reconciliationId);
+      assert.equal(audit.actor_user_id, review.reviewedByUserId); assert.equal(audit.league_id, trade.league_id);
+      assert.equal(audit.event_type, "recovery.trade_expiry_reconciled");
+      assert.ok(resultDatabase.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY));
+      const bytes = resultDatabase.serialize(); const restarted = await worker(resultDatabase).run();
+      assert.equal(restarted.due, 0); assert.deepEqual(resultDatabase.serialize(), bytes);
+      assert.equal(resultDatabase.prepare("SELECT total_changes() n").get().n, 0);
+    } finally { resultDatabase.close(); }
+    await assert.rejects(prepareRecoveryTradeExpiryReconciliation(options), { code: "RECOVERY_TRADE_PATH_UNSAFE" });
+    for (const [suffix, change, code] of [
+      ["row", { review: { ...review, rowSha256: "f".repeat(64) } }, "RECOVERY_TRADE_OCCURRENCE_INVALID"],
+      ["trade", { review: { ...review, tradeRowSha256: "f".repeat(64) } }, "RECOVERY_TRADE_OCCURRENCE_INVALID"],
+      ["league", { review: { ...review, leagueId: fixtureId("league:leagueB") } }, "RECOVERY_TRADE_OCCURRENCE_INVALID"],
+      ["deadline", { review: { ...review, deadlineAtMs: review.deadlineAtMs + 1 } }, "RECOVERY_TRADE_OCCURRENCE_INVALID"],
+      ["reviewer", { review: { ...review, reviewedByUserId: fixtureId("account:leagueACommissioner") } }, "RECOVERY_TRADE_REVIEWER_INVALID"],
+      ["extra", { review: { ...review, approve: true } }, "RECOVERY_TRADE_INPUT_INVALID"],
+      ["time", { executedAtMs: now - 1 }, "RECOVERY_TRADE_PLAN_INVALID"],
+      ["plan", { plan: { ...plan, unresolvedJobs: 0 } }, "RECOVERY_TRADE_PLAN_INVALID"],
+    ]) {
+      const outputDirectory = path.join(input.temporaryRoot, "trade-operation-reject-" + suffix);
+      await assert.rejects(prepareRecoveryTradeExpiryReconciliation({ ...options, ...change, outputDirectory }), { code });
+      assert.equal(fs.existsSync(outputDirectory), false);
+    }
+    for (const [suffix, beforeReceipt] of [
+      ["other-trade", db => db.prepare("UPDATE trades SET version=version+1 WHERE league_id=?").run(fixtureId("league:leagueB"))],
+      ["wrong-result", db => db.prepare("UPDATE trades SET version=version+1 WHERE id=?").run(trade.id)],
+      ["send", db => db.prepare("UPDATE outbox_events SET status='discarded' WHERE aggregate_id=?").run(trade.id)],
+      ["interrupt", () => { throw new Error("synthetic interruption after domain completion"); }],
+    ]) {
+      const outputDirectory = path.join(input.temporaryRoot, "trade-operation-failure-" + suffix);
+      await assert.rejects(prepareRecoveryTradeExpiryReconciliation({ ...options, outputDirectory, beforeReceipt }),
+        { code: suffix === "interrupt" ? "RECOVERY_TRADE_FAILED" : "RECOVERY_TRADE_POSTCHECK_FAILED" });
+      assert.equal(fs.existsSync(outputDirectory), false);
+    }
+    await operationTest.test("actual trade commands verify their lineage and the new held notification", async () => {
+      const { buildTradeExpiryReconciledRecoveryPlan } = require("../../src/operations/backups/buildTradeExpiryReconciledRecoveryPlan");
+      let sequence = 0;
+      const write = (name, value) => {
+        const file = path.join(input.temporaryRoot, `trade-command-${++sequence}-${name}.json`);
+        fs.writeFileSync(file, JSON.stringify(value), { flag: "wx" }); return file;
+      };
+      const invoke = (script, request, succeeds = true) => {
+        const processResult = spawnSync(process.execPath, [path.resolve(__dirname, "../../scripts/" + script), "--request", write("request", request)],
+          { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, windowsHide: true, env: process.env });
+        if (succeeds) { assert.equal(processResult.status, 0, processResult.stderr); assert.equal(processResult.stderr, ""); return JSON.parse(processResult.stdout); }
+        assert.equal(processResult.status, 1); assert.equal(processResult.stdout, ""); return JSON.parse(processResult.stderr);
+      };
+      const inspectCopy = source => {
+        const copyPath = path.join(input.temporaryRoot, `trade-inspect-${++sequence}.sqlite3`);
+        fs.copyFileSync(source, copyPath, fs.constants.COPYFILE_EXCL); return copyPath;
+      };
+      const credentialPreparationPath = write("credentials", prepared);
+      const initialReviewRequest = { requestVersion: 1, expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID,
+        expectedDatabaseId: FIXTURE_DATABASE_ID, observedAtMs: now, preparedDatabasePath: reviewPath, credentialPreparationPath };
+      const initialReview = invoke("db-recovery-review.js", initialReviewRequest);
+      assert.deepEqual(initialReview.plan, plan);
+      const commandRequest = { requestVersion: 1, credentialPreparationPath, preparedDatabasePath: prepared.preparedDatabasePath,
+        candidateReviewPath: write("candidate-review", initialReview), decisionPath: write("decision", review),
+        executedAtMs: now, temporaryRoot: input.temporaryRoot, outputDirectory: path.join(input.temporaryRoot, "trade-command-output") };
+      const commanded = invoke("db-recovery-trade-expiry.js", commandRequest);
+      assert.equal(commanded.status, "trade-expiry-reconciled-held"); assert.equal(commanded.activationReady, false);
+      const commandReceipt = JSON.parse(fs.readFileSync(path.join(commandRequest.outputDirectory, "trade-expiry-reconciliation.json"), "utf8"));
+      const currentPath = inspectCopy(commanded.reconciledDatabasePath);
+      const lineage = { initialDatabasePath: reviewPath, initialPlan: plan, steps: [{ kind: "trade-expiry",
+        reconciledDatabasePath: currentPath, receipt: commandReceipt, observedAtMs: now + 1 }] };
+      const nextReviewRequest = { ...initialReviewRequest, observedAtMs: now + 1, preparedDatabasePath: currentPath, lineagePath: write("lineage", lineage) };
+      const nextReview = invoke("db-recovery-review.js", nextReviewRequest);
+      assert.equal(nextReview.plan.planVersion, 6); assert.equal(nextReview.plan.unresolvedJobs, plan.unresolvedJobs - 1);
+      assert.equal(nextReview.plan.unresolvedMessages, plan.unresolvedMessages + 1); assert.equal(nextReview.activationReady, false);
+      assert.equal(nextReview.plan.outbox.find(row => row.id === commanded.createdOutboxId).deliveryPermitted, false);
+      const originalReader = openReadonlyDatabase({ databasePath: reviewPath }), currentReader = openReadonlyDatabase({ databasePath: currentPath });
+      try {
+        const verification = { preparedDatabase: originalReader, reconciledDatabase: currentReader, credentialPreparation: prepared,
+          originalPlan: plan, tradeExpiryReconciliation: commandReceipt, observedAtMs: now + 1 };
+        assert.deepEqual(buildTradeExpiryReconciledRecoveryPlan(verification), nextReview.plan);
+        const { reportChecksum: ignored, ...forgedBody } = commandReceipt;
+        forgedBody.unresolvedMessages = plan.unresolvedMessages;
+        assert.throws(() => buildTradeExpiryReconciledRecoveryPlan({ ...verification,
+          tradeExpiryReconciliation: { ...forgedBody, reportChecksum: hash(canonicalize(forgedBody)) } }), { code: "RECOVERY_TRADE_PLAN_RECEIPT_INVALID" });
+        const audiences = currentReader.prepare("SELECT * FROM outbox_event_audiences WHERE outbox_event_id=? ORDER BY id").all(commanded.createdOutboxId);
+        const message = currentReader.prepare("SELECT * FROM outbox_events WHERE id=?").get(commanded.createdOutboxId);
+        const events = [{ eventId: message.id, leagueId: message.league_id, rowSha256: hash(canonicalize(message)),
+          payloadSha256: hash(message.payload_json), audienceSha256: hash(canonicalize(audiences.map(row => hash(canonicalize(row))).sort())),
+          reasonCode: "REVIEWED_NEW_TRADE_REFRESH", evidenceSha256: hash("synthetic trade refresh suppression review") }];
+        const suppressed = prepareRecoveryInvalidationReconciliation({ credentialPreparation: { ...prepared, preparedDatabasePath: commanded.reconciledDatabasePath },
+          plan: nextReview.plan, lineage, events, reviewedByUserId: review.reviewedByUserId, reconciliationId: crypto.randomUUID(),
+          reconciledAtMs: now + 2, temporaryRoot: input.temporaryRoot, outputDirectory: path.join(input.temporaryRoot, "trade-then-invalidation") });
+        assert.equal(suppressed.unresolvedMessages, plan.unresolvedMessages); assert.equal(suppressed.deliveryPerformed, false);
+        const suppressedPath = inspectCopy(suppressed.reconciledDatabasePath);
+        const suppressedReceipt = JSON.parse(fs.readFileSync(path.join(path.dirname(suppressed.reconciledDatabasePath), "invalidation-reconciliation.json"), "utf8"));
+        const finalLineage = { ...lineage, steps: [...lineage.steps, { kind: "invalidation", reconciledDatabasePath: suppressedPath,
+          receipt: suppressedReceipt, observedAtMs: now + 3 }] };
+        const finalReview = invoke("db-recovery-review.js", { ...initialReviewRequest, observedAtMs: now + 3,
+          preparedDatabasePath: suppressedPath, lineagePath: write("final-lineage", finalLineage) });
+        assert.equal(finalReview.plan.unresolvedJobs, plan.unresolvedJobs - 1);
+        assert.equal(finalReview.plan.outbox.find(row => row.id === message.id).status, "discarded");
+        assert.equal(finalReview.activationReady, false);
+        const missing = invoke("db-recovery-review.js", { ...initialReviewRequest, observedAtMs: now + 3,
+          preparedDatabasePath: suppressedPath, lineagePath: write("missing-step", { ...lineage, steps: [finalLineage.steps[1]] }) }, false);
+        assert.match(missing.error.code, /^RECOVERY_/);
+      } finally { currentReader.close(); originalReader.close(); }
+      const reverseReader = openReadonlyDatabase({ databasePath: reviewPath });
+      let priorEvent;
+      try {
+        const message = reverseReader.prepare("SELECT * FROM outbox_events WHERE event_type='trade.changed' AND status='pending' ORDER BY id LIMIT 1").get();
+        assert.ok(message);
+        const audiences = reverseReader.prepare("SELECT * FROM outbox_event_audiences WHERE outbox_event_id=? ORDER BY id").all(message.id);
+        priorEvent = { eventId: message.id, leagueId: message.league_id, rowSha256: hash(canonicalize(message)), payloadSha256: hash(message.payload_json),
+          audienceSha256: hash(canonicalize(audiences.map(row => hash(canonicalize(row))).sort())),
+          reasonCode: "REVIEWED_EXISTING_TRADE_REFRESH", evidenceSha256: hash("synthetic earlier refresh review") };
+      } finally { reverseReader.close(); }
+      const firstSuppressed = prepareRecoveryInvalidationReconciliation({ credentialPreparation: prepared, plan, events: [priorEvent],
+        reviewedByUserId: review.reviewedByUserId, reconciliationId: crypto.randomUUID(), reconciledAtMs: now + 1,
+        temporaryRoot: input.temporaryRoot, outputDirectory: path.join(input.temporaryRoot, "invalidation-before-trade") });
+      const firstSuppressedPath = inspectCopy(firstSuppressed.reconciledDatabasePath);
+      const firstSuppressedReceipt = JSON.parse(fs.readFileSync(path.join(path.dirname(firstSuppressed.reconciledDatabasePath), "invalidation-reconciliation.json"), "utf8"));
+      const reverseLineage = { initialDatabasePath: reviewPath, initialPlan: plan, steps: [{ kind: "invalidation",
+        reconciledDatabasePath: firstSuppressedPath, receipt: firstSuppressedReceipt, observedAtMs: now + 2 }] };
+      const reverseLineagePath = write("reverse-lineage", reverseLineage);
+      const reverseReview = invoke("db-recovery-review.js", { ...initialReviewRequest, observedAtMs: now + 2,
+        preparedDatabasePath: firstSuppressedPath, lineagePath: reverseLineagePath });
+      const afterSuppression = invoke("db-recovery-trade-expiry.js", { ...commandRequest, preparedDatabasePath: firstSuppressed.reconciledDatabasePath,
+        candidateReviewPath: write("reverse-review", reverseReview), decisionPath: write("reverse-decision", { ...review, reconciliationId: crypto.randomUUID() }),
+        lineagePath: reverseLineagePath, executedAtMs: now + 3, outputDirectory: path.join(input.temporaryRoot, "trade-after-invalidation") });
+      const reversedPath = inspectCopy(afterSuppression.reconciledDatabasePath);
+      const reversedReceipt = JSON.parse(fs.readFileSync(path.join(path.dirname(afterSuppression.reconciledDatabasePath), "trade-expiry-reconciliation.json"), "utf8"));
+      const reversedReview = invoke("db-recovery-review.js", { ...initialReviewRequest, observedAtMs: now + 4, preparedDatabasePath: reversedPath,
+        lineagePath: write("reversed-final-lineage", { ...reverseLineage, steps: [...reverseLineage.steps,
+          { kind: "trade-expiry", reconciledDatabasePath: reversedPath, receipt: reversedReceipt, observedAtMs: now + 4 }] }) });
+      assert.equal(reversedReview.plan.planVersion, 6); assert.equal(reversedReview.plan.unresolvedJobs, plan.unresolvedJobs - 1);
+      assert.equal(reversedReview.plan.unresolvedMessages, plan.unresolvedMessages); assert.equal(reversedReview.activationReady, false);
+      assert.equal(readHash(firstSuppressed.reconciledDatabasePath), firstSuppressed.reconciledPlaintextSha256);
+      assert.equal(readHash(afterSuppression.reconciledDatabasePath), afterSuppression.reconciledPlaintextSha256);
+      for (const [suffix, change] of [["repeat", {}], ["extra", { approve: true }],
+        ["bad-review", { candidateReviewPath: write("bad-review", { ...initialReview, activationReady: true }) }]]) {
+        const outputDirectory = suffix === "repeat" ? commandRequest.outputDirectory : path.join(input.temporaryRoot, "trade-command-reject-" + suffix);
+        invoke("db-recovery-trade-expiry.js", { ...commandRequest, ...change, outputDirectory }, false);
+        if (suffix !== "repeat") assert.equal(fs.existsSync(outputDirectory), false);
+      }
+      const alteredPath = inspectCopy(commanded.reconciledDatabasePath);
+      const altered = openDatabase({ databasePath: alteredPath, environment: "test" }).database;
+      altered.prepare("UPDATE trades SET version=version+1 WHERE id=?").run(trade.id); altered.close();
+      const { reportChecksum: ignored, ...alteredBody } = commandReceipt;
+      alteredBody.reconciledPlaintextSha256 = readHash(alteredPath);
+      const alteredReader = openReadonlyDatabase({ databasePath: alteredPath });
+      const preparedReader = openReadonlyDatabase({ databasePath: reviewPath });
+      try {
+        // Even a fresh file hash, table hashes and receipt checksum cannot
+        // legitimize an additional domain change that was never reviewed.
+        const { snapshots, readRows } = require("../../src/operations/backups/recoveryTradeExpiryEvidence");
+        alteredBody.tableSnapshots = snapshots(readRows(alteredReader));
+        assert.throws(() => buildTradeExpiryReconciledRecoveryPlan({ preparedDatabase: preparedReader, reconciledDatabase: alteredReader,
+          credentialPreparation: prepared, originalPlan: plan, observedAtMs: now + 1,
+          tradeExpiryReconciliation: { ...alteredBody, reportChecksum: hash(canonicalize(alteredBody)) } }), { code: "RECOVERY_TRADE_PLAN_DELTA_INVALID" });
+      } finally { alteredReader.close(); preparedReader.close(); }
+      assert.equal(readHash(commanded.reconciledDatabasePath), commanded.reconciledPlaintextSha256);
+    });
+    assert.equal(readHash(report.reconciledDatabasePath), resultHash);
+  });
+  assert.equal(readHash(prepared.preparedDatabasePath), preparedHash);
+  assert.equal(readHash(input.restoredCandidate.targetDatabasePath), restoredHash);
+  assert.deepEqual(started.runtime.database.serialize(), sourceBytes);
+});
+
 test("a real statistics worker cannot use its restored lease after recovery preparation", async t => {
   let lease;
   const { started, input } = await candidate(t, database => {

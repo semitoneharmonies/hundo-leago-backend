@@ -46,7 +46,7 @@ function buildRecoveryReconciliationLineage({ initialDatabase,credentialPreparat
   try {
     const readers = [initialDatabase,...steps.map(step => {
       exact(step,["kind","reconciledDatabase","receipt","observedAtMs"]);
-      if (!["email","statistics","invalidation"].includes(step.kind) || !Number.isSafeInteger(step.observedAtMs) || step.observedAtMs < 0) fail("RECOVERY_LINEAGE_INPUT_INVALID");
+      if (!["email","statistics","invalidation","trade-expiry"].includes(step.kind) || !Number.isSafeInteger(step.observedAtMs) || step.observedAtMs < 0) fail("RECOVERY_LINEAGE_INPUT_INVALID");
       return step.reconciledDatabase;
     })];
     const paths = readers.map(database => { assertReader(database);return fs.realpathSync(database.name); });
@@ -57,7 +57,7 @@ function buildRecoveryReconciliationLineage({ initialDatabase,credentialPreparat
     if (!same(plan,initialPlan)) fail("RECOVERY_LINEAGE_PARENT_INVALID");
     const receipts = new Set(),reviews = new Set();
     for (const [index,step] of steps.entries()) {
-      const reviewId = step.kind === "statistics" ? step.receipt?.decision?.reconciliationId : step.receipt?.reconciliationId;
+      const reviewId = ["statistics","trade-expiry"].includes(step.kind) ? step.receipt?.decision?.reconciliationId : step.receipt?.reconciliationId;
       if (!reviewId || !step.receipt?.reportChecksum || reviews.has(reviewId) || receipts.has(step.receipt.reportChecksum) ||
           step.observedAtMs < plan.observedAtMs) fail("RECOVERY_LINEAGE_RECEIPT_REUSED");
       reviews.add(reviewId);receipts.add(step.receipt.reportChecksum);
@@ -69,6 +69,7 @@ function buildRecoveryReconciliationLineage({ initialDatabase,credentialPreparat
         let verify,receiptField;
         if (step.kind === "email") { verify = require("./buildEmailReconciledRecoveryPlan").buildEmailReconciledRecoveryPlan;receiptField = "emailReconciliation"; }
         else if (step.kind === "statistics") { verify = require("./buildStatisticsReconciledRecoveryPlan").buildStatisticsReconciledRecoveryPlan;receiptField = "statisticsReconciliation"; }
+        else if (step.kind === "trade-expiry") { verify = require("./buildTradeExpiryReconciledRecoveryPlan").buildTradeExpiryReconciledRecoveryPlan;receiptField = "tradeExpiryReconciliation"; }
         else { verify = require("./buildInvalidationReconciledRecoveryPlan").buildInvalidationReconciledRecoveryPlan;receiptField = "invalidationReconciliation"; }
         plan = verify({ preparedDatabase: readers[index],reconciledDatabase: readers[index+1],credentialPreparation,
           originalPlan: plan,parentProof,observedAtMs: step.observedAtMs,[receiptField]: step.receipt });
