@@ -1,5 +1,7 @@
 "use strict";
 
+const { resolveTeamDisplayColours } = require("../../../domain/leagues/teamDisplayPolicy");
+
 const { requireFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
 
 const { randomUUID } = require("node:crypto");
@@ -287,9 +289,11 @@ function teamProjection(row) {
     teamId: row.team_id,
     name: row.team_name,
     logoReference: row.logo_reference,
-    primaryColour: row.primary_colour,
-    secondaryColour: row.secondary_colour,
-    tertiaryColour: row.tertiary_colour,
+    ...resolveTeamDisplayColours({
+      primaryColour: row.primary_colour,
+      secondaryColour: row.secondary_colour,
+      tertiaryColour: row.tertiary_colour,
+    }),
     patternTemplate: row.pattern_template,
   });
 }

@@ -270,8 +270,8 @@ function createReadSchema(database) {
       league_id TEXT NOT NULL,
       name TEXT NOT NULL,
       status TEXT NOT NULL,
-      primary_colour TEXT NOT NULL,
-      secondary_colour TEXT NOT NULL,
+      primary_colour TEXT,
+      secondary_colour TEXT,
       tertiary_colour TEXT,
       pattern_template TEXT NOT NULL,
       logo_reference TEXT
@@ -1072,6 +1072,27 @@ function seedFallbackAuction(database) {
 }
 
 describe("FAD-06 SQLite auction read repository", () => {
+  test("reads ordinary and tied auctions with unset team colours without changing stored profiles", (t) => {
+    const runtime = createRuntime(t);
+    seedOrdinaryActiveAuctions(runtime.database);
+    seedRestrictedAuction(runtime.database);
+    runtime.database.prepare("UPDATE teams SET primary_colour = NULL, secondary_colour = NULL, tertiary_colour = NULL").run();
+    const before = runtime.database.serialize();
+    const collection = runtime.repository.listAuctions(listInput());
+    assert(collection.auctions.length > 0);
+    for (const auction of collection.auctions) validateAuctionReadProjection(auction);
+    for (const team of collection.startTeams) {
+      assert.equal(team.team.primaryColour, "#16324f");
+      assert.equal(team.team.secondaryColour, "#f7f7f7");
+    }
+    for (const auctionId of [IDS.ordinaryAuction, IDS.restrictedAuction]) {
+      const auction = runtime.repository.readAuction(detailInput(auctionId));
+      assert(auction);
+      validateAuctionReadProjection(auction);
+    }
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
   test("closes FAD auction administration after competition starts while preserving ordinary auction controls", (t) => {
     const runtime = createRuntime(t);
     seedOrdinaryActiveAuctions(runtime.database);

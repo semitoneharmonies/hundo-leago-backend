@@ -1,5 +1,7 @@
 "use strict";
 
+const { resolveTeamDisplayColours } = require("../../../domain/leagues/teamDisplayPolicy");
+
 const { readFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
 
 const {
@@ -327,12 +329,17 @@ function blockedCapability(reasonCode) {
 }
 
 function teamProjection(row) {
+  const colours = resolveTeamDisplayColours({
+    primaryColour: row?.primary_colour,
+    secondaryColour: row?.secondary_colour,
+    tertiaryColour: row?.tertiary_colour,
+  });
   if (
     !row ||
     !UUID_PATTERN.test(row.team_id || "") ||
     typeof row.team_name !== "string" ||
-    typeof row.primary_colour !== "string" ||
-    typeof row.secondary_colour !== "string" ||
+    typeof colours.primaryColour !== "string" ||
+    typeof colours.secondaryColour !== "string" ||
     typeof row.pattern_template !== "string"
   ) {
     incompatible("A safe auction team projection is unavailable.");
@@ -340,9 +347,7 @@ function teamProjection(row) {
   return freeze({
     teamId: row.team_id,
     name: row.team_name,
-    primaryColour: row.primary_colour,
-    secondaryColour: row.secondary_colour,
-    tertiaryColour: row.tertiary_colour,
+    ...colours,
     patternTemplate: row.pattern_template,
     logoReference: row.logo_reference,
   });

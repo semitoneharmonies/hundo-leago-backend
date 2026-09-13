@@ -2456,6 +2456,18 @@ function storedResult(database) {
 describe(
   "FAD-06 SQLite auction administration repository",
   () => {
+    test("returns auction action results with unset colours while preserving team preferences", (t) => {
+      const runtime = createRuntime(t);
+      runtime.database.prepare("UPDATE teams SET primary_colour = NULL, secondary_colour = NULL, tertiary_colour = NULL").run();
+      const profiles = runtime.database.prepare("SELECT id, primary_colour, secondary_colour, tertiary_colour FROM teams ORDER BY id");
+      const before = profiles.all();
+      const result = runtime.repository.administer(commandFor(runtime, "edit_bid"));
+      assert.equal(result.httpStatus, 200);
+      assert.equal(result.data.administrativeBids[0].team.primaryColour, "#16324f");
+      assert.equal(result.data.administrativeBids[0].team.secondaryColour, "#f7f7f7");
+      assert.deepEqual(profiles.all(), before);
+    });
+
     test(
       "edits one ordinary bid and commits the exact immutable response last",
       (t) => {

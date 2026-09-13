@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { resolveTeamDisplayColours } = require("../../../domain/leagues/teamDisplayPolicy");
 
 const {
   calculateStandings,
@@ -945,6 +946,12 @@ function inspectParticipants(participants) {
   const ids = new Set();
   const identities = [];
   for (const participant of participants) {
+    const colours = resolveTeamDisplayColours({
+      primaryColour: participant?.primary_colour,
+      secondaryColour: participant?.secondary_colour,
+      tertiaryColour: participant?.tertiary_colour,
+      patternTemplate: participant?.pattern_template,
+    });
     const colourCount = teamPatternColourCount(
       participant?.pattern_template
     );
@@ -961,17 +968,17 @@ function inspectParticipants(participants) {
       ) ||
       typeof participant.team_status !== "string" ||
       !COLOUR_PATTERN.test(
-        participant.primary_colour || ""
+        colours.primaryColour || ""
       ) ||
       !COLOUR_PATTERN.test(
-        participant.secondary_colour || ""
+        colours.secondaryColour || ""
       ) ||
       ![2, 3].includes(colourCount) ||
       (colourCount === 2 &&
-        participant.tertiary_colour !== null) ||
+        colours.tertiaryColour !== null) ||
       (colourCount === 3 &&
         !COLOUR_PATTERN.test(
-          participant.tertiary_colour || ""
+          colours.tertiaryColour || ""
         ))
     ) {
       failNotReady("participant_identity_invalid");
@@ -1035,11 +1042,7 @@ function inspectParticipants(participants) {
       teamId: participant.team_id,
       teamDisplayName:
         participant.team_display_name,
-      primaryColour: participant.primary_colour,
-      secondaryColour:
-        participant.secondary_colour,
-      tertiaryColour:
-        participant.tertiary_colour,
+      ...colours,
       patternTemplate:
         participant.pattern_template,
       sourceLogoObjectId:

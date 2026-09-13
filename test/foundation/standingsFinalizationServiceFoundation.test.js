@@ -758,6 +758,23 @@ function assertNoWrites(harness) {
 }
 
 describe("T-145 standings-finalization application service", () => {
+  test("finalizes teams with unset colours using display defaults for both pattern sizes", () => {
+    const harness = createHarness();
+    for (const participant of harness.context.participants) {
+      participant.primary_colour = null;
+      participant.secondary_colour = null;
+      participant.tertiary_colour = null;
+    }
+    const before = structuredClone(harness.context.participants);
+    const result = harness.service.finalize(command(harness));
+    assert.equal(result.code, "STANDINGS_FINALIZED");
+    const identities = harness.state.persisted.find(({ method }) => method === "insertTeamIdentities").options;
+    assert.match(JSON.stringify(identities), /#16324f/);
+    assert.match(JSON.stringify(identities), /#f7f7f7/);
+    assert.match(JSON.stringify(identities), /#f97316/);
+    assert.deepEqual(harness.context.participants, before);
+  });
+
   test("persists one exact finalization graph in migration-compatible order and returns only the durable result", () => {
     const harness = createHarness();
     assert.ok(
