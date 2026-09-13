@@ -6,6 +6,7 @@ const { openReadonlyDatabase } = require("../src/infrastructure/database/connect
 const { canonicalize } = require("../src/infrastructure/migration/sourceInventory");
 const { buildRecoveryReconciliationPlan } = require("../src/operations/backups/buildRecoveryReconciliationPlan");
 const { buildEmailReconciledRecoveryPlan } = require("../src/operations/backups/buildEmailReconciledRecoveryPlan");
+const { buildStatisticsReconciledRecoveryPlan } = require("../src/operations/backups/buildStatisticsReconciledRecoveryPlan");
 const { compareRecoveryLossWindow } = require("../src/operations/backups/compareRecoveryLossWindow");
 
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
@@ -63,7 +64,8 @@ function runRecoveryReviewCommand({ argv, output = console } = {}) {
   try {
     const request = readJson(parseArguments(argv));
     exactFields(request, ["requestVersion", "expectedEnvironmentId", "expectedDatabaseId", "observedAtMs",
-      "preparedDatabasePath", "credentialPreparationPath"], ["emailReview", "lossWindow"]);
+      "preparedDatabasePath", "credentialPreparationPath"], ["emailReview", "statisticsReview", "lossWindow"]);
+    if (request.emailReview !== undefined && request.statisticsReview !== undefined) fail("RECOVERY_REVIEW_REQUEST_INVALID");
     if (request.requestVersion !== 1 || !IDENTITY.test(request.expectedEnvironmentId) ||
         !IDENTITY.test(request.expectedDatabaseId) || !Number.isSafeInteger(request.observedAtMs) || request.observedAtMs < 0) {
       fail("RECOVERY_REVIEW_REQUEST_INVALID");
@@ -79,6 +81,14 @@ function runRecoveryReviewCommand({ argv, output = console } = {}) {
       plan = buildEmailReconciledRecoveryPlan({ preparedDatabase,
         reconciledDatabase: open(request.emailReview.reconciledDatabasePath), credentialPreparation, originalPlan,
         emailReconciliation: readJson(request.emailReview.emailReconciliationPath), observedAtMs: request.observedAtMs });
+    } else if (request.statisticsReview !== undefined) {
+      exactFields(request.statisticsReview, ["originalPlanPath", "statisticsReconciliationPath", "reconciledDatabasePath"]);
+      const originalPlan = readJson(request.statisticsReview.originalPlanPath);
+      if (originalPlan.databaseIdentity?.environmentId !== request.expectedEnvironmentId ||
+          originalPlan.databaseIdentity?.databaseId !== request.expectedDatabaseId) fail("RECOVERY_REVIEW_IDENTITY_MISMATCH");
+      plan = buildStatisticsReconciledRecoveryPlan({ preparedDatabase,
+        reconciledDatabase: open(request.statisticsReview.reconciledDatabasePath), credentialPreparation, originalPlan,
+        statisticsReconciliation: readJson(request.statisticsReview.statisticsReconciliationPath), observedAtMs: request.observedAtMs });
     } else {
       plan = buildRecoveryReconciliationPlan({ database: preparedDatabase, credentialPreparation,
         observedAtMs: request.observedAtMs, expectedEnvironmentId: request.expectedEnvironmentId,

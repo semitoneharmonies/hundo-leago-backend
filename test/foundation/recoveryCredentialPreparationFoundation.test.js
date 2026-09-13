@@ -14,6 +14,7 @@ const { buildRecoveryReconciliationPlan } = require("../../src/operations/backup
 const { prepareRecoveryEmailReconciliation } = require("../../src/operations/backups/prepareRecoveryEmailReconciliation");
 const { prepareRecoveryStatisticsReconciliation } = require("../../src/operations/backups/prepareRecoveryStatisticsReconciliation");
 const { buildEmailReconciledRecoveryPlan } = require("../../src/operations/backups/buildEmailReconciledRecoveryPlan");
+const { buildStatisticsReconciledRecoveryPlan } = require("../../src/operations/backups/buildStatisticsReconciledRecoveryPlan");
 const { createLeagueOutboxPublicationService } = require("../../src/application/services/activity/createLeagueOutboxPublicationService");
 const { createSqliteLeagueOutboxRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteLeagueOutboxRepository");
 const { compareRecoveryLossWindow } = require("../../src/operations/backups/compareRecoveryLossWindow");
@@ -1173,6 +1174,66 @@ test("reviewed statistics recovery executes only its exact occurrence in a new h
   assert.equal(fs.existsSync(path.join(input.temporaryRoot,"statistics-command-approval")),false);
   assert.equal(fs.existsSync(path.join(input.temporaryRoot,"statistics-command-altered-review")),false);
   assert.equal(readHash(commandReport.reconciledDatabasePath),commandHash);
+  const reconciledReviewPath = path.join(input.temporaryRoot,"statistics-reconciled-review.sqlite3");
+  fs.copyFileSync(commandReport.reconciledDatabasePath,reconciledReviewPath,fs.constants.COPYFILE_EXCL);
+  const originalReader = openReadonlyDatabase({ databasePath: reviewPath }),reconciledReader = openReadonlyDatabase({ databasePath: reconciledReviewPath });
+  const statisticsReceiptPath = path.join(commandRequest.outputDirectory,"statistics-reconciliation.json");
+  // Use the canonical on-disk receipt, whose result keys have a different
+  // serialization order from the job's original result_json string.
+  const statisticsReceipt = JSON.parse(fs.readFileSync(statisticsReceiptPath,"utf8"));
+  const observedAtMs = commandReport.completedAtMs+100;
+  let nextPlan;
+  const nextOptions = { preparedDatabase: originalReader,reconciledDatabase: reconciledReader,credentialPreparation: prepared,
+    originalPlan: plan,statisticsReconciliation: statisticsReceipt,observedAtMs };
+  try {
+    nextPlan = buildStatisticsReconciledRecoveryPlan(nextOptions);
+    assert.equal(nextPlan.planVersion,4); assert.equal(nextPlan.preparedPlaintextSha256,commandHash);
+    assert.equal(nextPlan.previousPlanChecksum,plan.planChecksum); assert.equal(nextPlan.statisticsReconciliationChecksum,statisticsReceipt.reportChecksum);
+    assert.equal(nextPlan.unresolvedJobs,plan.unresolvedJobs-1); assert.deepEqual(nextPlan.outbox,plan.outbox);
+    assert.equal(nextPlan.activationReady,false); assert.equal(nextPlan.executable,false);
+    const job = nextPlan.jobs.find(entry => entry.id === row.id);
+    assert.equal(job.status,"succeeded"); assert.equal(job.disposition,"preserve-recorded-result"); assert.equal(job.executionPermitted,false);
+    const { planChecksum,...nextBody } = nextPlan; assert.equal(hash(canonicalize(nextBody)),planChecksum);
+    assert.equal(JSON.stringify(nextPlan).includes(PRIVATE_VALUE),false);
+    for (const patch of [ { observedAtMs: commandReport.completedAtMs-1 },{ originalPlan: { ...plan,unresolvedJobs: 0 } },
+      { statisticsReconciliation: { ...statisticsReceipt,reportChecksum: "f".repeat(64) } } ]) {
+      assert.throws(() => buildStatisticsReconciledRecoveryPlan({ ...nextOptions,...patch }),error => /^RECOVERY_STATISTICS_PLAN_/.test(error.code));
+    }
+    const { reportChecksum: originalChecksum,...wrongCount } = statisticsReceipt; wrongCount.unresolvedJobs = 0;
+    assert.throws(() => buildStatisticsReconciledRecoveryPlan({ ...nextOptions,
+      statisticsReconciliation: { ...wrongCount,reportChecksum: hash(canonicalize(wrongCount)) } }),{ code: "RECOVERY_STATISTICS_PLAN_DELTA_INVALID" });
+    assert.equal(originalReader.prepare("SELECT total_changes() n").get().n,0);
+    assert.equal(reconciledReader.prepare("SELECT total_changes() n").get().n,0);
+  } finally { originalReader.close(); reconciledReader.close(); }
+  const nextReviewRequest = { requestVersion: 1,expectedEnvironmentId: FIXTURE_ENVIRONMENT_ID,expectedDatabaseId: FIXTURE_DATABASE_ID,
+    observedAtMs,preparedDatabasePath: reviewPath,credentialPreparationPath,
+    statisticsReview: { originalPlanPath: write("original-plan.json",plan),statisticsReconciliationPath: statisticsReceiptPath,reconciledDatabasePath: reconciledReviewPath } };
+  const invokeReview = request => spawnSync(process.execPath,[path.resolve(__dirname,"../../scripts/db-recovery-review.js"),
+    "--request",write(crypto.randomUUID()+".json",request)],{ encoding: "utf8",timeout: 60_000,maxBuffer: 8*1024*1024 });
+  const reviewedStatistics = invokeReview(nextReviewRequest); assert.equal(reviewedStatistics.status,0,reviewedStatistics.stderr);
+  assert.deepEqual(JSON.parse(reviewedStatistics.stdout).plan,nextPlan); assert.equal(reviewedStatistics.stderr,"");
+  for (const request of [{ ...nextReviewRequest,emailReview: {} },{ ...nextReviewRequest,statisticsReview: { ...nextReviewRequest.statisticsReview,approve: true } }]) {
+    const rejected = invokeReview(request); assert.equal(rejected.status,1); assert.equal(rejected.stdout,"");
+    assert.equal(JSON.parse(rejected.stderr).error.message,"Recovery review failed safely. No activation was performed.");
+  }
+  const changedCopy = path.join(input.temporaryRoot,"statistics-review-unrelated-change.sqlite3");
+  fs.copyFileSync(commandReport.reconciledDatabasePath,changedCopy,fs.constants.COPYFILE_EXCL);
+  const writer = openDatabase({ databasePath: changedCopy,environment: "test" }).database;
+  let changedTables;
+  try {
+    writer.prepare("INSERT INTO application_metadata(metadata_key,metadata_value,created_at_ms,updated_at_ms) VALUES('unreviewed_recovery_change','{}',?,?)").run(observedAtMs,observedAtMs);
+    changedTables = Object.fromEntries(Object.entries(allRows(writer)).map(([name,rows]) => [name,{ count: rows.length,sha256: hash(canonicalize(rows.map(row => hash(row)).sort())) }]));
+  } finally { writer.close(); }
+  const { reportChecksum: ignoredChecksum,...forgedBody } = statisticsReceipt;
+  forgedBody.reconciledPlaintextSha256 = readHash(changedCopy); forgedBody.tableSnapshots = changedTables;
+  const forgedReceipt = { ...forgedBody,reportChecksum: hash(canonicalize(forgedBody)) };
+  const originalAgain = openReadonlyDatabase({ databasePath: reviewPath }),changedReader = openReadonlyDatabase({ databasePath: changedCopy });
+  try {
+    assert.throws(() => buildStatisticsReconciledRecoveryPlan({ ...nextOptions,preparedDatabase: originalAgain,reconciledDatabase: changedReader,
+      statisticsReconciliation: forgedReceipt }),{ code: "RECOVERY_STATISTICS_PLAN_DELTA_INVALID" });
+    assert.equal(changedReader.prepare("SELECT total_changes() n").get().n,0);
+  } finally { originalAgain.close(); changedReader.close(); }
+  assert.equal(readHash(commandReport.reconciledDatabasePath),commandHash); assert.equal(readHash(reconciledReviewPath),commandHash);
   assert.deepEqual([readHash(reconciledDatabasePath),readHash(receiptPath)],outputHashes);
   assert.equal(readHash(prepared.preparedDatabasePath),preparedHash); assert.equal(readHash(input.restoredCandidate.targetDatabasePath),restoredHash);
   assert.deepEqual(started.runtime.database.serialize(),sourceBytes);
