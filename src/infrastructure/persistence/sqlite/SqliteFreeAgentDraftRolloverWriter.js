@@ -1,5 +1,7 @@
 "use strict";
 
+const { freeAgentDraftSchedulerScopeSql } = require("./SqliteFreeAgentDraftSchedulerScope");
+
 const { randomUUID } = require("node:crypto");
 
 const {
@@ -413,6 +415,7 @@ function normalizeEnsure(input) {
 
 function createSqliteFreeAgentDraftRolloverWriter({
   database,
+  configuredSeasonsOnly = false,
   createId = () => randomUUID(),
   beforeCommit,
 } = {}) {
@@ -462,7 +465,8 @@ function createSqliteFreeAgentDraftRolloverWriter({
         ON fad.league_id = rollover.league_id
        AND fad.season_id = rollover.season_id
        AND fad.id = rollover.fad_id
-      WHERE rollover.status = 'scheduled'
+      WHERE ${freeAgentDraftSchedulerScopeSql({ database, configuredSeasonsOnly, alias: 'rollover' })}
+        AND rollover.status = 'scheduled'
         AND fad.status = 'rapid'
         AND NOT EXISTS (
           SELECT 1 FROM job_runs AS job

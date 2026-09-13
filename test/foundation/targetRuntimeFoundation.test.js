@@ -2513,9 +2513,9 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(TARGET_ENDPOINTS.length, 125);
   });
 
-  test("runs FAD readiness through the composed target runtime and opens every Candidate Card atomically", async (t) => {
+  for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {
     const database = createDatabase(t);
-    const runtime = createTargetRuntime(runtimeOptions(database));
+    const runtime = createTargetRuntime({ ...runtimeOptions(database), stagingDailyAuctionsEnabled: dailyStaging });
     const scenario = seedComposedLeagueStartScenario(runtime);
     const authenticated =
       runtime.services.sessionService.resolveWithoutActivity(
@@ -2558,6 +2558,9 @@ describe("M3-19 exact-schema target dependency composition", () => {
             "2027-04-12T07:00:00.000Z"
           ),
           firstWeekStartsAtMs,
+          ...(dailyStaging ? { draftTiming: { candidateDeadlineAtMs,
+            rolloverTimesAtMs: Array.from({ length: 7 }, (_, index) => candidateDeadlineAtMs + (index + 1) * 86400000),
+          } } : {}),
           confirmed: true,
         },
         idempotencyKey:

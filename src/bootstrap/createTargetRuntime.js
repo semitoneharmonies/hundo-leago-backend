@@ -1519,6 +1519,7 @@ function createTargetRepositories({
   const freeAgentDraftAllocationLifecycleWriter =
     createSqliteFreeAgentDraftAllocationLifecycleWriter({
       database,
+      configuredSeasonsOnly: stagingDailyAuctionsEnabled,
       notificationWriter,
       leagueOutboxWriter,
     });
@@ -1529,6 +1530,7 @@ function createTargetRepositories({
   const freeAgentDraftCompletionWriter =
     createSqliteFreeAgentDraftCompletionWriter({
       database,
+      configuredSeasonsOnly: stagingDailyAuctionsEnabled,
       scheduleRecoveryService:
         freeAgentDraftScheduleRecoveryService,
       notificationWriter,
@@ -1624,6 +1626,7 @@ function createTargetRepositories({
   const freeAgentDraftRolloverWriter =
     createSqliteFreeAgentDraftRolloverWriter({
       database,
+      configuredSeasonsOnly: stagingDailyAuctionsEnabled,
       createId: () => secureRandom.id(),
     });
   const candidateAllocations =
@@ -1685,6 +1688,7 @@ function createTargetRepositories({
     freeAgentDraftJobs:
       createSqliteFreeAgentDraftJobRepository({
         database,
+        configuredSeasonsOnly: stagingDailyAuctionsEnabled,
       }),
     freeAgentDraftDeadlineReminderWriter,
     freeAgentDraftDeadlineWriter,

@@ -1385,7 +1385,7 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.equal(runtime.scheduler.getState(), "stopped");
   });
 
-  test("limits daily staging auction testing to auction resolution and league delivery", async (t) => {
+  test("runs the full scoped FAD lifecycle alongside daily staging auctions without enabling season or trade jobs", async (t) => {
     const input = deployedRuntimeInput(t);
     input.config = Object.freeze({ ...input.config, stagingDailyAuctionsEnabled: true, scheduledJobsEnabled: true, accountEmailDeliveryEnabled: false, leagueWriteMode: "open" });
     const runtime = openDeployedTargetRuntime(input);
@@ -1397,7 +1397,14 @@ describe("M7-01 deployed target runtime configuration", () => {
     const before = runtime.database.serialize();
     const cycle = await runtime.scheduler.start().initialRun;
     assert.equal(cycle.status, "succeeded");
-    assert.deepEqual(cycle.outcomes.map(({ name }) => name), ["free_agent_draft_auction_resolution", "auction_resolution", "league_outbox"]);
+    assert.deepEqual(cycle.outcomes.map(({ name }) => name), [
+      "free_agent_draft_readiness", "free_agent_draft_eligibility_revalidation",
+      "free_agent_draft_deadline_reminder", "free_agent_draft_deadline",
+      "free_agent_draft_allocation_cycle", "free_agent_draft_auction_resolution",
+      "free_agent_draft_restricted_activation", "free_agent_draft_fallback_activation",
+      "free_agent_draft_queued_nomination_activation", "free_agent_draft_rollover_finalization",
+      "auction_resolution", "free_agent_draft_completion", "league_outbox",
+    ]);
     assert.equal(before.equals(runtime.database.serialize()), true);
   });
 

@@ -792,6 +792,13 @@ function seedExistingSuccessor(
 }
 
 describe("SQLite FAD rollover writer", () => {
+  test("daily staging does not create rollover jobs for paused legacy drafts", (t) => {
+    const { database } = createFixture(t);
+    const scoped = createSqliteFreeAgentDraftRolloverWriter({ database, configuredSeasonsOnly: true });
+    const before = database.serialize();
+    assert.deepEqual(scoped.ensurePendingJobs({ ensuredAtMs: ROLLOVER_AT_MS, limit: 10 }), []);
+    assert.deepEqual(database.serialize(), before);
+  });
   test("exports the frozen surface and ensures only missing canonical jobs", (t) => {
     const { database, writer } = createFixture(t);
     assert.deepEqual(FREE_AGENT_DRAFT_ROLLOVER_WRITER_METHODS, [

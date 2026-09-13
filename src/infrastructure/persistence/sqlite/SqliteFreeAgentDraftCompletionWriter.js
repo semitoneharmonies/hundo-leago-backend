@@ -1,5 +1,7 @@
 "use strict";
 
+const { freeAgentDraftSchedulerScopeSql } = require("./SqliteFreeAgentDraftSchedulerScope");
+
 const crypto = require("node:crypto");
 
 const {
@@ -530,6 +532,7 @@ function terminalProjection({
 
 function createSqliteFreeAgentDraftCompletionWriter({
   database,
+  configuredSeasonsOnly = false,
   scheduleRecoveryService,
   notificationWriter,
   leagueOutboxWriter,
@@ -664,7 +667,8 @@ function createSqliteFreeAgentDraftCompletionWriter({
        AND seventh.window_kind = 'initial'
        AND seventh.rolls_over_at_ms =
          job.scheduled_for_ms
-      WHERE job.job_type = '${JOB_TYPE}'
+      WHERE ${freeAgentDraftSchedulerScopeSql({ database, configuredSeasonsOnly, alias: 'job' })}
+        AND job.job_type = '${JOB_TYPE}'
         AND draft.status = 'rapid'
         AND draft.completed_at_ms IS NULL
         AND job.scheduled_for_ms <= @nowMs
@@ -3292,7 +3296,8 @@ function createSqliteFreeAgentDraftCompletionWriter({
         ON seventh.league_id = draft.league_id AND seventh.season_id = draft.season_id
         AND seventh.fad_id = draft.id AND seventh.sequence = COALESCE(json_array_length(${supportsDraftTiming ? "draft.initial_rollover_times_json" : "NULL"}), 7)
         AND seventh.window_kind = 'initial'
-      WHERE draft.status = 'rapid' AND draft.completed_at_ms IS NULL
+      WHERE ${freeAgentDraftSchedulerScopeSql({ database, configuredSeasonsOnly, alias: 'draft' })}
+        AND draft.status = 'rapid' AND draft.completed_at_ms IS NULL
         AND seventh.rolls_over_at_ms <= @nowMs
         AND NOT EXISTS (
           SELECT 1 FROM job_runs WHERE league_id = draft.league_id

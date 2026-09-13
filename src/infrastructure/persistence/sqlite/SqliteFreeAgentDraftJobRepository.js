@@ -1,3 +1,5 @@
+const { freeAgentDraftSchedulerScopeSql } = require("./SqliteFreeAgentDraftSchedulerScope");
+
 const { requireFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
 
 const {
@@ -940,6 +942,7 @@ function normalizeReadinessRetryWrite(input) {
 
 function createSqliteFreeAgentDraftJobRepository({
   database,
+  configuredSeasonsOnly = false,
   beforeCommit,
 } = {}) {
   if (
@@ -997,7 +1000,8 @@ function createSqliteFreeAgentDraftJobRepository({
     dueStatement = database.prepare(`
       SELECT *
       FROM job_runs
-      WHERE job_type IN (
+      WHERE ${freeAgentDraftSchedulerScopeSql({ database, configuredSeasonsOnly, alias: 'job_runs' })}
+        AND job_type IN (
         ${FREE_AGENT_DRAFT_JOB_TYPES
           .map(() => "?")
           .join(", ")}

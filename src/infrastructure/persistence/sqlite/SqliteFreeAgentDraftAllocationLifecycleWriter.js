@@ -1,5 +1,7 @@
 "use strict";
 
+const { freeAgentDraftSchedulerScopeSql } = require("./SqliteFreeAgentDraftSchedulerScope");
+
 const crypto = require("node:crypto");
 
 const {
@@ -406,6 +408,7 @@ function requireSupportedTransition(input) {
 
 function createSqliteFreeAgentDraftAllocationLifecycleWriter({
   database,
+  configuredSeasonsOnly = false,
   notificationWriter,
   leagueOutboxWriter,
   beforeCommit,
@@ -497,7 +500,8 @@ function createSqliteFreeAgentDraftAllocationLifecycleWriter({
           ON generation.league_id = draft.league_id
          AND generation.season_id = draft.season_id
          AND generation.status = 'current'
-        WHERE draft.status IN (
+        WHERE ${freeAgentDraftSchedulerScopeSql({ database, configuredSeasonsOnly, alias: 'draft' })}
+          AND draft.status IN (
           'deadline_locked',
           'allocating'
         )

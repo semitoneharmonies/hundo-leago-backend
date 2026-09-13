@@ -1282,6 +1282,13 @@ describe("SQLite FAD allocation lifecycle writer", () => {
     restoreTriggers(database, rootTriggers);
   });
 
+  test("daily staging excludes paused legacy allocation roots without writes", () => {
+    const scoped = createSqliteFreeAgentDraftAllocationLifecycleWriter({ database, configuredSeasonsOnly: true });
+    const before = database.serialize();
+    assert.deepEqual(scoped.listCandidates({ nowMs: NOW_MS, limit: 10 }), []);
+    assert.deepEqual(database.serialize(), before);
+  });
+
   test("rejects direct transition hooks before any write outside the lifecycle transaction", () => {
     const notificationCount = count(database, "notifications");
     const outboxCount = count(database, "outbox_events");

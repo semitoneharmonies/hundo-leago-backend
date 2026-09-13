@@ -3612,6 +3612,43 @@ function createRealCompletionRecoveryFixture(
 }
 
 describe("SQLite Free Agent Draft lifecycle repository", () => {
+  for (const configured of [false, true]) test(`daily staging readiness ${configured ? 'opens configured cards' : 'preserves a paused legacy draft'}`, async (t) => {
+    const candidateDeadlineAtMs = WEEK_ONE_AT_MS - 2 * FREE_AGENT_DRAFT_DAY_MS;
+    const draftTiming = configured ? { candidateDeadlineAtMs,
+      rolloverTimesAtMs: [24, 30, 36, 42, 48].map(hours => candidateDeadlineAtMs + hours * 3600000) } : undefined;
+    const { database, repository } = createRuntime(t, { draftTiming, useRealCandidateCardWriter: true });
+    seedCanonicalRecoverySchedule(database, uuid(90000));
+    seedCanonicalReadinessTeamProfiles(database);
+    repository.ensureReadinessOperation(readinessInput());
+    const { createTargetRepositories } = require('../../src/bootstrap/createTargetRuntime');
+    const repositories = createTargetRepositories({ database, secureRandom: makeSecureRandom(92000), stagingDailyAuctionsEnabled: true });
+    const { createOpenReadyFreeAgentDraftCandidateCardsJob } = require('../../src/jobs/definitions/openReadyFreeAgentDraftCandidateCards');
+    const runner = createOpenReadyFreeAgentDraftCandidateCardsJob({
+      repository: repositories.freeAgentDraftJobs,
+      readinessService: createIntegratedReadinessService({ database, repository, nowMs: OPENED_AT_MS }),
+      clock: { nowMs: () => OPENED_AT_MS }, secureRandom: makeSecureRandom(93000),
+      leaseOwner: 'configured-staging-regression', logger: { error() {} },
+    });
+    const before = database.serialize();
+    const result = await runner.run();
+    assert.equal(result.status, 'succeeded', JSON.stringify(result));
+    if (configured) {
+      const draft = database.prepare('SELECT * FROM free_agent_drafts').get();
+      assert.equal(draft.status, 'cards_open');
+      assert.equal(draft.candidate_deadline_at_ms, candidateDeadlineAtMs);
+      assert.equal(database.prepare('SELECT count(*) n FROM candidate_cards').get().n, RECOVERY_TEAM_IDS.length);
+      assert.deepEqual(JSON.parse(draft.initial_rollover_times_json), draftTiming.rolloverTimesAtMs);
+      assert.equal(database.prepare("SELECT status FROM job_runs WHERE job_type='fad_readiness'").get().status, 'succeeded');
+      const opened = database.serialize();
+      await runner.run();
+      assert.deepEqual(database.serialize(), opened);
+    } else {
+      assert.deepEqual(database.serialize(), before);
+      assert.equal(database.prepare('SELECT count(*) n FROM candidate_cards').get().n, 0);
+      assert.equal(database.prepare("SELECT attempt_count FROM job_runs WHERE job_type='fad_readiness'").get().attempt_count, 0);
+    }
+    assert.deepEqual(database.pragma('foreign_key_check'), []);
+  });
   test("the real readiness service opens all cards and schedules the configured round count", (t) => {
     const candidateDeadlineAtMs = WEEK_ONE_AT_MS - 2 * FREE_AGENT_DRAFT_DAY_MS;
     const draftTiming = { candidateDeadlineAtMs, rolloverTimesAtMs: [24, 30, 36, 42, 48].map((hours) => candidateDeadlineAtMs + hours * 3600000) };

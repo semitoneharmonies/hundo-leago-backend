@@ -1599,6 +1599,7 @@ function fixture(t, options = {}) {
   const writer =
     createSqliteFreeAgentDraftCompletionWriter({
       database,
+      configuredSeasonsOnly: options.configuredSeasonsOnly ?? false,
       scheduleRecoveryService,
       afterStep: options.afterStep,
     });
@@ -1784,10 +1785,21 @@ function installPriorScheduleRecovery({
 }
 
 describe("SQLite Free Agent Draft completion writer", () => {
+  test("daily staging leaves legacy completion jobs and missing jobs untouched", (t) => {
+    const { database, writer } = fixture(t, { configuredSeasonsOnly: true });
+    const before = database.serialize();
+    assert.deepEqual(writer.listCandidates({ nowMs: COMPLETED_AT_MS, limit: 10 }), []);
+    assert.equal(writer.ensurePendingJobs({ nowMs: COMPLETED_AT_MS, limit: 10 }), 0);
+    assert.deepEqual(database.serialize(), before);
+    database.prepare('DELETE FROM job_runs WHERE id = ?').run(IDS.completionJob);
+    const missing = database.serialize();
+    assert.equal(writer.ensurePendingJobs({ nowMs: COMPLETED_AT_MS, limit: 10 }), 0);
+    assert.deepEqual(database.serialize(), missing);
+  });
   for (const count of [5, 14]) test(`completes only after the configured final round among ${count} rounds`, (t) => {
     const times = Array.from({ length: count }, (_, i) => DEADLINE_AT_MS + Math.floor(7 * FREE_AGENT_DRAFT_DAY_MS * (i + 1) / count));
     const draftTiming = { candidateDeadlineAtMs: DEADLINE_AT_MS, rolloverTimesAtMs: times };
-    const { database, writer, lifecycleRepository } = fixture(t, { draftTiming, realRecovery: true });
+    const { database, writer, lifecycleRepository } = fixture(t, { draftTiming, realRecovery: true, configuredSeasonsOnly: true });
     assert.deepEqual(writer.listCandidates({ nowMs: times.at(-1) - 1, limit: 10 }), []);
     const candidates = writer.listCandidates({ nowMs: COMPLETED_AT_MS, limit: 10 });
     assert.equal(candidates.length, 1);

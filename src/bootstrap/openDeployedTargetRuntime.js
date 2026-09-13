@@ -459,9 +459,8 @@ function openDeployedTargetRuntime({
       emailEnabled: config.accountEmailDeliveryEnabled,
       leagueWriteMode: config.leagueWriteMode,
       jobs: config.appEnv === "staging" && config.stagingDailyAuctionsEnabled === true
-        ? runtime.services.league.scheduledJobs.filter(({ name }) => [
+        ? runtime.services.league.scheduledJobs.filter(({ name }) => name.startsWith("free_agent_draft_") || [
             "auction_resolution",
-            "free_agent_draft_auction_resolution",
             "league_outbox",
             ...(config.nhlCompletedStatisticsEnabled ? ["nhl_completed_statistics"] : []),
             ...(config.matchupProcessingEnabled ? ["matchup_occurrences"] : []),
