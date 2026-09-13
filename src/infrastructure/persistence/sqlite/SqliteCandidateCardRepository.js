@@ -2354,6 +2354,12 @@ function createSqliteCandidateCardRepository({
               AND entry.card_id = @cardId
               AND entry.team_id = @teamId
               AND entry.player_id = eligible.player_id
+              AND NOT (
+                entry.entry_kind = 'candidate'
+                AND entry.placement_state = 'placed'
+                AND entry.requested_slot_group = @slotGroup
+                AND entry.requested_slot_number = @slotNumber
+              )
           )
           AND NOT EXISTS (
             SELECT 1
@@ -6080,6 +6086,7 @@ function createSqliteCandidateCardRepository({
         ),
         slotKey: slot.slotKey,
         slotGroup: slot.slotGroup,
+        slotNumber: slot.slotNumber,
         q,
         limit,
         cursor,
@@ -6158,13 +6165,14 @@ function createSqliteCandidateCardRepository({
       ) {
         return null;
       }
-      const occupied = loadEntries(scope).some(
+      const locked = loadEntries(scope).some(
         (entry) =>
+          entry.entryKind === "carryover" &&
           entry.placementState === "placed" &&
           entry.slotKey ===
             options.query.slotKey
       );
-      if (occupied) {
+      if (locked) {
         conflict(
           "The Candidate Card slot is occupied.",
           "CANDIDATE_SLOT_OCCUPIED"
@@ -6172,6 +6180,7 @@ function createSqliteCandidateCardRepository({
       }
       const rows = eligiblePlayerPageStatement.all({
         ...scope,
+        slotNumber: options.query.slotNumber,
         slotGroup: options.query.slotGroup,
         q: options.query.q,
         cursorName:

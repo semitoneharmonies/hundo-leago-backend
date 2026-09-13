@@ -3329,7 +3329,7 @@ describe(
     );
 
     test(
-      "requires exact private edit authority, stays readable during freeze, and closes at occupancy, deadline, or publication",
+      "requires exact private edit authority, stays readable during freeze, and closes at deadline or publication",
       (t) => {
         const runtime = createRuntime(t);
         const playerId = uuid(4_300);
@@ -3418,9 +3418,27 @@ describe(
             clientKey: "occupied-search",
           })
         );
-        assertRepositoryError(
-          () => readEligiblePlayers(occupied),
-          "CANDIDATE_SLOT_OCCUPIED"
+        const beforeReplacementSearch =
+          databaseBytes(occupied.database);
+        assert.deepEqual(
+          new Set(
+            readEligiblePlayers(occupied).data.map(
+              ({ player }) => player.playerId
+            )
+          ),
+          new Set([occupiedPlayer, replacement])
+        );
+        assert.deepEqual(
+          readEligiblePlayers(occupied, {
+            slotKey: "F02",
+          }).data.map(
+            ({ player }) => player.playerId
+          ),
+          [replacement]
+        );
+        assert.equal(
+          databaseBytes(occupied.database),
+          beforeReplacementSearch
         );
 
         const published = createRuntime(t);
@@ -3487,6 +3505,13 @@ describe(
         });
         const before = databaseBytes(
           runtime.database
+        );
+        assertRepositoryError(
+          () =>
+            readEligiblePlayers(runtime, {
+              slotKey: "F01",
+            }),
+          "CANDIDATE_SLOT_OCCUPIED"
         );
         const result = readEligiblePlayers(
           runtime,
@@ -8353,6 +8378,49 @@ test("SQLite whole-card save persists partial rows atomically, preserves safe id
     0
   );
   assert.equal(runtime.mutationSideEffects.length, 3);
+});
+
+test("SQLite saved Candidate Card searches and replaces a player before the deadline without removing the persisted entry first", (t) => {
+  const runtime = createRuntime(t);
+  const original = uuid(9_401);
+  const otherSlot = uuid(9_402);
+  const replacement = uuid(9_403);
+  for (const [playerId, fullName] of [
+    [original, "Kyle Original"],
+    [otherSlot, "Kirill Other Slot"],
+    [replacement, "Kevin Replacement"],
+  ]) {
+    seedSelectablePlayer(runtime, { playerId, fullName });
+  }
+  const offer = (playerId) => ({ playerId, aavCents: 300, termYears: 1 });
+  runtime.repository.saveCurrent(wholeSaveCommand(runtime, {
+    expectedCardVersion: 1,
+    candidates: { F01: offer(original), F02: offer(otherSlot) },
+    requestId: uuid(9_410),
+    clientKey: "replacement-save-original",
+    revisionId: uuid(9_411),
+    entryIdBase: 9_420,
+  }));
+  const beforeSearch = databaseBytes(runtime.database);
+  assert.deepEqual(new Set(readEligiblePlayers(runtime, {
+    slotKey: "F01", q: "k",
+  }).data.map(({ player }) => player.playerId)), new Set([original, replacement]));
+  assert.equal(databaseBytes(runtime.database), beforeSearch);
+  runtime.repository.saveCurrent(wholeSaveCommand(runtime, {
+    expectedCardVersion: 2,
+    candidates: { F01: offer(replacement), F02: offer(otherSlot) },
+    requestId: uuid(9_430),
+    clientKey: "replacement-save-changed",
+    revisionId: uuid(9_431),
+    entryIdBase: 9_440,
+  }));
+  const reopened = readPrivateCurrent(runtime);
+  assert.equal(reopened.cardVersion, 3);
+  assert.equal(reopened.slots[0].player.playerId, replacement);
+  assert.equal(reopened.slots[1].player.playerId, otherSlot);
+  assert.deepEqual(new Set(readEligiblePlayers(runtime, {
+    slotKey: "F01", q: "k",
+  }).data.map(({ player }) => player.playerId)), new Set([original, replacement]));
 });
 
 test("SQLite whole-card save preserves server-owned carryovers and rejects a client candidate in their slot without writes", (t) => {
