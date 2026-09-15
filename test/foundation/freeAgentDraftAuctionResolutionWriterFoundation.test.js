@@ -5,6 +5,18 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { describe, test } = require("node:test");
+const {
+  createFreeAgentDraftAuctionResolutionService,
+} = require("../../src/application/services/freeAgentDraft/createFreeAgentDraftAuctionResolutionService");
+const {
+  createResolveFreeAgentDraftAuctionsJob,
+} = require("../../src/jobs/definitions/resolveFreeAgentDraftAuctions");
+const {
+  createSqliteFreeAgentDraftFallbackActivationWriter,
+} = require("../../src/infrastructure/persistence/sqlite/SqliteFreeAgentDraftFallbackActivationWriter");
+const {
+  createSqliteAuctionReadRepository,
+} = require("../../src/infrastructure/persistence/sqlite/SqliteAuctionReadRepository");
 
 const {
   createFreeAgentDraftAuctionDrawCommitment,
@@ -3412,6 +3424,140 @@ describe("SQLite FAD auction resolution writer foundation", () => {
       }).count,
       0
     );
+  });
+
+  test("resolves a no-bid tie through the real job after a five-second rollover delay", async (t) => {
+    const runtime = createScenarioRuntime(t, "restricted_zero", { missingJob: true });
+    const triggers = captureAndDropTriggers(runtime.database);
+    insert(runtime.database, "free_agent_draft_rollovers", {
+      id: uuid(8_900), league_id: IDS.league, season_id: IDS.season,
+      fad_id: IDS.fad, sequence: 4, window_kind: "initial",
+      predecessor_rollover_id: IDS.rolloverThree,
+      extension_reason: null, extension_source_id: null,
+      opens_at_ms: RESOLVES_AT_MS + DAY_MS,
+      creation_cutoff_at_ms: RESOLVES_AT_MS + 2 * DAY_MS - 3600000,
+      rolls_over_at_ms: RESOLVES_AT_MS + 2 * DAY_MS,
+      status: "scheduled", processing_job_run_id: null,
+      processing_started_at_ms: null, completed_at_ms: null, last_error_code: null,
+      created_at_ms: OPENED_AT_MS + 4, updated_at_ms: OPENED_AT_MS + 4, version: 1,
+    });
+    restoreTriggers(runtime.database, triggers);
+    let tick = RESOLVES_AT_MS + 5000;
+    const clock = { nowMs: () => tick++ };
+    const errors = [];
+    const repository = {
+      ...runtime.writer,
+      executeClaimed(input) {
+        try { return runtime.writer.executeClaimed(input); }
+        catch (error) {
+          errors.push({ message: error.message, code: error.code, details: error.details, cause: error.cause?.message });
+          throw error;
+        }
+      },
+    };
+    const service = createFreeAgentDraftAuctionResolutionService({
+      repository, clock,
+      lateLockCoordinator: { async coordinateCommittedRoster() { throw new Error("No winner expected"); } },
+    });
+    let next = 15000;
+    const job = createResolveFreeAgentDraftAuctionsJob({
+      repository, resolutionService: service, clock,
+      secureRandom: { id: () => uuid(++next) },
+      leaseOwner: LEASE_OWNER,
+      logger: { error(...args) { errors.push(args); } },
+    });
+    const result = await job.run();
+    assert.equal(result.succeeded, 1, JSON.stringify({ result, errors }));
+    assert.equal(result.failed, 0);
+    const allocation = runtime.database.prepare(
+      "SELECT status, fallback_open_auction_id FROM free_agent_draft_player_allocations WHERE id = ?"
+    ).get(IDS.allocation);
+    assert.equal(allocation.status, "restricted_fallback_open");
+    assert.ok(allocation.fallback_open_auction_id);
+    const fallback = runtime.database.prepare(
+      "SELECT * FROM auctions WHERE id = ?"
+    ).get(allocation.fallback_open_auction_id);
+    assert.equal(fallback.created_at_ms, RESOLVES_AT_MS + 5002);
+    assert.equal(fallback.updated_at_ms, fallback.created_at_ms);
+    assert.equal(fallback.opened_at_ms, RESOLVES_AT_MS + DAY_MS);
+    assert.equal(fallback.resolves_at_ms, fallback.opened_at_ms + DAY_MS);
+    const auctionReader = createSqliteAuctionReadRepository({ database: runtime.database });
+    const readFallback = (manager, nowMs) => auctionReader.readAuction({
+      leagueId: IDS.league, auctionId: fallback.id,
+      viewerUserId: manager.user, viewerMembershipId: manager.membership, nowMs,
+    });
+    assert.equal(readFallback(MANAGERS[0], tick), null);
+    assert.equal((await job.run()).due, 0);
+    const source = runtime.writer.findResolution({
+      leagueId: IDS.league, auctionId: runtime.auctionId, occurrenceKey: runtime.key,
+    });
+    assert.equal(source.replayed, true);
+    assert.equal(source.fallbackAuctionId, fallback.id);
+
+    const activationWriter = createSqliteFreeAgentDraftFallbackActivationWriter({
+      database: runtime.database, createId: () => uuid(++next),
+    });
+    tick = fallback.opened_at_ms + 5000;
+    const activationRun = runtime.database.prepare(
+      "SELECT * FROM job_runs WHERE job_type = 'fad_fallback_activation'"
+    ).get();
+    assert.equal(activationRun.status, "pending");
+    assert.equal(activationRun.scheduled_for_ms, fallback.opened_at_ms);
+    const activationToken = uuid(++next);
+    const activationLease = tick + 15 * 60000;
+    // This writer fixture omits the opening lifecycle. Claim only its exact
+    // activation job using the normal guarded transition, with triggers active.
+    assert.equal(runtime.database.prepare(`
+      UPDATE job_runs SET status = 'running', attempt_count = attempt_count + 1,
+        lease_owner = ?, lease_token = ?, lease_expires_at_ms = ?,
+        started_at_ms = ?, updated_at_ms = ?, version = version + 1
+      WHERE id = ? AND status = 'pending' AND version = 1
+    `).run(LEASE_OWNER, activationToken, activationLease, tick, tick, activationRun.id).changes, 1);
+    const activationCommand = {
+      leagueId: IDS.league, seasonId: IDS.season, fadId: IDS.fad,
+      allocationId: IDS.allocation, playerId: IDS.player,
+      sourceAuctionId: runtime.auctionId, auctionId: fallback.id, rolloverId: uuid(8900),
+      activationAtMs: fallback.opened_at_ms, activatedAtMs: tick,
+      occurrenceKey: activationRun.occurrence_key,
+      expectedAllocationVersion: source.allocationVersion,
+      jobExecution: {
+        runId: activationRun.id, expectedVersion: 2, leaseOwner: LEASE_OWNER,
+        leaseToken: activationToken, leaseExpiresAtMs: activationLease,
+      },
+    };
+    const activated = activationWriter.executeClaimed(activationCommand);
+    assert.equal(activated.replayed, false);
+    assert.equal(activated.evidence.notificationIds.length, MANAGERS.length);
+    assert.equal(activationWriter.executeClaimed(activationCommand).replayed, true);
+    assert.deepEqual(
+      runtime.database.prepare("SELECT * FROM auctions WHERE id = ?").get(fallback.id),
+      fallback
+    );
+    const minimum = runtime.database.prepare(
+      "SELECT restricted_minimum_total_cents AS total, restricted_minimum_term_years AS term, restricted_minimum_aav_cents AS aav FROM free_agent_draft_player_allocations WHERE id = ?"
+    ).get(IDS.allocation);
+    assert.deepEqual(minimum, { total: 600, term: 2, aav: 300 });
+    for (const manager of MANAGERS) {
+      const visible = readFallback(manager, tick);
+      assert.equal(visible.viewerTeams[0].join.allowed, true);
+      assert.equal(visible.viewerTeams[0].bid, null);
+      assert.equal(visible.sourceKind, "fad_open_rapid");
+    }
+    tick = fallback.resolves_at_ms + 5000;
+    const noBid = await job.run();
+    assert.equal(noBid.succeeded, 1, JSON.stringify({ noBid, errors }));
+    assert.equal(noBid.failed, 0);
+    assert.equal(runtime.database.prepare(
+      "SELECT status FROM auctions WHERE id = ?"
+    ).get(fallback.id).status, "no_winner");
+    assert.deepEqual(runtime.database.prepare(
+      "SELECT status, decision_code, winning_team_id, contract_id, ownership_id FROM free_agent_draft_player_allocations WHERE id = ?"
+    ).get(IDS.allocation), {
+      status: "fallback_open_resolved", decision_code: "fallback_open_no_winner",
+      winning_team_id: null, contract_id: null, ownership_id: null,
+    });
+    assert.equal((await job.run()).due, 0);
+    assert.deepEqual(runtime.database.prepare("PRAGMA foreign_key_check").all(), []);
   });
 
   test("replays a delayed restricted fallback from its source-auction publication only", (t) => {

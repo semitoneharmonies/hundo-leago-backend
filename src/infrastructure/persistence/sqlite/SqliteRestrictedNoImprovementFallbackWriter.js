@@ -887,7 +887,7 @@ function createSqliteRestrictedNoImprovementFallbackWriter({
     ) VALUES (
       @fallbackAuctionId, @leagueId, @seasonId, @playerId, 'open',
       @fallbackOpensAtMs, @fallbackResolvesAtMs, NULL,
-      @fallbackOpensAtMs, @fallbackOpensAtMs, 1
+      @nowMs, @nowMs, 1
     )
   `);
   const updateAllocation = database.prepare(`
@@ -916,7 +916,7 @@ function createSqliteRestrictedNoImprovementFallbackWriter({
       @fallbackAuctionId, @leagueId, @seasonId,
       @fallbackAuctionId, 'fad_open_rapid',
       @fadId, @targetRolloverId, @allocationId,
-      'restricted_no_improvement_fallback', @fallbackOpensAtMs
+      'restricted_no_improvement_fallback', @nowMs
     )
   `);
   const insertDraw = database.prepare(`

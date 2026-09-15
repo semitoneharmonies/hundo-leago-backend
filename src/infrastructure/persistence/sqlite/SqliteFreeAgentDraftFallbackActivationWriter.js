@@ -936,15 +936,15 @@ function createSqliteFreeAgentDraftFallbackActivationWriter({
       row.opened_at_ms !== scope.activationAtMs ||
       row.resolves_at_ms <= row.opened_at_ms ||
       row.opened_by_user_id !== null ||
-      row.auction_created_at_ms !== row.opened_at_ms ||
-      row.auction_updated_at_ms !== row.opened_at_ms ||
+      row.auction_created_at_ms > row.opened_at_ms ||
+      row.auction_updated_at_ms !== row.auction_created_at_ms ||
       row.auction_version !== 1 ||
       row.context_id !== row.fallback_open_auction_id ||
       row.source_kind !== "fad_open_rapid" ||
       row.fad_allocation_id !== row.allocation_id ||
       row.fad_origin !==
         "restricted_no_improvement_fallback" ||
-      row.context_created_at_ms !== row.opened_at_ms ||
+      row.context_created_at_ms !== row.auction_created_at_ms ||
       row.rollover_opens_at_ms !== row.opened_at_ms ||
       row.rolls_over_at_ms !== row.resolves_at_ms ||
       row.creation_cutoff_at_ms !==
@@ -1116,7 +1116,12 @@ function createSqliteFreeAgentDraftFallbackActivationWriter({
       !Array.isArray(evidence.notificationIds) ||
       evidence.notificationIds.length !== 0 ||
       !Array.isArray(evidence.outboxEventIds) ||
-      evidence.outboxEventIds.length !== 0 ||
+      evidence.outboxEventIds.length > 1 ||
+      evidence.outboxEventIds.some((id) => !UUID_PATTERN.test(id || "")) ||
+      (
+        evidence.outboxEventIds.length === 0 &&
+        row.auction_created_at_ms !== row.opened_at_ms
+      ) ||
       (evidence.sourceRecoveryId !== null &&
         !UUID_PATTERN.test(evidence.sourceRecoveryId || ""))
     ) {
@@ -1175,6 +1180,10 @@ function createSqliteFreeAgentDraftFallbackActivationWriter({
       resolution.triggered_by_user_id !== null ||
       resolution.idempotency_key !== evidence.occurrenceKey ||
       resolution.resolved_at_ms !== state.occurred_at_ms ||
+      (
+        row.auction_created_at_ms !== resolution.resolved_at_ms &&
+        row.auction_created_at_ms !== row.opened_at_ms
+      ) ||
       row.source_resolves_at_ms > resolution.resolved_at_ms
     ) {
       incompatible(
@@ -1205,6 +1214,47 @@ function createSqliteFreeAgentDraftFallbackActivationWriter({
         "The delayed fallback terminal event is malformed.",
         "SOURCE_RESOLUTION_INVALID"
       );
+    }
+    // Older saved handoffs omitted the source-closing outbox. New handoffs
+    // carry exactly that publication; the fallback opens in a later job.
+    if (evidence.outboxEventIds.length === 1) {
+      const eventId = evidence.outboxEventIds[0];
+      const publications = outboxReplayStatement.all({
+        leagueId: row.league_id,
+        outboxEventId: eventId,
+      });
+      const expectedPayload = JSON.stringify(createSocketEventEnvelope({
+        eventId,
+        type: "auction.changed",
+        leagueId: row.league_id,
+        resourceId: row.restricted_auction_id,
+        version: row.source_auction_version,
+        reasonCode: "auction_changed",
+        occurredAt: resolution.resolved_at_ms,
+        related: createEmptySocketRelated({
+          fadId: row.fad_id,
+          allocationId: row.allocation_id,
+          auctionId: row.restricted_auction_id,
+        }),
+      }));
+      if (
+        publications.length !== 1 ||
+        publications[0].event_type !== "auction.changed" ||
+        publications[0].aggregate_type !== "auction" ||
+        publications[0].aggregate_id !== row.restricted_auction_id ||
+        publications[0].payload_json !== expectedPayload ||
+        publications[0].created_at_ms !== resolution.resolved_at_ms ||
+        publications[0].audience_id !== eventId ||
+        publications[0].audience_kind !== "league" ||
+        publications[0].audience_team_id !== null ||
+        publications[0].audience_user_id !== null ||
+        publications[0].audience_created_at_ms !== resolution.resolved_at_ms
+      ) {
+        incompatible(
+          "The delayed fallback source-closing publication is not exact.",
+          "SOURCE_OUTBOX_INVALID"
+        );
+      }
     }
     return Object.freeze({
       resolution,

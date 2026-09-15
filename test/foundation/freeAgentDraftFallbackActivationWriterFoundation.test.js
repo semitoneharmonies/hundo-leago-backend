@@ -541,7 +541,7 @@ function seedTeam(database, team, index, withManager) {
 
 function seedAuctionState(
   database,
-  { recovery, withBid }
+  { recovery, withBid, auctionCreatedAtMs, sourceOutboxIds }
 ) {
   seedRollover(database, {
     id: IDS.sourceRollover,
@@ -589,8 +589,8 @@ function seedAuctionState(
     opened_at_ms: ACTIVATION_AT_MS,
     resolves_at_ms: RESOLVES_AT_MS,
     opened_by_user_id: null,
-    created_at_ms: ACTIVATION_AT_MS,
-    updated_at_ms: ACTIVATION_AT_MS,
+    created_at_ms: auctionCreatedAtMs,
+    updated_at_ms: auctionCreatedAtMs,
     version: 1,
   });
   insert(database, "free_agent_draft_player_allocations", {
@@ -638,7 +638,7 @@ function seedAuctionState(
     fad_rollover_id: IDS.targetRollover,
     fad_allocation_id: IDS.allocation,
     fad_origin: "restricted_no_improvement_fallback",
-    created_at_ms: ACTIVATION_AT_MS,
+    created_at_ms: auctionCreatedAtMs,
   });
 
   const sourceNonce = Buffer.alloc(32, 0x31);
@@ -824,7 +824,7 @@ function seedAuctionState(
       sourceRecoveryId: null,
       activityId: null,
       notificationIds: [],
-      outboxEventIds: [],
+      outboxEventIds: sourceOutboxIds,
     }),
     occurred_at_ms: HANDOFF_AT_MS,
     created_at_ms: HANDOFF_AT_MS,
@@ -942,6 +942,8 @@ function createRuntime(
     managerCount = TEAMS.length,
     recovery = false,
     withBid = false,
+    auctionCreatedAtMs = ACTIVATION_AT_MS,
+    sourceOutboxIds = [],
     beforeCommit,
   } = {}
 ) {
@@ -983,6 +985,8 @@ function createRuntime(
   seedAuctionState(connection.database, {
     recovery,
     withBid,
+    auctionCreatedAtMs,
+    sourceOutboxIds,
   });
   restoreTriggers(connection.database, triggers);
   assert.deepEqual(
@@ -1338,6 +1342,38 @@ describe("SQLite delayed FAD fallback activation writer", () => {
         version: 3,
       }
     );
+  });
+
+  test("rejects an auction creation time unrelated to its handoff or legacy opening", (t) => {
+    const { database, writer, command } = createRuntime(t, {
+      auctionCreatedAtMs: HANDOFF_AT_MS + 1,
+      sourceOutboxIds: [uuid(9901)],
+    });
+    const before = immutableResourceState(database);
+    assert.throws(
+      () => writer.executeClaimed(command),
+      (error) => error.details?.reasonCode === "SOURCE_RESOLUTION_INVALID"
+    );
+    assert.deepEqual(immutableResourceState(database), before);
+    assert.deepEqual(sideEffectCounts(database), {
+      activities: 0, notifications: 0, outboxEvents: 0, outboxAudiences: 0,
+    });
+  });
+
+  test("rejects a handoff whose source-closing publication is missing", (t) => {
+    const { database, writer, command } = createRuntime(t, {
+      auctionCreatedAtMs: HANDOFF_AT_MS,
+      sourceOutboxIds: [uuid(9901)],
+    });
+    const before = immutableResourceState(database);
+    assert.throws(
+      () => writer.executeClaimed(command),
+      (error) => error.details?.reasonCode === "SOURCE_OUTBOX_INVALID"
+    );
+    assert.deepEqual(immutableResourceState(database), before);
+    assert.deepEqual(sideEffectCounts(database), {
+      activities: 0, notifications: 0, outboxEvents: 0, outboxAudiences: 0,
+    });
   });
 
   test("rejects the exact resolution boundary without publication", (t) => {
