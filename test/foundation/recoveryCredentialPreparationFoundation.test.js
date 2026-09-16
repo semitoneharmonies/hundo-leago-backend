@@ -168,6 +168,124 @@ async function candidate(t, alterSource = null) {
   return { started, input, config, objectStorage, encryptionKey, backup };
 }
 
+test("completion review binds actual held financial state and keeps every unproved recovery gate open", async t => {
+  const { buildRecoveryCompletionReview } = require("../../src/operations/backups/buildRecoveryCompletionReview");
+  const { started, input } = await candidate(t, database => {
+    database.prepare("UPDATE league_settings SET salary_cap_cents=1 WHERE league_id=?").run(fixtureId("league:leagueA"));
+  });
+  const sourceBytes = started.runtime.database.serialize();
+  const prepared = prepareRecoveryCredentials({ ...input, outputDirectory: path.join(input.temporaryRoot, "completion-input") });
+  const restoredPath = input.restoredCandidate.targetDatabasePath;
+  const preservedPath = path.join(input.temporaryRoot, "completion-preserved.sqlite3");
+  fs.copyFileSync(restoredPath, preservedPath, fs.constants.COPYFILE_EXCL);
+  const files = [prepared.preparedDatabasePath, restoredPath, preservedPath], hashes = files.map(readHash);
+  const readers = files.map(databasePath => openReadonlyDatabase({ databasePath }));
+  const save = (name, value) => { const file = path.join(input.temporaryRoot, name); fs.writeFileSync(file, JSON.stringify(value), { flag: "wx" }); return file; };
+  const command = (name, request, success = true) => {
+    const requestPath = save(crypto.randomUUID()+".json", request);
+    const result = spawnSync(process.execPath, [path.resolve(__dirname, "../../scripts/"+name), "--request", requestPath],
+      { encoding: "utf8", timeout: 60_000, maxBuffer: 16*1024*1024 });
+    assert.equal(result.status, success ? 0 : 1, result.stderr);
+    assert.equal((result.stdout+result.stderr).includes(PRIVATE_VALUE), false);
+    if (success) { assert.equal(result.stderr, ""); return JSON.parse(result.stdout); }
+    assert.equal(result.stdout, ""); assert.match(JSON.parse(result.stderr).error.code, /^RECOVERY_/);
+  };
+  try {
+    const plan = buildRecoveryReconciliationPlan({ database: readers[0], credentialPreparation: prepared,
+      observedAtMs: 101, expectedEnvironmentId: input.expectedEnvironmentId, expectedDatabaseId: input.expectedDatabaseId });
+    const options = { candidateDatabase: readers[0], restoredDatabase: readers[1], preservedDatabase: readers[2],
+      credentialPreparation: prepared, plan, preservedPlaintextSha256: hashes[2],
+      expectedEnvironmentId: input.expectedEnvironmentId, expectedDatabaseId: input.expectedDatabaseId, observedAtMs: 102 };
+    const report = buildRecoveryCompletionReview(options);
+    assert.equal(report.status, "recovery-completion-reviewed-held");
+    assert.equal(report.lossWindow.changedRecords, 0);
+    assert.equal(report.recordedLossProgress.totalChangedRecords,0);
+    assert.deepEqual(report.recordedLossProgress.counts,{matchesPreserved:0,stillAtBackupState:0,differentFromBoth:0});
+    assert.deepEqual(report.recordedLossProgress.tables,{});
+    assert.equal(report.recordedLossProgress.candidateOnlyChangedRecords,report.candidateChanges.changedRecords);
+    assert.equal(report.recordedLossProgress.completeLossWindowEvidence,false);
+    assert.equal(report.lossWindow.financialState.changedLeagues, 0);
+    assert.equal(report.candidateChanges.financialState.changedLeagues, 0);
+    assert.ok(report.candidateChanges.changedRecords > 0);
+    assert.equal(report.currentCaps.leagues.length, 2);
+    assert.equal(report.currentCaps.unconfiguredLeagues, 0);
+    assert.ok(report.currentCaps.leagues.every(league => league.teams.length > 0));
+    const reduced = report.currentCaps.leagues.find(league => league.leagueId === fixtureId("league:leagueA"));
+    assert.ok(reduced.teams.some(team => team.overCap));
+    assert.ok(reduced.teams.every(team => team.capLimitCents === 1));
+    assert.ok(report.currentCaps.leagues.find(league => league.leagueId === fixtureId("league:leagueB")).teams.every(team => team.capLimitCents > 1));
+    for (const [name, digest] of [["candidate",hashes[0]],["restored",hashes[1]],["preserved",hashes[2]]]) {
+      const financial = report.financialConsistency[name];
+      assert.equal(financial.plaintextSha256,digest);
+      assert.deepEqual(financial.findings.map(row=>row.code),["BUYOUT_POLICY_AMOUNT_REQUIRES_REVIEW","BUYOUT_POLICY_AMOUNT_REQUIRES_REVIEW"]);
+      assert.equal(financial.activationReady,false);assert.equal(financial.completeFinancialReconciliation,false);
+      assert.ok(financial.warnings.some(row=>row.code==="TEAM_OVER_CAP"));
+    }
+    assert.deepEqual(report.financialConsistency.restored.tables,report.financialConsistency.candidate.tables);
+    assert.deepEqual(report.financialConsistency.restored.tables,report.financialConsistency.preserved.tables);
+    for (const league of report.currentCaps.leagues) for (const team of league.teams) {
+      assert.equal(team.capUsageCents, team.breakdown.activePlayerCents+team.breakdown.retentionCents+team.breakdown.buyoutCents);
+      assert.equal(team.capSpaceCents, team.capLimitCents-team.capUsageCents);
+      assert.equal(team.overCap, team.capUsageCents > team.capLimitCents);
+    }
+    assert.equal(report.dispositions.unresolvedJobs, plan.unresolvedJobs);
+    assert.equal(report.dispositions.unresolvedMessages, plan.unresolvedMessages);
+    assert.equal(report.inventory.sessions.active, 0);
+    assert.ok(Object.values(report.inventory.activeActionTokens).every(count => count === 0));
+    assert.ok(report.gates.every(gate => gate.status === "pending"));
+    for (const field of ["completeLossWindowEvidence", "completeFinancialReconciliation", "operatorAuthenticated", "activationReady", "executable"]) assert.equal(report[field], false, field);
+    assert.equal(JSON.stringify(report).includes(PRIVATE_VALUE), false);
+    for (const file of files) assert.equal(JSON.stringify(report).includes(file), false);
+    const { reportChecksum, ...body } = report; assert.equal(reportChecksum, hash(canonicalize(body)));
+    assert.deepEqual(buildRecoveryCompletionReview(options), report);
+    const { planChecksum, ...forgedBody } = { ...plan, unresolvedJobs: 0, activationReady: true };
+    for (const patch of [{ plan: { ...forgedBody, planChecksum: hash(canonicalize(forgedBody)) } },
+      { candidateDatabase: readers[1] }, { preservedDatabase: readers[1] }, { preservedPlaintextSha256: "a".repeat(64) },
+      { observedAtMs: 100 }, { expectedDatabaseId: "wrong-database" },
+      { lineage: { initialDatabasePath: files[0], initialPlan: plan, steps: [] } }]) {
+      assert.throws(() => buildRecoveryCompletionReview({ ...options, ...patch }), error => /^RECOVERY_COMPLETION_/.test(error.code));
+    }
+    readers[0].transaction(() => assert.throws(() => buildRecoveryCompletionReview(options), { code: "RECOVERY_COMPLETION_INPUT_INVALID" }))();
+    const credentials = save("completion-credentials.json", prepared);
+    const review = command("db-recovery-review.js", { requestVersion: 1, preparedDatabasePath: files[0], credentialPreparationPath: credentials,
+      expectedEnvironmentId: input.expectedEnvironmentId, expectedDatabaseId: input.expectedDatabaseId, observedAtMs: 101 });
+    const request = { requestVersion: 1, candidateDatabasePath: files[0], restoredDatabasePath: files[1], preservedDatabasePath: files[2],
+      credentialPreparationPath: credentials, candidateReviewPath: save("completion-candidate.json", review), preservedPlaintextSha256: hashes[2],
+      expectedEnvironmentId: input.expectedEnvironmentId, expectedDatabaseId: input.expectedDatabaseId, observedAtMs: 102 };
+    assert.deepEqual(command("db-recovery-completion-review.js", request), report);
+    for (const patch of [{ force: true }, { activationReady: true }, { preservedDatabasePath: files[1] }, { preservedPlaintextSha256: "b".repeat(64) }]) {
+      command("db-recovery-completion-review.js", { ...request, ...patch }, false);
+    }
+    const { reportChecksum: discarded, ...badReview } = { ...review, plan: { ...forgedBody, planChecksum: hash(canonicalize(forgedBody)) } };
+    const forgedPath = save("completion-forged-plan.json", { ...badReview, reportChecksum: hash(canonicalize(badReview)) });
+    command("db-recovery-completion-review.js", { ...request, candidateReviewPath: forgedPath }, false);
+    await t.test("credential revocation is not mistaken for reconstruction of a changed session",()=>{
+      const alteredPath = path.join(input.temporaryRoot,"completion-preserved-session-change.sqlite3");
+      fs.copyFileSync(preservedPath,alteredPath,fs.constants.COPYFILE_EXCL);
+      const writer = openDatabase({databasePath:alteredPath,environment:"staging",persistentRoot:input.temporaryRoot,requirePersistentRoot:true}).database;
+      let sessionId;
+      try {
+        sessionId = writer.prepare("SELECT id FROM sessions WHERE status='active' ORDER BY id LIMIT 1").get().id;
+        assert.equal(writer.prepare("UPDATE sessions SET version=version+1 WHERE id=?").run(sessionId).changes,1);
+      } finally { writer.close(); }
+      const digest = readHash(alteredPath),altered = openReadonlyDatabase({databasePath:alteredPath});
+      try {
+        const reviewed = buildRecoveryCompletionReview({...options,preservedDatabase:altered,preservedPlaintextSha256:digest});
+        assert.equal(reviewed.recordedLossProgress.totalChangedRecords,1);
+        assert.deepEqual(reviewed.recordedLossProgress.counts,{matchesPreserved:0,stillAtBackupState:0,differentFromBoth:1});
+        const row=reviewed.recordedLossProgress.tables.sessions[0];
+        assert.equal(row.keySha256,hash(canonicalize([sessionId])));assert.equal(row.credentialBoundaryApplies,true);
+        assert.equal(row.status,"differentFromBoth");assert.equal(reviewed.inventory.sessions.active,0);
+        assert.equal(reviewed.recordedLossProgress.preservedStateIsApproved,false);
+        assert.equal(readHash(alteredPath),digest);assert.equal(altered.prepare("SELECT total_changes() n").get().n,0);
+      } finally { altered.close(); }
+    });
+    for (const reader of readers) assert.equal(reader.prepare("SELECT total_changes() n").get().n, 0);
+  } finally { readers.forEach(reader => reader.close()); }
+  assert.deepEqual(files.map(readHash), hashes);
+  assert.deepEqual(started.runtime.database.serialize(), sourceBytes);
+});
+
 test("selected restored league invalidations publish once without repeating domain effects after worker restart", async t => {
   const { started, input } = await candidate(t);
   const sourceBefore = started.runtime.database.serialize();
@@ -977,6 +1095,7 @@ test("an account link bound to a different recipient rejects recovery preparatio
 });
 
 test("restoring the selected backup excludes a later real buyout and restores exact financial rows in both leagues", async (t) => {
+  const { createTargetServices } = require("../../src/bootstrap/createTargetRuntime");
   const { started, input, config, objectStorage, encryptionKey, backup } = await candidate(t);
   const source = started.runtime.database;
   const atBackup = allRows(source);
@@ -987,7 +1106,15 @@ test("restoring the selected backup excludes a later real buyout and restores ex
   const issued = started.runtime.services.sessionService.issueForUser({ userId: fixtureId("account:leagueBManagerOne") });
   const authenticated = started.runtime.services.sessionService.resolve(issued.rawSessionToken);
   assert.equal(authenticated.valid, true);
-  const boughtOut = await started.runtime.services.league.rosterAction.buyOutContract({
+  // The backup uses wall-clock timestamps. Give this later transaction the
+  // same clock basis instead of the fixture runtime's fixed historical date.
+  const postBackupServices = createTargetServices({ repositories: started.runtime.repositories,
+    currentSeason: { label: "2026", nhlSeasonKey: "20262027" },
+    securityFoundations: { config: started.runtime.securityConfig, clock: { nowMs: () => Date.now() }, secureRandom: createSecureRandom(),
+      logger: { error() { assert.fail("Post-backup fixture operation must not log an error."); }, warn() {}, info() {} } },
+    leagueInvalidationPublisher: { publish() { assert.fail("Post-backup fixture operation must not publish."); } },
+    nhlFetchImplementation: async () => { assert.fail("Post-backup fixture operation must not call a provider."); } });
+  const boughtOut = await postBackupServices.league.rosterAction.buyOutContract({
     authenticated, leagueId: fixtureId("league:leagueB"), teamId: fixtureId("team:leagueB:6"), contractId,
     input: { confirmed: true, expectedContractVersion: 1, expectedOwnershipVersion: 1 },
   });
@@ -1006,7 +1133,7 @@ test("restoring the selected backup excludes a later real buyout and restores ex
   });
   // Prepare before read-only inspection creates SQLite WAL sidecars. The
   // original preparation guard must continue to reject those sidecars.
-  const prepared = prepareRecoveryCredentials({ ...input, restoredCandidate: restored,
+  const prepared = prepareRecoveryCredentials({ ...input, restoredCandidate: restored, preparedAtMs: Date.now(),
     outputDirectory: path.join(input.temporaryRoot, "loss-window-prepared") });
   const mutationsStoppedAtMs = Date.now();
   const preserved = await createVerifiedBackup({ databasePath: started.databasePath,
@@ -1057,6 +1184,35 @@ test("restoring the selected backup excludes a later real buyout and restores ex
     assert.equal(comparison.completeLossWindowEvidence, false);
     assert.equal(JSON.stringify(comparison).includes(PRIVATE_VALUE), false);
     assert.equal(JSON.stringify(comparison).includes(issued.rawSessionToken), false);
+    await t.test("completion review separates a real lost buyout from the intact held candidate", () => {
+      const { buildRecoveryCompletionReview } = require("../../src/operations/backups/buildRecoveryCompletionReview");
+      const reader = openReadonlyDatabase({ databasePath: prepared.preparedDatabasePath });
+      const before = [reader,restoredDatabase,preservedDatabase].map(database => readHash(database.name));
+      const observedAtMs = Date.now();
+      try {
+        const plan = buildRecoveryReconciliationPlan({ database: reader,credentialPreparation: prepared,observedAtMs,
+          expectedEnvironmentId: config.environmentId,expectedDatabaseId: config.databaseId });
+        const reviewed = buildRecoveryCompletionReview({ candidateDatabase: reader,restoredDatabase,preservedDatabase,
+          credentialPreparation: prepared,plan,preservedPlaintextSha256: preserved.plaintextSha256,
+          expectedEnvironmentId: config.environmentId,expectedDatabaseId: config.databaseId,observedAtMs });
+        assert.deepEqual(reviewed.lossWindow.financialState,financial);
+        assert.equal(reviewed.lossWindow.changedRecords,comparison.changedRecords);
+        assert.equal(reviewed.candidateChanges.financialState.changedLeagues,0);
+        assert.ok(reviewed.lossWindow.changedRecords > 0);
+        assert.equal(reviewed.recordedLossProgress.totalChangedRecords,comparison.changedRecords);
+        for (const table of ["contracts","buyout_obligations","player_ownerships"]) {
+          assert.ok(reviewed.recordedLossProgress.tables[table].length>0);
+          assert.ok(reviewed.recordedLossProgress.tables[table].every(row=>row.status==="stillAtBackupState"));
+        }
+        assert.equal(reviewed.gates.find(gate => gate.id === "loss-window-and-preservation-evidence").recordedChangedRecords,comparison.changedRecords);
+        assert.equal(reviewed.preservationProvenanceVerified,false);
+        assert.equal(reviewed.completeLossWindowEvidence,false);assert.equal(reviewed.activationReady,false);
+        assert.equal(JSON.stringify(reviewed).includes(issued.rawSessionToken),false);
+        assert.equal(JSON.stringify(reviewed).includes(PRIVATE_VALUE),false);
+        for (const database of [reader,restoredDatabase,preservedDatabase]) assert.equal(database.prepare("SELECT total_changes() n").get().n,0);
+        assert.deepEqual([reader,restoredDatabase,preservedDatabase].map(database => readHash(database.name)),before);
+      } finally { reader.close(); }
+    });
     await t.test("restore planning binds actual manifests, financial loss and administrator review without execution", async () => {
       const { buildRecoveryRestorePlan } = require("../../src/operations/backups/buildRecoveryRestorePlan");
       const backupManifestBytes = (await objectStorage.getPrivateObject({ objectKey: backup.manifestObjectKey })).body;
@@ -1149,8 +1305,1001 @@ test("restoring the selected backup excludes a later real buyout and restores ex
     assert.equal(prepared.activationReady, false);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { database.close(); }
+  await t.test("a known lost buyout reconstructs exact financial history after fresh fixture sign-in and survives encrypted backup", async () => {
+    const { createTargetRepositories,createTargetServices } = require("../../src/bootstrap/createTargetRuntime");
+    const { assertRecoveryRuntimeAllowed } = require("../../src/infrastructure/database/recoveryHold");
+    const activity = source.prepare("SELECT * FROM league_activity WHERE related_type='buyout_obligation' AND related_id=?").get(boughtOut.buyout.id);
+    const originalReceipt = JSON.parse(activity.metadata_json).buyoutReceipt;
+    const contractEvent = source.prepare("SELECT * FROM contract_events WHERE source_type='buyout' AND source_id=?").get(boughtOut.buyout.id);
+    const ownershipEvent = source.prepare("SELECT * FROM ownership_events WHERE source_type='buyout' AND source_id=?").get(boughtOut.buyout.id);
+    assert.ok(activity && originalReceipt && contractEvent && ownershipEvent);
+    // These IDs and the original time are reconstructed from actual preserved
+    // evidence. They are not newly guessed transactions or production authority.
+    const preservedIds = [boughtOut.buyout.id,...originalReceipt.years.map(year => year.id),contractEvent.id,ownershipEvent.id,activity.id];
+    const sourceRows = allRows(source);
+    const gameTables = Object.keys(atBackup).filter(table => !["sessions","security_audit_events"].includes(table) &&
+      canonicalize(atBackup[table]) !== canonicalize(sourceRows[table])).sort();
+    assert.ok(gameTables.includes("buyout_years"));assert.ok(gameTables.includes("player_ownerships"));
+    const originalFiles = [prepared.preparedDatabasePath,restored.targetDatabasePath,path.join(preserved.outputDirectory,BACKUP_FILE_NAME)];
+    const originalHashes = originalFiles.map(readHash);
+    const replayPath = path.join(input.temporaryRoot,"known-buyout-reconstruction.sqlite3");
+    fs.copyFileSync(prepared.preparedDatabasePath,replayPath,fs.constants.COPYFILE_EXCL);
+    const random = createSecureRandom(),ids = [],providers = [],deliveries = [],errors = [];
+    const secureRandom = { ...random,id: () => ids.length ? ids.shift() : random.id() };
+    let now = Date.now();
+    const makeServices = database => createTargetServices({ repositories: createTargetRepositories({ database,secureRandom }),
+      currentSeason: { label: "2026",nhlSeasonKey: "20262027" },
+      securityFoundations: { config: started.runtime.securityConfig,clock: { nowMs: () => now },secureRandom,
+        logger: { error: value => errors.push(value),warn: value => errors.push(value),info() {} } },
+      leagueInvalidationPublisher: { publish() { deliveries.push(true);assert.fail("Held reconstruction must not publish."); } },
+      nhlFetchImplementation: async () => { providers.push(true);throw new Error("Recovery fixture provider unavailable."); } });
+    let reconstructedRows,freshToken;
+    let work = openDatabase({ databasePath: replayPath,environment: "test" }).database;
+    try {
+      assert.throws(() => assertRecoveryRuntimeAllowed(work),{ code: "DATABASE_RECOVERY_HELD" });
+      const services = makeServices(work);
+      assert.equal(services.sessionService.resolveWithoutActivity(issued.rawSessionToken).valid,false);
+      assert.equal(services.sessionService.resolveWithoutActivity(sessionBytes.toString("base64url")).valid,false);
+      const email = work.prepare("SELECT email_normalized FROM users WHERE id=?").get(fixtureId("account:leagueBManagerOne")).email_normalized;
+      const signedIn = await services.account.signIn.signIn({ email,password: "Recovery Preparation Fixture Password 2026!" });
+      assert.equal(signedIn.signedIn,true);
+      freshToken = signedIn.rawSessionToken;
+      const fresh = services.sessionService.resolveWithoutActivity(freshToken);assert.equal(fresh.valid,true);
+      assert.equal(fresh.user.id,activity.actor_user_id);
+      assert.notEqual(fresh.session.id,issued.session.id);
+      const before = allRows(work);
+      const command = { authenticated: fresh,leagueId: fixtureId("league:leagueB"),teamId: fixtureId("team:leagueB:6"),contractId,
+        input: { confirmed: true,expectedContractVersion: contractAtBackup.version,expectedOwnershipVersion: originalReceipt.releasedOwnership.version } };
+      await assert.rejects(services.league.rosterAction.buyOutContract({ ...command,leagueId: fixtureId("league:leagueA"),teamId: fixtureId("team:leagueA:1") }),
+        { code: "LEAGUE_NOT_FOUND" });
+      assert.deepEqual(allRows(work),before);
+      ids.push(...preservedIds);
+      now = activity.occurred_at_ms;
+      const result = await services.league.rosterAction.buyOutContract(command);
+      assert.equal(ids.length,0);assert.equal(result.code,"CONTRACT_BOUGHT_OUT");
+      assert.deepEqual(result.buyout,boughtOut.buyout);assert.deepEqual(result.lateLock,boughtOut.lateLock);
+      assert.deepEqual(providers,[]);assert.deepEqual(deliveries,[]);assert.deepEqual(errors,[]);
+      const after = allRows(work);
+      assert.deepEqual(Object.keys(before).filter(table => canonicalize(before[table]) !== canonicalize(after[table])).sort(),gameTables);
+      for (const table of gameTables) {
+        const expectedRows = table === "outbox_events"
+          ? [...sourceRows[table].filter(row => JSON.parse(row).league_id !== null),
+            ...before[table].filter(row => JSON.parse(row).league_id === null)].sort()
+          : sourceRows[table];
+        assert.deepEqual(after[table],expectedRows,table);
+      }
+      for (const table of Object.keys(before).filter(table => !gameTables.includes(table))) assert.deepEqual(after[table],before[table],table);
+      const totals = work.prepare("SELECT COALESCE(SUM(penalty_cents),0) total FROM buyout_years").get().total;
+      assert.equal(totals,penaltyTotalAtBackup+boughtOut.buyout.annualPenaltyCents*boughtOut.buyout.remainingYears);
+      await assert.rejects(services.league.rosterAction.buyOutContract(command),{ code: "BUYOUT_CONTRACT_NOT_OWNED" });
+      assert.deepEqual(allRows(work),after);
+      now = Date.now();
+      assert.equal(services.account.signOut.signOut({ session: fresh.session,user: fresh.user }).signedOut,true);
+      assert.equal(services.sessionService.resolveWithoutActivity(freshToken).valid,false);
+      assert.equal(work.prepare("SELECT COUNT(*) n FROM sessions WHERE status='active'").get().n,0);
+      assert.equal(work.prepare("SELECT COUNT(*) n FROM account_action_tokens WHERE status='active'").get().n,0);
+      assert.deepEqual(readRecoveryEpoch(work),prepared.recoveryEpoch);
+      assert.throws(() => assertRecoveryRuntimeAllowed(work),{ code: "DATABASE_RECOVERY_HELD" });
+      assert.deepEqual(work.pragma("foreign_key_check"),[]);
+      reconstructedRows = allRows(work);
+    } finally { work.close(); }
+    // A fresh service composition still cannot reconstruct the transaction twice.
+    work = openDatabase({ databasePath: replayPath,environment: "test" }).database;
+    try {
+      const services = makeServices(work);
+      assert.equal(services.sessionService.resolveWithoutActivity(freshToken).valid,false);
+      const before = allRows(work);
+      const replayCommand = { buyoutId: boughtOut.buyout.id,buyoutYearIds: originalReceipt.years.map(year => year.id),
+        contractEventId: contractEvent.id,ownershipEventId: ownershipEvent.id,activityId: activity.id,
+        leagueId: activity.league_id,seasonId: originalReceipt.releasedOwnership.season_id,teamId: originalReceipt.releasedOwnership.team_id,
+        playerId: originalReceipt.releasedOwnership.player_id,contractId,ownershipId: originalReceipt.releasedOwnership.id,
+        expectedContractVersion: contractAtBackup.version,expectedOwnershipVersion: originalReceipt.releasedOwnership.version,
+        actorUserId: activity.actor_user_id,actorAuthority: activity.actor_authority,confirmed: true,reason: activity.reason,occurredAtMs: activity.occurred_at_ms };
+      const repositories = createTargetRepositories({ database: work,secureRandom });
+      const replayed = repositories.buyouts.buyOut(replayCommand);
+      assert.equal(replayed.obligation.id,boughtOut.buyout.id);
+      assert.deepEqual(allRows(work),before);assert.deepEqual(before,reconstructedRows);
+      assert.equal(work.prepare("SELECT total_changes() n").get().n,0);
+    } finally { work.close(); }
+    const replayHash = readHash(replayPath);
+    const encrypted = await createEncryptedOffsiteBackup({ databasePath: replayPath,config,objectStorage,
+      reason: "pre-cutover-rehearsal",requestedByType: "release_qa_automation",requestedById: "known-buyout-reconstruction-fixture",
+      backendBuildId: "m7-local-backend",retentionClass: "incident-preservation" });
+    const restoredAgain = await restoreEncryptedBackupToCleanPath({ manifestObjectKey: encrypted.manifestObjectKey,objectStorage,
+      keyResolver: async () => encryptionKey,expectedEnvironment: config.appEnv,expectedEnvironmentId: config.environmentId,
+      expectedDatabaseId: config.databaseId,targetDatabasePath: path.join(input.temporaryRoot,"known-buyout-reconstruction-restored.sqlite3"),temporaryRoot: input.temporaryRoot });
+    const finalReader = openReadonlyDatabase({ databasePath: restoredAgain.targetDatabasePath });
+    try {
+      assert.deepEqual(allRows(finalReader),reconstructedRows);
+      assert.deepEqual(readRecoveryEpoch(finalReader),prepared.recoveryEpoch);
+      assert.throws(() => assertRecoveryRuntimeAllowed(finalReader),{ code: "DATABASE_RECOVERY_HELD" });
+      assert.equal(finalReader.prepare("SELECT total_changes() n").get().n,0);
+    } finally { finalReader.close(); }
+    assert.equal(readHash(replayPath),replayHash);assert.deepEqual(originalFiles.map(readHash),originalHashes);
+    assert.deepEqual(providers,[]);assert.deepEqual(deliveries,[]);assert.deepEqual(errors,[]);
+  });
+  await t.test("reviewed known-buyout operation preserves historical rows and independently rejects forged recovery evidence", async () => {
+    const { buildKnownBuyoutEvidence, readRows: readRecoveryRows, snapshots: recoverySnapshots } = require("../../src/operations/backups/recoveryKnownBuyoutEvidence");
+    const { prepareRecoveryKnownBuyout } = require("../../src/operations/backups/prepareRecoveryKnownBuyout");
+    const { verifyRecoveryKnownBuyout, buildKnownBuyoutReconciledRecoveryPlan } = require("../../src/operations/backups/verifyRecoveryKnownBuyout");
+    const { assertRecoveryRuntimeAllowed } = require("../../src/infrastructure/database/recoveryHold");
+    const reader = openReadonlyDatabase({ databasePath: prepared.preparedDatabasePath });
+    const restoredDatabase = openReadonlyDatabase({ databasePath: restored.targetDatabasePath });
+    const preservedDatabase = openReadonlyDatabase({ databasePath: path.join(preserved.outputDirectory,BACKUP_FILE_NAME) });
+    const sources = [reader, restoredDatabase, preservedDatabase], originalHashes = sources.map(row => readHash(row.name));
+    const backupManifestBytes = (await objectStorage.getPrivateObject({ objectKey: backup.manifestObjectKey })).body;
+    const preservationManifestBytes = fs.readFileSync(path.join(preserved.outputDirectory,"backup-manifest.json"));
+    const observedAtMs = Date.now();
+    try {
+      const plan = buildRecoveryReconciliationPlan({ database: reader, credentialPreparation: prepared, observedAtMs,
+        expectedEnvironmentId: config.environmentId, expectedDatabaseId: config.databaseId });
+      const reviewOptions = { preparedDatabase: reader, restoredDatabase, preservedDatabase, credentialPreparation: prepared, plan,
+        buyoutId: boughtOut.buyout.id, leagueId: fixtureId("league:leagueB"), preservedPlaintextSha256: preserved.plaintextSha256,
+        observedAtMs, backupManifestBytes, preservationManifestBytes, expectedBackupManifestSha256: hash(backupManifestBytes),
+        expectedPreservationManifestSha256: hash(preservationManifestBytes) };
+      const { review, expected } = buildKnownBuyoutEvidence(reviewOptions);
+      assert.equal(review.provenance.offlineManifestBindingVerified,true);
+      assert.equal(review.provenance.externalCustodyVerified,false);
+      assert.equal(review.historicalActorUserId,fixtureId("account:leagueBManagerOne"));
+      assert.equal(review.financialEffect.totalScheduledPenaltyCents,boughtOut.buyout.annualPenaltyCents*boughtOut.buyout.remainingYears);
+      assert.equal(review.operatorAuthenticated,false);assert.equal(review.completeLossWindowEvidence,false);assert.equal(review.activationReady,false);
+      assert.equal(JSON.stringify(review).includes(PRIVATE_VALUE),false);assert.equal(JSON.stringify(review).includes(issued.rawSessionToken),false);
+      const decision = { reconciliationId: crypto.randomUUID(), action: "reconstruct-known-buyout-held", reviewedByUserId: fixtureId("account:platformAdmin"),
+        reviewChecksum: review.reportChecksum, evidenceSha256: review.evidenceSha256, reasonCode: "RECOVER_PRESERVED_BUYOUT" };
+      const outputDirectory = path.join(input.temporaryRoot,"reviewed-known-buyout");
+      const action = { reviewOptions, decision, temporaryRoot: input.temporaryRoot, outputDirectory };
+      for (const bad of [{ ...decision, reviewedByUserId: fixtureId("account:leagueBManagerOne") },
+        { ...decision, evidenceSha256: "0".repeat(64) }, { ...decision, activate: true }]) {
+        await assert.rejects(prepareRecoveryKnownBuyout({ ...action, decision: bad }),error => /^RECOVERY_BUYOUT_(REVIEWER|DECISION)_INVALID$/.test(error.code));
+        assert.equal(fs.existsSync(outputDirectory),false);
+      }
+      assert.throws(() => buildKnownBuyoutEvidence({ ...reviewOptions, expectedPreservationManifestSha256: "0".repeat(64) }),{ code: "RECOVERY_BUYOUT_INPUT_INVALID" });
+      assert.throws(() => buildKnownBuyoutEvidence({ ...reviewOptions, leagueId: fixtureId("league:leagueA") }),{ code: "RECOVERY_BUYOUT_HISTORY_INCOMPLETE" });
+      const preparedResult = await prepareRecoveryKnownBuyout(action);
+      assert.equal(preparedResult.status,"known-buyout-reconstructed-held");
+      const resultReader = openReadonlyDatabase({ databasePath: preparedResult.reconciledDatabasePath });
+      try {
+        const verified = verifyRecoveryKnownBuyout({ reviewOptions, reconciledDatabase: resultReader, reconciliation: preparedResult });
+        assert.equal(verified.reportChecksum,preparedResult.reportChecksum);
+        assert.equal(resultReader.prepare("SELECT actor_user_id FROM security_audit_events WHERE id=?").get(decision.reconciliationId).actor_user_id,decision.reviewedByUserId);
+        assert.equal(resultReader.prepare("SELECT occurred_at_ms FROM security_audit_events WHERE id=?").get(decision.reconciliationId).occurred_at_ms,observedAtMs);
+        const rows = allRows(resultReader), resultSnapshots = recoverySnapshots(readRecoveryRows(resultReader)), expectedSnapshots = recoverySnapshots(expected);
+        const preservedRows = allRows(preservedDatabase);
+        for (const table of Object.keys(expected).filter(name => !["application_metadata","security_audit_events"].includes(name))) {
+          assert.deepEqual(resultSnapshots[table],expectedSnapshots[table],table);
+        }
+        for (const table of new Set(review.effects.map(row => row.table))) {
+          const expectedRows = table === "outbox_events"
+            ? [...preservedRows[table].filter(row => JSON.parse(row).league_id !== null),
+              ...allRows(reader)[table].filter(row => JSON.parse(row).league_id === null)].sort()
+            : preservedRows[table];
+          assert.deepEqual(rows[table],expectedRows,table);
+        }
+        assert.throws(() => assertRecoveryRuntimeAllowed(resultReader),{ code: "DATABASE_RECOVERY_HELD" });
+        assert.deepEqual(readRecoveryEpoch(resultReader),prepared.recoveryEpoch);
+        assert.equal(resultReader.prepare("SELECT COUNT(*) n FROM sessions WHERE status='active'").get().n,0);
+        const next = buildKnownBuyoutReconciledRecoveryPlan({ preparedDatabase: reader, reconciledDatabase: resultReader, restoredDatabase, preservedDatabase,
+          credentialPreparation: prepared, originalPlan: plan, knownBuyoutReconciliation: preparedResult, observedAtMs, backupManifestBytes, preservationManifestBytes });
+        assert.equal(next.planVersion,8);assert.equal(next.previousPlanChecksum,plan.planChecksum);
+        assert.deepEqual(next.jobs,plan.jobs);
+        const priorMessageIds = new Set(plan.outbox.map(row => row.id));
+        assert.deepEqual(next.outbox.filter(row => priorMessageIds.has(row.id)),plan.outbox);
+        const addedMessages = next.outbox.filter(row => !priorMessageIds.has(row.id));
+        assert.equal(addedMessages.length,1);assert.equal(addedMessages[0].eventType,"contract.changed");
+        assert.equal(addedMessages[0].disposition,"held-awaiting-delivery-evidence");assert.equal(addedMessages[0].deliveryPermitted,false);
+        assert.equal(next.unresolvedJobs,plan.unresolvedJobs);assert.equal(next.unresolvedMessages,plan.unresolvedMessages+1);
+        assert.equal(next.activationReady,false);
+        const { buildRecoveryReconciliationLineage, buildRecoveryPlanFromLineage } = require("../../src/operations/backups/buildRecoveryReconciliationLineage");
+        const step = { kind: "known-buyout", reconciledDatabase: resultReader, receipt: preparedResult, observedAtMs,
+          restoredDatabase, preservedDatabase, backupManifestBytes, preservationManifestBytes };
+        assert.deepEqual(buildRecoveryReconciliationLineage({ initialDatabase: reader, credentialPreparation: prepared, initialPlan: plan, steps: [step] }),next);
+        assert.throws(() => buildRecoveryReconciliationLineage({ initialDatabase: reader, credentialPreparation: prepared, initialPlan: plan,
+          steps: [step,{ ...step, observedAtMs: observedAtMs+1 }] }),{ code: "RECOVERY_LINEAGE_SOURCE_REUSED" });
+        const commandDirectory = path.join(input.temporaryRoot,"known-buyout-command");fs.mkdirSync(commandDirectory);
+        const save = (name,value) => { const file = path.join(commandDirectory,name);fs.writeFileSync(file,Buffer.isBuffer(value) ? value : JSON.stringify(value),{ flag: "wx" });return file; };
+        const invoke = (name,flag,value,success=true) => {
+          const result = spawnSync(process.execPath,[path.resolve(__dirname,"../../scripts/"+name),flag,save(crypto.randomUUID()+".json",value)],
+            { encoding: "utf8",timeout: 60_000,maxBuffer: 16*1024*1024 });
+          assert.equal(result.status,success ? 0 : 1,result.stderr);assert.equal((result.stdout+result.stderr).includes(PRIVATE_VALUE),false);
+          if (success) { assert.equal(result.stderr,"");return JSON.parse(result.stdout); }
+          assert.equal(result.stdout,"");assert.match(JSON.parse(result.stderr).error.code,/^RECOVERY_/);
+        };
+        const credentialPreparationPath = save("credentials.json",prepared), backupManifestPath = save("backup-manifest.json",backupManifestBytes),
+          preservationManifestPath = save("preservation-manifest.json",preservationManifestBytes);
+        const candidateRequest = { requestVersion: 1,expectedEnvironmentId: config.environmentId,expectedDatabaseId: config.databaseId,
+          observedAtMs,preparedDatabasePath: reader.name,credentialPreparationPath };
+        const candidateReview = invoke("db-recovery-review.js","--request",candidateRequest);
+        assert.deepEqual(candidateReview.plan,plan);
+        const commandRequest = { requestVersion: 1,credentialPreparationPath,candidateReviewPath: save("candidate-review.json",candidateReview),
+          preparedDatabasePath: reader.name,restoredDatabasePath: restoredDatabase.name,preservedDatabasePath: preservedDatabase.name,
+          preservedPlaintextSha256: preserved.plaintextSha256,buyoutId: review.buyoutId,leagueId: review.leagueId,observedAtMs,
+          backupManifestPath,preservationManifestPath,expectedBackupManifestSha256: hash(backupManifestBytes),expectedPreservationManifestSha256: hash(preservationManifestBytes) };
+        assert.deepEqual(invoke("db-recovery-known-buyout.js","--review",commandRequest),review);
+        for (const change of [{ activate: true },{ decisionPath: PRIVATE_VALUE },{ expectedBackupManifestSha256: "0".repeat(64) }]) {
+          invoke("db-recovery-known-buyout.js","--review",{ ...commandRequest,...change },false);
+        }
+        const cliResult = invoke("db-recovery-known-buyout.js","--request",{ ...commandRequest,decisionPath: save("decision.json",decision),
+          temporaryRoot: input.temporaryRoot,outputDirectory: path.join(input.temporaryRoot,"known-buyout-cli-output") });
+        assert.equal(cliResult.reportChecksum,preparedResult.reportChecksum);
+        assert.equal(readHash(cliResult.reconciledDatabasePath),readHash(preparedResult.reconciledDatabasePath));
+        const descriptor = { initialDatabasePath: reader.name,initialPlan: plan,steps: [{ kind: "known-buyout",reconciledDatabasePath: resultReader.name,
+          receipt: preparedResult,observedAtMs,restoredDatabasePath: restoredDatabase.name,preservedDatabasePath: preservedDatabase.name,backupManifestPath,preservationManifestPath }] };
+        const lineageOptions = { database: resultReader,credentialPreparation: prepared,lineage: descriptor,observedAtMs,
+          expectedEnvironmentId: config.environmentId,expectedDatabaseId: config.databaseId };
+        assert.deepEqual(buildRecoveryPlanFromLineage(lineageOptions),next);
+        const lineagePath = save("lineage.json",descriptor);
+        const reviewedNext = invoke("db-recovery-review.js","--request",{ ...candidateRequest,preparedDatabasePath: resultReader.name,lineagePath });
+        assert.deepEqual(reviewedNext.plan,next);
+        invoke("db-recovery-review.js","--request",{ ...candidateRequest,preparedDatabasePath: resultReader.name },false);
+        const incomplete = JSON.parse(JSON.stringify(descriptor));delete incomplete.steps[0].preservationManifestPath;
+        assert.throws(() => buildRecoveryPlanFromLineage({ ...lineageOptions,lineage: incomplete }),{ code: "RECOVERY_LINEAGE_INPUT_INVALID" });
+        const { buildRecoveryCompletionReview } = require("../../src/operations/backups/buildRecoveryCompletionReview");
+        const completion = buildRecoveryCompletionReview({ candidateDatabase: resultReader,restoredDatabase,preservedDatabase,
+          credentialPreparation: prepared,plan: next,lineage: descriptor,preservedPlaintextSha256: preserved.plaintextSha256,
+          expectedEnvironmentId: config.environmentId,expectedDatabaseId: config.databaseId,observedAtMs });
+        for (const state of completion.candidateChanges.financialState.leagues) {
+          assert.deepEqual(state.preserved,completion.lossWindow.financialState.leagues.find(row => row.leagueId === state.leagueId).preserved);
+        }
+        assert.equal(completion.completeLossWindowEvidence,false);assert.equal(completion.activationReady,false);
+        for (const table of new Set(review.effects.map(row=>row.table))) {
+          const changed = completion.recordedLossProgress.tables[table];
+          assert.ok(changed?.length>0,table);
+          assert.ok(changed.every(row=>row.status==="matchesPreserved"),table);
+        }
+        assert.ok(completion.recordedLossProgress.counts.matchesPreserved>0);
+        assert.equal(completion.recordedLossProgress.preservedStateIsApproved,false);
+        assert.equal(completion.recordedLossProgress.completeLossWindowEvidence,false);
+        // A following real recovery operation must verify the buyout's entire
+        // predecessor and manifests, preserving its reconstructed finances.
+        const event = resultReader.prepare("SELECT * FROM outbox_events WHERE league_id IS NOT NULL AND event_type='trade.changed' AND status='pending' ORDER BY id LIMIT 1").get();
+        assert.ok(event);
+        const audiences = resultReader.prepare("SELECT * FROM outbox_event_audiences WHERE outbox_event_id=? ORDER BY id").all(event.id);
+        const cleanSourcePath = path.join(input.temporaryRoot,"known-buyout-before-invalidation.sqlite3");
+        fs.copyFileSync(resultReader.name,cleanSourcePath,fs.constants.COPYFILE_EXCL);
+        const suppressed = prepareRecoveryInvalidationReconciliation({ credentialPreparation: { ...prepared,preparedDatabasePath: cleanSourcePath },
+          plan: next,lineage: descriptor,events: [{ eventId: event.id,leagueId: event.league_id,rowSha256: hash(canonicalize(event)),
+            payloadSha256: hash(event.payload_json),audienceSha256: hash(canonicalize(audiences.map(row => hash(canonicalize(row))).sort())),
+            reasonCode: "REVIEWED_RESTORED_REFRESH",evidenceSha256: hash("synthetic restored refresh after known buyout") }],
+          reviewedByUserId: decision.reviewedByUserId,reconciliationId: crypto.randomUUID(),reconciledAtMs: observedAtMs+1,
+          temporaryRoot: input.temporaryRoot,outputDirectory: path.join(input.temporaryRoot,"known-buyout-then-invalidation") });
+        const suppressedReader = openReadonlyDatabase({ databasePath: suppressed.reconciledDatabasePath });
+        try {
+          const combined = { ...descriptor,steps: [...descriptor.steps,{ kind: "invalidation",reconciledDatabasePath: suppressedReader.name,
+            receipt: suppressed,observedAtMs: observedAtMs+2 }] };
+          const combinedOptions = { ...lineageOptions,database: suppressedReader,lineage: combined,observedAtMs: observedAtMs+2 };
+          const combinedPlan = buildRecoveryPlanFromLineage(combinedOptions);
+          assert.equal(combinedPlan.previousPlanChecksum,next.planChecksum);
+          assert.equal(combinedPlan.unresolvedMessages,next.unresolvedMessages-1);
+          assert.deepEqual(combinedPlan.jobs,next.jobs);
+          const combinedRows = allRows(suppressedReader);
+          for (const table of new Set(review.effects.map(row => row.table))) {
+            const unaffected = row => table !== "outbox_events" || JSON.parse(row).id !== event.id;
+            assert.deepEqual(combinedRows[table].filter(unaffected),rows[table].filter(unaffected),table);
+          }
+          const suppressedEvent = suppressedReader.prepare("SELECT * FROM outbox_events WHERE id=?").get(event.id);
+          assert.equal(suppressedEvent.status,"discarded");
+          assert.equal(suppressedEvent.version,event.version+1);
+          assert.throws(() => buildRecoveryPlanFromLineage({ ...combinedOptions,lineage: { ...combined,steps: combined.steps.slice(1) } }),
+            error => /^RECOVERY_LINEAGE_/.test(error.code));
+          assert.equal(suppressedReader.prepare("SELECT total_changes() n").get().n,0);
+        } finally { suppressedReader.close(); }
+        const { reconciledDatabasePath: ignoredPath, inspection: ignoredInspection, reportChecksum: ignoredChecksum, ...receiptBody } = preparedResult;
+        const forged = { ...receiptBody, activationReady: true };
+        assert.throws(() => verifyRecoveryKnownBuyout({ reviewOptions, reconciledDatabase: resultReader,
+          reconciliation: { ...forged, reportChecksum: hash(canonicalize(forged)) } }),{ code: "RECOVERY_BUYOUT_RECEIPT_INVALID" });
+        assert.equal(resultReader.prepare("SELECT total_changes() n").get().n,0);
+      } finally { resultReader.close(); }
+      await assert.rejects(prepareRecoveryKnownBuyout(action),{ code: "RECOVERY_BUYOUT_PATH_UNSAFE" });
+      const corruptOutput = path.join(input.temporaryRoot,"reviewed-known-buyout-corrupt");
+      await assert.rejects(prepareRecoveryKnownBuyout({ ...action, outputDirectory: corruptOutput, beforeReceipt(database) {
+        database.prepare("UPDATE teams SET version=version+1 WHERE id=?").run(fixtureId("team:leagueA:1"));
+      } }),{ code: "RECOVERY_BUYOUT_POSTCHECK_FAILED" });
+      assert.equal(fs.existsSync(corruptOutput),false);
+      const alteredPath = path.join(input.temporaryRoot,"known-buyout-altered-result.sqlite3");
+      fs.copyFileSync(preparedResult.reconciledDatabasePath,alteredPath,fs.constants.COPYFILE_EXCL);
+      const writer = openDatabase({ databasePath: alteredPath,environment: "test" }).database;
+      writer.prepare("UPDATE buyout_years SET penalty_cents=penalty_cents+1 WHERE buyout_obligation_id=?").run(boughtOut.buyout.id);writer.close();
+      const altered = openReadonlyDatabase({ databasePath: alteredPath });
+      try {
+        const { reconciledDatabasePath, inspection, reportChecksum, ...body } = preparedResult;
+        body.reconciledPlaintextSha256 = readHash(alteredPath);
+        assert.throws(() => verifyRecoveryKnownBuyout({ reviewOptions, reconciledDatabase: altered,
+          reconciliation: { ...body, reportChecksum: hash(canonicalize(body)) } }),{ code: "RECOVERY_BUYOUT_DELTA_INVALID" });
+      } finally { altered.close(); }
+      assert.deepEqual(sources.map(row => readHash(row.name)),originalHashes);
+      for (const database of sources) assert.equal(database.prepare("SELECT total_changes() n").get().n,0);
+    } finally { for (const database of sources) database.close(); }
+  });
   assert.deepEqual(source.serialize(), sourceAfterKnownChanges);
   assert.equal(source.prepare("SELECT status FROM contracts WHERE id=?").get(contractId).status, "eliminated");
+});
+
+test("an exact restored auction rejects its previous worker and signs once with real roster callbacks", async t => {
+  const { createTargetRepositories, createTargetServices } = require("../../src/bootstrap/createTargetRuntime");
+  const { createSqliteAuctionResolutionRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteAuctionResolutionRepository");
+  const { createAuctionResolutionService } = require("../../src/application/services/auctions/createAuctionResolutionService");
+  const { createResolveTargetAuctionsJob } = require("../../src/jobs/definitions/resolveTargetAuctions");
+  const { buildAuctionResolutionOccurrenceKey } = require("../../src/domain/auctions/auctionResolutionPolicy");
+  const { REPOSITORY_ERROR_CODES } = require("../../src/infrastructure/persistence/sqlite/SqliteRepositoryError");
+  let auction, bid, occurrence, oldClaim, now;
+  const oldOwner = "synthetic-before-auction-recovery", secureRandom = createSecureRandom();
+  const { started, input, config, backup } = await candidate(t, database => {
+    auction = database.prepare("SELECT * FROM auctions WHERE id=?").get(fixtureId("auction:leagueA"));
+    bid = database.prepare("SELECT * FROM auction_bids WHERE auction_id=?").get(auction.id);
+    // Complete this synthetic fixture's original submission history. The base
+    // read-view fixture predates its manager membership and has no bid event.
+    // Keep the persisted auction deadline and offered price/term unchanged.
+    const assignment = database.prepare("SELECT * FROM team_manager_assignments WHERE league_id=? AND team_id=? " +
+      "AND user_id=? AND status='accepted'").get(auction.league_id, bid.team_id, bid.submitted_by_user_id);
+    const submittedAtMs = assignment.accepted_at_ms + 1;
+    assert.ok(submittedAtMs > auction.opened_at_ms && submittedAtMs < auction.resolves_at_ms);
+    database.prepare("UPDATE auction_bids SET first_submitted_at_ms=?,last_edited_at_ms=? WHERE id=?")
+      .run(submittedAtMs, submittedAtMs, bid.id);
+    bid = database.prepare("SELECT * FROM auction_bids WHERE id=?").get(bid.id);
+    database.prepare("INSERT INTO auction_events(id,league_id,season_id,auction_id,bid_id,team_id,actor_user_id,event_type,metadata_json,occurred_at_ms) " +
+      "VALUES(?,?,?,?,?,?,?,'bid_submitted',?,?)").run(crypto.randomUUID(), auction.league_id, auction.season_id, auction.id,
+      bid.id, bid.team_id, bid.submitted_by_user_id, JSON.stringify({ actorMembershipId: assignment.membership_id,
+        actorAuthority: "manager", before: null, after: { totalValueCents: 900,termYears: 3,aavCents: 300,
+          lowestOfferedAavCents: 300,lowestOfferedTotalValueCents: 900,editCount: 0,version: 1 } }), submittedAtMs);
+    const repositories = createTargetRepositories({ database, secureRandom });
+    now = auction.resolves_at_ms + 1000;
+    occurrence = repositories.auctionResolutions.listDue({ nowMs: now,limit: 100 }).find(row => row.auctionId === auction.id);
+    assert.ok(occurrence); assert.equal(occurrence.dueAtMs, auction.resolves_at_ms);
+    const candidate = repositories.auctionResolutions.loadCandidate({ leagueId: auction.league_id,auctionId: auction.id,nowMs: now });
+    assert.equal(candidate.bids.length, 1); assert.equal(candidate.bids[0].authorityValid, true);
+    oldClaim = repositories.auctionResolutions.claimRun({ jobRunId: crypto.randomUUID(), leagueId: auction.league_id,
+      seasonId: auction.season_id, occurrenceKey: buildAuctionResolutionOccurrenceKey({ auctionId: auction.id,dueAtMs: occurrence.dueAtMs }),
+      scheduledForMs: occurrence.dueAtMs,leaseOwner: oldOwner,nowMs: now - 1000,leaseExpiresAtMs: now + 60_000 });
+    assert.equal(oldClaim.acquired, true);
+  });
+  const occurrenceKey = buildAuctionResolutionOccurrenceKey({ auctionId: auction.id,dueAtMs: occurrence.dueAtMs });
+  const sourceBytes = started.runtime.database.serialize(), restoredHash = readHash(input.restoredCandidate.targetDatabasePath);
+  const prepared = prepareRecoveryCredentials({ ...input,preparedAtMs: now,
+    outputDirectory: path.join(input.temporaryRoot,"auction-preparation") });
+  const preparedHash = readHash(prepared.preparedDatabasePath), workPath = path.join(input.temporaryRoot,"auction-work.sqlite3");
+  fs.copyFileSync(prepared.preparedDatabasePath, workPath, fs.constants.COPYFILE_EXCL);
+  const open = () => openDatabase({ databasePath: workPath,environment: "test" }).database;
+  const summerCalls = [], lateLockCalls = [], completions = [], completionCommands = [], errors = [], providerCalls = [];
+  function worker(database, previousWorker = false) {
+    const clock = { nowMs: () => now }, logger = { error: value => errors.push(value),warn: value => errors.push(value),info() {} };
+    const repositories = createTargetRepositories({ database,secureRandom });
+    const services = createTargetServices({ repositories,currentSeason: { label: "2026",nhlSeasonKey: "20262027" },
+      securityFoundations: { config: started.runtime.securityConfig,clock,secureRandom,logger },
+      leagueInvalidationPublisher: { publish() { assert.fail("Held auction messages must remain unpublished."); } },
+      nhlFetchImplementation: async () => { providerCalls.push(true);throw new Error("Fixture provider is unavailable."); } });
+    // These wrappers observe the production implementations; neither callback
+    // is replaced by a success/no-op stub. No runtime or scheduler is started.
+    const repository = createSqliteAuctionResolutionRepository({ database,candidateCardSummerSynchronizer: {
+      synchronize(command) {
+        const inTransaction = database.inTransaction;
+        const result = repositories.candidateCardSummerSynchronizer.synchronize(command);
+        summerCalls.push({ command,inTransaction,result }); return result;
+      },
+    } });
+    const service = createAuctionResolutionService({ repository: { ...repository,
+      completeClaimedDue(command) { const result = repository.completeClaimedDue(command); completionCommands.push(command); return result; },
+    },secureRandom,lateLockCoordinator: {
+      async coordinateCommittedRoster(command) {
+        const inTransaction = database.inTransaction;
+        const result = await services.league.lateLockCoordinator.coordinateCommittedRoster(command);
+        lateLockCalls.push({ command,inTransaction,result }); return result;
+      },
+    } });
+    return createResolveTargetAuctionsJob({ repository: { ...repository,
+      listDue(query) { return repository.listDue({ ...query,limit: 100 }).filter(row => row.auctionId === auction.id); },
+      ...(previousWorker ? { claimRun() { return oldClaim; } } : {}),
+    },resolutionService: { async resolveClaimedDue(command) {
+      const result = await service.resolveClaimedDue(command);completions.push(result);return result;
+    } },clock,secureRandom,leaseOwner: previousWorker ? oldOwner : "synthetic-after-auction-recovery",logger });
+  }
+  let database = open();
+  try {
+    const before = allRows(database), beforeBytes = database.serialize();
+    const restoredJob = database.prepare("SELECT * FROM job_runs WHERE id=?").get(oldClaim.runId);
+    assert.equal(restoredJob.status, "leased"); assert.equal(restoredJob.lease_owner, null);
+    assert.equal(restoredJob.lease_expires_at_ms, now); assert.equal(restoredJob.version, oldClaim.version + 1);
+    const stale = await worker(database,true).run();
+    assert.equal(stale.status, "succeeded"); assert.equal(stale.completed, 0); assert.equal(stale.skipped, 1);
+    assert.equal(stale.failed, 0); assert.deepEqual(database.serialize(), beforeBytes);
+    assert.deepEqual(summerCalls, []); assert.deepEqual(lateLockCalls, []); assert.deepEqual(completions, []);
+    assert.equal(database.prepare("SELECT total_changes() n").get().n, 0);
+    const result = await worker(database).run();
+    assert.equal(result.status, "succeeded", JSON.stringify(errors)); assert.equal(result.due, 1);
+    assert.equal(result.acquired, 1); assert.equal(result.completed, 1); assert.equal(result.failed, 0); assert.equal(result.skipped, 0);
+    assert.equal(completions.length, 1); assert.equal(completions[0].status, "resolved");
+    assert.equal(summerCalls.length, 1); assert.equal(lateLockCalls.length, 1);
+    assert.equal(summerCalls[0].inTransaction, true); assert.equal(lateLockCalls[0].inTransaction, false);
+    assert.equal(summerCalls[0].result.affectedCardCount, 0); assert.equal(summerCalls[0].result.changedCardCount, 0);
+    assert.deepEqual(completions[0].lateLock, { status: "not_applicable" });
+    assert.deepEqual(errors, []); assert.deepEqual(providerCalls, []);
+    const after = allRows(database);
+    const updatedTables = new Map([["auctions",auction.id],["auction_bids",bid.id],["job_runs",oldClaim.runId]]);
+    const addedCounts = { contracts: 1,contract_years: 3,contract_events: 1,player_ownerships: 1,
+      ownership_events: 1,auction_events: 1,auction_resolutions: 1,league_activity: 1,outbox_events: 1,outbox_event_audiences: 1 };
+    for (const [table,rows] of Object.entries(before)) {
+      if (!updatedTables.has(table) && !Object.hasOwn(addedCounts,table)) assert.deepEqual(after[table],rows,table);
+      if (updatedTables.has(table)) assert.deepEqual(after[table].filter(row => JSON.parse(row).id !== updatedTables.get(table)),
+        rows.filter(row => JSON.parse(row).id !== updatedTables.get(table)),table);
+    }
+    const additions = {};
+    for (const [table,count] of Object.entries(addedCounts)) {
+      const oldIds = new Set(before[table].map(row => JSON.parse(row).id));
+      assert.deepEqual(after[table].filter(row => oldIds.has(JSON.parse(row).id)),before[table],table);
+      additions[table] = after[table].map(JSON.parse).filter(row => !oldIds.has(row.id));
+      assert.equal(additions[table].length,count,table);
+      assert.ok(additions[table].every(row => row.league_id === auction.league_id),table);
+    }
+    const resolution = additions.auction_resolutions[0], contract = additions.contracts[0], ownership = additions.player_ownerships[0];
+    assert.equal(resolution.outcome_code, "winner"); assert.equal(resolution.winning_bid_id,bid.id);
+    assert.equal(resolution.winning_team_id,bid.team_id); assert.equal(resolution.scheduled_occurrence_key,occurrenceKey);
+    assert.equal(resolution.highest_bid_cents,900); assert.equal(resolution.winning_term_years,3);
+    assert.equal(resolution.contract_id,contract.id); assert.equal(resolution.ownership_id,ownership.id);
+    assert.equal(resolution.resolved_at_ms,now); assert.equal(resolution.status,"resolved");
+    assert.equal(resolution.final_contract_value_cents,900); assert.equal(resolution.final_aav_cents,300);
+    assert.equal(contract.player_id,auction.player_id); assert.equal(contract.current_team_id,bid.team_id);
+    assert.equal(contract.original_total_value_cents,900); assert.equal(contract.original_term_years,3);
+    assert.equal(contract.aav_cents,300); assert.equal(contract.acquisition_source_id,resolution.id);
+    assert.deepEqual(additions.contract_years.map(row => row.year_number).sort(),[1,2,3]);
+    assert.ok(additions.contract_years.every(row => row.contract_id === contract.id && row.aav_cents === 300 && row.created_at_ms === now));
+    assert.equal(additions.contract_years.filter(row => row.status === "current").length,1);
+    assert.equal(additions.contract_years.filter(row => row.status === "future").length,2);
+    assert.equal(ownership.player_id,auction.player_id); assert.equal(ownership.team_id,bid.team_id);
+    assert.equal(ownership.roster_category,"Active"); assert.equal(ownership.acquired_transaction_id,resolution.id);
+    // The real completion preserves the normal overfull-roster warning.
+    // Recovery neither invents a slot nor silently repairs the manager's team.
+    assert.equal(ownership.slot_number,null); assert.equal(resolution.general_illegal,1);
+    assert.deepEqual(summerCalls[0].command, { leagueId: auction.league_id,affectedTeamIds: [bid.team_id],
+      affectedPlayerIds: [auction.player_id],sourceOperationId: resolution.id,sourceKind: "auction_allocation",nowMs: now });
+    assert.equal(lateLockCalls[0].command.mutationKind,"auction_resolution");
+    assert.equal(lateLockCalls[0].command.teams[0].teamId,bid.team_id);
+    assert.equal(additions.contract_events[0].contract_id,contract.id);
+    assert.equal(additions.ownership_events[0].ownership_id,ownership.id);
+    assert.equal(additions.auction_events[0].event_type,"auction_resolved");
+    assert.equal(additions.league_activity[0].event_type,"auction_signing_completed");
+    assert.equal(additions.league_activity[0].related_id,resolution.id);
+    const message = additions.outbox_events[0];
+    assert.equal(message.event_type,"auction.changed"); assert.equal(message.aggregate_id,auction.id);
+    assert.equal(message.status,"pending"); assert.equal(message.published_at_ms,null); assert.equal(message.attempt_count,0);
+    assert.deepEqual(additions.outbox_event_audiences[0], { id: message.id,outbox_event_id: message.id,
+      league_id: auction.league_id,audience_kind: "league",team_id: null,user_id: null,created_at_ms: now });
+    assert.deepEqual(database.prepare("SELECT * FROM auctions WHERE id=?").get(auction.id),
+      { ...auction,status: "resolved",updated_at_ms: now,version: auction.version + 1 });
+    assert.deepEqual(database.prepare("SELECT * FROM auction_bids WHERE id=?").get(bid.id), { ...bid,status: "won",version: bid.version + 1 });
+    const job = database.prepare("SELECT * FROM job_runs WHERE id=?").get(oldClaim.runId);
+    assert.equal(job.status,"succeeded"); assert.equal(job.attempt_count,oldClaim.attemptCount + 1);
+    assert.equal(job.version,oldClaim.version + 3); assert.equal(job.lease_owner,null); assert.equal(job.lease_expires_at_ms,null);
+    assert.equal(job.completed_at_ms,now);
+    assert.deepEqual(job,{ ...restoredJob,status: "succeeded",attempt_count: oldClaim.attemptCount + 1,
+      lease_owner: null,lease_expires_at_ms: null,started_at_ms: now,completed_at_ms: now,
+      result_json: JSON.stringify({ auctionId: auction.id,outcome: "resolved" }),last_error_code: null,
+      updated_at_ms: now,version: oldClaim.version + 3 });
+    assert.ok(database.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY));
+    assert.deepEqual(readRecoveryEpoch(database),prepared.recoveryEpoch); assertCredentialAccess(database,false);
+    assert.throws(() => createTargetRuntime({ database,migrationsDirectory: path.resolve(__dirname,"../../database/migrations") }),
+      { code: "DATABASE_RECOVERY_HELD" });
+    const completedBytes = database.serialize();
+    assert.throws(() => createTargetRepositories({ database,secureRandom }).auctionResolutions.succeedRun({ leagueId: auction.league_id,
+      runId: oldClaim.runId,leaseOwner: oldOwner,expectedVersion: oldClaim.version,completedAtMs: now,
+      auctionId: auction.id,outcome: "resolved" }), { code: REPOSITORY_ERROR_CODES.versionConflict });
+    assert.deepEqual(database.serialize(),completedBytes);
+    assert.deepEqual(database.pragma("foreign_key_check"),[]); assert.deepEqual(database.pragma("integrity_check"),[{ integrity_check: "ok" }]);
+    database.close(); database = open();
+    const restartBytes = database.serialize(), restarted = await worker(database).run();
+    assert.equal(restarted.status,"succeeded"); assert.equal(restarted.due,0); assert.equal(restarted.completed,0);
+    assert.deepEqual(database.serialize(),restartBytes); assert.deepEqual(allRows(database),after);
+    assert.equal(database.prepare("SELECT total_changes() n").get().n,0);
+    assert.equal(summerCalls.length,1); assert.equal(lateLockCalls.length,1); assert.equal(completions.length,1);
+  } finally { if (database.open) database.close(); }
+  assert.equal(readHash(prepared.preparedDatabasePath),preparedHash);
+  assert.equal(readHash(input.restoredCandidate.targetDatabasePath),restoredHash);
+  assert.deepEqual(started.runtime.database.serialize(),sourceBytes);
+  const { buildRecoveryAuctionReview } = require("../../src/operations/backups/buildRecoveryAuctionReview");
+  let auctionReviewPaths, auctionReviewPlan;
+  await t.test("the read-only auction review command binds actual copies and rejects forged context", async reviewTest => {
+    const directory = path.join(input.temporaryRoot,"auction-review-command"); fs.mkdirSync(directory);
+    const candidatePath = path.join(directory,"prepared-review.sqlite3");
+    fs.copyFileSync(prepared.preparedDatabasePath,candidatePath,fs.constants.COPYFILE_EXCL);
+    const restoredPath = path.join(directory,"restored-review.sqlite3");
+    fs.copyFileSync(input.restoredCandidate.targetDatabasePath,restoredPath,fs.constants.COPYFILE_EXCL);
+    const preserved = await createVerifiedBackup({ databasePath: started.databasePath,
+      outputDirectory: path.join(directory,"preserved"),environment: config.appEnv,
+      reason: "incident-preservation",capturedAtMs: Date.now(),temporaryRoot: input.temporaryRoot });
+    const preservedPath = path.join(preserved.outputDirectory,BACKUP_FILE_NAME);
+    const files = [candidatePath,restoredPath,preservedPath], hashes = files.map(readHash);
+    const credentialsPath = path.join(directory,"credentials.json"), candidateReviewPath = path.join(directory,"candidate-review.json");
+    fs.writeFileSync(credentialsPath,JSON.stringify(prepared),{ flag: "wx" });
+    const candidateRequestPath = path.join(directory,"candidate-request.json");
+    fs.writeFileSync(candidateRequestPath,JSON.stringify({ requestVersion: 1,expectedEnvironmentId: config.environmentId,
+      expectedDatabaseId: config.databaseId,observedAtMs: now,preparedDatabasePath: candidatePath,credentialPreparationPath: credentialsPath }),{ flag: "wx" });
+    const candidateCommand = spawnSync(process.execPath,[path.resolve(__dirname,"../../scripts/db-recovery-review.js"),"--request",candidateRequestPath],
+      { encoding: "utf8",timeout: 60_000,maxBuffer: 8*1024*1024 });
+    assert.equal(candidateCommand.status,0,candidateCommand.stderr); assert.equal(candidateCommand.stderr,"");
+    const candidateReview = JSON.parse(candidateCommand.stdout); auctionReviewPlan = candidateReview.plan;
+    fs.writeFileSync(candidateReviewPath,candidateCommand.stdout,{ flag: "wx" });
+    const request = { requestVersion: 1,credentialPreparationPath: credentialsPath,candidateReviewPath,
+      preparedDatabasePath: candidatePath,restoredDatabasePath: restoredPath,preservedDatabasePath: preservedPath,
+      preservedPlaintextSha256: preserved.plaintextSha256,jobId: oldClaim.runId,auctionId: auction.id,leagueId: auction.league_id,observedAtMs: now };
+    let sequence = 0;
+    function invoke(value, passes = true) {
+      const requestPath = path.join(directory,`request-${sequence++}.json`);fs.writeFileSync(requestPath,JSON.stringify(value),{ flag: "wx" });
+      const child = spawnSync(process.execPath,[path.resolve(__dirname,"../../scripts/db-recovery-auction-review.js"),"--request",requestPath],
+        { encoding: "utf8",timeout: 60_000,maxBuffer: 8*1024*1024 });
+      if (passes) { assert.equal(child.status,0,child.stderr);assert.equal(child.stderr,"");return JSON.parse(child.stdout); }
+      assert.equal(child.status,1,child.stderr);assert.equal(child.stdout,"");
+      assert.match(JSON.parse(child.stderr).error.code,/^RECOVERY_AUCTION_REVIEW_/);
+      assert.equal(child.stderr.includes(PRIVATE_VALUE),false);
+    }
+    let commandSequence = 0;
+    function recoveryCommand(script,value,passes = true) {
+      const commandPath = path.join(directory,`auction-command-${commandSequence++}.json`);
+      fs.writeFileSync(commandPath,JSON.stringify(value),{ flag: "wx" });
+      const child = spawnSync(process.execPath,[path.resolve(__dirname,`../../scripts/${script}`),"--request",commandPath],
+        { encoding: "utf8",timeout: 90_000,maxBuffer: 16*1024*1024 });
+      if (passes) { assert.equal(child.status,0,child.stderr);assert.equal(child.stderr,"");return JSON.parse(child.stdout); }
+      assert.equal(child.status,1,child.stderr);assert.equal(child.stdout,"");
+      assert.match(JSON.parse(child.stderr).error.code,/^RECOVERY_/);assert.equal(child.stderr.includes(PRIVATE_VALUE),false);
+    }
+    function saveAuctionJson(name,value) {
+      const file = path.join(directory,name);fs.writeFileSync(file,JSON.stringify(value),{ flag: "wx" });return file;
+    }
+    const reviewed = invoke(request);
+    assert.equal(reviewed.status,"auction-recovery-reviewed-held"); assert.equal(reviewed.auctionId,auction.id);
+    assert.equal(reviewed.jobId,oldClaim.runId); assert.equal(reviewed.planChecksum,auctionReviewPlan.planChecksum);
+    assert.equal(reviewed.contextEvidence.preparedSnapshotSha256,auctionReviewPlan.snapshotSha256);
+    assert.equal(reviewed.contextSha256,hash(canonicalize(reviewed.contextEvidence)));
+    assert.equal(reviewed.originalDeadlineAtMs,auction.resolves_at_ms); assert.equal(reviewed.dueAtMs,occurrence.dueAtMs);
+    assert.equal(reviewed.contextEvidence.candidateState.auction.rowSha256,hash(canonicalize(auction)));
+    assert.equal(reviewed.contextEvidence.candidateState.bids[0].rowSha256,hash(canonicalize(bid)));
+    assert.deepEqual(reviewed.bidAuthority,[{ bidId: bid.id,historicalAuthorityValid: true }]);
+    assert.equal(reviewed.pricingPreview.decision.outcome,"winner");
+    assert.equal(reviewed.pricingPreview.decision.winner.finalTotalValueCents,900);
+    assert.equal(reviewed.pricingPreview.completionEligibilityVerified,false);
+    assert.deepEqual(reviewed.contextEvidence.callbacks,{ openCandidateCardsInLeague: 0,liveMatchupWeeksInLeague: 0,effectsEvaluated: false });
+    assert.equal(reviewed.lossWindow.changedRecords,0); assert.deepEqual(reviewed.restoredState,reviewed.preservedState);
+    assert.equal(reviewed.lossWindowReportChecksum,reviewed.lossWindow.reportChecksum);
+    assert.equal(reviewed.requiredReview,"league-rules-loss-window-and-domain-effects");
+    for (const field of ["operatorAuthenticated","replayPermitted","completeLossWindowEvidence","activationReady","executable"]) assert.equal(reviewed[field],false);
+    const { reportChecksum,...body } = reviewed; assert.equal(hash(canonicalize(body)),reportChecksum);
+    assert.equal(JSON.stringify(reviewed).includes(PRIVATE_VALUE),false);
+    for (const change of [{ mode: "execute" },{ requestVersion: 2 },{ observedAtMs: now - 1 },
+      { leagueId: fixtureId("league:leagueB") },{ jobId: crypto.randomUUID() },{ auctionId: fixtureId("auction:leagueB") },
+      { preservedPlaintextSha256: "0".repeat(64) },{ preservedDatabasePath: restoredPath,preservedPlaintextSha256: restoredHash }]) {
+      invoke({ ...request,...change },false);
+    }
+    const forgedCandidate = { ...candidateReview,plan: { ...candidateReview.plan,unresolvedJobs: candidateReview.plan.unresolvedJobs - 1 } };
+    const { reportChecksum: oldChecksum,...forgedBody } = forgedCandidate;
+    forgedCandidate.reportChecksum = hash(canonicalize(forgedBody));
+    const forgedPath = path.join(directory,"forged-candidate.json");fs.writeFileSync(forgedPath,JSON.stringify(forgedCandidate),{ flag: "wx" });
+    invoke({ ...request,candidateReviewPath: forgedPath },false);
+    const readers = files.map(databasePath => openReadonlyDatabase({ databasePath }));
+    try {
+      const options = { preparedDatabase: readers[0],restoredDatabase: readers[1],preservedDatabase: readers[2],
+        credentialPreparation: prepared,plan: auctionReviewPlan,jobId: oldClaim.runId,auctionId: auction.id,
+        leagueId: auction.league_id,preservedPlaintextSha256: preserved.plaintextSha256,observedAtMs: now };
+      assert.deepEqual(buildRecoveryAuctionReview(options),reviewed);
+      await reviewTest.test("independent auction evidence verifies the real domain delta and rejects altered output", async () => {
+        const { expectedRecoveryAuctionDelta, verifyRecoveryAuctionDelta } = require("../../src/operations/backups/recoveryAuctionDeltaEvidence");
+        assert.equal(completionCommands.length,1);
+        const command = completionCommands[0];
+        const identifiers = Object.fromEntries(["activityId","auctionEventId","contractEventId","contractId","contractYearIds",
+          "futureSeasonIds","outboxEventId","ownershipEventId","ownershipId","resolutionId"].map(key => [key,command[key]]));
+        const evidence = expectedRecoveryAuctionDelta({ reviewOptions: options,identifiers });
+        const { createSqliteCapReadRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteCapReadRepository");
+        const previousCap = createSqliteCapReadRepository({ database: readers[0] }).calculate({ leagueId: auction.league_id,seasonId: auction.season_id,teamId: bid.team_id });
+        assert.equal(evidence.completedJob.status,"succeeded");assert.equal(evidence.cap.capUsageCents,previousCap.capUsageCents + 300);
+        assert.deepEqual(evidence.expectedCallbacks,{ candidateCardsAffected: 0,candidateCardsChanged: 0,lateLockStatus: "not_applicable" });
+        const completedReader = openReadonlyDatabase({ databasePath: workPath });
+        const completedHash = readHash(workPath);
+        try {
+          const differences = [];
+          for (const [table,rows] of Object.entries(evidence.expected)) {
+            const actual = completedReader.prepare(`SELECT * FROM "${table}"`).all();
+            if (actual.length !== rows.length) differences.push({ table,count: true });
+            for (const row of rows) {
+              const observed = actual.find(item => row.id ? item.id === row.id : canonicalize(item) === canonicalize(row));
+              if (!observed) { differences.push({ table,missing: true });continue; }
+              const columns = [...new Set([...Object.keys(row),...Object.keys(observed)])].filter(key => canonicalize(row[key]) !== canonicalize(observed[key]));
+              if (columns.length) differences.push({ table,columns });
+            }
+          }
+          assert.deepEqual(differences,[]);
+          const verified = verifyRecoveryAuctionDelta({ reviewOptions: options,identifiers,completedDatabase: completedReader });
+          assert.equal(verified.status,"auction-domain-delta-verified-held");assert.equal(verified.reviewChecksum,reviewed.reportChecksum);
+          assert.equal(verified.completedPlaintextSha256,completedHash);assert.equal(verified.createdPendingMessages,1);
+          for (const field of ["callbackExecutionVerified","operatorAuthenticated","completeLossWindowEvidence","leaseElapsedVerified","activationReady","executable"]) assert.equal(verified[field],false);
+          const { reportChecksum,...body } = verified;assert.equal(reportChecksum,hash(canonicalize(body)));
+          assert.equal(JSON.stringify(verified).includes(PRIVATE_VALUE),false);
+          assert.equal(completedReader.prepare("SELECT total_changes() n").get().n,0);
+          assert.throws(() => verifyRecoveryAuctionDelta({ reviewOptions: options,identifiers,completedDatabase: readers[0] }),
+            { code: "RECOVERY_AUCTION_DELTA_OUTPUT_INVALID" });
+          for (const invalid of [{ ...identifiers,force: true },{ ...identifiers,contractId: identifiers.ownershipId },
+            { ...identifiers,contractYearIds: identifiers.contractYearIds.slice(0,2) },{ ...identifiers,resolutionId: auction.id }]) {
+            assert.throws(() => expectedRecoveryAuctionDelta({ reviewOptions: options,identifiers: invalid }),
+              { code: "RECOVERY_AUCTION_DELTA_IDS_INVALID" });
+          }
+        } finally { completedReader.close(); }
+        const mutations = [
+          ["contract value","UPDATE contracts SET original_total_value_cents=original_total_value_cents+300,aav_cents=aav_cents+100 WHERE id=?",identifiers.contractId],
+          ["year charge","UPDATE contract_years SET aav_cents=aav_cents+100 WHERE id=?",identifiers.contractYearIds[0]],
+          ["ownership version","UPDATE player_ownerships SET version=version+1 WHERE id=?",identifiers.ownershipId],
+          ["winning bid","UPDATE auction_bids SET version=version+1 WHERE id=?",bid.id],
+          ["resolution warning","UPDATE auction_resolutions SET warnings_json='[]' WHERE id=?",identifiers.resolutionId],
+          ["contract event","UPDATE contract_events SET reason='altered' WHERE id=?",identifiers.contractEventId],
+          ["ownership event","UPDATE ownership_events SET reason='altered' WHERE id=?",identifiers.ownershipEventId],
+          ["auction event","UPDATE auction_events SET metadata_json='{}' WHERE id=?",identifiers.auctionEventId],
+          ["activity history","UPDATE league_activity SET reason='altered' WHERE id=?",identifiers.activityId],
+          ["job attempt","UPDATE job_runs SET attempt_count=attempt_count+1 WHERE id=?",oldClaim.runId],
+          ["pending delivery","UPDATE outbox_events SET attempt_count=attempt_count+1 WHERE id=?",identifiers.outboxEventId],
+          ["audience timestamp","UPDATE outbox_event_audiences SET created_at_ms=created_at_ms+1 WHERE id=?",identifiers.outboxEventId],
+          ["recovery hold","UPDATE application_metadata SET metadata_value='{}' WHERE metadata_key=?",RECOVERY_HOLD_KEY],
+          ["credential preservation","UPDATE users SET updated_at_ms=updated_at_ms+1 WHERE id=?",fixtureId("account:platformAdmin")],
+          ["other league","UPDATE auctions SET version=version+1 WHERE id=?",fixtureId("auction:leagueB")],
+        ];
+        for (const [index,[label,sql,id]] of mutations.entries()) {
+          const alteredPath = path.join(directory,`altered-auction-${index}.sqlite3`);
+          fs.copyFileSync(workPath,alteredPath,fs.constants.COPYFILE_EXCL);
+          const writer = openDatabase({ databasePath: alteredPath,environment: "test" }).database;
+          try { assert.equal(writer.prepare(sql).run(id).changes,1,label); }
+          catch (error) { throw new Error(`Altered ${label} fixture failed: ${error.code || error.name}`); }
+          finally { writer.close(); }
+          const alteredReader = openReadonlyDatabase({ databasePath: alteredPath });
+          const alteredHash = readHash(alteredPath);
+          try {
+            assert.throws(() => verifyRecoveryAuctionDelta({ reviewOptions: options,identifiers,completedDatabase: alteredReader }),
+              { code: "RECOVERY_AUCTION_DELTA_MISMATCH" },label);
+            assert.equal(alteredReader.prepare("SELECT total_changes() n").get().n,0,label);
+          } finally { alteredReader.close(); }
+          assert.equal(readHash(alteredPath),alteredHash,label);
+        }
+        assert.equal(readHash(workPath),completedHash);
+        assert.deepEqual(files.map(readHash),hashes);
+        assert.deepEqual(started.runtime.database.serialize(),sourceBytes);
+      });
+      await reviewTest.test("the attributed auction action verifies real callbacks and leaves a complete held receipt", async actionTest => {
+        const { prepareRecoveryAuctionReconciliation } = require("../../src/operations/backups/prepareRecoveryAuctionReconciliation");
+        const { expectedRecoveryAuctionDelta, snapshots } = require("../../src/operations/backups/recoveryAuctionDeltaEvidence");
+        const { buildRecoveryAuctionAttribution } = require("../../src/operations/backups/recoveryAuctionReconciliationEvidence");
+        const { verifyRecoveryAuctionReconciliation } = require("../../src/operations/backups/verifyRecoveryAuctionReconciliation");
+        const decision = { action: "resolve-ordinary-auction-held",reconciliationId: crypto.randomUUID(),
+          reviewedByUserId: fixtureId("account:platformAdmin"),reasonCode: "REVIEWED_AUCTION_DEADLINE_AND_LOSS_WINDOW",
+          evidenceSha256: hash("synthetic auction administrator review"),reviewChecksum: reviewed.reportChecksum };
+        const outputDirectory = path.join(directory,"attributed-auction");
+        const actionOptions = { reviewOptions: options,decision,temporaryRoot: input.temporaryRoot,outputDirectory };
+        const report = await prepareRecoveryAuctionReconciliation(actionOptions);
+        const receiptPath = path.join(outputDirectory,"auction-reconciliation.json"), outputHash = readHash(report.reconciledDatabasePath);
+        const receiptHash = readHash(receiptPath), receipt = JSON.parse(fs.readFileSync(receiptPath,"utf8"));
+        const { reconciledDatabasePath,inspection,...body } = report;assert.deepEqual(body,receipt);
+        const { reportChecksum,...signedBody } = receipt;assert.equal(reportChecksum,hash(canonicalize(signedBody)));
+        assert.equal(report.status,"auction-reconciled-held");assert.equal(report.reconciledPlaintextSha256,outputHash);
+        assert.equal(report.unresolvedJobs,auctionReviewPlan.unresolvedJobs - 1);
+        assert.equal(report.unresolvedMessages,auctionReviewPlan.unresolvedMessages + 1);
+        assert.deepEqual(report.decision,decision);assert.deepEqual(report.review,reviewed);
+        for (const field of ["callbackExecutionVerified","leaseElapsedVerified","restartVerified"]) assert.equal(report[field],true);
+        for (const field of ["operatorAuthenticated","completeLossWindowEvidence","activationReady","executable"]) assert.equal(report[field],false);
+        assert.equal(report.execution.callbacks.summer.length,1);assert.equal(report.execution.callbacks.lateLock.length,1);
+        assert.equal(report.execution.callbacks.summer[0].inTransaction,true);assert.equal(report.execution.callbacks.lateLock[0].inTransaction,false);
+        assert.equal(report.execution.callbacks.summer[0].result.affectedCardCount,0);
+        assert.deepEqual(report.execution.callbacks.lateLock[0].result,{ status: "not_applicable" });
+        assert.equal(report.execution.callbacks.providerCalls,0);assert.equal(report.execution.callbacks.errors,0);
+        assert.ok(report.execution.elapsedMs < report.execution.leaseDurationMs);
+        assert.equal(report.execution.restartResult.due,0);assert.equal(report.execution.restartResult.completed,0);
+        assert.equal(JSON.stringify(report).includes(PRIVATE_VALUE),false);
+        const expected = expectedRecoveryAuctionDelta({ reviewOptions: options,identifiers: report.identifiers });
+        const attribution = buildRecoveryAuctionAttribution({ evidence: expected,decision,execution: report.execution });
+        const output = openReadonlyDatabase({ databasePath: report.reconciledDatabasePath });
+        try {
+          assert.deepEqual(report.tableSnapshots,snapshots(attribution.expected));
+          const actualRows = allRows(output);
+          for (const [table,rows] of Object.entries(attribution.expected)) assert.deepEqual(actualRows[table],rows.map(canonicalize).sort(),table);
+          assert.deepEqual(output.prepare("SELECT * FROM security_audit_events WHERE id=?").get(decision.reconciliationId),attribution.audit);
+          assert.deepEqual(output.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(attribution.metadata.metadata_key),attribution.metadata);
+          assert.ok(output.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY));
+          assert.deepEqual(readRecoveryEpoch(output),prepared.recoveryEpoch);assertCredentialAccess(output,false);
+          assert.equal(output.prepare("SELECT * FROM outbox_events WHERE id=?").get(report.createdOutboxId).status,"pending");
+          assert.equal(output.prepare("SELECT total_changes() n").get().n,0);
+          assert.throws(() => createTargetRuntime({ database: output,migrationsDirectory: path.resolve(__dirname,"../../database/migrations") }),{ code: "DATABASE_RECOVERY_HELD" });
+          const verified = verifyRecoveryAuctionReconciliation({ reviewOptions: options,reconciledDatabase: output,reconciliation: receipt });
+          assert.equal(verified.status,"auction-reconciliation-verified-held");assert.equal(verified.reconciliationChecksum,receipt.reportChecksum);
+          assert.equal(verified.unresolvedJobs,report.unresolvedJobs);assert.equal(verified.unresolvedMessages,report.unresolvedMessages);
+          assert.deepEqual(verified.tableSnapshots,report.tableSnapshots);assert.equal(verified.operatorAuthenticated,false);
+          assert.equal(verified.activationReady,false);assert.equal(verified.executable,false);
+          assert.equal(JSON.stringify(verified).includes(PRIVATE_VALUE),false);
+          const resign = change => { const { reportChecksum,...body } = { ...receipt,...change };return { ...body,reportChecksum: hash(canonicalize(body)) }; };
+          for (const change of [{ activationReady: true },{ unresolvedJobs: report.unresolvedJobs - 1 },
+            { domainSnapshotSha256: "0".repeat(64) },{ decisionChecksum: "0".repeat(64) }]) {
+            assert.throws(() => verifyRecoveryAuctionReconciliation({ reviewOptions: options,reconciledDatabase: output,reconciliation: resign(change) }),
+              { code: "RECOVERY_AUCTION_RECEIPT_INVALID" });
+          }
+          assert.throws(() => verifyRecoveryAuctionReconciliation({ reviewOptions: options,reconciledDatabase: readers[0],
+            reconciliation: resign({ reconciledPlaintextSha256: reviewed.preparedPlaintextSha256 }) }),{ code: "RECOVERY_AUCTION_RECEIPT_SOURCE_REUSED" });
+          assert.equal(output.prepare("SELECT total_changes() n").get().n,0);
+        } finally { output.close(); }
+        const preservedFiles = [...files,report.reconciledDatabasePath,receiptPath], preservedHashes = preservedFiles.map(readHash);
+        const attempts = [
+          ["forged-review",{ decision: { ...decision,reviewChecksum: "0".repeat(64) } },"RECOVERY_AUCTION_DECISION_INVALID"],
+          ["wrong-action",{ decision: { ...decision,action: "activate" } },"RECOVERY_AUCTION_DECISION_INVALID"],
+          ["extra-decision",{ decision: { ...decision,force: true } },"RECOVERY_AUCTION_DECISION_INVALID"],
+          ["wrong-reviewer",{ decision: { ...decision,reviewedByUserId: fixtureId("recovery-preparation:user") } },"RECOVERY_AUCTION_REVIEWER_INVALID"],
+          ["extended-lease",{ leaseDurationMs: report.execution.leaseDurationMs + 1 },"RECOVERY_AUCTION_INPUT_INVALID"],
+          ["expired-elapsed-lease",{ leaseDurationMs: 1 },"RECOVERY_AUCTION_EXECUTION_FAILED"],
+          ["existing-output",{ outputDirectory },"RECOVERY_AUCTION_PATH_UNSAFE"],
+          ["escaped-output",{ outputDirectory: path.join(path.dirname(input.temporaryRoot),"auction-escaped") },"RECOVERY_AUCTION_PATH_UNSAFE"],
+          ["interrupted",{ beforeReceipt() { throw new Error("synthetic receipt interruption"); } },"RECOVERY_AUCTION_RECONCILIATION_FAILED"],
+          ["unexpected-change",{ beforeReceipt(db) { db.prepare("UPDATE auctions SET version=version+1 WHERE id=?").run(fixtureId("auction:leagueB")); } },"RECOVERY_AUCTION_POSTCHECK_FAILED"],
+        ];
+        for (const [label,change,code] of attempts) {
+          const target = change.outputDirectory || path.join(directory,`auction-action-${label}`);
+          await assert.rejects(() => prepareRecoveryAuctionReconciliation({ ...actionOptions,outputDirectory: target,...change }),{ code },label);
+          if (label !== "existing-output") assert.equal(fs.existsSync(target),false,label);
+          assert.deepEqual(preservedFiles.map(readHash),preservedHashes,label);
+        }
+        // Bind a recorded timeout without sleeping through a five-minute lease.
+        assert.throws(() => buildRecoveryAuctionAttribution({ evidence: expected,decision,
+          execution: { ...report.execution,elapsedMs: report.execution.leaseDurationMs } }),{ code: "RECOVERY_AUCTION_EXECUTION_EVIDENCE_INVALID" });
+        assert.throws(() => buildRecoveryAuctionAttribution({ evidence: expected,decision,
+          execution: { ...report.execution,callbacks: { ...report.execution.callbacks,providerCalls: 1 } } }),{ code: "RECOVERY_AUCTION_EXECUTION_EVIDENCE_INVALID" });
+        for (const [index,[table,sql,id,code]] of [
+          ["contracts","UPDATE contracts SET original_total_value_cents=original_total_value_cents+300,aav_cents=aav_cents+100 WHERE id=?",report.identifiers.contractId,"RECOVERY_AUCTION_RECEIPT_DELTA_INVALID"],
+          ["security_audit_events","UPDATE security_audit_events SET reason_code='changed' WHERE id=?",decision.reconciliationId,"RECOVERY_AUCTION_RECEIPT_DELTA_INVALID"],
+          ["application_metadata","UPDATE application_metadata SET metadata_value='{}' WHERE metadata_key=?",attribution.metadata.metadata_key,"RECOVERY_AUCTION_RECEIPT_DELTA_INVALID"],
+          ["schema","CREATE TABLE unexpected_recovery_table (id TEXT)",null,"RECOVERY_AUCTION_RECEIPT_SCHEMA_INVALID"],
+        ].entries()) {
+          const alteredPath = path.join(directory,`altered-receipt-output-${index}.sqlite3`);
+          fs.copyFileSync(report.reconciledDatabasePath,alteredPath,fs.constants.COPYFILE_EXCL);
+          const alteredWriter = openDatabase({ databasePath: alteredPath,environment: "test" }).database;
+          try { if (id === null) alteredWriter.exec(sql);else assert.equal(alteredWriter.prepare(sql).run(id).changes,1,table); }
+          finally { alteredWriter.close(); }
+          const alteredReader = openReadonlyDatabase({ databasePath: alteredPath }), alteredHash = readHash(alteredPath);
+          try {
+            const { readRows } = require("../../src/operations/backups/recoveryAuctionDeltaEvidence");
+            const { reportChecksum,...forgedBody } = { ...receipt,reconciledPlaintextSha256: alteredHash,tableSnapshots: snapshots(readRows(alteredReader)) };
+            const forged = { ...forgedBody,reportChecksum: hash(canonicalize(forgedBody)) };
+            assert.throws(() => verifyRecoveryAuctionReconciliation({ reviewOptions: options,reconciledDatabase: alteredReader,reconciliation: forged }),{ code },table);
+            assert.equal(alteredReader.prepare("SELECT total_changes() n").get().n,0,table);
+          } finally { alteredReader.close(); }
+          assert.equal(readHash(alteredPath),alteredHash,table);
+          assert.deepEqual(preservedFiles.map(readHash),preservedHashes,table);
+        }
+        await actionTest.test("actual auction commands advance only with complete history and keep their new notification held", async () => {
+          const { buildAuctionReconciledRecoveryPlan } = require("../../src/operations/backups/buildAuctionReconciledRecoveryPlan");
+          const cliDecisionPath = saveAuctionJson("command-auction-decision.json",{ ...decision,reconciliationId: crypto.randomUUID() });
+          const cliOutput = path.join(directory,"command-auction-action");
+          const cliRequest = { ...request,decisionPath: cliDecisionPath,temporaryRoot: input.temporaryRoot,outputDirectory: cliOutput };
+          const cliReport = recoveryCommand("db-recovery-auction.js",cliRequest);
+          assert.equal(cliReport.status,"auction-reconciled-held");assert.equal(cliReport.activationReady,false);
+          const cliReceipt = JSON.parse(fs.readFileSync(path.join(cliOutput,"auction-reconciliation.json"),"utf8"));
+          const cliSourceHash = readHash(cliReport.reconciledDatabasePath);
+          const inspectionPath = path.join(directory,"command-auction-inspection.sqlite3");
+          fs.copyFileSync(cliReport.reconciledDatabasePath,inspectionPath,fs.constants.COPYFILE_EXCL);
+          const inspectionReader = openReadonlyDatabase({ databasePath: inspectionPath });
+          let nextPlan, event, audiences;
+          try {
+            const planOptions = { preparedDatabase: readers[0],reconciledDatabase: inspectionReader,restoredDatabase: readers[1],preservedDatabase: readers[2],
+              credentialPreparation: prepared,originalPlan: auctionReviewPlan,auctionReconciliation: cliReceipt,observedAtMs: now + 1 };
+            nextPlan = buildAuctionReconciledRecoveryPlan(planOptions);
+            assert.equal(nextPlan.planVersion,7);assert.equal(nextPlan.previousPlanChecksum,auctionReviewPlan.planChecksum);
+            assert.equal(nextPlan.unresolvedJobs,auctionReviewPlan.unresolvedJobs - 1);assert.equal(nextPlan.unresolvedMessages,auctionReviewPlan.unresolvedMessages + 1);
+            assert.equal(nextPlan.jobs.find(row => row.id === oldClaim.runId).disposition,"preserve-recorded-result");
+            assert.equal(nextPlan.outbox.find(row => row.id === cliReport.createdOutboxId).disposition,"held-awaiting-delivery-evidence");
+            assert.equal(nextPlan.activationReady,false);assert.equal(nextPlan.executable,false);
+            assert.throws(() => buildAuctionReconciledRecoveryPlan({ ...planOptions,parentProof: {} }),{ code: "RECOVERY_AUCTION_RECEIPT_VERIFICATION_FAILED" });
+            event = inspectionReader.prepare("SELECT * FROM outbox_events WHERE id=?").get(cliReport.createdOutboxId);
+            audiences = inspectionReader.prepare("SELECT * FROM outbox_event_audiences WHERE outbox_event_id=? ORDER BY id").all(event.id);
+            assert.equal(inspectionReader.prepare("SELECT total_changes() n").get().n,0);
+          } finally { inspectionReader.close(); }
+          const auctionStep = { kind: "auction",reconciledDatabasePath: inspectionPath,receipt: cliReceipt,observedAtMs: now + 1,
+            restoredDatabasePath: restoredPath,preservedDatabasePath: preservedPath };
+          const history = { initialDatabasePath: candidatePath,initialPlan: auctionReviewPlan,steps: [auctionStep] };
+          const historyPath = saveAuctionJson("command-auction-lineage.json",history);
+          const nextCandidateRequest = { requestVersion: 1,credentialPreparationPath: credentialsPath,preparedDatabasePath: inspectionPath,
+            expectedEnvironmentId: config.environmentId,expectedDatabaseId: config.databaseId,observedAtMs: now + 1,lineagePath: historyPath };
+          const nextCandidate = recoveryCommand("db-recovery-review.js",nextCandidateRequest);
+          assert.deepEqual(nextCandidate.plan,nextPlan);
+          const nextCandidatePath = saveAuctionJson("command-auction-next-candidate.json",nextCandidate);
+          const completionRequest = { requestVersion: 1,candidateDatabasePath: inspectionPath,restoredDatabasePath: restoredPath,
+            preservedDatabasePath: preservedPath,credentialPreparationPath: credentialsPath,candidateReviewPath: nextCandidatePath,
+            preservedPlaintextSha256: readHash(preservedPath),expectedEnvironmentId: config.environmentId,expectedDatabaseId: config.databaseId,
+            observedAtMs: now + 1,lineagePath: historyPath };
+          const completion = recoveryCommand("db-recovery-completion-review.js",completionRequest);
+          assert.equal(completion.planChecksum,nextPlan.planChecksum);assert.equal(completion.lineageVerified,true);
+          assert.equal(completion.lossWindow.changedRecords,0);assert.equal(completion.candidateChanges.financialState.changedLeagues,1);
+          const financial = completion.candidateChanges.financialState.leagues.find(row => row.leagueId === auction.league_id);
+          const activeTotal = side => financial[side].contracts.find(row => row.status === "active");
+          assert.equal(activeTotal("preserved").originalTotalValueCents-activeTotal("restored").originalTotalValueCents,900);
+          assert.equal(activeTotal("preserved").aavCents-activeTotal("restored").aavCents,300);
+          assert.equal(completion.dispositions.unresolvedJobs,nextPlan.unresolvedJobs);
+          assert.equal(completion.dispositions.messages.some(row => row.id === cliReport.createdOutboxId),true);
+          assert.equal(completion.activationReady,false);assert.equal(completion.completeFinancialReconciliation,false);
+          const { lineagePath: completionHistory,...completionWithoutHistory } = completionRequest;
+          recoveryCommand("db-recovery-completion-review.js",completionWithoutHistory,false);
+          const { lineagePath: omitted,...missingHistory } = nextCandidateRequest;
+          recoveryCommand("db-recovery-review.js",missingHistory,false);
+          const { preservedDatabasePath: missing,...incompleteStep } = auctionStep;
+          const incompletePath = saveAuctionJson("command-auction-incomplete-lineage.json",{ ...history,steps: [incompleteStep] });
+          recoveryCommand("db-recovery-review.js",{ ...nextCandidateRequest,lineagePath: incompletePath },false);
+          const reusedPath = saveAuctionJson("command-auction-reused-source-lineage.json",{ ...history,steps: [{ ...auctionStep,preservedDatabasePath: restoredPath }] });
+          recoveryCommand("db-recovery-review.js",{ ...nextCandidateRequest,lineagePath: reusedPath },false);
+          const rejectedPath = path.join(directory,"command-auction-repeated");
+          recoveryCommand("db-recovery-auction.js",{ ...cliRequest,preparedDatabasePath: inspectionPath,candidateReviewPath: nextCandidatePath,
+            observedAtMs: now + 1,lineagePath: historyPath,outputDirectory: rejectedPath },false);
+          assert.equal(fs.existsSync(rejectedPath),false);
+          recoveryCommand("db-recovery-auction.js",{ ...cliRequest,force: true,outputDirectory: rejectedPath },false);
+          assert.equal(fs.existsSync(rejectedPath),false);
+          const refreshReviewPath = saveAuctionJson("command-auction-refresh-review.json",{ events: [{ eventId: event.id,leagueId: event.league_id,
+            rowSha256: hash(canonicalize(event)),payloadSha256: hash(event.payload_json),audienceSha256: hash(canonicalize(audiences.map(row => hash(canonicalize(row))).sort())),
+            reasonCode: "RESTORED_REFRESH_REVIEWED",evidenceSha256: hash("synthetic newly created auction refresh review") }] });
+          const refreshOutput = path.join(directory,"command-auction-refresh");
+          const refresh = recoveryCommand("db-recovery-invalidations.js",{ requestVersion: 1,credentialPreparationPath: credentialsPath,
+            preparedDatabasePath: cliReport.reconciledDatabasePath,candidateReviewPath: nextCandidatePath,lineagePath: historyPath,
+            invalidationReviewPath: refreshReviewPath,reviewedByUserId: decision.reviewedByUserId,reconciliationId: crypto.randomUUID(),
+            reconciledAtMs: now + 2,temporaryRoot: input.temporaryRoot,outputDirectory: refreshOutput });
+          const refreshReceipt = JSON.parse(fs.readFileSync(path.join(refreshOutput,"invalidation-reconciliation.json"),"utf8"));
+          const refreshInspection = path.join(directory,"command-auction-refresh-inspection.sqlite3");
+          fs.copyFileSync(refresh.reconciledDatabasePath,refreshInspection,fs.constants.COPYFILE_EXCL);
+          const combinedHistoryPath = saveAuctionJson("command-auction-refresh-lineage.json",{ ...history,steps: [...history.steps,
+            { kind: "invalidation",reconciledDatabasePath: refreshInspection,receipt: refreshReceipt,observedAtMs: now + 3 }] });
+          const combined = recoveryCommand("db-recovery-review.js",{ ...nextCandidateRequest,preparedDatabasePath: refreshInspection,
+            observedAtMs: now + 3,lineagePath: combinedHistoryPath });
+          assert.equal(combined.plan.unresolvedJobs,auctionReviewPlan.unresolvedJobs - 1);
+          assert.equal(combined.plan.unresolvedMessages,auctionReviewPlan.unresolvedMessages);
+          assert.equal(combined.plan.activationReady,false);assert.equal(combined.plan.executable,false);
+          const combinedReviewPath = saveAuctionJson("command-auction-refresh-completion-candidate.json",combined);
+          const finalCompletion = recoveryCommand("db-recovery-completion-review.js",{ ...completionRequest,candidateDatabasePath: refreshInspection,
+            candidateReviewPath: combinedReviewPath,lineagePath: combinedHistoryPath,observedAtMs: now + 3 });
+          assert.equal(finalCompletion.dispositions.messages.some(row => row.id === cliReport.createdOutboxId),false);
+          assert.deepEqual(finalCompletion.currentCaps,completion.currentCaps);
+          assert.equal(finalCompletion.dispositions.unresolvedMessages,auctionReviewPlan.unresolvedMessages);
+          assert.equal(finalCompletion.activationReady,false);
+          assert.equal(readHash(cliReport.reconciledDatabasePath),cliSourceHash);
+          assert.deepEqual(preservedFiles.map(readHash),preservedHashes);
+        });
+        assert.equal(readHash(report.reconciledDatabasePath),outputHash);assert.equal(readHash(receiptPath),receiptHash);
+        assert.deepEqual(started.runtime.database.serialize(),sourceBytes);
+      });
+      assert.throws(() => buildRecoveryAuctionReview({ ...options,lineage: { initialDatabasePath: candidatePath,initialPlan: auctionReviewPlan,steps: [] } }),
+        { code: "RECOVERY_AUCTION_REVIEW_FAILED" });
+      const event = readers[0].prepare("SELECT * FROM outbox_events WHERE league_id=? AND event_type='trade.changed' AND status='pending' ORDER BY id LIMIT 1")
+        .get(auction.league_id); assert.ok(event);
+      const audiences = readers[0].prepare("SELECT * FROM outbox_event_audiences WHERE outbox_event_id=? ORDER BY id").all(event.id);
+      const outputDirectory = path.join(directory,"prior-invalidation");
+      const suppressed = prepareRecoveryInvalidationReconciliation({ credentialPreparation: prepared,plan: auctionReviewPlan,
+        events: [{ eventId: event.id,leagueId: event.league_id,rowSha256: hash(canonicalize(event)),payloadSha256: hash(event.payload_json),
+          audienceSha256: hash(canonicalize(audiences.map(row => hash(canonicalize(row))).sort())),
+          reasonCode: "RESTORED_REFRESH_REVIEWED",evidenceSha256: hash("synthetic-auction-review-prior-invalidation") }],
+        reviewedByUserId: fixtureId("account:platformAdmin"),reconciliationId: crypto.randomUUID(),reconciledAtMs: now + 1,
+        temporaryRoot: input.temporaryRoot,outputDirectory });
+      const receipt = JSON.parse(fs.readFileSync(path.join(outputDirectory,"invalidation-reconciliation.json"),"utf8"));
+      const derivativePath = path.join(directory,"lineage-review.sqlite3");
+      fs.copyFileSync(suppressed.reconciledDatabasePath,derivativePath,fs.constants.COPYFILE_EXCL);
+      const derivativeHash = readHash(derivativePath), successfulOutputHash = readHash(suppressed.reconciledDatabasePath);
+      const lineagePath = path.join(directory,"lineage.json");
+      const lineage = { initialDatabasePath: candidatePath,initialPlan: auctionReviewPlan,steps: [{ kind: "invalidation",
+        reconciledDatabasePath: derivativePath,receipt,observedAtMs: now + 2 }] };
+      fs.writeFileSync(lineagePath,JSON.stringify(lineage),{ flag: "wx" });
+      const nextRequestPath = path.join(directory,"lineage-candidate-request.json");
+      fs.writeFileSync(nextRequestPath,JSON.stringify({ requestVersion: 1,expectedEnvironmentId: config.environmentId,
+        expectedDatabaseId: config.databaseId,observedAtMs: now + 2,preparedDatabasePath: derivativePath,
+        credentialPreparationPath: credentialsPath,lineagePath }),{ flag: "wx" });
+      const nextCandidate = spawnSync(process.execPath,[path.resolve(__dirname,"../../scripts/db-recovery-review.js"),"--request",nextRequestPath],
+        { encoding: "utf8",timeout: 60_000,maxBuffer: 8*1024*1024 });
+      assert.equal(nextCandidate.status,0,nextCandidate.stderr);assert.equal(nextCandidate.stderr,"");
+      const nextCandidatePath = path.join(directory,"lineage-candidate-review.json");
+      fs.writeFileSync(nextCandidatePath,nextCandidate.stdout,{ flag: "wx" });
+      const nextRequest = { ...request,preparedDatabasePath: derivativePath,candidateReviewPath: nextCandidatePath,
+        observedAtMs: now + 2,lineagePath };
+      const next = invoke(nextRequest);
+      assert.equal(next.planChecksum,JSON.parse(nextCandidate.stdout).plan.planChecksum);
+      assert.notEqual(next.contextSha256,reviewed.contextSha256);
+      assert.equal(next.contextEvidence.candidateState.auction.rowSha256,reviewed.contextEvidence.candidateState.auction.rowSha256);
+      assert.equal(next.requiredReview,"league-rules-loss-window-and-domain-effects");assert.equal(next.replayPermitted,false);
+      await reviewTest.test("auction recovery follows an earlier invalidation only with its actual complete lineage", async () => {
+        const decisionPath = saveAuctionJson("after-invalidation-auction-decision.json",{ action: "resolve-ordinary-auction-held",reconciliationId: crypto.randomUUID(),
+          reviewedByUserId: fixtureId("account:platformAdmin"),reasonCode: "REVIEWED_AUCTION_DEADLINE_AND_LOSS_WINDOW",
+          evidenceSha256: hash("synthetic reviewed auction after invalidation"),reviewChecksum: next.reportChecksum });
+        const outputDirectory = path.join(directory,"after-invalidation-auction");
+        const report = recoveryCommand("db-recovery-auction.js",{ ...nextRequest,decisionPath,temporaryRoot: input.temporaryRoot,outputDirectory });
+        assert.equal(report.planChecksum,next.planChecksum);assert.equal(report.activationReady,false);
+        const receipt = JSON.parse(fs.readFileSync(path.join(outputDirectory,"auction-reconciliation.json"),"utf8"));
+        const resultPath = path.join(directory,"after-invalidation-auction-inspection.sqlite3");
+        fs.copyFileSync(report.reconciledDatabasePath,resultPath,fs.constants.COPYFILE_EXCL);
+        const step = { kind: "auction",reconciledDatabasePath: resultPath,receipt,observedAtMs: now + 3,
+          restoredDatabasePath: restoredPath,preservedDatabasePath: preservedPath };
+        const combinedPath = saveAuctionJson("after-invalidation-auction-lineage.json",{ ...lineage,steps: [...lineage.steps,step] });
+        const request = { requestVersion: 1,credentialPreparationPath: credentialsPath,preparedDatabasePath: resultPath,
+          expectedEnvironmentId: config.environmentId,expectedDatabaseId: config.databaseId,observedAtMs: now + 3,lineagePath: combinedPath };
+        const candidate = recoveryCommand("db-recovery-review.js",request);
+        assert.equal(candidate.plan.planVersion,7);assert.equal(candidate.plan.unresolvedJobs,auctionReviewPlan.unresolvedJobs - 1);
+        assert.equal(candidate.plan.unresolvedMessages,auctionReviewPlan.unresolvedMessages);
+        assert.equal(candidate.plan.activationReady,false);assert.equal(candidate.plan.executable,false);
+        const omittedPath = saveAuctionJson("after-invalidation-auction-omitted-lineage.json",{ ...lineage,steps: [step] });
+        recoveryCommand("db-recovery-review.js",{ ...request,lineagePath: omittedPath },false);
+        assert.equal(readHash(derivativePath),derivativeHash);assert.equal(readHash(suppressed.reconciledDatabasePath),successfulOutputHash);
+      });
+      const { lineagePath: omitted,...missingLineage } = nextRequest;invoke(missingLineage,false);
+      const forgedLineagePath = path.join(directory,"forged-lineage.json");
+      fs.writeFileSync(forgedLineagePath,JSON.stringify({ ...lineage,steps: [{ ...lineage.steps[0],receipt: { ...receipt,reportChecksum: "0".repeat(64) } }] }),{ flag: "wx" });
+      invoke({ ...nextRequest,lineagePath: forgedLineagePath },false);
+      assert.equal(readHash(derivativePath),derivativeHash);assert.equal(readHash(suppressed.reconciledDatabasePath),successfulOutputHash);
+      for (const reader of readers) assert.equal(reader.prepare("SELECT total_changes() n").get().n,0);
+    } finally { for (const reader of readers) reader.close(); }
+    assert.deepEqual(files.map(readHash),hashes); assert.deepEqual(started.runtime.database.serialize(),sourceBytes);
+    assert.equal(readHash(prepared.preparedDatabasePath),preparedHash);
+    auctionReviewPaths = { prepared: candidatePath,restored: restoredPath };
+  });
+  await t.test("the loss-window report identifies a real signing completed after the selected backup", async () => {
+    // Only after proving source preservation, simulate a real later signing in
+    // the original synthetic fixture. Its original claim is still current
+    // there, while the held derivative has already rejected that same claim.
+    const heldHash = readHash(workPath), source = started.runtime.database;
+    const completed = await worker(source,true).run();
+    assert.equal(completed.status,"succeeded"); assert.equal(completed.completed,1);
+    assert.equal(summerCalls.length,2); assert.equal(lateLockCalls.length,2);
+    assert.deepEqual(errors,[]); assert.deepEqual(providerCalls,[]);
+    const resolution = source.prepare("SELECT * FROM auction_resolutions WHERE auction_id=?").get(auction.id);
+    assert.equal(resolution.status,"resolved");
+    const sourceAfterSigning = source.serialize();
+    const preserved = await createVerifiedBackup({ databasePath: started.databasePath,
+      outputDirectory: path.join(input.temporaryRoot,"auction-loss-window-preserved"),environment: config.appEnv,
+      reason: "incident-preservation",capturedAtMs: Date.now(),temporaryRoot: input.temporaryRoot });
+    const restoredDatabase = openReadonlyDatabase({ databasePath: input.restoredCandidate.targetDatabasePath });
+    const preservedDatabase = openReadonlyDatabase({ databasePath: path.join(preserved.outputDirectory,BACKUP_FILE_NAME) });
+    try {
+      const report = compareRecoveryLossWindow({ restoredDatabase,preservedDatabase,restoredPlaintextSha256: restoredHash,
+        preservedPlaintextSha256: preserved.plaintextSha256,sourceBackupId: backup.backupId,
+        expectedEnvironmentId: config.environmentId,expectedDatabaseId: config.databaseId,observedAtMs: Date.now(),
+        includeFinancialState: true,includeJobEvidence: true });
+      assert.equal(report.changedTables,13); assert.equal(report.changedRecords,15);
+      const expected = { auctions: 1,auction_bids: 1,job_runs: 1,contracts: 1,contract_years: 3,contract_events: 1,
+        player_ownerships: 1,ownership_events: 1,auction_events: 1,auction_resolutions: 1,league_activity: 1,
+        outbox_events: 1,outbox_event_audiences: 1 };
+      for (const [table,rows] of Object.entries(report.tables)) assert.equal(rows.changes.length,expected[table] || 0,table);
+      for (const [table,id] of [["contracts",resolution.contract_id],["player_ownerships",resolution.ownership_id],
+        ["auction_resolutions",resolution.id]]) {
+        const changed = report.tables[table].changes[0];
+        assert.equal(changed.keySha256,hash(canonicalize([id]))); assert.equal(changed.kind,"absent-from-backup");
+        assert.equal(changed.restoredRowSha256,null);
+        assert.equal(changed.preservedRowSha256,hash(canonicalize(source.prepare(`SELECT * FROM ${table} WHERE id=?`).get(id))));
+      }
+      assert.equal(report.jobEvidence.changedOccurrences,1); assert.equal(report.jobEvidence.recordedCompletionsAfterBackup,1);
+      const job = report.jobEvidence.occurrences.find(row => row.jobId === oldClaim.runId);
+      assert.equal(job.restored.status,"leased"); assert.equal(job.preserved.status,"succeeded");
+      assert.equal(job.replayPermitted,false); assert.equal(job.domainOutcomeVerified,false); assert.equal(job.externalOutcomeVerified,false);
+      assert.equal(report.financialState.changedLeagues,1); assert.equal(report.financialState.completeReconciliation,false);
+      const financial = report.financialState.leagues.find(row => row.leagueId === auction.league_id);
+      const before = financial.restored.contracts.find(row => row.status === "active");
+      const after = financial.preserved.contracts.find(row => row.status === "active");
+      assert.equal(after.count,before.count + 1); assert.equal(after.originalTotalValueCents,before.originalTotalValueCents + 900);
+      assert.equal(after.aavCents,before.aavCents + 300);
+      for (const league of report.financialState.leagues.filter(row => row.leagueId !== auction.league_id)) {
+        assert.deepEqual(league.restored,league.preserved); assert.equal(league.recordedTotalsChanged,false);
+      }
+      assert.equal(report.activationReady,false); assert.equal(report.executable,false); assert.equal(report.completeLossWindowEvidence,false);
+      assert.equal(report.tables.outbox_events.changes[0].preservedStatus,"pending");
+      assert.equal(report.tables.outbox_events.changes[0].replayPermitted,false);
+      const { reportChecksum,...body } = report; assert.equal(hash(canonicalize(body)),reportChecksum);
+      assert.equal(JSON.stringify(report).includes(PRIVATE_VALUE),false);
+      const preparedReader = openReadonlyDatabase({ databasePath: auctionReviewPaths.prepared });
+      try {
+        const reviewed = buildRecoveryAuctionReview({ preparedDatabase: preparedReader,restoredDatabase,preservedDatabase,
+          credentialPreparation: prepared,plan: auctionReviewPlan,jobId: oldClaim.runId,auctionId: auction.id,leagueId: auction.league_id,
+          preservedPlaintextSha256: preserved.plaintextSha256,observedAtMs: report.observedAtMs });
+        assert.equal(reviewed.requiredReview,"recorded-outcome-and-loss-reconciliation");
+        assert.equal(reviewed.restoredState.auction.status,"open"); assert.equal(reviewed.preservedState.auction.status,"resolved");
+        assert.equal(reviewed.preservedState.resolutions.length,1);
+        const linked = reviewed.preservedState.resolutions[0];
+        assert.equal(linked.id,resolution.id); assert.equal(linked.contract.id,resolution.contract_id); assert.equal(linked.ownership.id,resolution.ownership_id);
+        assert.equal(linked.contract.rowSha256,hash(canonicalize(source.prepare("SELECT * FROM contracts WHERE id=?").get(resolution.contract_id))));
+        assert.equal(linked.ownership.rowSha256,hash(canonicalize(source.prepare("SELECT * FROM player_ownerships WHERE id=?").get(resolution.ownership_id))));
+        assert.deepEqual(reviewed.lossWindow,report); assert.equal(reviewed.replayPermitted,false);
+        assert.equal(reviewed.activationReady,false); assert.equal(reviewed.executable,false);
+        assert.equal(preparedReader.prepare("SELECT total_changes() n").get().n,0);
+      } finally { preparedReader.close(); }
+      for (const db of [restoredDatabase,preservedDatabase]) assert.equal(db.prepare("SELECT total_changes() n").get().n,0);
+    } finally { restoredDatabase.close();preservedDatabase.close(); }
+    assert.deepEqual(source.serialize(),sourceAfterSigning);
+    assert.equal(readHash(workPath),heldHash); assert.equal(readHash(prepared.preparedDatabasePath),preparedHash);
+    assert.equal(readHash(input.restoredCandidate.targetDatabasePath),restoredHash);
+  });
 });
 
 test("an exact restored trade expiry rejects its previous worker and replays once in a held copy", async t => {
@@ -1426,11 +2575,55 @@ test("an exact restored trade expiry rejects its previous worker and replays onc
         lineagePath: reverseLineagePath, executedAtMs: now + 3, outputDirectory: path.join(input.temporaryRoot, "trade-after-invalidation") });
       const reversedPath = inspectCopy(afterSuppression.reconciledDatabasePath);
       const reversedReceipt = JSON.parse(fs.readFileSync(path.join(path.dirname(afterSuppression.reconciledDatabasePath), "trade-expiry-reconciliation.json"), "utf8"));
+      const reversedLineage = { ...reverseLineage, steps: [...reverseLineage.steps,
+        { kind: "trade-expiry", reconciledDatabasePath: reversedPath, receipt: reversedReceipt, observedAtMs: now + 4 }] };
+      const reversedLineagePath = write("reversed-final-lineage", reversedLineage);
       const reversedReview = invoke("db-recovery-review.js", { ...initialReviewRequest, observedAtMs: now + 4, preparedDatabasePath: reversedPath,
-        lineagePath: write("reversed-final-lineage", { ...reverseLineage, steps: [...reverseLineage.steps,
-          { kind: "trade-expiry", reconciledDatabasePath: reversedPath, receipt: reversedReceipt, observedAtMs: now + 4 }] }) });
+        lineagePath: reversedLineagePath });
       assert.equal(reversedReview.plan.planVersion, 6); assert.equal(reversedReview.plan.unresolvedJobs, plan.unresolvedJobs - 1);
       assert.equal(reversedReview.plan.unresolvedMessages, plan.unresolvedMessages); assert.equal(reversedReview.activationReady, false);
+      const delayedReader = openReadonlyDatabase({ databasePath: reversedPath });
+      let delayedEvent;
+      try {
+        const message = delayedReader.prepare("SELECT * FROM outbox_events WHERE id=?").get(afterSuppression.createdOutboxId);
+        assert.ok(message.created_at_ms > prepared.preparedAtMs);
+        const audiences = delayedReader.prepare("SELECT * FROM outbox_event_audiences WHERE outbox_event_id=? ORDER BY id").all(message.id);
+        delayedEvent = { eventId: message.id, leagueId: message.league_id, rowSha256: hash(canonicalize(message)),
+          payloadSha256: hash(message.payload_json), audienceSha256: hash(canonicalize(audiences.map(row => hash(canonicalize(row))).sort())),
+          reasonCode: "REVIEWED_DELAYED_TRADE_REFRESH", evidenceSha256: hash("synthetic delayed refresh review") };
+      } finally { delayedReader.close(); }
+      const delayedRequest = { requestVersion: 1, credentialPreparationPath, preparedDatabasePath: afterSuppression.reconciledDatabasePath,
+        candidateReviewPath: write("delayed-review", reversedReview), invalidationReviewPath: write("delayed-events", { events: [delayedEvent] }),
+        lineagePath: reversedLineagePath, reviewedByUserId: review.reviewedByUserId, reconciliationId: crypto.randomUUID(),
+        reconciledAtMs: now + 5, temporaryRoot: input.temporaryRoot, outputDirectory: path.join(input.temporaryRoot, "delayed-invalidation") };
+      assert.equal(invoke("db-recovery-invalidations.js", delayedRequest, false).error.code, "RECOVERY_INVALIDATION_EVENT_MISMATCH");
+      assert.equal(fs.existsSync(delayedRequest.outputDirectory), false);
+      const delayedSuppressed = invoke("db-recovery-invalidations.js", { ...delayedRequest, eventScope: "reviewed-candidate" });
+      assert.equal(delayedSuppressed.disposition, "suppress-reviewed-refresh-hint");
+      assert.equal(delayedSuppressed.unresolvedMessages, plan.unresolvedMessages - 1);
+      assert.equal(delayedSuppressed.deliveryPerformed, false); assert.equal(delayedSuppressed.activationReady, false);
+      const delayedPath = inspectCopy(delayedSuppressed.reconciledDatabasePath);
+      const delayedReceipt = JSON.parse(fs.readFileSync(path.join(path.dirname(delayedSuppressed.reconciledDatabasePath), "invalidation-reconciliation.json"), "utf8"));
+      const delayedLineage = { ...reversedLineage, steps: [...reversedLineage.steps,
+        { kind: "invalidation", reconciledDatabasePath: delayedPath, receipt: delayedReceipt, observedAtMs: now + 6 }] };
+      const delayedReview = invoke("db-recovery-review.js", { ...initialReviewRequest, observedAtMs: now + 6, preparedDatabasePath: delayedPath,
+        lineagePath: write("delayed-lineage", delayedLineage) });
+      assert.equal(delayedReview.plan.outbox.find(row => row.id === delayedEvent.eventId).status, "discarded");
+      assert.equal(delayedReview.plan.unresolvedMessages, plan.unresolvedMessages - 1);
+      assert.equal(delayedReview.plan.unresolvedJobs, plan.unresolvedJobs - 1); assert.equal(delayedReview.activationReady, false);
+      for (const [suffix, change] of [["scope", { eventScope: "all" }], ["history", { lineagePath: undefined }],
+        ["hash", { invalidationReviewPath: write("bad-delayed-events", { events: [{ ...delayedEvent, rowSha256: "f".repeat(64) }] }) }]]) {
+        const outputDirectory = path.join(input.temporaryRoot, "delayed-reject-" + suffix);
+        const rejected = invoke("db-recovery-invalidations.js", { ...delayedRequest, eventScope: "reviewed-candidate", ...change, outputDirectory }, false);
+        assert.match(rejected.error.code, /^RECOVERY_/); assert.equal(fs.existsSync(outputDirectory), false);
+      }
+      const { reportChecksum: delayedChecksum, ...downgradedBody } = delayedReceipt;
+      downgradedBody.disposition = "suppress-restored-refresh-hint";
+      const downgradedReceipt = { ...downgradedBody, reportChecksum: hash(canonicalize(downgradedBody)) };
+      const downgradedLineage = { ...delayedLineage, steps: delayedLineage.steps.map((step, index) => index === 2 ? { ...step, receipt: downgradedReceipt } : step) };
+      invoke("db-recovery-review.js", { ...initialReviewRequest, observedAtMs: now + 6, preparedDatabasePath: delayedPath,
+        lineagePath: write("downgraded-lineage", downgradedLineage) }, false);
+      assert.equal(readHash(delayedSuppressed.reconciledDatabasePath), delayedSuppressed.reconciledPlaintextSha256);
       assert.equal(readHash(firstSuppressed.reconciledDatabasePath), firstSuppressed.reconciledPlaintextSha256);
       assert.equal(readHash(afterSuppression.reconciledDatabasePath), afterSuppression.reconciledPlaintextSha256);
       for (const [suffix, change] of [["repeat", {}], ["extra", { approve: true }],

@@ -1,5 +1,6 @@
 const path = require("node:path");
 const { loadBackupConfig } = require("./loadBackupConfig");
+const { loadFirstAdministratorSetupConfig } = require("./loadFirstAdministratorSetupConfig");
 
 const {
   loadSecurityConfig,
@@ -504,6 +505,8 @@ function loadTargetRuntimeConfig({
   if (runtimeConfig.backupScheduleEnabled) {
     runtimeConfig.backup = loadBackupConfig({ env, runtimeConfig });
   }
+  const firstAdministratorSetup = loadFirstAdministratorSetupConfig({ env, runtimeConfig });
+  if (firstAdministratorSetup) runtimeConfig.firstAdministratorSetup = firstAdministratorSetup;
   return Object.freeze(runtimeConfig);
 }
 

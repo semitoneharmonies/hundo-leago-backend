@@ -180,6 +180,7 @@ function deterministicEffectId(runId, effect) {
 }
 
 function createMatchupOccurrenceHandlers({
+  executionGuard,
   statisticsService,
   lateLockCoordinator,
   readRepository,
@@ -188,6 +189,9 @@ function createMatchupOccurrenceHandlers({
   resultService,
   provider = "nhl",
 } = {}) {
+  if (!executionGuard || typeof executionGuard.runAtomic !== "function") {
+    throw new TypeError("matchup occurrence handlers require guarded atomic batches");
+  }
   if (!statisticsService || typeof statisticsService.refresh !== "function") {
     throw new TypeError("matchup occurrence handlers require target statistics");
   }
@@ -310,29 +314,31 @@ function createMatchupOccurrenceHandlers({
         "matchup:lock",
         observedAtMs
       );
-      transition(input, "lock_transition");
-      const context = requireWeek(input);
-      const teamIds = [
-        ...new Set(
-          context.matchups.flatMap(({ home_team_id, away_team_id }) => [
-            home_team_id,
-            away_team_id,
-          ])
-        ),
-      ].sort();
-      const locks = teamIds.map((teamId) =>
-        legalityService.lockAtBoundary({
-          leagueId: input.leagueId,
-          seasonId: input.seasonId,
-          weekId: input.weekId,
-          teamId,
-          provider,
-          lockId: deterministicEffectId(input.runId, `lock:${teamId}`),
-          nowMs: input.observedAtMs,
-          occurrenceExecution: input.occurrenceExecution,
-        })
-      );
-      return Object.freeze({ lockedTeams: locks.length });
+      return executionGuard.runAtomic(input.occurrenceExecution, () => {
+        transition(input, "lock_transition");
+        const context = requireWeek(input);
+        const teamIds = [
+          ...new Set(
+            context.matchups.flatMap(({ home_team_id, away_team_id }) => [
+              home_team_id,
+              away_team_id,
+            ])
+          ),
+        ].sort();
+        const locks = teamIds.map((teamId) =>
+          legalityService.lockAtBoundary({
+            leagueId: input.leagueId,
+            seasonId: input.seasonId,
+            weekId: input.weekId,
+            teamId,
+            provider,
+            lockId: deterministicEffectId(input.runId, `lock:${teamId}`),
+            nowMs: input.observedAtMs,
+            occurrenceExecution: input.occurrenceExecution,
+          })
+        );
+        return Object.freeze({ lockedTeams: locks.length });
+      });
     },
     async "matchup:finalize"(occurrenceExecution, observedAtMs) {
       const input = requireOccurrenceExecution(
@@ -340,9 +346,19 @@ function createMatchupOccurrenceHandlers({
         "matchup:finalize",
         observedAtMs
       );
-      transition(input, "finalize_transition");
-      const outcomes = finalizeOutstanding(input, "finalize");
-      return Object.freeze({ finalizedMatchups: outcomes.length });
+      try {
+        return executionGuard.runAtomic(input.occurrenceExecution, () => {
+          transition(input, "finalize_transition");
+          const outcomes = finalizeOutstanding(input, "finalize");
+          return Object.freeze({ finalizedMatchups: outcomes.length });
+        });
+      } catch (error) {
+        // Keep the visible retry state after rolling back every partial result.
+        if (error.code === "MATCHUP_FINAL_SOURCE_WAITING") {
+          transition(input, "finalize_transition");
+        }
+        throw error;
+      }
     },
     async "matchup:rollover"(occurrenceExecution, observedAtMs) {
       const input = requireOccurrenceExecution(
@@ -350,17 +366,19 @@ function createMatchupOccurrenceHandlers({
         "matchup:rollover",
         observedAtMs
       );
-      let context = requireWeek(input);
-      if (context.week.status !== "final") {
-        finalizeOutstanding(input, "rollover_finalize");
-        context = requireWeek(input);
-      }
-      if (context.week.status !== "final") {
-        const error = new Error("The matchup week is not final at rollover.");
-        error.code = "MATCHUP_ROLLOVER_NOT_FINAL";
-        throw error;
-      }
-      return Object.freeze({ status: "final" });
+      return executionGuard.runAtomic(input.occurrenceExecution, () => {
+        let context = requireWeek(input);
+        if (context.week.status !== "final") {
+          finalizeOutstanding(input, "rollover_finalize");
+          context = requireWeek(input);
+        }
+        if (context.week.status !== "final") {
+          const error = new Error("The matchup week is not final at rollover.");
+          error.code = "MATCHUP_ROLLOVER_NOT_FINAL";
+          throw error;
+        }
+        return Object.freeze({ status: "final" });
+      });
     },
   };
   if (

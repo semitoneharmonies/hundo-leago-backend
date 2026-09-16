@@ -678,6 +678,7 @@ function createIntegratedServices(
     logger: { error() {} },
   });
   const handlers = createMatchupOccurrenceHandlers({
+    executionGuard: { runAtomic() { assert.fail("Statistics refresh must not open a synchronous batch transaction"); } },
     statisticsService: statistics,
     lateLockCoordinator: coordinator,
     readRepository: { readWeek() {}, readMatchup() {} },

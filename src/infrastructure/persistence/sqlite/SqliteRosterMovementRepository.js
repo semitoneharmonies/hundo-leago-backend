@@ -1,4 +1,11 @@
 const crypto = require("node:crypto");
+const {
+  createEmptySocketRelated,
+  createSocketEventMetadata,
+} = require("../../../domain/leagues/socketInvalidation");
+const {
+  resolveSqliteLeagueOutboxWriter,
+} = require("./SqliteLeagueOutboxWriter");
 
 const {
   RosterMovementPolicyError,
@@ -71,6 +78,7 @@ function createSqliteRosterMovementRepository({
   let cancellationWriter;
   let moveTransaction;
   try {
+    const outboxWriter = resolveSqliteLeagueOutboxWriter({ database, leagueOutboxWriter });
     findOwnershipStatement = database.prepare(
       "SELECT * FROM player_ownerships " +
         "WHERE league_id = @leagueId AND player_id = @playerId LIMIT 2"
@@ -296,6 +304,27 @@ function createSqliteRosterMovementRepository({
         sourceKind: "roster_movement",
         nowMs: move.occurredAtMs,
       });
+      const outbox = outboxWriter.write({
+        id: deterministicUuid(`outbox:${move.ownershipEventId}:roster.changed`),
+        leagueId: move.leagueId,
+        eventType: "roster.changed",
+        aggregateType: "player_ownership",
+        aggregateId: updated.id,
+        payload: createSocketEventMetadata({
+          eventType: "roster.changed",
+          version: updated.version,
+          reasonCode: "roster_changed",
+          occurredAtMs: move.occurredAtMs,
+          related: createEmptySocketRelated({ teamId: move.teamId }),
+        }),
+        occurredAtMs: move.occurredAtMs,
+      });
+      if (outbox && typeof outbox.then === "function") {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.argumentInvalid,
+          "Roster update writes must be synchronous."
+        );
+      }
       return Object.freeze({
         ownership: updated,
         affectedOwnerships: Object.freeze(

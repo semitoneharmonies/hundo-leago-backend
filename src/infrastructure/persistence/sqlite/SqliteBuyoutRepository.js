@@ -1,5 +1,12 @@
 const crypto = require("node:crypto");
 const {
+  createEmptySocketRelated,
+  createSocketEventMetadata,
+} = require("../../../domain/leagues/socketInvalidation");
+const {
+  resolveSqliteLeagueOutboxWriter,
+} = require("./SqliteLeagueOutboxWriter");
+const {
   BuyoutPolicyError,
   createBuyoutAggregate,
   validateBuyoutCommand,
@@ -84,6 +91,7 @@ function createSqliteBuyoutRepository({
   let deleteOwnershipStatement;
   let buyoutTransaction;
   try {
+    const outboxWriter = resolveSqliteLeagueOutboxWriter({ database, leagueOutboxWriter });
     const cancellationWriter = resolveSqliteTradeProposalCancellationWriter({
       database, leagueOutboxWriter, tradePublicationWriter, tradeProposalCancellationWriter,
     });
@@ -319,6 +327,27 @@ function createSqliteBuyoutRepository({
         sourceKind: "buyout",
         nowMs: command.occurredAtMs,
       });
+      const outbox = outboxWriter.write({
+        id: command.contractEventId,
+        leagueId: command.leagueId,
+        eventType: "contract.changed",
+        aggregateType: "contract",
+        aggregateId: command.contractId,
+        payload: createSocketEventMetadata({
+          eventType: "contract.changed",
+          version: contract.version,
+          reasonCode: "contract_changed",
+          occurredAtMs: command.occurredAtMs,
+          related: createEmptySocketRelated({ teamId: command.teamId }),
+        }),
+        occurredAtMs: command.occurredAtMs,
+      });
+      if (outbox && typeof outbox.then === "function") {
+        throw repositoryError(
+          REPOSITORY_ERROR_CODES.argumentInvalid,
+          "Contract update writes must be synchronous."
+        );
+      }
       return Object.freeze({
         contract,
         obligation,

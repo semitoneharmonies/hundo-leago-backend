@@ -127,6 +127,10 @@ function createAccountProfileService({
         });
       });
     } catch (error) {
+      const profileError = [error, error?.cause].find(
+        (candidate) => candidate instanceof AccountProfileError
+      );
+      if (profileError) throw profileError;
       if (error?.code === "REPOSITORY_VERSION_CONFLICT") {
         throw new AccountProfileError(
           "ACCOUNT_PROFILE_PRECONDITION_FAILED"

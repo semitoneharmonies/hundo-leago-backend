@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const crypto = require("node:crypto");
+
 const {
   createAccountActionTokenService,
 } = require(
@@ -12,7 +17,12 @@ const {
 );
 const {
   openDatabase,
+  openReadonlyDatabase,
+  resolveDatabasePath,
 } = require("../src/infrastructure/database/connection");
+const {
+  assertDatabaseIdentity,
+} = require("../src/infrastructure/database/databaseIdentity");
 const {
   assertMigrationCompatibility,
   discoverMigrations,
@@ -183,6 +193,82 @@ function protectedDeliveryConfiguration(env) {
   });
 }
 
+function confirmedProductionIdentity(options, env, delivery) {
+  if (options.appEnv !== "production") return null;
+  const identityPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
+  let origin;
+  try { origin = new URL(delivery.publicFrontendOrigin); } catch { /* Reject below. */ }
+  if (
+    env.APP_ENV !== "production" ||
+    typeof env.APP_ENVIRONMENT_ID !== "string" || !identityPattern.test(env.APP_ENVIRONMENT_ID) ||
+    typeof env.DATABASE_ID !== "string" || !identityPattern.test(env.DATABASE_ID) ||
+    !origin || origin.protocol !== "https:" || origin.origin !== delivery.publicFrontendOrigin
+  ) {
+    const error = new Error("Production bootstrap requires the confirmed database identity and secure frontend origin.");
+    error.code = "FIRST_PLATFORM_ADMINISTRATOR_PRODUCTION_CONFIG_INVALID";
+    throw error;
+  }
+  return Object.freeze({ environmentId: env.APP_ENVIRONMENT_ID, databaseId: env.DATABASE_ID });
+}
+
+function inspectProductionBootstrapDatabase(options, expected) {
+  const databasePath = resolveDatabasePath({
+    databasePath: options.databasePath,
+    environment: "production",
+    persistentRoot: options.persistentRoot,
+  });
+  if (!fs.existsSync(databasePath)) {
+    const error = new Error("An existing absolute database path is required.");
+    error.code = "DATABASE_PATH_REQUIRED";
+    throw error;
+  }
+  function assertClosedSource() {
+    for (const suffix of ["-wal", "-shm", "-journal"]) {
+      if (fs.existsSync(databasePath + suffix)) {
+        const error = new Error("Production bootstrap requires a closed, checkpointed database.");
+        error.code = "FIRST_PLATFORM_ADMINISTRATOR_DATABASE_NOT_CLOSED";
+        throw error;
+      }
+    }
+  }
+  const digest = file => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  assertClosedSource();
+  const sourceHash = digest(databasePath);
+  const temporaryParent = fs.realpathSync(os.tmpdir());
+  const temporaryDirectory = fs.mkdtempSync(path.join(temporaryParent, "hundo-bootstrap-preflight-"));
+  try {
+    fs.chmodSync(temporaryDirectory, 0o700);
+    const copy = path.join(temporaryDirectory, "candidate.sqlite3");
+    fs.copyFileSync(databasePath, copy, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(copy, 0o600);
+    assertClosedSource();
+    if (digest(copy) !== sourceHash || digest(databasePath) !== sourceHash) {
+      const error = new Error("Production bootstrap source changed during inspection.");
+      error.code = "FIRST_PLATFORM_ADMINISTRATOR_DATABASE_CHANGED";
+      throw error;
+    }
+    // SQLite may create WAL sidecars even for read-only opens. Inspect only
+    // this private disposable copy; a rejection leaves the selected files alone.
+    const inspected = openReadonlyDatabase({ databasePath: copy });
+    try {
+      assertMigrationCompatibility(inspected, discoverMigrations({ migrationsDirectory: options.migrationsDirectory }));
+      assertDatabaseIdentity(inspected, expected);
+    } finally { inspected.close(); }
+  } finally {
+    const resolved = fs.realpathSync(temporaryDirectory);
+    if (path.dirname(resolved) !== temporaryParent || !path.basename(resolved).startsWith("hundo-bootstrap-preflight-")) {
+      throw new Error("Bootstrap temporary-directory cleanup target is invalid.");
+    }
+    fs.rmSync(resolved, { recursive: true, force: false });
+  }
+  assertClosedSource();
+  if (digest(databasePath) !== sourceHash) {
+    const error = new Error("Production bootstrap source changed after inspection.");
+    error.code = "FIRST_PLATFORM_ADMINISTRATOR_DATABASE_CHANGED";
+    throw error;
+  }
+}
+
 function runBootstrapCommand({
   argv = process.argv.slice(2),
   env = process.env,
@@ -191,6 +277,10 @@ function runBootstrapCommand({
   const options = parseArguments(argv);
   const identity = protectedIdentity(env);
   const delivery = protectedDeliveryConfiguration(env);
+  const productionIdentity = confirmedProductionIdentity(options, env, delivery);
+  if (productionIdentity) {
+    inspectProductionBootstrapDatabase(options, productionIdentity);
+  }
   const connection = openDatabase({
     databasePath: options.databasePath,
     environment: ["staging", "production"].includes(options.appEnv)
@@ -255,7 +345,13 @@ function runBootstrapCommand({
       secureRandom,
       publicFrontendOrigin: delivery.publicFrontendOrigin,
     });
-    const result = service.bootstrap(identity);
+    const result = productionIdentity
+      ? connection.database.transaction(() => {
+          // Recheck under the same writer transaction as account creation.
+          assertDatabaseIdentity(connection.database, productionIdentity);
+          return service.bootstrap(identity);
+        }).immediate()
+      : service.bootstrap(identity);
     const summary = Object.freeze({
       status: "created",
       code: result.code,

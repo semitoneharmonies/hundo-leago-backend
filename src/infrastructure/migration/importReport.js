@@ -165,6 +165,23 @@ function renderImportReportMarkdown(report) {
   ].join("\n");
 }
 
+function renameCompletedReport(fsModule, temporary, output) {
+  const waits = [10, 20, 40];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fsModule.renameSync(temporary, output);
+      return;
+    } catch (error) {
+      // Windows can briefly deny directory renames after its files close.
+      // Retry only publication of these completed files, never the import.
+      if (process.platform !== "win32" || error?.code !== "EPERM" ||
+          attempt >= waits.length || fsModule.existsSync(output)) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waits[attempt]);
+      if (fsModule.existsSync(output)) throw error;
+    }
+  }
+}
+
 function publishImportReport({
   report,
   reportDirectory,
@@ -216,7 +233,7 @@ function publishImportReport({
         flag: "wx",
       }
     );
-    fsModule.renameSync(temporary, output);
+    renameCompletedReport(fsModule, temporary, output);
     ownsTemporary = false;
   } catch (error) {
     if (ownsTemporary) {

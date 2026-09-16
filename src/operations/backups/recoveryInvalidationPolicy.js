@@ -6,6 +6,7 @@ const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{1
 const DIGEST = /^[a-f0-9]{64}$/;
 const ERROR_CODE = "RECOVERY_INVALIDATION_SUPPRESSED";
 const DISPOSITION = "suppress-restored-refresh-hint";
+const REVIEWED_DISPOSITION = "suppress-reviewed-refresh-hint";
 const REFRESH_HINTS = new Set(["league.changed","team.changed","roster.changed","contract.changed","auction.changed","trade.changed",
   "matchup.changed","standings.changed","draft.changed","candidate_card.changed","candidate_card_help.changed","fad_nomination_queue.changed","operations.changed"]);
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
@@ -17,6 +18,11 @@ class RecoveryInvalidationError extends Error {
   }
 }
 function fail(code) { throw new RecoveryInvalidationError(code); }
+function invalidationDisposition(eventScope) {
+  if (eventScope === "restored") return DISPOSITION;
+  if (eventScope === "reviewed-candidate") return REVIEWED_DISPOSITION;
+  fail("RECOVERY_INVALIDATION_INPUT_INVALID");
+}
 function validateInvalidationDecisions(events) {
   if (!Array.isArray(events) || events.length < 1 || events.length > 1000) fail("RECOVERY_INVALIDATION_INPUT_INVALID");
   const decisions = events.map(event => {
@@ -29,15 +35,28 @@ function validateInvalidationDecisions(events) {
   if (new Set(decisions.map(row => row.eventId)).size !== decisions.length) fail("RECOVERY_INVALIDATION_INPUT_INVALID");
   return Object.freeze(decisions);
 }
-function readReviewedInvalidations(database,events,{ preparedAtMs,reconciledAtMs }) {
+function readReviewedInvalidations(database,events,{ preparedAtMs,reconciledAtMs,eventScope = "restored",verifiedPlan = null }) {
+  invalidationDisposition(eventScope);
   if (!Number.isSafeInteger(preparedAtMs) || preparedAtMs < 0 || !Number.isSafeInteger(reconciledAtMs) || reconciledAtMs < preparedAtMs ||
       database.prepare("SELECT 1 FROM sessions WHERE status='active' LIMIT 1").get() ||
       database.prepare("SELECT 1 FROM account_action_tokens WHERE status='active' LIMIT 1").get()) fail("RECOVERY_INVALIDATION_CREDENTIAL_BOUNDARY_INVALID");
+  // Both callers rebuild the complete candidate lineage before entering here.
+  // The explicit scope can include a new hint from a reviewed recovery action,
+  // but never an unreviewed row or an event created after that observation.
+  const reviewed = eventScope === "reviewed-candidate";
+  if (reviewed && (!Number.isSafeInteger(verifiedPlan?.observedAtMs) || verifiedPlan.observedAtMs < preparedAtMs ||
+      verifiedPlan.observedAtMs > reconciledAtMs || !Array.isArray(verifiedPlan.outbox) ||
+      verifiedPlan.activationReady !== false || verifiedPlan.executable !== false)) fail("RECOVERY_INVALIDATION_PLAN_INVALID");
+  const cutoff = reviewed ? verifiedPlan.observedAtMs : preparedAtMs;
   return events.map(event => {
     const row = database.prepare("SELECT * FROM outbox_events WHERE id=? AND league_id=?").get(event.eventId,event.leagueId);
     if (!row || !["pending","failed","publishing"].includes(row.status) || row.published_at_ms !== null ||
-        row.created_at_ms > preparedAtMs || row.updated_at_ms > reconciledAtMs || !Number.isSafeInteger(row.version+1) ||
+        row.created_at_ms > cutoff || row.updated_at_ms > reconciledAtMs || !Number.isSafeInteger(row.version+1) ||
         hash(canonicalize(row)) !== event.rowSha256 || hash(row.payload_json) !== event.payloadSha256) fail("RECOVERY_INVALIDATION_EVENT_MISMATCH");
+    if (reviewed && !verifiedPlan.outbox.some(entry => entry.id === row.id && entry.leagueId === row.league_id &&
+        entry.channel === "league-notification" && entry.eventType === row.event_type && entry.status === row.status &&
+        entry.rowSha256 === event.rowSha256 && entry.disposition === "held-awaiting-delivery-evidence" &&
+        entry.deliveryPermitted === false)) fail("RECOVERY_INVALIDATION_EVENT_MISMATCH");
     const audiences = database.prepare("SELECT * FROM outbox_event_audiences WHERE outbox_event_id=? AND league_id=? ORDER BY id").all(row.id,row.league_id);
     if (fingerprint(audiences).sha256 !== event.audienceSha256) fail("RECOVERY_INVALIDATION_AUDIENCE_MISMATCH");
     try {
@@ -55,10 +74,11 @@ function suppressedInvalidation(row,reconciledAtMs) {
   // explicit suppression, never a claim that a recipient received this event.
   return { ...row,status: "discarded",last_error_code: ERROR_CODE,updated_at_ms: reconciledAtMs,version: row.version+1 };
 }
-function invalidationReviewRecords({ plan,events,reconciliationId,reviewedByUserId,reconciledAtMs }) {
+function invalidationReviewRecords({ plan,events,reconciliationId,reviewedByUserId,reconciledAtMs,eventScope = "restored" }) {
+  const disposition = invalidationDisposition(eventScope);
   const decisionChecksum = hash(canonicalize(events));
   const metadata = { metadata_key: `recovery_invalidation_review:${reconciliationId}`,metadata_value: canonicalize({ recoveryId: plan.recoveryId,
-    reconciliationId,reviewedByUserId,reconciledAtMs,planChecksum: plan.planChecksum,decisionChecksum,disposition: DISPOSITION,events }),
+    reconciliationId,reviewedByUserId,reconciledAtMs,planChecksum: plan.planChecksum,decisionChecksum,disposition,events }),
     created_at_ms: reconciledAtMs,updated_at_ms: reconciledAtMs };
   const audit = { id: reconciliationId,event_type: "recovery.invalidations_suppressed",outcome: "success",actor_user_id: reviewedByUserId,
     target_user_id: null,league_id: null,session_id: null,request_correlation_id: plan.recoveryId,reason_code: `invalidation_${decisionChecksum}`,
@@ -66,5 +86,5 @@ function invalidationReviewRecords({ plan,events,reconciliationId,reviewedByUser
   return { decisionChecksum,metadata,audit };
 }
 
-module.exports = { UUID,DIGEST,ERROR_CODE,DISPOSITION,RecoveryInvalidationError,fail,hash,fingerprint,
+module.exports = { UUID,DIGEST,ERROR_CODE,DISPOSITION,REVIEWED_DISPOSITION,RecoveryInvalidationError,fail,hash,fingerprint,invalidationDisposition,
   validateInvalidationDecisions,readReviewedInvalidations,suppressedInvalidation,invalidationReviewRecords };

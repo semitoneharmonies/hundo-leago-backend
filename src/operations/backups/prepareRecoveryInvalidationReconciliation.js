@@ -6,7 +6,7 @@ const { inspectDatabase } = require("../../infrastructure/database/sqliteBackup"
 const { canonicalize } = require("../../infrastructure/migration/sourceInventory");
 const { createSqliteSecurityAuditRepository } = require("../../infrastructure/persistence/sqlite/SqliteSecurityAuditRepository");
 const { buildRecoveryPlanFromLineage } = require("./buildRecoveryReconciliationLineage");
-const { UUID,DIGEST,DISPOSITION,ERROR_CODE,RecoveryInvalidationError,fail,hash,fingerprint,validateInvalidationDecisions,
+const { UUID,DIGEST,ERROR_CODE,RecoveryInvalidationError,fail,hash,fingerprint,invalidationDisposition,validateInvalidationDecisions,
   readReviewedInvalidations,suppressedInvalidation,invalidationReviewRecords } = require("./recoveryInvalidationPolicy");
 
 const same = (left,right) => canonicalize(left) === canonicalize(right);
@@ -23,16 +23,19 @@ function allRows(database) {
   }));
 }
 
-// Suppresses selected restored refresh hints after credential invalidation.
+// Suppresses exact refresh hints after credential invalidation. The default
+// scope covers restored hints; reviewed-candidate also covers later hints
+// recorded in the independently rebuilt candidate lineage.
 // Authoritative activity/notifications, all other messages and every prior
 // database remain untouched. This operation sends nothing and never reopens.
 function prepareRecoveryInvalidationReconciliation({ credentialPreparation,plan,events,reviewedByUserId,reconciliationId,reconciledAtMs,
-  temporaryRoot,outputDirectory,lineage = null,beforeCommit = null } = {}) {
+  temporaryRoot,outputDirectory,lineage = null,eventScope = "restored",beforeCommit = null } = {}) {
   if (![reviewedByUserId,reconciliationId].every(value => UUID.test(value || "")) || !Number.isSafeInteger(reconciledAtMs) || reconciledAtMs < 0 ||
       ![temporaryRoot,outputDirectory,credentialPreparation?.preparedDatabasePath].every(value => typeof value === "string" && path.isAbsolute(value)) ||
       ![plan?.preparedPlaintextSha256,plan?.planChecksum].every(value => DIGEST.test(value || "")) ||
       (beforeCommit !== null && typeof beforeCommit !== "function")) fail("RECOVERY_INVALIDATION_INPUT_INVALID");
   const decisions = validateInvalidationDecisions(events);
+  const disposition = invalidationDisposition(eventScope);
   let ownedDirectory = null,physicalRoot,database;
   try {
     const credential = JSON.parse(JSON.stringify(credentialPreparation)),originalPlan = JSON.parse(JSON.stringify(plan));
@@ -54,8 +57,8 @@ function prepareRecoveryInvalidationReconciliation({ credentialPreparation,plan,
       const before = allRows(database),beforeTables = Object.fromEntries(Object.entries(before).map(([name,rows]) => [name,fingerprint(rows)]));
       if (!same(beforeTables,verified.tableSnapshots)) fail("RECOVERY_INVALIDATION_SOURCE_CHANGED");
       if (!database.prepare("SELECT 1 FROM users u JOIN platform_roles r ON r.user_id=u.id WHERE u.id=? AND u.status='active' AND r.role='platform_administrator' AND r.status='active'").get(reviewedByUserId)) fail("RECOVERY_INVALIDATION_REVIEWER_INVALID");
-      const rows = readReviewedInvalidations(database,decisions,{ preparedAtMs: credential.preparedAtMs,reconciledAtMs });
-      const records = invalidationReviewRecords({ plan: verified,events: decisions,reconciliationId,reviewedByUserId,reconciledAtMs });
+      const rows = readReviewedInvalidations(database,decisions,{ preparedAtMs: credential.preparedAtMs,reconciledAtMs,eventScope,verifiedPlan: verified });
+      const records = invalidationReviewRecords({ plan: verified,events: decisions,reconciliationId,reviewedByUserId,reconciledAtMs,eventScope });
       const initialChanges = database.prepare("SELECT total_changes() n").get().n;
       const suppress = database.prepare("UPDATE outbox_events SET status='discarded',last_error_code=?,updated_at_ms=?,version=version+1 WHERE id=? AND league_id=? AND version=? AND status IN ('pending','failed','publishing')");
       for (const row of rows) if (suppress.run(ERROR_CODE,reconciledAtMs,row.id,row.league_id,row.version).changes !== 1) fail("RECOVERY_INVALIDATION_EVENT_MISMATCH");
@@ -76,7 +79,7 @@ function prepareRecoveryInvalidationReconciliation({ credentialPreparation,plan,
     const inspection = inspectDatabase(candidatePath);unchanged(source,originalPlan.preparedPlaintextSha256);
     const report = { reportVersion: 1,status: "invalidations-reconciled-held",recoveryId: verified.recoveryId,recoveryEpoch: verified.recoveryEpoch,
       reconciliationId,reviewedByUserId,reconciledAtMs,planChecksum: verified.planChecksum,sourcePlaintextSha256: verified.preparedPlaintextSha256,
-      reconciledPlaintextSha256: hashFile(candidatePath),...result,disposition: DISPOSITION,deliveryPerformed: false,
+      reconciledPlaintextSha256: hashFile(candidatePath),...result,disposition,deliveryPerformed: false,
       reviewEvidence: "operator-supplied-not-current-authentication",sourceDatabase: "unchanged",jobs: "unchanged-and-held",
       authoritativeNotifications: "unchanged",normalRuntime: "blocked-by-durable-recovery-hold",activationReady: false };
     const receipt = { ...report,reportChecksum: hash(canonicalize(report)) };

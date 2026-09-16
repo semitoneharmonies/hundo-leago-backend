@@ -56,6 +56,7 @@ function harness({
     { id: uuid(11), home_team_id: uuid(22), away_team_id: uuid(20) },
   ];
   const handlers = createMatchupOccurrenceHandlers({
+    executionGuard: { runAtomic(_execution, effect) { return effect(); } },
     statisticsService: {
       async refresh(command) {
         calls.push(["refresh", command]);
@@ -296,6 +297,7 @@ test("handlers reject missing, mutable, inexact, mismatched, and malformed execu
 
 test("finalization reports waiting source as a retryable durable failure", async () => {
   const handlers = createMatchupOccurrenceHandlers({
+    executionGuard: { runAtomic(_execution, effect) { return effect(); } },
     statisticsService: { refresh() {} },
     lateLockCoordinator: { retryEligibleLateLocks() {} },
     readRepository: {

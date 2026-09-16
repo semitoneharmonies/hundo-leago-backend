@@ -3,7 +3,7 @@ const path = require("node:path");
 const { canonicalize } = require("../../infrastructure/migration/sourceInventory");
 const { buildRecoveryReconciliationPlan } = require("./buildRecoveryReconciliationPlan");
 const { readVerifiedRecoveryParent } = require("./buildRecoveryReconciliationLineage");
-const { UUID,DIGEST,DISPOSITION,RecoveryInvalidationError,fail,hash,fingerprint,validateInvalidationDecisions,
+const { UUID,DIGEST,DISPOSITION,REVIEWED_DISPOSITION,RecoveryInvalidationError,fail,hash,fingerprint,validateInvalidationDecisions,
   readReviewedInvalidations,suppressedInvalidation,invalidationReviewRecords } = require("./recoveryInvalidationPolicy");
 const same = (left,right) => canonicalize(left) === canonicalize(right);
 function unchanged(database,digest) {
@@ -15,7 +15,7 @@ function buildInvalidationReconciledRecoveryPlan({ preparedDatabase,reconciledDa
   const input = invalidationReconciliation;
   if ([preparedDatabase,reconciledDatabase].some(database => !database?.open || database.readonly !== true || database.inTransaction || !path.isAbsolute(database.name || "")) ||
       (parentProof === undefined && originalPlan?.planVersion !== 2) || !Number.isSafeInteger(observedAtMs) || observedAtMs < 0 ||
-      input?.reportVersion !== 1 || input.status !== "invalidations-reconciled-held" || input.disposition !== DISPOSITION || input.deliveryPerformed !== false ||
+      input?.reportVersion !== 1 || input.status !== "invalidations-reconciled-held" || ![DISPOSITION,REVIEWED_DISPOSITION].includes(input.disposition) || input.deliveryPerformed !== false ||
       input.reviewEvidence !== "operator-supplied-not-current-authentication" || input.sourceDatabase !== "unchanged" || input.jobs !== "unchanged-and-held" ||
       input.authoritativeNotifications !== "unchanged" || input.normalRuntime !== "blocked-by-durable-recovery-hold" || input.activationReady !== false ||
       ![input.reconciliationId,input.reviewedByUserId].every(value => UUID.test(value || "")) || ![input.reconciledPlaintextSha256,input.reportChecksum].every(value => DIGEST.test(value || "")) ||
@@ -27,6 +27,7 @@ function buildInvalidationReconciledRecoveryPlan({ preparedDatabase,reconciledDa
         expectedEnvironmentId: originalPlan.databaseIdentity?.environmentId,expectedDatabaseId: originalPlan.databaseIdentity?.databaseId });
     if (!same(parent,originalPlan)) fail("RECOVERY_INVALIDATION_PLAN_PARENT_INVALID");
     const { reconciledDatabasePath,inspection,reportChecksum,...receipt } = input;
+    const eventScope = receipt.disposition === REVIEWED_DISPOSITION ? "reviewed-candidate" : "restored";
     const events = validateInvalidationDecisions(receipt.events);
     if (hash(canonicalize(receipt)) !== reportChecksum || !same(events,receipt.events) || receipt.planChecksum !== parent.planChecksum ||
         receipt.sourcePlaintextSha256 !== parent.preparedPlaintextSha256 || receipt.recoveryId !== parent.recoveryId || !same(receipt.recoveryEpoch,parent.recoveryEpoch) ||
@@ -45,8 +46,10 @@ function buildInvalidationReconciledRecoveryPlan({ preparedDatabase,reconciledDa
       }));
       const before = read(preparedDatabase),after = read(reconciledDatabase);
       if (!preparedDatabase.prepare("SELECT 1 FROM users u JOIN platform_roles r ON r.user_id=u.id WHERE u.id=? AND u.status='active' AND r.role='platform_administrator' AND r.status='active'").get(receipt.reviewedByUserId)) fail("RECOVERY_INVALIDATION_PLAN_REVIEWER_INVALID");
-      const selected = new Set(readReviewedInvalidations(preparedDatabase,events,{ preparedAtMs: credentialPreparation.preparedAtMs,reconciledAtMs: receipt.reconciledAtMs }).map(row => row.id));
-      const records = invalidationReviewRecords({ plan: parent,events,reconciliationId: receipt.reconciliationId,reviewedByUserId: receipt.reviewedByUserId,reconciledAtMs: receipt.reconciledAtMs });
+      const selected = new Set(readReviewedInvalidations(preparedDatabase,events,{ preparedAtMs: credentialPreparation.preparedAtMs,
+        reconciledAtMs: receipt.reconciledAtMs,eventScope,verifiedPlan: parent }).map(row => row.id));
+      const records = invalidationReviewRecords({ plan: parent,events,reconciliationId: receipt.reconciliationId,
+        reviewedByUserId: receipt.reviewedByUserId,reconciledAtMs: receipt.reconciledAtMs,eventScope });
       const expected = { ...before,outbox_events: before.outbox_events.map(row => selected.has(row.id) ? suppressedInvalidation(row,receipt.reconciledAtMs) : row),
         application_metadata: [...before.application_metadata,records.metadata],security_audit_events: [...before.security_audit_events,records.audit] };
       const tableSnapshots = Object.fromEntries(names.map(name => [name,fingerprint(after[name])]));

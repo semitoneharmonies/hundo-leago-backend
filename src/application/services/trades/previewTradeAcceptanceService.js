@@ -46,7 +46,9 @@ function projectResult(result) {
       seasonId: result.trade.season_id,
       proposingTeamId: result.trade.proposing_team_id,
       receivingTeamId: result.trade.receiving_team_id,
-      status: "Pending",
+      status: result.trade.trade_status === "awaiting_commissioner_approval"
+        ? "Awaiting Commissioner Approval"
+        : "Pending",
       effectiveDeadlineAtMs: result.trade.effective_deadline_at_ms,
       version: result.trade.trade_version,
     }),
@@ -67,6 +69,7 @@ function createPreviewTradeAcceptanceService({
     "requireActiveMembership",
     "league membership authorization"
   );
+  assertMethod(leagueAuthorization, "requireCommissioner", "commissioner authorization");
   assertMethod(teamAuthorization, "requireManager", "team-manager authorization");
   for (const method of ["findLifecycleParticipants", "previewAcceptance"]) {
     assertMethod(repository, method, "a read-only trade preview repository");
@@ -86,7 +89,15 @@ function createPreviewTradeAcceptanceService({
     if (!Number.isSafeInteger(proposal.effective_deadline_at_ms)) {
       throw new TradeLifecyclePolicyError(TRADE_LIFECYCLE_CODES.stateInvalid);
     }
-    const actor = teamAuthorization.requireManager(
+    let approvalActor = null;
+    if (proposal.trade_status === "awaiting_commissioner_approval") {
+      try {
+        approvalActor = leagueAuthorization.requireCommissioner(authenticated, proposal.league_id);
+      } catch (error) {
+        if (error?.code !== "LEAGUE_COMMISSIONER_REQUIRED") throw error;
+      }
+    }
+    const actor = approvalActor || teamAuthorization.requireManager(
       authenticated,
       proposal.league_id,
       proposal.receiving_team_id

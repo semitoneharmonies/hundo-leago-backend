@@ -45,19 +45,21 @@ function buildRecoveryReconciliationLineage({ initialDatabase,credentialPreparat
   if (!Array.isArray(steps) || steps.length < 1 || steps.length > 32 || initialPlan?.planVersion !== 2) fail("RECOVERY_LINEAGE_INPUT_INVALID");
   try {
     const readers = [initialDatabase,...steps.map(step => {
-      exact(step,["kind","reconciledDatabase","receipt","observedAtMs"]);
-      if (!["email","statistics","invalidation","trade-expiry"].includes(step.kind) || !Number.isSafeInteger(step.observedAtMs) || step.observedAtMs < 0) fail("RECOVERY_LINEAGE_INPUT_INVALID");
+      exact(step,["kind","reconciledDatabase","receipt","observedAtMs",...(["auction","known-buyout"].includes(step?.kind) ? ["restoredDatabase","preservedDatabase"] : []),
+        ...(step?.kind === "known-buyout" ? ["backupManifestBytes","preservationManifestBytes"] : [])]);
+      if (!["email","statistics","invalidation","trade-expiry","auction","known-buyout"].includes(step.kind) || !Number.isSafeInteger(step.observedAtMs) || step.observedAtMs < 0) fail("RECOVERY_LINEAGE_INPUT_INVALID");
       return step.reconciledDatabase;
     })];
     const paths = readers.map(database => { assertReader(database);return fs.realpathSync(database.name); });
     if (new Set(paths).size !== paths.length) fail("RECOVERY_LINEAGE_SOURCE_REUSED");
-    const before = readers.map(database => ({ digest: assertReader(database),changes: database.prepare("SELECT total_changes() n").get().n }));
+    const protectedReaders = [...readers,...steps.filter(step => ["auction","known-buyout"].includes(step.kind)).flatMap(step => [step.restoredDatabase,step.preservedDatabase])];
+    const before = protectedReaders.map(database => ({ digest: assertReader(database),changes: database.prepare("SELECT total_changes() n").get().n }));
     let plan = buildRecoveryReconciliationPlan({ database: initialDatabase,credentialPreparation,observedAtMs: initialPlan.observedAtMs,
       expectedEnvironmentId: initialPlan.databaseIdentity?.environmentId,expectedDatabaseId: initialPlan.databaseIdentity?.databaseId });
     if (!same(plan,initialPlan)) fail("RECOVERY_LINEAGE_PARENT_INVALID");
     const receipts = new Set(),reviews = new Set();
     for (const [index,step] of steps.entries()) {
-      const reviewId = ["statistics","trade-expiry"].includes(step.kind) ? step.receipt?.decision?.reconciliationId : step.receipt?.reconciliationId;
+      const reviewId = ["statistics","trade-expiry","auction","known-buyout"].includes(step.kind) ? step.receipt?.decision?.reconciliationId : step.receipt?.reconciliationId;
       if (!reviewId || !step.receipt?.reportChecksum || reviews.has(reviewId) || receipts.has(step.receipt.reportChecksum) ||
           step.observedAtMs < plan.observedAtMs) fail("RECOVERY_LINEAGE_RECEIPT_REUSED");
       reviews.add(reviewId);receipts.add(step.receipt.reportChecksum);
@@ -70,12 +72,16 @@ function buildRecoveryReconciliationLineage({ initialDatabase,credentialPreparat
         if (step.kind === "email") { verify = require("./buildEmailReconciledRecoveryPlan").buildEmailReconciledRecoveryPlan;receiptField = "emailReconciliation"; }
         else if (step.kind === "statistics") { verify = require("./buildStatisticsReconciledRecoveryPlan").buildStatisticsReconciledRecoveryPlan;receiptField = "statisticsReconciliation"; }
         else if (step.kind === "trade-expiry") { verify = require("./buildTradeExpiryReconciledRecoveryPlan").buildTradeExpiryReconciledRecoveryPlan;receiptField = "tradeExpiryReconciliation"; }
+        else if (step.kind === "auction") { verify = require("./buildAuctionReconciledRecoveryPlan").buildAuctionReconciledRecoveryPlan;receiptField = "auctionReconciliation"; }
+        else if (step.kind === "known-buyout") { verify = require("./verifyRecoveryKnownBuyout").buildKnownBuyoutReconciledRecoveryPlan;receiptField = "knownBuyoutReconciliation"; }
         else { verify = require("./buildInvalidationReconciledRecoveryPlan").buildInvalidationReconciledRecoveryPlan;receiptField = "invalidationReconciliation"; }
         plan = verify({ preparedDatabase: readers[index],reconciledDatabase: readers[index+1],credentialPreparation,
-          originalPlan: plan,parentProof,observedAtMs: step.observedAtMs,[receiptField]: step.receipt });
+          originalPlan: plan,parentProof,observedAtMs: step.observedAtMs,[receiptField]: step.receipt,
+          ...(["auction","known-buyout"].includes(step.kind) ? { restoredDatabase: step.restoredDatabase,preservedDatabase: step.preservedDatabase } : {}),
+          ...(step.kind === "known-buyout" ? { backupManifestBytes: step.backupManifestBytes,preservationManifestBytes: step.preservationManifestBytes } : {}) });
       } finally { parents.delete(parentProof); }
     }
-    for (const [index,database] of readers.entries()) {
+    for (const [index,database] of protectedReaders.entries()) {
       assertReader(database,before[index].digest);
       if (database.prepare("SELECT total_changes() n").get().n !== before[index].changes) fail("RECOVERY_LINEAGE_WRITE_DETECTED");
     }
@@ -101,9 +107,18 @@ function buildRecoveryPlanFromLineage({ database,credentialPreparation,lineage =
       const reader = openReadonlyDatabase({ databasePath: file });readers.push(reader);return reader;
     };
     const initialDatabase = open(lineage.initialDatabasePath);
+    const readManifestBytes = file => {
+      if (typeof file !== "string" || file !== file.trim() || !path.isAbsolute(file) || !fs.statSync(file).isFile() ||
+          fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).nlink !== 1 || fs.statSync(file).size < 2 ||
+          fs.statSync(file).size > 16 * 1024 * 1024) fail("RECOVERY_LINEAGE_SOURCE_INVALID");
+      return fs.readFileSync(file);
+    };
     const steps = lineage.steps.map(step => {
-      exact(step,["kind","reconciledDatabasePath","receipt","observedAtMs"]);
-      return { kind: step.kind,reconciledDatabase: open(step.reconciledDatabasePath),receipt: step.receipt,observedAtMs: step.observedAtMs };
+      exact(step,["kind","reconciledDatabasePath","receipt","observedAtMs",...(["auction","known-buyout"].includes(step?.kind) ? ["restoredDatabasePath","preservedDatabasePath"] : []),
+        ...(step?.kind === "known-buyout" ? ["backupManifestPath","preservationManifestPath"] : [])]);
+      return { kind: step.kind,reconciledDatabase: open(step.reconciledDatabasePath),receipt: step.receipt,observedAtMs: step.observedAtMs,
+        ...(["auction","known-buyout"].includes(step.kind) ? { restoredDatabase: open(step.restoredDatabasePath),preservedDatabase: open(step.preservedDatabasePath) } : {}),
+        ...(step.kind === "known-buyout" ? { backupManifestBytes: readManifestBytes(step.backupManifestPath),preservationManifestBytes: readManifestBytes(step.preservationManifestPath) } : {}) };
     });
     const plan = buildRecoveryReconciliationLineage({ initialDatabase,credentialPreparation,initialPlan: lineage.initialPlan,steps });
     if (plan.observedAtMs !== observedAtMs || plan.databaseIdentity.environmentId !== expectedEnvironmentId ||

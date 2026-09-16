@@ -443,6 +443,7 @@ function openDeployedTargetRuntime({
       matchupProcessingLeagueIds: config.matchupProcessingLeagueIds,
       leagueInvalidationPublisher,
       leagueWriteMode: config.leagueWriteMode,
+      firstAdministratorSetup: config.firstAdministratorSetup || null,
       freeAgentDraftRoutesEnabled:
         config.freeAgentDraftRoutesEnabled,
       stagingAccountAutoVerificationEnabled,

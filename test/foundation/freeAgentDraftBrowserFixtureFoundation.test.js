@@ -122,6 +122,350 @@ function authenticate(runtime, userId) {
   return authenticated;
 }
 
+for (const kind of ["baseline", "lock", "finalize"]) {
+  test(`restored matchup ${kind} rejects its old lease and finishes a committed transition once after worker restart`,
+    t => verifyRestoredMatchupOccurrence(t, `matchup:${kind}`));
+}
+
+for (const kind of ["lock", "finalize", "rollover"]) {
+  test(`restored matchup ${kind} rolls back interrupted partial batches and completes once after restart`,
+    t => verifyRestoredMatchupOccurrence(t, `matchup:${kind}`, { interrupt: true }));
+}
+
+async function verifyRestoredMatchupOccurrence(t, jobType, { interrupt = false } = {}) {
+  const crypto = require("node:crypto");
+  const { openDatabase,openReadonlyDatabase } = require("../../src/infrastructure/database/connection");
+  const { createTargetRepositories,createTargetServices,createTargetRuntime } = require("../../src/bootstrap/createTargetRuntime");
+  const { createSecureRandom } = require("../../src/infrastructure/security/createSecureRandom");
+  const { createRunMatchupOccurrencesJob } = require("../../src/jobs/definitions/runMatchupOccurrences");
+  const { createLiveStatisticsService } = require("../../src/application/services/statistics/createLiveStatisticsService");
+  const { classifyMatchupOccurrenceExecutionGuardError } = require("../../src/infrastructure/persistence/sqlite/SqliteMatchupOccurrenceExecutionGuard");
+  const { loadBackupConfig } = require("../../src/config/loadBackupConfig");
+  const { createObjectStorageAdapter } = require("../../src/infrastructure/backups/createObjectStorageAdapter");
+  const { createEncryptedOffsiteBackup } = require("../../src/operations/backups/createEncryptedOffsiteBackup");
+  const { restoreEncryptedBackupToCleanPath } = require("../../src/operations/backups/restoreEncryptedBackupToCleanPath");
+  const { prepareRecoveryCredentials } = require("../../src/operations/backups/prepareRecoveryCredentials");
+  const { buildRecoveryReconciliationPlan } = require("../../src/operations/backups/buildRecoveryReconciliationPlan");
+  const { RECOVERY_HOLD_KEY,assertRecoveryRuntimeAllowed } = require("../../src/infrastructure/database/recoveryHold");
+  const { readRows,snapshots,hash } = require("../../src/operations/backups/recoveryKnownBuyoutEvidence");
+  const started = await startRuntime(t), source = started.runtime.database;
+  seedRealPlayerCatalog(source);
+  const fixture = await createFreeAgentDraftBrowserFixture({ runtime:started.runtime });
+  const league = fixture.leagues.gamma;
+  assert.equal(league.phase,"completed");
+  const season = source.prepare("SELECT * FROM seasons WHERE league_id=? AND id=?").get(league.leagueId,league.seasonId);
+  const target = source.prepare("SELECT j.*,b.owning_matchup_week_id week_id,b.schedule_operation_id,b.schedule_version FROM job_runs j JOIN matchup_schedule_job_bindings b ON b.job_run_id=j.id " +
+    "JOIN season_matchup_schedule_generations g ON g.league_id=b.league_id AND g.season_id=b.season_id AND g.schedule_operation_id=b.schedule_operation_id AND g.schedule_version=b.schedule_version AND g.status='current' " +
+    "JOIN matchup_weeks w ON w.id=b.owning_matchup_week_id AND w.league_id=b.league_id " +
+    "WHERE j.league_id=? AND j.season_id=? AND j.job_type=? AND j.status='pending' AND w.status='scheduled' ORDER BY j.scheduled_for_ms LIMIT 1")
+    .get(league.leagueId,league.seasonId,jobType);
+  assert.ok(target,"The completed real FAD must leave the requested scheduled occurrence.");
+  const week=source.prepare("SELECT * FROM matchup_weeks WHERE id=? AND league_id=?").get(target.week_id,league.leagueId);
+  const weekMatchups=source.prepare("SELECT * FROM matchups WHERE matchup_week_id=? AND league_id=?").all(week.id,league.leagueId);
+  const matchupIds=new Set(weekMatchups.map(row=>row.id));
+  const teamIds=new Set(weekMatchups.flatMap(row=>[row.home_team_id,row.away_team_id]));
+  assert.equal(weekMatchups.length,7);assert.equal(teamIds.size,14);
+  let nowMs = target.scheduled_for_ms+1;
+  const clock = { nowMs:()=>nowMs },secureRandom = createSecureRandom();
+  const securityFoundations = { config:started.runtime.securityConfig,clock,secureRandom,logger:{ info(){},warn(){},error(){} } };
+  const currentSeason = { label:season.label,nhlSeasonKey:season.nhl_season_key };
+  const observed = { providerCalls:0,emailCalls:0,publications:0 };
+  const forbidden = kind => async () => { observed[kind]++;assert.fail("Recovery occurrence cannot invoke "+kind); };
+  function compose(database) {
+    // Match normal runtime composition when NHL completed-game statistics is disabled.
+    // This existing fixture uses synthetic SportsDataIO data; NHL source isolation remains tested separately.
+    const repositories = createTargetRepositories({ database,secureRandom,matchupProcessingLeagueIds:[league.leagueId] });
+    const services = createTargetServices({ repositories,securityFoundations,currentSeason,
+      leagueInvalidationPublisher:{ publish(){observed.publications++;assert.fail("Recovery occurrence cannot publish.");} },
+      nhlFetchImplementation:forbidden("providerCalls"),sportsDataIoFetchImplementation:forbidden("providerCalls"),emailFetchImplementation:forbidden("emailCalls"),
+      emailAdapter:{sendEmailVerification:forbidden("emailCalls"),sendAccountActionLink:forbidden("emailCalls"),sendSecurityNotification:forbidden("emailCalls")} });
+    return { repositories,services };
+  }
+  const claimInput = { leagueId:league.leagueId,seasonId:league.seasonId,jobType:target.job_type,occurrenceKey:target.occurrence_key };
+  const original = compose(source);
+  async function refreshLocalStatistics(atMs) {
+    nowMs=atMs;
+    const players=source.prepare("SELECT external.external_value AS providerPlayerId FROM player_external_ids external JOIN players player ON player.id=external.player_id " +
+      "WHERE external.provider='sportsdataio-discovery-lab' AND player.status='active' GROUP BY external.external_value ORDER BY CAST(external.external_value AS INTEGER), external.external_value")
+      .all().filter(row=>/^[1-9][0-9]*$/.test(row.providerPlayerId));
+    assert.ok(players.length>=700);
+    // This fixture adapter supplies synthetic totals only to the original local database.
+    // Restored services still use the normal composition with all external adapters denied.
+    const statistics=createLiveStatisticsService({repository:original.repositories.statistics,nhlSeasonKey:season.nhl_season_key,
+      providerName:"sportsdataio-live",playerIdentityProvider:"sportsdataio-discovery-lab",minimumPlayerCount:700,nowMs:()=>nowMs,createId:()=>secureRandom.id(),
+      provider:{async fetchLiveSnapshot({requiredPlayers,requiredPlayerGames}) {
+        assert.deepEqual(requiredPlayerGames,[],"Normal fixture locks must not require historical late-lock coverage.");
+        return {provider:"sportsdataio-live",sourceVersion:`recovery-fixture-${season.nhl_season_key}-${nowMs}`,capturedAtMs:nowMs,totalsSourceUpdatedAtMs:nowMs,
+          totalsRows:players.map((player,index)=>({playerId:player.providerPlayerId,gamesPlayed:1,goals:index%3,assists:index%4})),playerGameRows:[],
+          playerGameCoverage:{schemaVersion:1,throughAtMs:nowMs,players:requiredPlayers.map(player=>({playerId:player.playerId,providerPlayerId:player.providerPlayerId,
+            providerTeamId:null,disposition:"no_team",games:[]}))}};
+      }}});
+    await statistics.refresh();
+  }
+  async function completePrerequisite(kind) {
+    const jobs=source.prepare("SELECT j.* FROM job_runs j JOIN matchup_schedule_job_bindings b ON b.job_run_id=j.id " +
+      "WHERE b.owning_matchup_week_id=? AND j.league_id=? AND j.season_id=? AND j.job_type=? AND b.schedule_operation_id=? AND b.schedule_version=?")
+      .all(week.id,league.leagueId,league.seasonId,kind,target.schedule_operation_id,target.schedule_version);
+    assert.equal(jobs.length,1);const job=jobs[0];assert.equal(job.status,"pending");nowMs=job.scheduled_for_ms+1;
+    const claim=original.repositories.matchupJobs.claim({leagueId:league.leagueId,seasonId:league.seasonId,jobType:kind,occurrenceKey:job.occurrence_key,
+      nowMs,leaseOwner:"fixture-prerequisite-worker",leaseToken:crypto.randomUUID(),leaseExpiresAtMs:nowMs+60_000});
+    assert.equal(claim.acquired,true,`${kind} prerequisite for the current schedule must be claimable`);
+    const result=await original.services.league.matchupOccurrenceHandlers[kind](claim.occurrenceExecution,nowMs);
+    original.repositories.matchupJobs.succeed({leagueId:league.leagueId,runId:job.id,leaseOwner:claim.occurrenceExecution.leaseOwner,
+      leaseToken:claim.occurrenceExecution.leaseToken,expectedVersion:claim.occurrenceExecution.claimedJobVersion,completedAtMs:nowMs,result});
+  }
+  if(jobType!=="matchup:baseline") {
+    await refreshLocalStatistics(week.baseline_at_ms);
+    await completePrerequisite("matchup:baseline");
+    if(jobType==="matchup:finalize" || jobType==="matchup:rollover") {
+      await completePrerequisite("matchup:lock");
+      await refreshLocalStatistics(week.ends_at_ms);
+      if (jobType === "matchup:rollover") {
+        // Rollover retries finalization from the durable Awaiting Data state.
+        const finalizeJob = source.prepare("SELECT j.* FROM job_runs j JOIN matchup_schedule_job_bindings b ON b.job_run_id=j.id " +
+          "WHERE b.owning_matchup_week_id=? AND j.league_id=? AND j.job_type='matchup:finalize' AND b.schedule_operation_id=?")
+          .get(week.id, league.leagueId, target.schedule_operation_id);
+        assert(finalizeJob); nowMs = finalizeJob.scheduled_for_ms + 1;
+        const claim = original.repositories.matchupJobs.claim({ leagueId: league.leagueId, seasonId: league.seasonId,
+          jobType: finalizeJob.job_type, occurrenceKey: finalizeJob.occurrence_key, nowMs,
+          leaseOwner: "waiting-finalize-prerequisite", leaseToken: crypto.randomUUID(), leaseExpiresAtMs: nowMs + 60_000 });
+        assert.equal(claim.acquired, true);
+        original.services.league.matchupWeeks.advance({ leagueId: league.leagueId, seasonId: league.seasonId, weekId: week.id,
+          operationId: crypto.randomUUID(), nowMs, occurrenceExecution: claim.occurrenceExecution });
+        original.repositories.matchupJobs.fail({ leagueId: league.leagueId, runId: finalizeJob.id,
+          leaseOwner: claim.occurrenceExecution.leaseOwner, leaseToken: claim.occurrenceExecution.leaseToken,
+          expectedVersion: claim.occurrenceExecution.claimedJobVersion, completedAtMs: nowMs,
+          nextAttemptAtMs: target.scheduled_for_ms + 60_000, errorCode: "MATCHUP_FINAL_SOURCE_WAITING" });
+        assert.equal(source.prepare("SELECT status FROM matchup_weeks WHERE id=?").get(week.id).status, "awaiting_data");
+      }
+    }
+  }
+  nowMs=target.scheduled_for_ms+1;
+  const oldClaim = original.repositories.matchupJobs.claim({ ...claimInput,nowMs,leaseOwner:"pre-backup-fixture-worker",
+    leaseToken:crypto.randomUUID(),leaseExpiresAtMs:nowMs+60_000 });
+  assert.equal(oldClaim.acquired,true);
+  const encryptionKey=crypto.randomBytes(32),objects=new Map();
+  const objectStorage=createObjectStorageAdapter({client:{
+    async putObject({key,body,visibility}){assert.equal(visibility,"private");objects.set(key,Buffer.from(body));return {stored:true};},
+    async headObject({key}){const body=objects.get(key);return body?{byteSize:body.length,sha256:hash(body)}:null;},
+    async getObject({key}){return {body:Buffer.from(objects.get(key))};}
+  }});
+  const config=loadBackupConfig({env:{BACKUP_LOCAL_DIR:path.join(started.temporaryRoot,"matchup-backup-work"),BACKUP_OBJECT_ENDPOINT:"https://release-qa.invalid",
+    BACKUP_OBJECT_REGION:"local-1",BACKUP_OBJECT_BUCKET:"hundo-release-qa",BACKUP_OBJECT_PREFIX:"m7/matchup-recovery/",BACKUP_OBJECT_ACCESS_KEY_ID:"local-release-qa",
+    BACKUP_OBJECT_SECRET_ACCESS_KEY:"fixture-only",BACKUP_ENCRYPTION_KEY_VERSION:"matchup-local-v1",BACKUP_ENCRYPTION_KEY:encryptionKey.toString("base64url"),BACKUP_SCHEDULE_ENABLED:"false"},
+    runtimeConfig:{appEnv:"staging",persistentRoot:started.temporaryRoot,environmentId:FIXTURE_ENVIRONMENT_ID,databaseId:FIXTURE_DATABASE_ID}});
+  const backup=await createEncryptedOffsiteBackup({databasePath:started.databasePath,config,objectStorage,reason:"pre-cutover-rehearsal",
+    requestedByType:"release_qa_automation",requestedById:"matchup-recovery-fixture",backendBuildId:"local-matchup-recovery",retentionClass:"incident-preservation",nowMs:()=>nowMs});
+  const sourceBytes=source.serialize();
+  const restored=await restoreEncryptedBackupToCleanPath({manifestObjectKey:backup.manifestObjectKey,objectStorage,keyResolver:async()=>encryptionKey,
+    expectedEnvironment:config.appEnv,expectedEnvironmentId:config.environmentId,expectedDatabaseId:config.databaseId,
+    targetDatabasePath:path.join(started.temporaryRoot,"matchup-restored.sqlite3"),temporaryRoot:started.temporaryRoot});
+  nowMs++;
+  const prepared=prepareRecoveryCredentials({restoredCandidate:restored,temporaryRoot:started.temporaryRoot,outputDirectory:path.join(started.temporaryRoot,"matchup-prepared"),
+    expectedEnvironmentId:config.environmentId,expectedDatabaseId:config.databaseId,recoveryId:crypto.randomUUID(),preparedAtMs:nowMs});
+  const readHash=file=>hash(fs.readFileSync(file)),protectedFiles=[restored.targetDatabasePath,prepared.preparedDatabasePath],protectedHashes=protectedFiles.map(readHash);
+  const preparedReader=openReadonlyDatabase({databasePath:prepared.preparedDatabasePath});
+  try {
+    const plan=buildRecoveryReconciliationPlan({database:preparedReader,credentialPreparation:prepared,observedAtMs:nowMs,
+      expectedEnvironmentId:config.environmentId,expectedDatabaseId:config.databaseId});
+    const heldJob=plan.jobs.find(row=>row.id===target.id);assert.equal(heldJob.leaseExpired,true);assert.equal(heldJob.executionPermitted,false);
+    assert.equal(heldJob.disposition,"held-awaiting-occurrence-evidence");assert.equal(plan.activationReady,false);
+    assert.equal(preparedReader.prepare("SELECT total_changes() n").get().n,0);
+  } finally {preparedReader.close();}
+  const replayPath=path.join(started.temporaryRoot,"matchup-replay.sqlite3");fs.copyFileSync(prepared.preparedDatabasePath,replayPath,fs.constants.COPYFILE_EXCL);
+  let database=openDatabase({databasePath:replayPath,environment:"test"}).database;
+  try {
+    let runtime=compose(database);
+    const before=readRows(database),beforeSnapshots=snapshots(before),hold=before.application_metadata.find(row=>row.metadata_key===RECOVERY_HOLD_KEY);
+    await t.test("the restored pre-recovery execution and completion cannot write",async()=>{
+      await assert.rejects(runtime.services.league.matchupOccurrenceHandlers[jobType](oldClaim.occurrenceExecution,nowMs),
+        error=>classifyMatchupOccurrenceExecutionGuardError(error)==="MATCHUP_OCCURRENCE_LEASE_LOST");
+      assert.throws(()=>runtime.repositories.matchupJobs.succeed({leagueId:league.leagueId,runId:target.id,
+        leaseOwner:oldClaim.occurrenceExecution.leaseOwner,leaseToken:oldClaim.occurrenceExecution.leaseToken,
+        expectedVersion:oldClaim.occurrenceExecution.claimedJobVersion,completedAtMs:nowMs,result:{status:"baseline_ready"}}),{code:"REPOSITORY_VERSION_CONFLICT"});
+      assert.deepEqual(snapshots(readRows(database)),beforeSnapshots);
+    });
+    nowMs++;
+    const currentClaim=runtime.repositories.matchupJobs.claim({...claimInput,nowMs,leaseOwner:"reviewed-fixture-worker",leaseToken:crypto.randomUUID(),leaseExpiresAtMs:nowMs+100});
+    assert.equal(currentClaim.acquired,true);
+    if (interrupt) {
+      const { spawnSync } = require("node:child_process");
+      const claimed = readRows(database), claimedSnapshots = snapshots(claimed);
+      const claimedBytes = database.serialize();
+      const crashAtMs = nowMs;
+      const faultPoints = jobType === "matchup:lock" ? [1, 7, 14] : [1, 4, 7];
+      for (const mode of ["throw", "exit"]) for (const stopAfter of faultPoints) {
+        await t.test(`${mode} after write ${stopAfter} leaves no partial effect and retries once`, async () => {
+          const faultPath = path.join(started.temporaryRoot, `matchup-${mode}-${stopAfter}.sqlite3`);
+          fs.writeFileSync(faultPath, claimedBytes, { flag: "wx" });
+          const child = spawnSync(process.execPath, [path.join(__dirname, "../../scripts/fixtures/matchupInterruptedWorker.js")], {
+            input: JSON.stringify({ databasePath: faultPath, mode, stopAfter, nowMs: crashAtMs,
+              execution: currentClaim.occurrenceExecution, currentSeason }),
+            encoding: "utf8", windowsHide: true, timeout: 60_000,
+          });
+          assert.ifError(child.error);
+          assert.equal(child.status, mode === "exit" ? 86 : 0, child.stderr);
+          const marker = JSON.parse(child.stdout.trim());
+          assert.deepEqual(marker, { reached: true, mode, stopAfter, inTransaction: true });
+          let faultDatabase = openDatabase({ databasePath: faultPath, environment: "test" }).database;
+          try {
+            assert.deepEqual(snapshots(readRows(faultDatabase)), claimedSnapshots, "Every table must match the pre-effect checkpoint after interruption");
+            let faultRuntime = compose(faultDatabase);
+            nowMs = crashAtMs + 101;
+            const runner = () => createRunMatchupOccurrencesJob({ repository: { ...faultRuntime.repositories.matchupJobs,
+              listDue(input) { return faultRuntime.repositories.matchupJobs.listDue({ ...input, limit: 100 }).filter(row => row.id === target.id); } },
+              executionGuard: faultRuntime.repositories.matchupOccurrenceRunnerExecutionGuard, handlers: faultRuntime.services.league.matchupOccurrenceHandlers,
+              clock, secureRandom, leaseOwner: "partial-crash-restarted-worker", logger: { error() {} } });
+            const result = await runner().run();
+            assert.equal(result.due, 1); assert.equal(result.acquired, 1); assert.equal(result.succeeded, 1); assert.equal(result.failed, 0); assert.equal(result.skipped, 0);
+            const completed = readRows(faultDatabase), completedSnapshots = snapshots(completed);
+            const expected = jobType === "matchup:lock" ? { lockedTeams: 14 } : jobType === "matchup:rollover" ? { status: "final" } : { finalizedMatchups: 7 };
+            const job = completed.job_runs.find(row => row.id === target.id);
+            assert.equal(job.status, "succeeded"); assert.equal(job.attempt_count, currentClaim.occurrence.attempt_count + 1);
+            assert.deepEqual(JSON.parse(job.result_json), expected);
+            assert.deepEqual(completed.job_runs.filter(row => row.id !== target.id), claimed.job_runs.filter(row => row.id !== target.id));
+            const allowed = ["job_runs", "matchup_operations", "matchup_weeks", "matchups", "stat_snapshots",
+              ...(jobType === "matchup:lock" ? ["matchup_roster_locks", "matchup_roster_players", "stat_snapshot_players"] : ["matchup_results", "matchup_result_versions"])];
+            for (const table of Object.keys(claimedSnapshots)) {
+              if (!allowed.includes(table)) assert.deepEqual(completedSnapshots[table], claimedSnapshots[table], table);
+              else assert.deepEqual(completed[table].filter(row => row.league_id !== league.leagueId), claimed[table].filter(row => row.league_id !== league.leagueId), `${table}: other leagues`);
+            }
+            const additions = table => completed[table].filter(row => !claimed[table].some(old => old.id === row.id));
+            assert.equal(additions("matchup_operations").length, jobType === "matchup:lock" ? 1 : jobType === "matchup:rollover" ? 7 : 8);
+            if (jobType === "matchup:lock") {
+              assert.equal(additions("matchup_roster_locks").length, 14);
+              assert.deepEqual(new Set(additions("matchup_roster_locks").map(row => row.team_id)), teamIds);
+              assert.equal(additions("matchup_roster_players").length, 252);
+              assert.equal(additions("stat_snapshot_players").length, 252);
+            } else {
+              assert.equal(additions("matchup_results").length, 7);
+              assert.equal(additions("matchup_result_versions").length, 7);
+              assert.equal(completed.matchup_weeks.find(row => row.id === week.id).status, "final");
+            }
+            const standings = faultRuntime.services.league.matchupStandings.read({ leagueId: league.leagueId, seasonId: league.seasonId });
+            assert.equal(standings.finalizedResultCount, jobType === "matchup:lock" ? 0 : 7);
+            assert.equal((await runner().run()).due, 0);
+            assert.deepEqual(snapshots(readRows(faultDatabase)), completedSnapshots);
+            faultDatabase.close();
+            faultDatabase = openDatabase({ databasePath: faultPath, environment: "test" }).database;
+            faultRuntime = compose(faultDatabase);
+            assert.equal((await runner().run()).due, 0);
+            assert.deepEqual(snapshots(readRows(faultDatabase)), completedSnapshots);
+            assert.deepEqual(faultRuntime.services.league.matchupStandings.read({ leagueId: league.leagueId, seasonId: league.seasonId }), standings);
+            assert.throws(() => assertRecoveryRuntimeAllowed(faultDatabase), { code: "DATABASE_RECOVERY_HELD" });
+            assert.deepEqual(faultDatabase.pragma("foreign_key_check"), []);
+            assert.deepEqual(faultDatabase.pragma("integrity_check"), [{ integrity_check: "ok" }]);
+          } finally { if (faultDatabase.open) faultDatabase.close(); }
+        });
+      }
+      if (jobType !== "matchup:lock") await t.test("missing statistics after three results rolls back the results and preserves retry", async () => {
+        const waitingPath = path.join(started.temporaryRoot, "matchup-waiting.sqlite3");
+        fs.writeFileSync(waitingPath, claimedBytes, { flag: "wx" });
+        const waitingDatabase = openDatabase({ databasePath: waitingPath, environment: "test" }).database;
+        try {
+          const waitingRuntime = compose(waitingDatabase);
+          const { createMatchupOccurrenceHandlers } = require("../../src/application/services/matchups/createMatchupOccurrenceHandlers");
+          let finalized = 0;
+          const handlers = createMatchupOccurrenceHandlers({
+            executionGuard: waitingRuntime.repositories.matchupOccurrenceRunnerExecutionGuard,
+            statisticsService: { refresh: forbidden("providerCalls") }, lateLockCoordinator: { retryEligibleLateLocks: forbidden("providerCalls") },
+            readRepository: waitingRuntime.repositories.matchupRead, weekService: waitingRuntime.services.league.matchupWeeks,
+            legalityService: waitingRuntime.services.league.matchupLegality, provider: "sportsdataio-live",
+            resultService: { finalize(input) {
+              if (finalized === 3) return { finalized: false };
+              const result = waitingRuntime.services.league.matchupResults.finalize(input);
+              assert.equal(result.finalized, true); finalized++; return result;
+            } },
+          });
+          nowMs = crashAtMs;
+          await assert.rejects(handlers[jobType](currentClaim.occurrenceExecution, nowMs), { code: "MATCHUP_FINAL_SOURCE_WAITING" });
+          assert.equal(finalized, 3, "The waiting source must be encountered after real result writes");
+          const waiting = readRows(waitingDatabase);
+          for (const table of Object.keys(claimedSnapshots)) {
+            if (!["matchup_weeks", "matchups", "matchup_operations"].includes(table)) assert.deepEqual(waiting[table], claimed[table], `${table}: no partial finalization`);
+          }
+          if (jobType === "matchup:finalize") assert.equal(waiting.matchup_weeks.find(row => row.id === week.id).status, "awaiting_data");
+          assert.equal(waitingRuntime.services.league.matchupStandings.read({ leagueId: league.leagueId, seasonId: league.seasonId }).finalizedResultCount, 0);
+          nowMs += 101;
+          const runner = createRunMatchupOccurrencesJob({ repository: { ...waitingRuntime.repositories.matchupJobs,
+            listDue(input) { return waitingRuntime.repositories.matchupJobs.listDue({ ...input, limit: 100 }).filter(row => row.id === target.id); } },
+            executionGuard: waitingRuntime.repositories.matchupOccurrenceRunnerExecutionGuard, handlers: waitingRuntime.services.league.matchupOccurrenceHandlers,
+            clock, secureRandom, leaseOwner: "statistics-ready-worker", logger: { error() {} } });
+          assert.equal((await runner.run()).succeeded, 1);
+          assert.equal(waitingRuntime.services.league.matchupStandings.read({ leagueId: league.leagueId, seasonId: league.seasonId }).finalizedResultCount, 7);
+          const completed = snapshots(readRows(waitingDatabase));
+          assert.equal((await runner.run()).due, 0); assert.deepEqual(snapshots(readRows(waitingDatabase)), completed);
+          assert.throws(() => assertRecoveryRuntimeAllowed(waitingDatabase), { code: "DATABASE_RECOVERY_HELD" });
+        } finally { waitingDatabase.close(); }
+      });
+      assert.deepEqual(observed, { providerCalls: 0, emailCalls: 0, publications: 0 });
+      assert.deepEqual(protectedFiles.map(readHash), protectedHashes);
+      assert.deepEqual(source.serialize(), sourceBytes);
+      return;
+    }
+    const expectedEffect=jobType==="matchup:baseline"?{status:"baseline_ready"}:jobType==="matchup:lock"?{lockedTeams:14}:{finalizedMatchups:7};
+    const effect=await runtime.services.league.matchupOccurrenceHandlers[jobType](currentClaim.occurrenceExecution,nowMs);
+    assert.deepEqual(effect,expectedEffect);
+    const committed=readRows(database),committedSnapshots=snapshots(committed);
+    const allowedTables=["job_runs","matchup_operations","matchup_weeks"];
+    if(jobType==="matchup:lock") allowedTables.push("matchups","matchup_roster_locks","matchup_roster_players","stat_snapshots","stat_snapshot_players");
+    if(jobType==="matchup:finalize") allowedTables.push("matchups","stat_snapshots","matchup_results","matchup_result_versions");
+    for(const table of Object.keys(beforeSnapshots)) if(!allowedTables.includes(table)) assert.deepEqual(committedSnapshots[table],beforeSnapshots[table],table);
+    for(const table of allowedTables) {
+      assert.deepEqual(committed[table].filter(row=>row.league_id!==league.leagueId),before[table].filter(row=>row.league_id!==league.leagueId),`${table}: other leagues`);
+      if(!["job_runs","matchup_weeks","matchups"].includes(table)) {
+        const rowsById=new Map(committed[table].map(row=>[row.id,row]));
+        for(const row of before[table]) assert.deepEqual(rowsById.get(row.id),row,`${table}: preserve existing rows`);
+      }
+    }
+    assert.deepEqual(committed.matchup_weeks.filter(row=>row.id!==target.week_id),before.matchup_weeks.filter(row=>row.id!==target.week_id));
+    assert.deepEqual(committed.matchups.filter(row=>!matchupIds.has(row.id)),before.matchups.filter(row=>!matchupIds.has(row.id)));
+    const additions=table=>committed[table].filter(row=>!before[table].some(old=>old.id===row.id));
+    const newOperations=additions("matchup_operations");assert.equal(newOperations.length,jobType==="matchup:finalize"?8:1);
+    for(const row of newOperations) {assert.equal(row.league_id,league.leagueId);assert.equal(row.matchup_week_id,target.week_id);}
+    if(jobType==="matchup:lock") {
+      const locks=additions("matchup_roster_locks");assert.equal(locks.length,14);
+      assert.deepEqual(new Set(locks.map(row=>row.team_id)),teamIds);
+      for(const row of locks) {assert.equal(row.matchup_week_id,week.id);assert.equal(row.legal,1);}
+      assert.equal(additions("matchup_roster_players").length,252);assert.equal(additions("stat_snapshots").length,14);assert.equal(additions("stat_snapshot_players").length,252);
+      for(const row of committed.matchups.filter(row=>matchupIds.has(row.id))) assert.equal(row.status,"live");
+    }
+    if(jobType==="matchup:finalize") {
+      assert.equal(additions("stat_snapshots").length,7);assert.equal(additions("matchup_results").length,7);assert.equal(additions("matchup_result_versions").length,7);
+      for(const row of committed.matchups.filter(row=>matchupIds.has(row.id))) assert.equal(row.status,"final");
+      assert.equal(committed.matchup_weeks.find(row=>row.id===week.id).status,"final");
+    }
+    const standingsInput={leagueId:league.leagueId,seasonId:league.seasonId};
+    const committedStandings=runtime.services.league.matchupStandings.read(standingsInput);
+    assert.equal(committedStandings.finalizedResultCount,jobType==="matchup:finalize"?7:0);
+    assert.equal(database.prepare("SELECT status FROM job_runs WHERE id=?").get(target.id).status,"running");
+    database.close();nowMs+=101;database=openDatabase({databasePath:replayPath,environment:"test"}).database;runtime=compose(database);
+    const runner=()=>createRunMatchupOccurrencesJob({repository:{...runtime.repositories.matchupJobs,
+      listDue(input){return runtime.repositories.matchupJobs.listDue({...input,limit:100}).filter(row=>row.id===target.id);}},
+      executionGuard:runtime.repositories.matchupOccurrenceRunnerExecutionGuard,handlers:runtime.services.league.matchupOccurrenceHandlers,clock,secureRandom,
+      leaseOwner:"restarted-fixture-worker",logger:{error(){}}});
+    await t.test("a restarted real worker completes the prior effect without another transition",async()=>{
+      const result=await runner().run();assert.equal(result.status,"succeeded");assert.equal(result.due,1,"The exact current occurrence must remain eligible after its domain effect commits");assert.equal(result.acquired,1);
+      assert.equal(result.succeeded,1);assert.equal(result.failed,0);assert.equal(result.skipped,0);
+      const after=readRows(database),afterSnapshots=snapshots(after);
+      for(const table of Object.keys(committedSnapshots)) if(table!=="job_runs") assert.deepEqual(afterSnapshots[table],committedSnapshots[table],table);
+      assert.deepEqual(after.job_runs.filter(row=>row.id!==target.id),before.job_runs.filter(row=>row.id!==target.id));
+      const finalJob=after.job_runs.find(row=>row.id===target.id);assert.equal(finalJob.status,"succeeded");assert.equal(finalJob.attempt_count,oldClaim.occurrence.attempt_count+2);
+      assert.deepEqual(JSON.parse(finalJob.result_json),jobType==="matchup:finalize"?{finalizedMatchups:0}:expectedEffect);
+      assert.deepEqual(runtime.services.league.matchupStandings.read(standingsInput),committedStandings);
+      assert.equal((await runner().run()).due,0);assert.deepEqual(snapshots(readRows(database)),afterSnapshots);
+      database.close();database=openDatabase({databasePath:replayPath,environment:"test"}).database;runtime=compose(database);
+      assert.equal((await runner().run()).due,0);assert.deepEqual(snapshots(readRows(database)),afterSnapshots);
+      assert.deepEqual(database.prepare("SELECT * FROM application_metadata WHERE metadata_key=?").get(RECOVERY_HOLD_KEY),hold);
+      assert.throws(()=>assertRecoveryRuntimeAllowed(database),{code:"DATABASE_RECOVERY_HELD"});
+      assert.throws(()=>createTargetRuntime({database,migrationsDirectory:MIGRATIONS_DIRECTORY,securityFoundations,currentSeason}),{code:"DATABASE_RECOVERY_HELD"});
+      assert.deepEqual(database.pragma("foreign_key_check"),[]);assert.deepEqual(database.pragma("integrity_check"),[{integrity_check:"ok"}]);
+    });
+    assert.deepEqual(observed,{providerCalls:0,emailCalls:0,publications:0});
+    assert.deepEqual(protectedFiles.map(readHash),protectedHashes);assert.deepEqual(source.serialize(),sourceBytes);
+  } finally {if(database.open)database.close();}
+}
+
 function repeatableSentinelFacts(value) {
   if (Array.isArray(value)) {
     return value.map(repeatableSentinelFacts);

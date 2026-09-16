@@ -4,7 +4,8 @@ const CLOSED_SESSION_OPERATIONS = new Set([
   "DELETE /api/v1/session",
 ]);
 
-function createLeagueWriteGate({ mode, isAllowedOrigin } = {}) {
+function createLeagueWriteGate({ mode, isAllowedOrigin, firstAdministratorSetupEnabled = false } = {}) {
+  if (typeof firstAdministratorSetupEnabled !== "boolean") throw new TypeError("first-administrator setup enablement must be explicit");
   if (!new Set(["closed", "open"]).has(mode)) {
     throw new TypeError("league write gate requires an explicit mode");
   }
@@ -16,7 +17,8 @@ function createLeagueWriteGate({ mode, isAllowedOrigin } = {}) {
     if (
       mode === "open" ||
       SAFE_METHODS.has(request.method) ||
-      CLOSED_SESSION_OPERATIONS.has(`${request.method} ${request.path}`)
+      CLOSED_SESSION_OPERATIONS.has(`${request.method} ${request.path}`) ||
+      (firstAdministratorSetupEnabled && request.method === "POST" && request.path === "/api/v1/accounts/credential-setups")
     ) {
       next();
       return;

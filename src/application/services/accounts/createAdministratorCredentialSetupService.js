@@ -74,7 +74,9 @@ function createAdministratorCredentialSetupService({
   outboxRepository,
   clock,
   secureRandom,
+  canCompleteSetup = () => true,
 } = {}) {
+  if (typeof canCompleteSetup !== "function") throw new TypeError("credential setup requires a synchronous authorization check");
   for (const method of ["resolve", "consume"]) {
     assertMethod(
       actionTokenService,
@@ -130,7 +132,8 @@ function createAdministratorCredentialSetupService({
     if (
       !user ||
       user.status !== "pending_credential_setup" ||
-      credentialRepository.findActiveByUserId(user.id)
+      credentialRepository.findActiveByUserId(user.id) ||
+      canCompleteSetup(user.id) !== true
     ) {
       return INVALID_CREDENTIAL_SETUP_RESULT;
     }
@@ -160,7 +163,8 @@ function createAdministratorCredentialSetupService({
             !currentUser ||
             currentUser.status !==
               "pending_credential_setup" ||
-            currentCredential
+            currentCredential ||
+            canCompleteSetup(context.userId) !== true
           ) {
             throw new AdministratorCredentialSetupStateError();
           }

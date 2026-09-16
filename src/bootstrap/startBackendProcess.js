@@ -1,6 +1,7 @@
 const {
   loadStagingMaintenanceHoldConfig,
 } = require("../config/loadStagingMaintenanceHoldConfig");
+const { assertProductionMaintenanceInactive } = require("../config/loadProductionMaintenanceConfig");
 
 function reportTargetStartupFailure(error, sink = process.stderr) {
   const record = {
@@ -36,6 +37,7 @@ async function startBackendProcess({
   loadTargetStarter = loadTargetProcess,
   loadHoldStarter = loadMaintenanceHoldProcess,
 } = {}) {
+  assertProductionMaintenanceInactive({ env });
   if (typeof loadHoldConfig !== "function") {
     throw new TypeError("maintenance-hold config loader is required");
   }

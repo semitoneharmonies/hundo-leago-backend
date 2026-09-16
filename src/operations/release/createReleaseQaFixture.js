@@ -1860,7 +1860,7 @@ function insertMatchupAndReleaseSignals(
     FIXTURE_NOW_MS - 7 * day
   );
   database.prepare(`
-    UPDATE matchup_results SET current_version_id = ?, version = version + 1
+    UPDATE matchup_results SET current_version_id = ?
     WHERE id = ?
   `).run(resultVersionId, resultId);
 

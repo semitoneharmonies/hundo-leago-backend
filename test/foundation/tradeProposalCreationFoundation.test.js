@@ -1458,6 +1458,44 @@ describe("M5-06 atomic pending trade-proposal creation", () => {
 });
 
 describe("M5-07 read-only trade acceptance preview", () => {
+  for (const [role, userId] of [["commissioner", IDS.commissioner], ["platform administrator", IDS.platformAdministrator]]) {
+    test(`commissioner approval preview permits the current ${role} only after receiver acceptance and stays read-only`, async (t) => {
+      const runtime = createRuntime(t);
+      if (userId === IDS.platformAdministrator) {
+        runtime.repositories.platform_roles.insert({
+          id: uuid(980_001), user_id: userId, role: "platform_administrator", status: "active",
+          granted_by_user_id: IDS.commissioner, granted_at_ms: NOW_MS - 1_000,
+          ended_at_ms: null, version: 1,
+        });
+      }
+      const proposal = create(runtime, `approval-preview-${role}`, creationInput());
+      const tradeId = proposal.proposal.id;
+      const beforePendingPreview = runtime.database.serialize();
+      assert.throws(() => preview(runtime, tradeId, userId), { code: "TEAM_MANAGER_REQUIRED" });
+      assert.deepEqual(runtime.database.serialize(), beforePendingPreview);
+      await accept(runtime, tradeId, `approval-preview-accept-${role}`);
+
+      const before = runtime.database.serialize();
+      const result = preview(runtime, tradeId, userId);
+      assert.equal(result.code, "TRADE_ACCEPTANCE_PREVIEWED");
+      assert.equal(result.proposal.status, "Awaiting Commissioner Approval");
+      assert.equal(result.proposal.version, 2);
+      assert.equal(result.assets.length, 7);
+      assert.deepEqual(runtime.database.serialize(), before);
+      assert.throws(() => preview(runtime, tradeId, IDS.manager), { code: "TEAM_MANAGER_REQUIRED" });
+      assert.deepEqual(preview(runtime, tradeId).assets, result.assets);
+      assert.deepEqual(runtime.database.serialize(), before);
+
+      runtime.database.prepare("UPDATE leagues SET status='frozen', version=version+1 WHERE id=?").run(IDS.league);
+      const frozen = runtime.database.serialize();
+      assert.equal(preview(runtime, tradeId, userId).proposal.status, "Awaiting Commissioner Approval");
+      assert.deepEqual(runtime.database.serialize(), frozen);
+      runtime.setNow(TRADE_DEADLINE_MS);
+      assert.throws(() => preview(runtime, tradeId, userId), (error) => error instanceof TradeLifecyclePolicyError && error.reasonCode.endsWith("WINDOW_CLOSED"));
+      assert.deepEqual(runtime.database.serialize(), frozen);
+    });
+  }
+
   test("revalidates every typed asset and projects a legal result without writes", (t) => {
     const runtime = createRuntime(t);
     const proposal = create(

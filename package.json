@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node server.js",
     "start:compatibility": "node server-compatibility.js",
+    "start:maintenance:production": "node scripts/start-production-maintenance.js",
     "dev": "nodemon server.js",
     "dev:compatibility": "nodemon server-compatibility.js",
     "dev:m3-browser-fixture": "node scripts/start-m3-browser-fixture.js",
@@ -19,6 +20,7 @@
     "db:backup:verify": "node scripts/db-backup-verify.js",
     "db:initialize-environment": "node scripts/db-initialize-environment.js",
     "db:import-json": "node scripts/db-import-json.js",
+    "db:import-production": "node scripts/db-import-production.js",
     "db:import-staging": "node scripts/db-import-staging.js",
     "db:inventory": "node scripts/db-inventory.js",
     "db:migrate": "node scripts/db-migrate.js",

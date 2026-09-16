@@ -177,6 +177,18 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
 
   const database = openReadonlyDatabase({ databasePath: firstPath });
   try {
+    const officialResults = database.prepare(`
+      SELECT result.id, result.version, current.version_number,
+        (SELECT COUNT(*) FROM matchup_result_versions AS history
+          WHERE history.matchup_result_id = result.id) AS history_count
+      FROM matchup_results AS result
+      JOIN matchup_result_versions AS current ON current.id = result.current_version_id
+    `).all();
+    assert.equal(officialResults.length, 2);
+    for (const result of officialResults) {
+      assert.equal(result.version, result.history_count, "fixture result version must match its correction history");
+      assert.equal(result.version, result.version_number, "fixture current result must be the final history version");
+    }
     const leagueA = fixtureId("league:leagueA");
     const leagueB = fixtureId("league:leagueB");
     assert.notEqual(leagueA, leagueB);

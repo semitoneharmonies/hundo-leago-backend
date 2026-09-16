@@ -167,6 +167,7 @@ function createRuntime(
   {
     candidateCardSummerSynchronizer,
     tradePublicationWriter,
+    leagueOutboxWriter,
   } = {}
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m4-04-"));
@@ -203,6 +204,7 @@ function createRuntime(
           },
         },
       tradePublicationWriter,
+      leagueOutboxWriter,
     }),
   };
 }
@@ -497,6 +499,35 @@ describe("M4-04 atomic roster movement repository", () => {
         .get().count,
       1
     );
+  });
+
+  test("writes one durable team-scoped update with an ordinary roster move", (t) => {
+    const runtime = createRuntime(t);
+    runtime.context.repositories.player_ownerships.insert(ownership());
+    const result = runtime.repository.move(moveInput());
+    const rows = runtime.database.prepare("SELECT * FROM outbox_events").all();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].event_type, "roster.changed");
+    assert.equal(rows[0].league_id, IDS.league);
+    assert.equal(rows[0].aggregate_id, IDS.ownership1);
+    assert.equal(rows[0].status, "pending");
+    const payload = JSON.parse(rows[0].payload_json);
+    assert.equal(payload.related.teamId, IDS.team);
+    assert.equal(payload.version, result.ownership.version);
+    assert.equal(payload.reasonCode, "roster_changed");
+    const beforeRetry = runtime.database.serialize();
+    assert.throws(() => runtime.repository.move(moveInput()));
+    assert.deepEqual(runtime.database.serialize(), beforeRetry);
+  });
+
+  test("rolls the roster move and histories back after a durable update write fails", (t) => {
+    let writer;
+    const runtime = createRuntime(t, { leagueOutboxWriter: { write(input) { writer.write(input); throw new Error("injected durable update failure"); } } });
+    writer = require("../../src/infrastructure/persistence/sqlite/SqliteLeagueOutboxWriter").createSqliteLeagueOutboxWriter({ database: runtime.database });
+    runtime.context.repositories.player_ownerships.insert(ownership());
+    const before = runtime.database.serialize();
+    assert.throws(() => runtime.repository.move(moveInput()));
+    assert.deepEqual(runtime.database.serialize(), before);
   });
 
   test("returns every ownership changed by automatic source-slot placement", (t) => {

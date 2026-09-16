@@ -1,11 +1,13 @@
 const http = require("node:http");
 const { Server: SocketServer } = require("socket.io");
+const INCOMPLETE_REQUEST_SHUTDOWN_GRACE_MS = 20_000;
 
 function createTargetHttpServer({
   runtime,
   securityConfig = runtime?.securityConfig,
   httpModule = http,
   SocketServerClass = SocketServer,
+  incompleteRequestGraceMs = INCOMPLETE_REQUEST_SHUTDOWN_GRACE_MS,
 } = {}) {
   if (
     !runtime?.app ||
@@ -31,8 +33,47 @@ function createTargetHttpServer({
   if (typeof SocketServerClass !== "function") {
     throw new TypeError("target HTTP server requires a Socket.IO server");
   }
+  if (
+    !Number.isSafeInteger(incompleteRequestGraceMs) ||
+    incompleteRequestGraceMs < 1 ||
+    incompleteRequestGraceMs > INCOMPLETE_REQUEST_SHUTDOWN_GRACE_MS
+  ) {
+    throw new TypeError("target HTTP server requires a bounded incomplete-request shutdown grace");
+  }
 
   const server = httpModule.createServer(runtime.app);
+  const connections = new Map();
+  let incompleteRequestGraceExpired = false;
+
+  function closeIncompleteConnection(connection) {
+    if (
+      connection.upgraded ||
+      [...connection.requests].some((request) => request.complete)
+    ) return;
+    // Flush an already completed response before closing a pipelined client.
+    connection.socket.destroySoon();
+  }
+
+  server.on("connection", (socket) => {
+    connections.set(socket, { socket, requests: new Set(), upgraded: false });
+    socket.once("close", () => connections.delete(socket));
+  });
+  server.on("upgrade", (request, socket) => {
+    const connection = connections.get(socket);
+    if (connection) connection.upgraded = true;
+  });
+  server.on("request", (request, response) => {
+    const connection = connections.get(request.socket);
+    if (!connection) return;
+    connection.requests.add(request);
+    const finished = () => {
+      connection.requests.delete(request);
+      if (incompleteRequestGraceExpired) closeIncompleteConnection(connection);
+    };
+    response.once("finish", finished);
+    response.once("close", finished);
+    if (incompleteRequestGraceExpired) closeIncompleteConnection(connection);
+  });
   const io = new SocketServerClass(server, {
     cors: {
       origin(origin, callback) {
@@ -107,6 +148,15 @@ function createTargetHttpServer({
   async function closeResources() {
     const errors = [];
     let serverClosePromise = null;
+    // Only clients still sending a request are bounded here. Completed request
+    // bodies and running jobs keep their existing graceful-drain behavior.
+    const incompleteRequestTimer = setTimeout(() => {
+      incompleteRequestGraceExpired = true;
+      for (const connection of connections.values()) {
+        closeIncompleteConnection(connection);
+      }
+    }, incompleteRequestGraceMs);
+    incompleteRequestTimer.unref();
     function isAlreadyClosed(error) {
       return error?.code === "ERR_SERVER_NOT_RUNNING";
     }
@@ -162,6 +212,7 @@ function createTargetHttpServer({
     } catch (error) {
       errors.push(error);
     }
+    clearTimeout(incompleteRequestTimer);
     if (errors.length > 0) {
       throw new AggregateError(
         errors,
@@ -182,4 +233,4 @@ function createTargetHttpServer({
   return Object.freeze({ close, io, listen, server });
 }
 
-module.exports = { createTargetHttpServer };
+module.exports = { createTargetHttpServer, INCOMPLETE_REQUEST_SHUTDOWN_GRACE_MS };

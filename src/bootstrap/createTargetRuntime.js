@@ -1,4 +1,5 @@
 const express = require("express");
+const { createFirstAdministratorSetupPolicy } = require("../application/services/accounts/createFirstAdministratorSetupPolicy");
 const { assertRecoveryRuntimeAllowed } = require("../infrastructure/database/recoveryHold");
 const { readRecoveryEpoch } = require("../infrastructure/database/recoveryEpoch");
 
@@ -1422,12 +1423,25 @@ function createTargetRepositories({
         occurrenceExecution
       )
     );
+  const matchupOccurrenceBatchTransaction = database.transaction(
+    (occurrenceExecution, effect) => {
+      matchupOccurrenceExecutionGuard.assertCurrent(occurrenceExecution);
+      const result = effect();
+      if (result && typeof result.then === "function") {
+        throw new TypeError("Matchup batch transactions must complete synchronously.");
+      }
+      return result;
+    }
+  );
   const matchupOccurrenceRunnerExecutionGuard =
     Object.freeze({
       assertCurrent(occurrenceExecution) {
         return matchupOccurrenceRunnerGuardTransaction.immediate(
           occurrenceExecution
         );
+      },
+      runAtomic(occurrenceExecution, effect) {
+        return matchupOccurrenceBatchTransaction.immediate(occurrenceExecution, effect);
       },
     });
   const leagueOutboxWriter = createSqliteLeagueOutboxWriter({
@@ -1843,6 +1857,7 @@ function createTargetRepositories({
 
 function createTargetServices({
   repositories,
+  canCompleteAdministratorSetup,
   securityFoundations,
   currentSeason,
   passwordHasher: suppliedPasswordHasher,
@@ -2453,6 +2468,7 @@ function createTargetServices({
     createId: () => secureRandom.id(),
   });
   const matchupOccurrenceHandlers = createMatchupOccurrenceHandlers({
+    executionGuard: repositories.matchupOccurrenceRunnerExecutionGuard,
     statisticsService: statistics,
     lateLockCoordinator,
     readRepository: repositories.matchupRead,
@@ -2513,6 +2529,7 @@ function createTargetServices({
     }),
     credentialSetup: createAdministratorCredentialSetupService({
       actionTokenService,
+      canCompleteSetup: canCompleteAdministratorSetup,
       userRepository: repositories.users,
       credentialRepository: repositories.credentials,
       passwordHasher,
@@ -3142,6 +3159,7 @@ function createTargetRouters({
 
 function createTargetRuntime({
   database,
+  firstAdministratorSetup = null,
   migrationsDirectory,
   securityFoundations,
   currentSeason,
@@ -3170,6 +3188,10 @@ function createTargetRuntime({
   const migrationState = assertMigrationCompatibility(database, migrations);
   assertRecoveryRuntimeAllowed(database);
   readRecoveryEpoch(database);
+  const firstAdministratorSetupPolicy = firstAdministratorSetup
+    ? createFirstAdministratorSetupPolicy({ database, config: firstAdministratorSetup, clock: securityFoundations?.clock,
+        appEnv: securityFoundations?.config?.appEnv, buildId: securityFoundations?.config?.buildId, leagueWriteMode })
+    : null;
   let targetApplication = null;
   let socketRooms = null;
   const onSessionChanged = createSessionSocketInvalidator({
@@ -3192,6 +3214,7 @@ function createTargetRuntime({
     });
   const services = createTargetServices({
     repositories,
+    canCompleteAdministratorSetup: firstAdministratorSetupPolicy?.allows,
     securityFoundations,
     currentSeason,
     passwordHasher,
@@ -3223,6 +3246,7 @@ function createTargetRuntime({
     freeAgentDraftRoutesEnabled,
     leagueWriteGate: createLeagueWriteGate({
       mode: leagueWriteMode,
+      firstAdministratorSetupEnabled: firstAdministratorSetupPolicy !== null,
       isAllowedOrigin:
         securityFoundations.config.isAllowedFrontendOrigin,
     }),

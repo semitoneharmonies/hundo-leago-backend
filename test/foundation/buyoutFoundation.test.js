@@ -108,7 +108,7 @@ function seed(context, { signedProspect = false } = {}) {
 
 function createRuntime(
   t,
-  { candidateCardSummerSynchronizer, signedProspect = false, tradeProposalCancellationWriter, tradePublicationWriter } = {}
+  { candidateCardSummerSynchronizer, signedProspect = false, tradeProposalCancellationWriter, tradePublicationWriter, leagueOutboxWriter } = {}
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m4-08-"));
   const connection = openDatabase({
@@ -130,6 +130,7 @@ function createRuntime(
       database: connection.database,
       tradeProposalCancellationWriter,
       tradePublicationWriter,
+      leagueOutboxWriter,
       candidateCardSummerSynchronizer:
         candidateCardSummerSynchronizer ?? {
           synchronize() {
@@ -286,6 +287,33 @@ describe("M4-08 buyout policy", () => {
 });
 
 describe("M4-08 atomic SQLite buyout", () => {
+  test("writes one durable contract update for a buyout without pending trades and replays without writes", (t) => {
+    const { database, repository } = createRuntime(t, { signedProspect: true });
+    const result = repository.buyOut(command());
+    const rows = database.prepare("SELECT * FROM outbox_events").all();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].event_type, "contract.changed");
+    assert.equal(rows[0].league_id, IDS.league);
+    assert.equal(rows[0].aggregate_id, IDS.contract);
+    assert.equal(rows[0].status, "pending");
+    const payload = JSON.parse(rows[0].payload_json);
+    assert.equal(payload.related.teamId, IDS.team1);
+    assert.equal(payload.version, result.contract.version);
+    assert.equal(payload.reasonCode, "contract_changed");
+    const beforeReplay = database.serialize();
+    assert.deepEqual(repository.buyOut(command()), result);
+    assert.deepEqual(database.serialize(), beforeReplay);
+  });
+
+  test("rolls every buyout effect back after its durable contract update fails", (t) => {
+    let writer;
+    const { database, repository } = createRuntime(t, { leagueOutboxWriter: { write(input) { writer.write(input); throw new Error("injected durable update failure"); } } });
+    writer = require("../../src/infrastructure/persistence/sqlite/SqliteLeagueOutboxWriter").createSqliteLeagueOutboxWriter({ database });
+    const before = database.serialize();
+    assert.throws(() => repository.buyOut(command()));
+    assert.deepEqual(database.serialize(), before);
+  });
+
   test("buys out signed Prospect rights, cancels every matching proposal, and replays without writes", (t) => {
     const { context, database, repository } = createRuntime(t, { signedProspect: true });
     seedPendingTrade(context, { prospect: true });
@@ -298,7 +326,7 @@ describe("M4-08 atomic SQLite buyout", () => {
     assert.equal(count(database, "player_ownerships"), 0);
     assert.equal(count(database, "trade_events"), 3);
     assert.equal(count(database, "league_activity"), 4);
-    assert.equal(count(database, "outbox_events"), 3);
+    assert.equal(count(database, "outbox_events"), 4);
     assert.deepEqual(database.prepare("SELECT * FROM trade_assets ORDER BY id").all(), historyBefore);
     for (const event of database.prepare("SELECT * FROM trade_events").all()) {
       assert.equal(event.reason, "player_bought_out");
@@ -395,7 +423,7 @@ describe("M4-08 atomic SQLite buyout", () => {
     failSummer = false;
     const result = repository.buyOut(command());
     assert.equal(result.automaticallyCancelledTradeIds.length, 2);
-    assert.equal(count(database, "outbox_events"), 2);
+    assert.equal(count(database, "outbox_events"), 3);
     assert.equal(count(database, "league_activity"), 3);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   });
