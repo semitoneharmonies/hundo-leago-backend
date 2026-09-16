@@ -365,6 +365,38 @@ describe("FAD-14 membership authority-change publications", () => {
     assert(before.equals(runtime.database.serialize()));
   });
 
+  test("cancels a never-accepted manager invitation without inventing membership dates or changing another league", (t) => {
+    const runtime = createRuntime(t);
+    runtime.database.prepare(`UPDATE league_memberships
+      SET status = 'invited', joined_at_ms = NULL WHERE id = ?
+    `).run(MANAGER_A_MEMBERSHIP_ID);
+    const insertInvitation = runtime.database.prepare(`INSERT INTO league_invitations
+      (id, league_id, invited_email_normalized, invited_user_id, inviting_user_id,
+       membership_id, status, workflow, created_at_ms, expires_at_ms, version)
+      VALUES (?, ?, 'manager@example.test', ?, ?, ?, 'pending', 'create_team', ?, ?, 1)
+    `);
+    insertInvitation.run(uuid(801), LEAGUE_A_ID, MANAGER_ID, COMMISSIONER_ID,
+      MANAGER_A_MEMBERSHIP_ID, NOW_MS, NOW_MS + 86400000);
+    insertInvitation.run(uuid(802), LEAGUE_B_ID, MANAGER_ID, COMMISSIONER_ID,
+      MANAGER_B_MEMBERSHIP_ID, NOW_MS, NOW_MS + 86400000);
+    const result = createService(runtime).remove(removeCommand());
+    assert.equal(result.membership.status, "ended");
+    assert.equal(result.membership.endedAtMs, null);
+    assert.equal(result.membership.version, 2);
+    assert.equal(runtime.database.prepare("SELECT joined_at_ms FROM league_memberships WHERE id = ?")
+      .get(MANAGER_A_MEMBERSHIP_ID).joined_at_ms, null);
+    assert.deepEqual(runtime.database.prepare("SELECT status, version FROM league_invitations WHERE id = ?")
+      .get(uuid(801)), { status: "cancelled", version: 2 });
+    assert.deepEqual(runtime.database.prepare("SELECT status, version FROM league_invitations WHERE id = ?")
+      .get(uuid(802)), { status: "pending", version: 1 });
+    assert.equal(runtime.database.prepare("SELECT status FROM league_memberships WHERE id = ?")
+      .get(MANAGER_B_MEMBERSHIP_ID).status, "active");
+    assert.equal(readCanonicalAuthorityPublications(runtime.database).length, 1);
+    // Cancellation releases the unique pending-invitation slot for a later re-invite.
+    insertInvitation.run(uuid(803), LEAGUE_A_ID, MANAGER_ID, COMMISSIONER_ID,
+      MANAGER_A_MEMBERSHIP_ID, NOW_MS, NOW_MS + 86400000);
+  });
+
   test("publishes one exact membership event with no assignments and rejects retry or stale CAS without duplicates", (t) => {
     const runtime = createRuntime(t);
     const service = createService(runtime);

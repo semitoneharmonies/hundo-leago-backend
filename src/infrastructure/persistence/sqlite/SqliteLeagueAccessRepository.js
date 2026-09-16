@@ -65,6 +65,7 @@ function createSqliteLeagueAccessRepository({
   let listEndingManagerAssignmentsStatement;
   let findManagerAssignmentStatement;
   let endMembershipStatement;
+  let cancelPendingInvitationsStatement;
   let endManagerAssignmentsStatement;
   let insertMembershipActivityStatement;
   let endMembershipTransaction;
@@ -224,12 +225,19 @@ function createSqliteLeagueAccessRepository({
     `);
     endMembershipStatement = database.prepare(`
       UPDATE league_memberships
-      SET status = 'ended', ended_at_ms = @occurredAtMs,
+      SET status = 'ended',
+        ended_at_ms = CASE WHEN joined_at_ms IS NULL THEN NULL ELSE @occurredAtMs END,
         updated_at_ms = @occurredAtMs, version = version + 1
       WHERE league_id = @leagueId
         AND id = @membershipId
         AND status IN ('active', 'invited')
         AND version = @expectedVersion
+    `);
+    cancelPendingInvitationsStatement = database.prepare(`
+      UPDATE league_invitations
+      SET status = 'cancelled', version = version + 1
+      WHERE league_id = @leagueId AND membership_id = @membershipId
+        AND status = 'pending'
     `);
     endManagerAssignmentsStatement = database.prepare(`
       UPDATE team_manager_assignments
@@ -304,6 +312,7 @@ function createSqliteLeagueAccessRepository({
           "The league membership changed before removal."
         );
       }
+      cancelPendingInvitationsStatement.run(command);
       insertMembershipActivityStatement.run({
         ...command,
         metadataJson: JSON.stringify({
