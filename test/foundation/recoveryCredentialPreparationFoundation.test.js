@@ -608,7 +608,7 @@ test("reviewed restored email suppression preserves source, jobs and every unrel
   });
   await t.test("suppresses exact pending, failed and publishing account messages while keeping the hold", async suppressionTest => {
     result = prepareRecoveryEmailReconciliation({ ...options, outputDirectory: path.join(input.temporaryRoot, "email-reviewed") });
-    assert.equal(result.suppressedMessages, 3); assert.equal(result.protectedTableCount, 131);
+    assert.equal(result.suppressedMessages, 3); assert.equal(result.protectedTableCount, 134);
     assert.equal(result.activationReady, false); assert.equal(result.jobs, "unchanged-and-held");
     assert.equal(result.providerEvidence, "reviewer-supplied-not-independently-fetched");
     assert.equal(result.unresolvedMessages, plan.unresolvedMessages - 3);
@@ -2818,7 +2818,7 @@ test("reviewed statistics recovery executes only its exact occurrence in a new h
   assert.equal(requests.length,2); assert.equal(report.status,"statistics-reconciled-held");
   assert.equal(report.activationReady,false); assert.equal(report.completedJobId,row.id);
   assert.equal(report.unresolvedJobs,plan.unresolvedJobs-1); assert.equal(report.unresolvedMessages,plan.unresolvedMessages);
-  assert.equal(report.protectedTableCount,125); assert.equal(report.otherJobs,"unchanged-and-held");
+  assert.equal(report.protectedTableCount,128); assert.equal(report.otherJobs,"unchanged-and-held");
   assert.equal(report.messages,"unchanged-and-held"); assert.equal(report.sourcePlaintextSha256,preparedHash);
   assert.equal(report.reviewEvidence,"operator-supplied-not-current-authentication");
   assert.equal(report.providerEvidence,"fetched-through-nhl-completed-game-adapter");

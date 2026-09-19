@@ -31,6 +31,7 @@ function freezeRows(rows) {
 
 function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled = false } = {}) {
   const capRepository = createSqliteCapReadRepository({ database });
+  const expandedSchema = database.pragma("user_version", { simple: true }) >= 57;
   let scopeStatement;
   let playersStatement;
   let draftPicksStatement;
@@ -146,10 +147,10 @@ function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled 
         stats.goals,
         stats.assists,
         stats.nhl_points,
-        CASE WHEN expanded.total_id IS NOT NULL
+        ${expandedSchema ? `CASE WHEN expanded.total_id IS NOT NULL
           THEN CASE ownership.position_group WHEN 'D' THEN expanded.defence_fp_hundredths ELSE expanded.forward_fp_hundredths END
-          ELSE stats.fantasy_points_hundredths END AS fantasy_points_hundredths,
-        expanded.stats_json AS scoring_stats_json,
+          ELSE stats.fantasy_points_hundredths END` : "stats.fantasy_points_hundredths"} AS fantasy_points_hundredths,
+        ${expandedSchema ? "expanded.stats_json" : "NULL"} AS scoring_stats_json,
         CASE WHEN ${expandedScoringEnabled ? 1 : 0} = 1 AND @nhlSeasonKey = '20262027' THEN 1 ELSE 0 END AS expanded_required,
         source.nhl_team_abbreviation,
         source.source_payload_json,
@@ -164,7 +165,7 @@ function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled 
       LEFT JOIN latest_stats AS stats
         ON stats.player_id = ownership.player_id
        AND stats.recency = 1
-      LEFT JOIN expanded_stat_totals AS expanded ON expanded.total_id = stats.id
+      ${expandedSchema ? "LEFT JOIN expanded_stat_totals AS expanded ON expanded.total_id = stats.id" : ""}
       LEFT JOIN latest_source AS source
         ON source.player_id = ownership.player_id
        AND source.recency = 1

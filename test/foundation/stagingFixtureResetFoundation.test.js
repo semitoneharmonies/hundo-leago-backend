@@ -201,13 +201,24 @@ async function runtime(t) {
 
 test("M7-10 resets only the exact staging fixture after a verified backup and preserves the imported catalog", async (t) => {
   const target = await runtime(t);
+  // Expanded NHL evidence is global provider data, not release-QA fixture data.
+  // Its delete guards must remain installed throughout a fixture reset.
+  const preservedProviderDeleteGuards = [
+    "expanded_player_game_stats_immutable_delete",
+    "expanded_stat_refreshes_immutable_delete",
+    "expanded_stat_totals_immutable_delete",
+  ];
+  const installedProtectedTriggerNames = [
+    ...FIXTURE_RESET_PROTECTED_TRIGGER_NAMES,
+    ...preservedProviderDeleteGuards,
+  ].sort();
   assert.deepEqual(
     FIXTURE_RESET_PROTECTED_TRIGGER_NAMES,
     [...FIXTURE_RESET_PROTECTED_TRIGGER_NAMES].sort(),
     "the approved protected-trigger catalogue must remain deterministic"
   );
   assert.deepEqual(
-    FIXTURE_RESET_PROTECTED_TRIGGER_NAMES,
+    installedProtectedTriggerNames,
     target.database
       .prepare(`
         SELECT name
@@ -224,7 +235,7 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
         "stat_refresh_player_game_coverage_stage_before_set"
       )
       .map(({ name }) => name),
-    "the reset must suspend every installed delete guard and coverage write guard exactly"
+    "every installed delete guard and coverage write guard must be explicitly reset-owned or preserved provider protection"
   );
   assert.ok(
     FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.includes(
@@ -568,11 +579,11 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
       FROM sqlite_schema
       WHERE type = 'trigger'
         AND name IN (
-          ${FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.map(() => "?").join(", ")}
+          ${installedProtectedTriggerNames.map(() => "?").join(", ")}
         )
       ORDER BY name ASC
     `)
-    .all(...FIXTURE_RESET_PROTECTED_TRIGGER_NAMES);
+    .all(...installedProtectedTriggerNames);
 
   let authorizationCalls = 0;
   const service = createStagingFixtureResetService({
@@ -663,11 +674,11 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
         FROM sqlite_schema
         WHERE type = 'trigger'
           AND name IN (
-            ${FIXTURE_RESET_PROTECTED_TRIGGER_NAMES.map(() => "?").join(", ")}
+            ${installedProtectedTriggerNames.map(() => "?").join(", ")}
           )
         ORDER BY name ASC
       `)
-      .all(...FIXTURE_RESET_PROTECTED_TRIGGER_NAMES),
+      .all(...installedProtectedTriggerNames),
     protectedTriggerSqlBefore
   );
   assert.equal(

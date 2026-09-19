@@ -14,6 +14,7 @@ const {
 
 function createSqlitePublicRosterRepository({ database, expandedScoringEnabled = false } = {}) {
   const capRepository = createSqliteCapReadRepository({ database });
+  const expandedSchema = database.pragma("user_version", { simple: true }) >= 57;
   let scopeStatement;
   let playersStatement;
   try {
@@ -86,10 +87,10 @@ function createSqlitePublicRosterRepository({ database, expandedScoringEnabled =
         stats.goals,
         stats.assists,
         stats.nhl_points,
-        CASE WHEN expanded.total_id IS NOT NULL
+        ${expandedSchema ? `CASE WHEN expanded.total_id IS NOT NULL
           THEN CASE ownership.position_group WHEN 'D' THEN expanded.defence_fp_hundredths ELSE expanded.forward_fp_hundredths END
-          ELSE stats.fantasy_points_hundredths END AS fantasy_points_hundredths,
-        expanded.stats_json AS scoring_stats_json,
+          ELSE stats.fantasy_points_hundredths END` : "stats.fantasy_points_hundredths"} AS fantasy_points_hundredths,
+        ${expandedSchema ? "expanded.stats_json" : "NULL"} AS scoring_stats_json,
         stats.source_updated_at_ms
       FROM player_ownerships AS ownership
       INNER JOIN players AS player ON player.id = ownership.player_id
@@ -101,7 +102,7 @@ function createSqlitePublicRosterRepository({ database, expandedScoringEnabled =
       LEFT JOIN latest_stats AS stats
         ON stats.player_id = ownership.player_id
         AND stats.recency = 1
-      LEFT JOIN expanded_stat_totals AS expanded ON expanded.total_id = stats.id
+      ${expandedSchema ? "LEFT JOIN expanded_stat_totals AS expanded ON expanded.total_id = stats.id" : ""}
       WHERE ownership.league_id = @leagueId
         AND ownership.season_id = @seasonId
         AND ownership.team_id = @teamId

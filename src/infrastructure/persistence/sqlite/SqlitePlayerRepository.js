@@ -146,13 +146,16 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
       "LIMIT 1) " +
       "LEFT JOIN stat_sources AS statistics_source ON statistics_source.id = statistics.stat_source_id";
     const expandedRequired = expandedScoringEnabled && currentNhlStatisticsSeason === '20262027';
-    const expandedJoin = " LEFT JOIN expanded_stat_totals AS expanded ON expanded.total_id = statistics.id ";
-    const fantasyPoints = "CASE WHEN expanded.total_id IS NOT NULL THEN CASE source.normalized_position WHEN 'D' THEN expanded.defence_fp_hundredths WHEN 'F' THEN expanded.forward_fp_hundredths END " +
-      (expandedRequired ? "ELSE NULL END" : "ELSE statistics.fantasy_points_hundredths END");
+    const expandedSchema = database.pragma("user_version", { simple: true }) >= 57;
+    const expandedJoin = expandedSchema ? " LEFT JOIN expanded_stat_totals AS expanded ON expanded.total_id = statistics.id " : "";
+    const fantasyPoints = expandedSchema
+      ? "CASE WHEN expanded.total_id IS NOT NULL THEN CASE source.normalized_position WHEN 'D' THEN expanded.defence_fp_hundredths WHEN 'F' THEN expanded.forward_fp_hundredths END " +
+        (expandedRequired ? "ELSE NULL END" : "ELSE statistics.fantasy_points_hundredths END")
+      : "statistics.fantasy_points_hundredths";
     const sortFantasyPoints = `COALESCE(${fantasyPoints}, -9007199254740991)`;
     const readColumns = PLAYER_READ_COLUMNS.map(column => column === 'statistics.fantasy_points_hundredths AS statistics_fantasy_points_hundredths'
       ? `${fantasyPoints} AS statistics_fantasy_points_hundredths` : column).concat([
-        'expanded.stats_json AS statistics_scoring_stats_json',
+        `${expandedSchema ? 'expanded.stats_json' : 'NULL'} AS statistics_scoring_stats_json`,
         `${expandedRequired ? 1 : 0} AS statistics_expanded_required`,
       ]);
     findDetailByIdStatement = database.prepare(

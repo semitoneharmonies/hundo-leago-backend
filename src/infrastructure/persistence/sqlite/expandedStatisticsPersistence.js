@@ -21,6 +21,7 @@ function persistExpandedStatistics(database, command) {
 }
 
 function readExpandedStatistics(database, refreshId) {
+  if (database.pragma("user_version", { simple: true }) < 57) return null;
   const root = database.prepare("SELECT * FROM expanded_stat_refreshes WHERE refresh_id = ?").get(refreshId);
   if (!root) return null;
   const totals = database.prepare("SELECT extra.*, parent.player_id, parent.games_played, parent.goals, parent.assists FROM expanded_stat_totals AS extra JOIN player_stat_totals AS parent ON parent.id = extra.total_id AND parent.refresh_id = extra.refresh_id WHERE extra.refresh_id = ?").all(refreshId);

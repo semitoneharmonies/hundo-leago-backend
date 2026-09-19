@@ -17,7 +17,8 @@ const SCRIPT = path.join(ROOT, "scripts/start-production-maintenance.js");
 const BUILD = "a".repeat(40), SERVICE = "srv-syntheticfixture1234";
 const sha = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
 function environment(overrides = {}) {
-  return { ...REQUIRED_VALUES, APP_BUILD_ID: BUILD, RENDER_GIT_COMMIT: BUILD,
+  return { ...REQUIRED_VALUES, STAGING_MAINTENANCE_HOLD: "false", STAGING_DAILY_AUCTIONS_ENABLED: "false",
+    APP_BUILD_ID: BUILD, RENDER_GIT_COMMIT: BUILD,
     RENDER_SERVICE_ID: SERVICE, PRODUCTION_MAINTENANCE_CONFIRMATION: `${SERVICE}:${BUILD}`,
     PORT: "10000", ...overrides };
 }

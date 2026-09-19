@@ -1800,7 +1800,8 @@ function createTargetRepositories({
       database,
       candidateCardSummerSynchronizer,
     }),
-    providerResultCorrections: createSqliteProviderResultCorrectionRepository({ database, leagueIds: matchupProcessingLeagueIds }),
+    providerResultCorrections: expandedScoringEnabled
+      ? createSqliteProviderResultCorrectionRepository({ database, leagueIds: matchupProcessingLeagueIds }) : null,
     players: createSqlitePlayerRepository({ database, currentNhlStatisticsSeason, expandedScoringEnabled }),
     platformRoles: createSqlitePlatformRoleRepository({ database }),
     publicRoster: createSqlitePublicRosterRepository({ database, expandedScoringEnabled }),
@@ -2436,13 +2437,13 @@ function createTargetServices({
     scoringService: matchupScoring,
     createId: () => secureRandom.id(),
   });
-  const providerResultCorrections = createProviderResultCorrectionService({
+  const providerResultCorrections = expandedScoringEnabled ? createProviderResultCorrectionService({
     repository: repositories.providerResultCorrections,
     scoringService: matchupScoring,
     clock,
     createId: () => secureRandom.id(),
     logger,
-  });
+  }) : null;
   const matchupResultCorrection =
     createMatchupResultCorrectionService({
       repositoryContext: repositories.context,
