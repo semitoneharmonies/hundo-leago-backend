@@ -1574,3 +1574,6 @@ BEGIN SELECT RAISE(ABORT, 'expanded statistics are immutable'); END;
 
 CREATE TRIGGER expanded_player_game_stats_immutable_delete BEFORE DELETE ON expanded_player_game_stats
 BEGIN SELECT RAISE(ABORT, 'expanded statistics are immutable'); END;
+
+UPDATE application_metadata SET metadata_value = '57', updated_at_ms = max(updated_at_ms, 57)
+WHERE metadata_key = 'data_model_version' AND metadata_value = '56';

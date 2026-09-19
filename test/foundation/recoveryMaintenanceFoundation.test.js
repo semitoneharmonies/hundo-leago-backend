@@ -600,7 +600,7 @@ test("held maintenance uses real fresh HTTP authentication and read-only feature
       assert.equal((await request(maintenance.baseUrl,"/api/v1/operations/health",manager)).status,403);
       const health = await request(maintenance.baseUrl,"/api/v1/operations/health",administrator);
       assert.equal(health.status,200,health.text);assert.deepEqual(health.json.data.databaseIdentity,f.options.reviewOptions.plan.databaseIdentity);
-      assert.equal(health.json.data.sourceBackupId,f.prepared.sourceBackupId);assert.equal(health.json.data.schemaVersion,56);
+      assert.equal(health.json.data.sourceBackupId,f.prepared.sourceBackupId);assert.equal(health.json.data.schemaVersion,57);
       assert.equal(health.json.data.backendBuildId,f.options.backendBuildId);assert.equal(health.json.data.activationReady,false);
       assert.equal(health.json.data.jobs,"not-started");assert.equal(health.json.data.email,"held");
       assert.equal((await request(maintenance.baseUrl,"/api/v1/operations/recovery/review",manager)).status,403);

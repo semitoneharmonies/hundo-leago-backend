@@ -985,7 +985,7 @@ describe("FAD-11 SQLite recovery-read repository", () => {
     }
   });
 
-  test("prepares every read against the real schema migrated through 56", () => {
+  test("prepares every read against the real schema migrated through 57", () => {
     const directory = fs.mkdtempSync(
       path.join(os.tmpdir(), "hundo-fad-recovery-schema-")
     );
@@ -999,7 +999,7 @@ describe("FAD-11 SQLite recovery-read repository", () => {
         applicationBuildId:
           "fad-11-recovery-read-schema-foundation",
       });
-      assert.equal(state.userVersion, 56);
+      assert.equal(state.userVersion, 57);
       assert.doesNotThrow(() =>
         createSqliteFreeAgentDraftRecoveryReadRepository({
           database: connection.database,

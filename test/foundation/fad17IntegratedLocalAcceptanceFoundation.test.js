@@ -366,9 +366,10 @@ test(
       );
       assert.deepEqual(
         applicationTableNames(runtime.database),
-        REPOSITORY_CATALOG.map(
-          ({ tableName }) => tableName
-        ).sort()
+        // This rehearsal intentionally ends at schema 54; expanded scoring arrives in 57.
+        REPOSITORY_CATALOG.filter(({ tableName }) => ![
+          "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats",
+        ].includes(tableName)).map(({ tableName }) => tableName).sort()
       );
     }
 

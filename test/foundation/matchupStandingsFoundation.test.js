@@ -41,9 +41,12 @@ test("expanded migration preserves populated history and provider correction cha
   const tables = database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations' ORDER BY name").all().map(row => row.name);
   const contents = () => Object.fromEntries(tables.map(name => [name, database.prepare(`SELECT * FROM ${name}`).all().map(JSON.stringify).sort()]));
   const before = contents();
+  before.application_metadata = before.application_metadata.map(JSON.parse).map(row => row.metadata_key === "data_model_version"
+    ? { ...row, metadata_value: "57", updated_at_ms: Math.max(row.updated_at_ms, 57) } : row).map(JSON.stringify).sort();
   applyMigrations({ database, migrations, applicationBuildId: "expanded-after", now: () => 2 });
   assert.deepEqual(contents(), before);
   assert.equal(database.pragma("user_version", { simple: true }), 57);
+  assert.equal(database.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key = 'data_model_version'").get().metadata_value, "57");
   assert.deepEqual(database.pragma("foreign_key_check"), []);
   assert.equal(database.pragma("integrity_check", { simple: true }), "ok");
   database.prepare("INSERT INTO stat_sources (id, provider, status, created_at_ms, updated_at_ms, version) VALUES (?, 'nhl-completed-games', 'active', 1, 1, 1)").run(uuid(100));

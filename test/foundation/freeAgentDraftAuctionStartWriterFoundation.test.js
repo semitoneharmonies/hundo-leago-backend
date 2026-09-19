@@ -471,7 +471,7 @@ function createFixture(t, label, options = {}) {
     const db = connection.database;
     const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations' ORDER BY name").all().map(({ name }) => name);
     const before = tables.map((name) => ({ name, columns: db.pragma(`table_info(${name})`).map(({ name }) => name), rows: db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all() }));
-    applyMigrations({ database: db, migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }), applicationBuildId: 'populated-fad-timing-migration', now: () => 45 });
+    applyMigrations({ database: db, migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }).filter(migration => migration.id <= 56), applicationBuildId: 'populated-fad-timing-migration', now: () => 45 });
     for (const { name, columns, rows } of before) {
       const expected = name === 'application_metadata' ? rows.map(row => row.metadata_key === 'data_model_version' ? { ...row, metadata_value: '56', updated_at_ms: Math.max(row.updated_at_ms, 56) } : row) : rows;
       assert.deepEqual(db.prepare(`SELECT ${columns.join(', ')} FROM ${name} ORDER BY rowid`).all(), expected, name);
