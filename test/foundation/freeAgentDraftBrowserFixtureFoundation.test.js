@@ -725,7 +725,7 @@ test(
         error.code ===
           "FREE_AGENT_DRAFT_BROWSER_FIXTURE_RUNTIME_INVALID"
     );
-    for (const schemaVersion of [53, 57]) {
+    for (const schemaVersion of [53, 58]) {
       await assert.rejects(
         createFreeAgentDraftBrowserFixture({
           runtime: { database: { open: true, pragma: () => schemaVersion } },

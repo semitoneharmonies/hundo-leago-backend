@@ -4,7 +4,7 @@ const {
   repositoryError,
 } = require("./SqliteRepositoryError");
 const {
-  REPOSITORY_CATALOG,
+  getRepositoryCatalogForSchemaVersion,
   getRepositoryDefinition,
 } = require("./repositoryCatalog");
 const {
@@ -15,6 +15,7 @@ function validateCompleteRepositorySchema(database) {
   if (
     !database ||
     typeof database.prepare !== "function" ||
+    typeof database.pragma !== "function" ||
     typeof database.transaction !== "function"
   ) {
     throw repositoryError(
@@ -41,7 +42,7 @@ function validateCompleteRepositorySchema(database) {
     );
   }
 
-  const catalogTables = REPOSITORY_CATALOG.map(
+  const catalogTables = getRepositoryCatalogForSchemaVersion(database.pragma("user_version", { simple: true })).map(
     ({ tableName }) => tableName
   ).sort();
   if (
@@ -68,7 +69,7 @@ function validateCompleteRepositorySchema(database) {
 function createSqliteRepositoryContext({ database } = {}) {
   const schemaTables =
     validateCompleteRepositorySchema(database);
-  const repositoryEntries = REPOSITORY_CATALOG.map(
+  const repositoryEntries = getRepositoryCatalogForSchemaVersion(database.pragma("user_version", { simple: true })).map(
     (definition) => [
       definition.tableName,
       createSqliteRecordRepository({
@@ -102,6 +103,9 @@ function createSqliteRepositoryContext({ database } = {}) {
 
   function getRepository(tableName) {
     const definition = getRepositoryDefinition(tableName);
+    if (!repositories[definition.tableName]) {
+      throw repositoryError(REPOSITORY_ERROR_CODES.argumentInvalid, "The repository is unavailable in this database schema.");
+    }
     return repositories[definition.tableName];
   }
 

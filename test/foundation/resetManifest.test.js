@@ -194,6 +194,21 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
       RESET_V1_POST_RESET_TABLE_POLICY,
       [
         {
+          tableName: "expanded_stat_refreshes",
+          introducedByMigrationId: 57,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "expanded_stat_totals",
+          introducedByMigrationId: 57,
+          treatment: "require_empty",
+        },
+        {
+          tableName: "expanded_player_game_stats",
+          introducedByMigrationId: 57,
+          treatment: "require_empty",
+        },
+        {
           tableName: "auction_administration_command_results",
           introducedByMigrationId: 30,
           treatment: "require_empty",
@@ -467,9 +482,9 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
         },
       ]
     );
-    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 51);
-    assert.equal(classifiedTables.length, 133);
-    assert.equal(new Set(classifiedTables).size, 133);
+    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 54);
+    assert.equal(classifiedTables.length, 136);
+    assert.equal(new Set(classifiedTables).size, 136);
     assert.deepEqual(
       [...classifiedTables].sort(),
       [...catalogTables].sort()

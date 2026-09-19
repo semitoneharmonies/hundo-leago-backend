@@ -1259,7 +1259,7 @@ test("restoring the selected backup excludes a later real buyout and restores ex
       fs.mkdirSync(pendingDirectory);
       for (const entry of fs.readdirSync(options.migrationsDirectory)) fs.copyFileSync(
         path.join(options.migrationsDirectory, entry), path.join(pendingDirectory, entry), fs.constants.COPYFILE_EXCL);
-      fs.writeFileSync(path.join(pendingDirectory, "0057_unapproved_recovery.sql"), "SELECT 1;\n", { flag: "wx" });
+      fs.writeFileSync(path.join(pendingDirectory, "0058_unapproved_recovery.sql"), "SELECT 1;\n", { flag: "wx" });
       assert.throws(() => buildRecoveryRestorePlan({ ...options, migrationsDirectory: pendingDirectory }),
         { code: "RECOVERY_RESTORE_PLAN_FAILED" });
       const commandDirectory = path.join(input.temporaryRoot, "restore-plan-command"); fs.mkdirSync(commandDirectory);

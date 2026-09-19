@@ -34,7 +34,7 @@ const {
   inventorySourceBundle,
 } = require("../../src/infrastructure/migration/sourceInventory");
 const {
-  REPOSITORY_CATALOG,
+  SCHEMA_54_REPOSITORY_CATALOG: REPOSITORY_CATALOG,
 } = require("../../src/infrastructure/persistence/sqlite/repositoryCatalog");
 const {
   parseArguments,

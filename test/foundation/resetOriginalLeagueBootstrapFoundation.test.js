@@ -47,7 +47,7 @@ const {
   createSqliteRepositoryContext,
 } = require("../../src/infrastructure/persistence/sqlite/createSqliteRepositoryContext");
 const {
-  REPOSITORY_CATALOG,
+  SCHEMA_54_REPOSITORY_CATALOG: REPOSITORY_CATALOG,
 } = require("../../src/infrastructure/persistence/sqlite/repositoryCatalog");
 
 const ROOT = path.resolve(__dirname, "..", "..");

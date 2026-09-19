@@ -8,6 +8,8 @@ const {
   openDatabase,
 } = require("../../src/infrastructure/database/connection");
 const {
+  applyMigrations,
+  discoverMigrations,
   migrateDatabase,
 } = require("../../src/infrastructure/database/migrate");
 const {
@@ -228,6 +230,32 @@ function collectRepositoryDatabaseArtifacts() {
 }
 
 describe("M2-05 SQLite repository foundation", () => {
+  test("keeps historical schemas exact and requires the expanded tables at schema 57", (t) => {
+    const Database = require("better-sqlite3");
+    const database = new Database(":memory:");
+    t.after(() => database.close());
+    applyMigrations({
+      database,
+      migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }).slice(0, 54),
+      applicationBuildId: "expanded-scoring-legacy-catalog-test",
+    });
+    for (const version of [54, 55, 56]) {
+      database.pragma(`user_version = ${version}`);
+      const context = createSqliteRepositoryContext({ database });
+      assert.equal(context.schemaTables.length, 133);
+      assert.equal(context.repositories.expanded_stat_totals, undefined);
+      assert.throws(() => context.getRepository("expanded_stat_totals"),
+        assertRepositoryError(REPOSITORY_ERROR_CODES.argumentInvalid));
+    }
+    database.pragma("user_version = 57");
+    assert.throws(() => createSqliteRepositoryContext({ database }),
+      assertRepositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible));
+    database.pragma("user_version = 54");
+    database.exec("CREATE TABLE unapproved_table (id TEXT PRIMARY KEY)");
+    assert.throws(() => createSqliteRepositoryContext({ database }),
+      assertRepositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible));
+  });
+
   test("catalogs every application table with schema-exact scope, key, and version metadata", (t) => {
     const { database, context } = createTemporaryDatabase(
       t,
@@ -245,7 +273,7 @@ describe("M2-05 SQLite repository foundation", () => {
       ({ tableName }) => tableName
     ).sort();
 
-    assert.equal(REPOSITORY_CATALOG.length, 133);
+    assert.equal(REPOSITORY_CATALOG.length, 136);
     assert.equal(Object.isFrozen(REPOSITORY_CATALOG), true);
     assert.equal(
       REPOSITORY_CATALOG.every(Object.isFrozen),
@@ -253,7 +281,7 @@ describe("M2-05 SQLite repository foundation", () => {
     );
     assert.deepEqual(catalogTables, actualTables);
     assert.deepEqual(context.schemaTables, actualTables);
-    assert.equal(Object.keys(context.repositories).length, 133);
+    assert.equal(Object.keys(context.repositories).length, 136);
     assert.equal(Object.isFrozen(context.repositories), true);
     assert.equal(Object.isFrozen(context), true);
 

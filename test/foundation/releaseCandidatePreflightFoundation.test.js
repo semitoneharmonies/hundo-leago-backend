@@ -389,21 +389,21 @@ test("backend release-source inspection reports schema 57 while the historical a
     baseSchemaVersion: EXPECTED_BASE_SCHEMA_VERSION,
     targetSchemaVersion: 57,
     migrationCount: 57,
-    postBaseMigrationCount: 34,
+    postBaseMigrationCount: 35,
     contiguous: true,
     checksumSetSha256:
-      "582e39d5cb91d785d078b49a2594450fa245b34f81d095f1b6550da0e76de284",
+      "cdc742d3b83f42dd6bb637c9086bb45c212686b4cfb663f3429d2ce98f0e52bc",
   });
   assert.equal(EXPECTED_SCHEMA_VERSION, 54);
   assert.deepEqual(facts.repositorySource, {
     repositoryCatalogCount:
-      EXPECTED_REPOSITORY_CATALOG_COUNT,
+      136,
     repositoryCatalogSha256:
-      EXPECTED_REPOSITORY_CATALOG_SHA256,
+      "e1f05f73aba8323c318d80d68a711c351473abfd1b94347e42701e664f77f790",
     postResetRequireEmptyCount:
-      EXPECTED_POST_RESET_REQUIRE_EMPTY_COUNT,
+      54,
     postResetPolicySha256:
-      EXPECTED_POST_RESET_POLICY_SHA256,
+      "0d1ab0d9ff2691b9d9c975a6fdda8b0b5f829653c5fa142b0a39e7bc84f64800",
     resetPolicyCoverageValid: true,
   });
   assert.equal(facts.renderProbe.safe, true);

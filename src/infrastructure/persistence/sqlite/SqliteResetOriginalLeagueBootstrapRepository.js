@@ -19,7 +19,7 @@ const {
   tableSemanticHash,
 } = require("../../migration/runJsonImport");
 const {
-  REPOSITORY_CATALOG,
+  getRepositoryCatalogForSchemaVersion,
 } = require("./repositoryCatalog");
 const {
   SqliteRepositoryError,
@@ -176,7 +176,7 @@ function createSqliteResetOriginalLeagueBootstrapRepository({
     );
   }
 
-  const tableNames = REPOSITORY_CATALOG.map(
+  const tableNames = getRepositoryCatalogForSchemaVersion(database.pragma("user_version", { simple: true })).map(
     ({ tableName }) => tableName
   ).sort();
   const pristineStates = new WeakSet();

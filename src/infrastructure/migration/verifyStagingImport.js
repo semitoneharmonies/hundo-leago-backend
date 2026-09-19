@@ -10,7 +10,7 @@ const {
   loadAndValidateStagingDescriptor,
 } = require("../database/stagingEnvironment");
 const {
-  REPOSITORY_CATALOG,
+  SCHEMA_54_REPOSITORY_CATALOG: REPOSITORY_CATALOG,
 } = require("../persistence/sqlite/repositoryCatalog");
 const {
   calculateSemanticReportHash,
