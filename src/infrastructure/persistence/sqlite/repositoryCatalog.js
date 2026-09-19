@@ -28,6 +28,9 @@ function repositoryDefinition(
 }
 
 const DEFINITIONS = [
+  repositoryDefinition("expanded_stat_refreshes", REPOSITORY_SCOPES.global, { keyColumn: "refresh_id" }),
+  repositoryDefinition("expanded_stat_totals", REPOSITORY_SCOPES.global, { keyColumn: "total_id" }),
+  repositoryDefinition("expanded_player_game_stats", REPOSITORY_SCOPES.global, { keyColumn: "observation_id" }),
   repositoryDefinition(
     "account_action_tokens",
     REPOSITORY_SCOPES.global,

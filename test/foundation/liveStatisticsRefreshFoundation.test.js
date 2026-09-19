@@ -44,6 +44,38 @@ const REQUIREMENTS_SHA256 =
   "861588ac14315a916976323781b48c4528179a91dacf25d461b57a06b5dcb8ad";
 const COVERAGE_SHA256 = "c".repeat(64);
 const EVIDENCE_SHA256 = "e".repeat(64);
+const { emptyScoringStats, EXPANDED_SCORING_VERSION } = require("../../src/domain/statistics/expandedScoringPolicy");
+const { readExpandedStatistics } = require("../../src/infrastructure/persistence/sqlite/expandedStatisticsPersistence");
+
+test("expanded statistics commit a sealed breakdown atomically and preserve prior refreshes", (t) => {
+  const runtime = createSqliteRuntime(t);
+  const prior = prepareLiveCompletion(runtime);
+  runtime.repository.completeLiveRefresh(prior.command);
+  const previousRows = runtime.database.prepare("SELECT * FROM player_stat_totals WHERE refresh_id = ? ORDER BY id").all(prior.refreshId);
+  const prepared = prepareLiveCompletion(runtime, { base: 900 });
+  const expandedScoring = { scoringRuleVersion: EXPANDED_SCORING_VERSION,
+    totalsRows: prepared.command.rows.map(row => ({ playerId: row.externalPlayerId,
+      scoringStats: { ...emptyScoringStats(), evenStrengthGoals: row.goals, primaryAssists: row.assists, hits: row.gamesPlayed ? 2 : 0, giveaways: row.gamesPlayed ? 7 : 0 } })),
+    playerGameRows: [],
+  };
+  runtime.repository.completeLiveRefresh({ ...prepared.command, sourceVersion: "expanded-v1", expandedScoring });
+  const sealed = readExpandedStatistics(runtime.database, prepared.refreshId);
+  assert.equal(sealed.totals.length, 3);
+  assert.equal(sealed.scoringRuleVersion, EXPANDED_SCORING_VERSION);
+  assert.equal(sealed.totals[0].scoringStats.giveaways, 7);
+  const deductions = runtime.database.prepare("SELECT forward_fp_hundredths, defence_fp_hundredths FROM expanded_stat_totals WHERE provider_player_id = '101'").get();
+  assert.deepEqual(deductions, { forward_fp_hundredths: -30, defence_fp_hundredths: 0 });
+  assert.deepEqual(runtime.database.prepare("SELECT * FROM player_stat_totals WHERE refresh_id = ? ORDER BY id").all(prior.refreshId), previousRows);
+  assert.equal(readExpandedStatistics(runtime.database, prior.refreshId), null);
+  assert.throws(() => runtime.database.prepare("UPDATE expanded_stat_totals SET stats_json = '{}' WHERE refresh_id = ?").run(prepared.refreshId));
+  assert.throws(() => runtime.database.prepare("DELETE FROM expanded_stat_refreshes WHERE refresh_id = ?").run(prepared.refreshId));
+  const invalid = prepareLiveCompletion(runtime, { base: 1000 });
+  assert.throws(() => runtime.repository.completeLiveRefresh({ ...invalid.command, sourceVersion: "expanded-invalid", expandedScoring: { ...expandedScoring, totalsRows: expandedScoring.totalsRows.slice(1) } }));
+  assertNoSealedRefreshWrites(runtime.database, invalid.refreshId);
+  assert.equal(runtime.database.prepare("SELECT count(*) AS n FROM expanded_stat_totals WHERE refresh_id = ?").get(invalid.refreshId).n, 0);
+  assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+  assert.equal(runtime.database.pragma("integrity_check", { simple: true }), "ok");
+});
 
 function uuid(value) {
   return (

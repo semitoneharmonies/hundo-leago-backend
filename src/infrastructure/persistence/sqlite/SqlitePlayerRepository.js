@@ -86,7 +86,7 @@ function escapeLike(value) {
   return value.replace(/[\\%_]/g, "\\$&");
 }
 
-function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = null } = {}) {
+function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = null, expandedScoringEnabled = false } = {}) {
   if (currentNhlStatisticsSeason !== null && !/^\d{8}$/.test(currentNhlStatisticsSeason)) throw new TypeError("Current NHL statistics require an exact season key.");
   const players = createSqliteRecordRepository({
     database,
@@ -145,17 +145,27 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
       "refresh.completed_at_ms DESC, totals.created_at_ms DESC, totals.id DESC " +
       "LIMIT 1) " +
       "LEFT JOIN stat_sources AS statistics_source ON statistics_source.id = statistics.stat_source_id";
+    const expandedRequired = expandedScoringEnabled && currentNhlStatisticsSeason === '20262027';
+    const expandedJoin = " LEFT JOIN expanded_stat_totals AS expanded ON expanded.total_id = statistics.id ";
+    const fantasyPoints = "CASE WHEN expanded.total_id IS NOT NULL THEN CASE source.normalized_position WHEN 'D' THEN expanded.defence_fp_hundredths WHEN 'F' THEN expanded.forward_fp_hundredths END " +
+      (expandedRequired ? "ELSE NULL END" : "ELSE statistics.fantasy_points_hundredths END");
+    const sortFantasyPoints = `COALESCE(${fantasyPoints}, -9007199254740991)`;
+    const readColumns = PLAYER_READ_COLUMNS.map(column => column === 'statistics.fantasy_points_hundredths AS statistics_fantasy_points_hundredths'
+      ? `${fantasyPoints} AS statistics_fantasy_points_hundredths` : column).concat([
+        'expanded.stats_json AS statistics_scoring_stats_json',
+        `${expandedRequired ? 1 : 0} AS statistics_expanded_required`,
+      ]);
     findDetailByIdStatement = database.prepare(
-      `SELECT ${PLAYER_READ_COLUMNS.join(", ")} FROM players ` +
-        `${currentSourceJoin} ${currentStatisticsJoin} ` +
+      `SELECT ${readColumns.join(", ")} FROM players ` +
+        `${currentSourceJoin} ${currentStatisticsJoin} ${expandedJoin} ` +
         "WHERE players.id = @playerId LIMIT 1"
     );
     findPageCursorStatement = database.prepare(
       "SELECT players.id, players.full_name, " +
         "lower(players.full_name) AS sort_name, players.status, " +
-        "COALESCE(statistics.fantasy_points_hundredths, -1) " +
+        `${sortFantasyPoints} ` +
         "AS sort_fantasy_points_hundredths " +
-        `FROM players ${currentStatisticsJoin} ` +
+        `FROM players ${currentSourceJoin} ${currentStatisticsJoin} ${expandedJoin} ` +
         "WHERE players.id = ? LIMIT 1"
     );
     listExternalIdsStatement = database.prepare(
@@ -164,8 +174,8 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         "ORDER BY provider ASC, external_value ASC"
     );
     listPageStatement = database.prepare(
-      `SELECT ${PLAYER_READ_COLUMNS.join(", ")} FROM players ` +
-        `${currentSourceJoin} ${currentStatisticsJoin} ` +
+      `SELECT ${readColumns.join(", ")} FROM players ` +
+        `${currentSourceJoin} ${currentStatisticsJoin} ${expandedJoin} ` +
         "WHERE (@status = 'all' OR players.status = @status) " +
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
         "AND (@providerActive IS NULL OR source.active IS NULL OR source.active = 1) " +
@@ -251,8 +261,8 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         "LIMIT @limit"
     );
     listPageByFantasyPointsStatement = database.prepare(
-      `SELECT ${PLAYER_READ_COLUMNS.join(", ")} FROM players ` +
-        `${currentSourceJoin} ${currentStatisticsJoin} ` +
+      `SELECT ${readColumns.join(", ")} FROM players ` +
+        `${currentSourceJoin} ${currentStatisticsJoin} ${expandedJoin} ` +
         "WHERE (@status = 'all' OR players.status = @status) " +
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
         "AND (@providerActive IS NULL OR source.active IS NULL OR source.active = 1) " +
@@ -332,12 +342,12 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         ")) " +
         "AND (" +
         "@cursorFantasyPoints IS NULL OR " +
-        "COALESCE(statistics.fantasy_points_hundredths, -1) < @cursorFantasyPoints OR (" +
-        "COALESCE(statistics.fantasy_points_hundredths, -1) = @cursorFantasyPoints AND (" +
+        `${sortFantasyPoints} < @cursorFantasyPoints OR (` +
+        `${sortFantasyPoints} = @cursorFantasyPoints AND (` +
         "lower(players.full_name) > @cursorName OR " +
         "(lower(players.full_name) = @cursorName AND players.id > @cursorId)" +
         "))) " +
-        "ORDER BY COALESCE(statistics.fantasy_points_hundredths, -1) DESC, " +
+        `ORDER BY ${sortFantasyPoints} DESC, ` +
         "lower(players.full_name) ASC, players.id ASC " +
         "LIMIT @limit"
     );

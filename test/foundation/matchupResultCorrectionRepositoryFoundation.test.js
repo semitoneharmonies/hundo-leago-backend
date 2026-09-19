@@ -1282,6 +1282,28 @@ function rollToNextSeason(database) {
 }
 
 describe("T097 SQLite matchup-result correction repository", () => {
+  test("finalizes regular-season standings containing negative fantasy points", t => {
+    const runtime = createRuntime(t);
+    const command = baseCommand({ offset: 8100, homeScoreHundredths: -150, awayScoreHundredths: -100 });
+    runtime.repository.correct(command);
+    commitRegularFinalization(runtime.database, { resultVersionId: command.correction.resultVersionId, resultVersion: 2,
+      homeScoreHundredths: -150, awayScoreHundredths: -100, nowMs: CORRECTED_AT_MS + 1 });
+    const rows = runtime.database.prepare("SELECT fantasy_points_for_hundredths FROM standings_rows WHERE standings_snapshot_id = ?").all(IDS.finalSnapshot);
+    assert.deepEqual(rows.map(row=>row.fantasy_points_for_hundredths).sort((a,b)=>a-b), [-150,-100]);
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+  });
+  test("persists negative corrections and their replacement final standings", t => {
+    const runtime = createRuntime(t);
+    commitRegularFinalization(runtime.database);
+    const command = withReplacement(runtime.repository, baseCommand({ offset: 8000, expectedSeasonVersion: 2,
+      homeScoreHundredths: -150, awayScoreHundredths: -100 }));
+    const result = runtime.repository.correct(command);
+    assert.equal(result.result_version_number, 2);
+    const rows = runtime.database.prepare("SELECT fantasy_points_for_hundredths, fantasy_points_against_hundredths FROM standings_rows WHERE standings_snapshot_id = ? ORDER BY team_id").all(command.replacement.snapshotId);
+    assert.deepEqual(rows.map(row=>row.fantasy_points_for_hundredths).sort((a,b)=>a-b), [-150,-100]);
+    assert.deepEqual(rows.map(row=>row.fantasy_points_against_hundredths).sort((a,b)=>a-b), [-150,-100]);
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+  });
   test("atomically commits and immutably replays pre-final corrections without standings writes", (t) => {
     const runtime = createRuntime(t);
     const contextChanges = totalChanges(runtime.database);

@@ -185,6 +185,11 @@ function positiveInteger(value, description = "integer") {
   return value;
 }
 
+function signedInteger(value, description) {
+  if (!Number.isSafeInteger(value)) invalid(`A safe ${description} is required.`);
+  return value;
+}
+
 function nonnegativeInteger(
   value,
   description = "integer"
@@ -286,11 +291,11 @@ function normalizeStandingsRow(value) {
     value.standingsPoints,
     "standings-points value"
   );
-  const pointsFor = nonnegativeInteger(
+  const pointsFor = signedInteger(
     value.fantasyPointsForHundredths,
     "fantasy-points-for value"
   );
-  const pointsAgainst = nonnegativeInteger(
+  const pointsAgainst = signedInteger(
     value.fantasyPointsAgainstHundredths,
     "fantasy-points-against value"
   );
@@ -855,8 +860,8 @@ function createSqliteMatchupStandingsFinalizationRepository({
               OR
               (
                 history.version_number > 1
-                AND history.source_type = 'correction'
-                AND history.actor_user_id IS NOT NULL
+                AND ((history.source_type = 'correction' AND history.actor_user_id IS NOT NULL)
+                  OR (history.source_type = 'provider_correction' AND history.actor_user_id IS NULL AND history.reason = 'Automatic NHL statistics correction'))
                 AND history.reason IS NOT NULL
                 AND history.reason = trim(history.reason)
                 AND length(history.reason) BETWEEN 1 AND 500

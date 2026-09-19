@@ -119,6 +119,8 @@ function safeProvider(row) {
 
 function safeStatistics(row) {
   if (!row.statistics_nhl_season_key) return null;
+  if (row.statistics_expanded_required && !row.statistics_scoring_stats_json) return null;
+  if (row.statistics_scoring_stats_json && !Number.isSafeInteger(row.statistics_fantasy_points_hundredths)) return null;
   return Object.freeze({
     provider: row.statistics_provider,
     nhlSeasonKey: row.statistics_nhl_season_key,
@@ -128,6 +130,10 @@ function safeStatistics(row) {
     nhlPoints: row.statistics_nhl_points,
     fantasyPointsHundredths: row.statistics_fantasy_points_hundredths,
     sourceUpdatedAtMs: row.statistics_source_updated_at_ms,
+    ...(row.statistics_scoring_stats_json ? {
+      scoringRuleVersion: "expanded-2026-v1",
+      scoringStats: Object.freeze(JSON.parse(row.statistics_scoring_stats_json)),
+    } : {}),
   });
 }
 

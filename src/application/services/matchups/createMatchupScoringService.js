@@ -1,3 +1,5 @@
+const { usesExpandedScoring } = require("../../../domain/statistics/expandedScoringPolicy");
+const { calculateExpandedTeamScore } = require("../../../domain/matchups/expandedMatchupScoringPolicy");
 const {
   calculateTeamLiveScore,
   describeLiveSource,
@@ -119,7 +121,7 @@ function verifyOrFail(operation, message) {
   }
 }
 
-function createMatchupScoringService({ repository } = {}) {
+function createMatchupScoringService({ repository, expandedScoringEnabled = false } = {}) {
   if (!repository || typeof repository.readContext !== "function") {
     throw new TypeError("createMatchupScoringService requires a scoring repository");
   }
@@ -445,6 +447,12 @@ function createMatchupScoringService({ repository } = {}) {
       const lockedPlayers = playersByLock.get(lock.id) || [];
       let currentTotals = context.totals;
       let excludedPlayerGames = exclusionsByTeam.get(teamId) || [];
+      if (usesExpandedScoring(context.matchup.nhl_season_key) && (expandedScoringEnabled || context.expandedScoring)) {
+        if (context.refresh.provider !== "nhl-completed-games" || !context.expandedScoring) fail(MATCHUP_SCORING_SERVICE_CODES.statisticsMissing, "Expanded statistics await a complete NHL refresh.");
+        return calculateExpandedTeamScore({ lock, lockedPlayers, currentPlayerGames,
+          expandedPlayerGames: context.expandedScoring.playerGames, excludedPlayerGames,
+          weekStartsAtMs: context.matchup.week_starts_at_ms, weekEndsAtMs: context.matchup.week_ends_at_ms });
+      }
       if (context.refresh.provider === "nhl-completed-games") {
         // Completed games belong to their start-time window, even if the feed
         // finishes a Sunday game after Monday's baseline or finalization is delayed.
@@ -508,7 +516,12 @@ function createMatchupScoringService({ repository } = {}) {
     return readScore(input, new Set(["final"]));
   }
 
-  return Object.freeze({ readAtRefresh, readLive });
+  function readForCorrection(input) {
+    if (!expandedScoringEnabled || input.refreshId !== undefined) fail(MATCHUP_SCORING_SERVICE_CODES.stateInvalid, "Provider correction scoring is not enabled.");
+    return readScore(input, new Set(["final"]));
+  }
+
+  return Object.freeze({ readAtRefresh, readLive, readForCorrection });
 }
 
 module.exports = {

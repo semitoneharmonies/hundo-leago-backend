@@ -410,6 +410,7 @@ describe("M7-01 deployed target runtime configuration", () => {
   test("NHL statistics and matchup processing require separate explicit controls", () => {
     const defaults = loadTargetRuntimeConfig({ env: deployedEnvironment(), backendRoot: ROOT });
     assert.equal(defaults.nhlCompletedStatisticsEnabled, false);
+    assert.equal(defaults.expandedScoringEnabled, false);
     assert.equal(defaults.matchupProcessingEnabled, false);
     assert.equal(defaults.matchupProcessingLeagueIds, null);
     const leagueId = "00000000-0000-4000-8000-000000000001";
@@ -419,10 +420,11 @@ describe("M7-01 deployed target runtime configuration", () => {
     for (const invalid of ["", "all", ` ${leagueId}`, `${leagueId},`, `${leagueId},${leagueId}`, [leagueId]]) {
       assert.throws(() => loadTargetRuntimeConfig({ env: deployedEnvironment({ MATCHUP_PROCESSING_LEAGUE_IDS: invalid }), backendRoot: ROOT }), TargetRuntimeConfigError);
     }
-    const enabled = loadTargetRuntimeConfig({ env: deployedEnvironment({ NHL_COMPLETED_STATISTICS_ENABLED: "true", MATCHUP_PROCESSING_ENABLED: "true" }), backendRoot: ROOT });
+    const enabled = loadTargetRuntimeConfig({ env: deployedEnvironment({ NHL_COMPLETED_STATISTICS_ENABLED: "true", MATCHUP_PROCESSING_ENABLED: "true", EXPANDED_SCORING_ENABLED: "true" }), backendRoot: ROOT });
     assert.equal(enabled.nhlCompletedStatisticsEnabled, true);
+    assert.equal(enabled.expandedScoringEnabled, true);
     assert.equal(enabled.matchupProcessingEnabled, true);
-    for (const overrides of [{ NHL_COMPLETED_STATISTICS_ENABLED: "yes" }, { MATCHUP_PROCESSING_ENABLED: "true" }, { MATCHUP_PROCESSING_ENABLED: "1" }]) {
+    for (const overrides of [{ EXPANDED_SCORING_ENABLED: "true" }, { EXPANDED_SCORING_ENABLED: "yes" }, { NHL_COMPLETED_STATISTICS_ENABLED: "yes" }, { MATCHUP_PROCESSING_ENABLED: "true" }, { MATCHUP_PROCESSING_ENABLED: "1" }]) {
       assert.throws(() => loadTargetRuntimeConfig({ env: deployedEnvironment(overrides), backendRoot: ROOT }), TargetRuntimeConfigError);
     }
     assert.throws(() => loadTargetRuntimeConfig({ env: liveProviderEnvironment("required", { NHL_COMPLETED_STATISTICS_ENABLED: "true" }), backendRoot: ROOT }), TargetRuntimeConfigError);
@@ -1510,7 +1512,7 @@ describe("M7-01 deployed target runtime configuration", () => {
       inspect.database
         .prepare("SELECT COUNT(*) AS count FROM schema_migrations")
         .get().count,
-      56
+      57
     );
     assert.equal(
       inspect.database
@@ -1648,7 +1650,7 @@ describe("M7-01 deployed target runtime configuration", () => {
       ].sort()
     );
     assert.equal(body.data.environment, "staging");
-    assert.equal(body.data.schemaVersion, 56);
+    assert.equal(body.data.schemaVersion, 57);
     assert.equal(body.data.scheduler.state, "disabled");
     assert.deepEqual(body.data.accountEmailDelivery, { enabled: false });
     assert.deepEqual(body.data.backupSchedule, { enabled: false, latestRun: null });

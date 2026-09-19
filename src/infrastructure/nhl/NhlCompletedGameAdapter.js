@@ -1,5 +1,7 @@
 const { createHash } = require("node:crypto");
 const { assertNhlSeasonKey } = require("../../domain/statistics/statisticsPolicy");
+const { EXPANDED_SCORING_VERSION, usesExpandedScoring, emptyScoringStats, addScoringStats } = require("../../domain/statistics/expandedScoringPolicy");
+const { normalizeExpandedReports } = require("./normalizeExpandedReports");
 
 const PROVIDER_NAME = "nhl-completed-games";
 const PLAYER_IDENTITY_PROVIDER = "nhl";
@@ -34,7 +36,7 @@ function easternStart(value) {
   fail("An NHL game start is ambiguous.");
 }
 
-function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, readCatalogPlayers, timeoutMs = 20_000, retryDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, readCatalogPlayers, expandedScoringEnabled = false, timeoutMs = 20_000, retryDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   if (typeof fetchImpl !== "function" || typeof nowMs !== "function" || typeof readCatalogPlayers !== "function" || typeof retryDelay !== "function") throw new TypeError("NHL completed-game statistics require fetch, clock and catalog readers.");
   integer(timeoutMs, "request timeout", 1);
   let gameStateSnapshot = null;
@@ -82,25 +84,25 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
     }
   }
 
-  async function pages(resource, expression, { aggregate = false } = {}) {
+  async function pages(resource, expression, { aggregate = false, pageSize = 100 } = {}) {
     const sort = resource === "game"
       ? [{ property: "id", direction: "ASC" }]
       : [{ property: "playerId", direction: "ASC" }, { property: "gameId", direction: "ASC" }];
     async function readPage(start, expectedTotal = null) {
-      const query = new URLSearchParams({ start: String(start), limit: "100", cayenneExp: expression, sort: JSON.stringify(sort) });
+      const query = new URLSearchParams({ start: String(start), limit: String(pageSize), cayenneExp: expression, sort: JSON.stringify(sort) });
       if (resource !== "game") { query.set("isAggregate", String(aggregate)); query.set("isGame", "true"); }
       const page = await json(`${STATS_ORIGIN}/stats/rest/en/${resource}?${query}`);
       integer(page?.total, "page total");
       if (page.total > 200_000) fail("The NHL response exceeded its bounded page count.");
       if (!Array.isArray(page.data) || (expectedTotal !== null && page.total !== expectedTotal)) fail("NHL pagination changed during the refresh.");
-      if (page.data.length !== Math.min(100, page.total - start)) fail("The NHL response is incomplete.");
+      if (page.data.length !== Math.min(pageSize, page.total - start)) fail("The NHL response is incomplete.");
       return page;
     }
     const first = await readPage(0);
     const result = [...first.data];
     // Bounded parallel reads keep a complete season within the capture window.
-    for (let start = 100; start < first.total; start += 400) {
-      const offsets = [start, start + 100, start + 200, start + 300].filter((offset) => offset < first.total);
+    for (let start = pageSize; start < first.total; start += pageSize * 4) {
+      const offsets = [start, start + pageSize, start + pageSize * 2, start + pageSize * 3].filter((offset) => offset < first.total);
       const batch = await Promise.all(offsets.map((offset) => readPage(offset, first.total)));
       for (const page of batch) result.push(...page.data);
     }
@@ -133,6 +135,9 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
 
   async function fetchLiveSnapshot({ nhlSeasonKey, requiredPlayers, requiredPlayerGames = [] } = {}) {
     const season = assertNhlSeasonKey(nhlSeasonKey);
+    const expanded = expandedScoringEnabled && usesExpandedScoring(season);
+    const expandedTotals = new Map();
+    const expandedGames = new Map();
     const startedAtMs = integer(nowMs(), "capture time");
     if (!Array.isArray(requiredPlayers) || !Array.isArray(requiredPlayerGames)) fail("Required NHL identities are missing.");
     const catalog = readCatalogPlayers();
@@ -142,6 +147,7 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
       const id = identity(player.providerPlayerId);
       if (totals.has(id)) fail("The NHL catalog contains duplicate identities.");
       totals.set(id, { playerId: id, gamesPlayed: 0, goals: 0, assists: 0 });
+      if (expanded) expandedTotals.set(id, emptyScoringStats());
     }
     for (const required of requiredPlayers) if (!totals.has(identity(required.providerPlayerId))) fail("A required NHL player is missing from the catalog.");
     const rawGames = await pages("game", `season=${season} and gameType=2`);
@@ -158,8 +164,26 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
     // Restrict rows to explicitly completed games and verify each game, including zero scorers.
     for (let offset = 0; offset < completed.length; offset += 200) {
       const batch = completed.slice(offset, offset + 200);
-      const rows = await pages("skater/summary", `gameId in (${batch.map(({ id }) => id).join(",")})`);
+      const expression = `gameId in (${batch.map(({ id }) => id).join(",")})`;
+      const pageOptions = expanded ? { pageSize: 1000 } : {};
+      const rows = await pages("skater/summary", expression, pageOptions);
       if (rows.length === 0) fail("Completed NHL games have no statistics.");
+      if (expanded) {
+        // Each full refresh rereads every completed game, including historical
+        // corrections. Bulk reports avoid thousands of individual game calls.
+        const realtime = await pages("skater/realtime", expression, pageOptions);
+        const scoring = await pages("skater/scoringpergame", expression, pageOptions);
+        const penalties = await pages("skater/penalties", expression, pageOptions);
+        const penaltyShots = await pages("skater/penaltyShots", expression, pageOptions);
+        const penaltyShotLandings = [];
+        for (const gameId of new Set(penaltyShots.filter((row) => row.penaltyShotsGoals > 0).map((row) => String(row.gameId)))) {
+          const landing = await json(`${WEB_ORIGIN}/v1/gamecenter/${gameId}/landing`);
+          if (String(landing.id) !== gameId || String(landing.season) !== season || landing.gameType !== 2) fail("NHL penalty-shot evidence has a mismatched game.");
+          penaltyShotLandings.push(landing);
+        }
+        const categories = normalizeExpandedReports({ summary: rows, realtime, scoring, penalties, penaltyShots, penaltyShotLandings });
+        for (const [key, value] of categories) expandedGames.set(key, value);
+      }
       const seen = new Set();
       const appearances = new Map(batch.map(({ id }) => [id, 0]));
       for (const row of rows) {
@@ -172,7 +196,10 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
         if (gp !== 1 || row.points !== goals + assists) fail("NHL game statistics are inconsistent.");
         appearances.set(gameId, appearances.get(gameId) + 1);
         const total = totals.get(id);
-        if (total) { total.gamesPlayed += gp; total.goals += goals; total.assists += assists; }
+        if (total) {
+          total.gamesPlayed += gp; total.goals += goals; total.assists += assists;
+          if (expanded) addScoringStats(expandedTotals.get(id), expandedGames.get(pair));
+        }
         if (!["H", "R"].includes(row.homeRoad)) fail("An NHL player-game team is missing.");
         const game = games.get(gameId);
         const playerAppearances = appearancesByPlayer.get(id) || [];
@@ -231,9 +258,16 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
     }
     const capturedAtMs = integer(nowMs(), "capture time");
     if (capturedAtMs < startedAtMs || capturedAtMs - startedAtMs > 5 * 60_000) fail("NHL snapshot capture exceeded its consistency window.");
-    const sourceVersion = `nhl-completed-v1:${createHash("sha256").update(JSON.stringify({ season, completed: completed.map(({ id }) => id), totals: [...totals.values()], coverage, playerGameRows })).digest("hex")}`;
+    const expandedScoring = expanded ? {
+      scoringRuleVersion: EXPANDED_SCORING_VERSION,
+      totalsRows: [...expandedTotals].map(([playerId, scoringStats]) => ({ playerId, scoringStats })),
+      playerGameRows: playerGameRows.map((row) => ({ playerId: row.playerId, nhlGameId: row.nhlGameId,
+        gamesPlayed: expandedGames.has(`${row.nhlGameId}:${row.playerId}`) ? 1 : 0,
+        scoringStats: expandedGames.get(`${row.nhlGameId}:${row.playerId}`) || emptyScoringStats() })),
+    } : undefined;
+    const sourceVersion = `nhl-completed-v1:${createHash("sha256").update(JSON.stringify({ season, completed: completed.map(({ id }) => id), totals: [...totals.values()], coverage, playerGameRows, ...(expanded ? { expandedScoring } : {}) })).digest("hex")}`;
     gameStateSnapshot = { season, observedAtMs: startedAtMs, sourceVersion, games: new Map([...boxscores].map(([id, box]) => [id, { nhlGameId: id, nhlGameScheduledStartsAtMs: box.game.startsAtMs, observedGameState: box.state }])) };
-    return { provider: PROVIDER_NAME, sourceVersion, capturedAtMs, totalsSourceUpdatedAtMs: startedAtMs, totalsRows: [...totals.values()], playerGameRows, playerGameCoverage: { schemaVersion: 1, throughAtMs: capturedAtMs, players: coverage } };
+    return { provider: PROVIDER_NAME, sourceVersion, capturedAtMs, totalsSourceUpdatedAtMs: startedAtMs, totalsRows: [...totals.values()], playerGameRows, playerGameCoverage: { schemaVersion: 1, throughAtMs: capturedAtMs, players: coverage }, ...(expanded ? { expandedScoring } : {}) };
   }
 
   async function fetchGameStates({ nhlSeasonKey, requestedAtMs, games }) {

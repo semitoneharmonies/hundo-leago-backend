@@ -53,10 +53,10 @@ function calculateStandings({ participants, results } = {}) {
     const homeScore = result.home_score_hundredths;
     const awayScore = result.away_score_hundredths;
     if (
-      !Number.isSafeInteger(homeScore) || homeScore < 0 ||
-      !Number.isSafeInteger(awayScore) || awayScore < 0
+      !Number.isSafeInteger(homeScore) ||
+      !Number.isSafeInteger(awayScore)
     ) {
-      fail(MATCHUP_STANDINGS_CODES.inputInvalid, "Finalized scores must be nonnegative integers.");
+      fail(MATCHUP_STANDINGS_CODES.inputInvalid, "Finalized scores must be exact integers.");
     }
     home.gamesPlayed += 1;
     away.gamesPlayed += 1;

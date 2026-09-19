@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
 
+const { isCorrectionSource } = require("../../../domain/matchups/resultCorrectionSourcePolicy");
 const {
   calculateStandings,
 } = require(
@@ -416,9 +417,7 @@ function validateOutcome(
 ) {
   if (
     !Number.isSafeInteger(homeScoreHundredths) ||
-    homeScoreHundredths < 0 ||
     !Number.isSafeInteger(awayScoreHundredths) ||
-    awayScoreHundredths < 0 ||
     !VALID_OUTCOMES.has(outcome) ||
     (outcome === "home_win" &&
       homeScoreHundredths <=
@@ -597,10 +596,7 @@ function inspectResultChain(
         failState("result_version_chain_invalid");
       }
     } else if (
-      version.source_type !== "correction" ||
-      !UUID_PATTERN.test(
-        version.actor_user_id || ""
-      ) ||
+      !isCorrectionSource(version) ||
       typeof version.reason !== "string" ||
       version.reason.length < 1 ||
       version.reason.length > 500 ||
@@ -942,11 +938,9 @@ function inspectSnapshotRows(
         !Number.isSafeInteger(
           row.fantasy_points_for_hundredths
         ) ||
-        row.fantasy_points_for_hundredths < 0 ||
         !Number.isSafeInteger(
           row.fantasy_points_against_hundredths
         ) ||
-        row.fantasy_points_against_hundredths < 0 ||
         row.fantasy_point_differential_hundredths !==
           row.fantasy_points_for_hundredths -
             row.fantasy_points_against_hundredths

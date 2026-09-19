@@ -6,6 +6,56 @@ const { normalizePlayerGameCoverageResponse } = require("../../src/domain/statis
 const { normalizeStatisticsRows } = require("../../src/domain/statistics/statisticsPolicy");
 const NOW = Date.parse("2025-10-09T02:00:00Z");
 const PLAYER = "20000000-0000-4000-8000-000000000001";
+const expandedFixtures = require("../fixtures/nhlExpandedScoringGames.json");
+const { normalizeExpandedSnapshot } = require("../../src/domain/statistics/expandedStatisticsSnapshotPolicy");
+
+test("enabled NHL collector carries all categories and the real penalty-shot exception through a sealed snapshot", async () => {
+  // Move captured reports into the target season to exercise its explicit switch.
+  const captured = structuredClone(expandedFixtures.games.find(game => game.gameId === 2025020477));
+  const gameId = 2026020477;
+  for (const report of ["summary", "realtime", "scoringpergame", "penalties", "penaltyShots"]) {
+    for (const row of captured[report]) row.gameId = gameId;
+  }
+  const landing = captured.penaltyShotLandings[0];
+  landing.id = gameId; landing.season = 20262027;
+  const calls = [];
+  const now = Date.parse("2026-12-20T12:00:00Z");
+  const chosen = captured.summary.find(row => row.playerId === 8480797);
+  const teamId = chosen.homeRoad === "H" ? 13 : 16;
+  let incomplete = false;
+  const adapter = createNhlCompletedGameAdapter({ expandedScoringEnabled: true, nowMs: () => now, retryDelay: async () => {},
+    readCatalogPlayers: () => captured.summary.map(row => ({ providerPlayerId: String(row.playerId) })),
+    fetchImpl: async uri => {
+      const url = new URL(uri); calls.push(url.pathname);
+      let data;
+      if (url.pathname.endsWith("/game")) data = { total: 1, data: [{ id: gameId, season: 20262027, gameType: 2,
+        easternStartTime: "2026-12-10T19:00:00", homeTeamId: 13, visitingTeamId: 16, gameStateId: 7 }] };
+      else if (url.pathname.includes("/gamecenter/")) data = landing;
+      else if (url.pathname.includes("/player/")) data = { playerId: chosen.playerId, position: "L", currentTeamId: teamId, isActive: true };
+      else {
+        const report = url.pathname.split("/").at(-1);
+        const rows = incomplete && report === "penalties" ? captured[report].slice(1) : captured[report];
+        assert.ok(rows, url.pathname);
+        data = { total: rows.length, data: rows };
+      }
+      return { ok: true, json: async () => structuredClone(data) };
+    },
+  });
+  const input = { nhlSeasonKey: "20262027", requiredPlayers: [{ playerId: PLAYER, providerPlayerId: String(chosen.playerId) }], requiredPlayerGames: [] };
+  const snapshot = await adapter.fetchLiveSnapshot(input);
+  const totals = normalizeStatisticsRows({ rows: snapshot.totalsRows, minimumPlayerCount: 30, sourceUpdatedAtMs: snapshot.totalsSourceUpdatedAtMs });
+  const observations = normalizePlayerGameStatisticsRows({ rows: snapshot.playerGameRows, capturedAtMs: snapshot.capturedAtMs });
+  const expanded = normalizeExpandedSnapshot(snapshot.expandedScoring, { nhlSeasonKey: input.nhlSeasonKey, totals, observations });
+  const scored = expanded.playerGameRows[0];
+  assert.equal(scored.playerId, "8480797");
+  assert.equal(scored.gamesPlayed, 1);
+  assert.equal(scored.scoringStats.evenStrengthGoals, 1);
+  assert.equal(scored.scoringStats.shortHandedGoals, 0);
+  assert.equal(Object.keys(scored.scoringStats).length, 13);
+  assert.ok(calls.some(path => path.endsWith("/penaltyShots")));
+  incomplete = true;
+  await assert.rejects(adapter.fetchLiveSnapshot(input), { code: "NHL_EXPANDED_REPORT_INCOMPLETE" });
+});
 
 function fixture(overrides = {}) {
   let now = NOW;

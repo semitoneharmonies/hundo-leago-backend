@@ -388,6 +388,33 @@ function headers(cookie) {
 }
 
 describe("authenticated player reads", () => {
+  test("projects signed expanded totals by position, leaves unknown positions unavailable, and preserves historical reads", t => {
+    const { database, service: historical } = createRuntime(t);
+    const { emptyScoringStats } = require("../../src/domain/statistics/expandedScoringPolicy");
+    const { persistExpandedStatistics } = require("../../src/infrastructure/persistence/sqlite/expandedStatisticsPersistence");
+    const { safePlayer } = require("../../src/application/services/players/createPlayerReadService");
+    const repository = createSqlitePlayerRepository({ database, currentNhlStatisticsSeason: "20262027", expandedScoringEnabled: true });
+    assert.equal(safePlayer(repository.findDetailById(PLAYER_TWO_ID)).statistics, null);
+    database.prepare("INSERT INTO stat_sources (id,provider,status,created_at_ms,updated_at_ms,version) VALUES (?,'nhl-completed-games','active',?,?,1)").run(uuid(501), NOW_MS, NOW_MS);
+    database.prepare("INSERT INTO stat_refreshes (id,stat_source_id,nhl_season_key,source_version,status,started_at_ms,completed_at_ms,player_count,version) VALUES (?,?,'20262027','expanded','succeeded',?,?,3,1)").run(uuid(502), uuid(501), NOW_MS, NOW_MS);
+    database.prepare("INSERT INTO player_source_state (id,player_id,provider,source_position,normalized_position,nhl_team_abbreviation,active,source_version,effective_at_ms,created_at_ms) VALUES (?,?,'sportsdataio-discovery-lab','D','D','VAN',1,'expanded',?,?)").run(uuid(503), PLAYER_ONE_ID, NOW_MS+1, NOW_MS+1);
+    const scoringStats = { ...emptyScoringStats(), hits: 2, blockedShots: 1, giveaways: 7 };
+    const players = [PLAYER_ONE_ID, PLAYER_TWO_ID, PLAYER_THREE_ID];
+    const rows = players.map((playerId,index) => ({ externalPlayerId: String(1001+index), gamesPlayed: 1, goals: 0, assists: 0 }));
+    for (const [index,playerId] of players.entries()) database.prepare("INSERT INTO player_stat_totals (id,stat_source_id,refresh_id,nhl_season_key,player_id,games_played,goals,assists,nhl_points,fantasy_points_hundredths,source_updated_at_ms,created_at_ms) VALUES (?,?,?,'20262027',?,1,0,0,0,0,?,?)").run(uuid(510+index), uuid(501), uuid(502), playerId, NOW_MS+1, NOW_MS+1);
+    persistExpandedStatistics(database, { refreshId: uuid(502), nhlSeasonKey: "20262027", playerIdentityProvider: "nhl", rows, playerGameRows: [],
+      expandedScoring: { scoringRuleVersion: "expanded-2026-v1", totalsRows: rows.map(row=>({playerId:row.externalPlayerId,scoringStats})),playerGameRows:[] } });
+    const before = database.serialize();
+    const defence = safePlayer(repository.findDetailById(PLAYER_ONE_ID));
+    const forward = safePlayer(repository.findDetailById(PLAYER_TWO_ID));
+    assert.equal(defence.statistics.fantasyPointsHundredths, 35);
+    assert.equal(forward.statistics.fantasyPointsHundredths, -10);
+    assert.deepEqual(forward.statistics.scoringStats, scoringStats);
+    assert.equal(repository.findPageCursor(PLAYER_TWO_ID).sort_fantasy_points_hundredths, -10);
+    assert.equal(safePlayer(repository.findDetailById(PLAYER_THREE_ID)).statistics, null);
+    assert.equal(historical.read({ authenticated: authenticated(), playerId: PLAYER_ONE_ID }).statistics.fantasyPointsHundredths, 10000);
+    assert.deepEqual(database.serialize(), before);
+  });
   test("searches names case-insensitively with stable cursor pagination and no writes", (t) => {
     const runtime = createRuntime(t);
     const before = runtime.database.serialize();

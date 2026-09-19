@@ -18,8 +18,8 @@ function fail(code, message) {
 }
 
 function score(value) {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    fail(MATCHUP_RESULT_CODES.inputInvalid, "A nonnegative score is required.");
+  if (!Number.isSafeInteger(value)) {
+    fail(MATCHUP_RESULT_CODES.inputInvalid, "An exact integer score is required.");
   }
   return value;
 }
@@ -32,7 +32,9 @@ function deriveMatchupOutcome(homeScoreHundredths, awayScoreHundredths) {
 }
 
 function evaluateFinalSource({ weekEndsAtMs, refreshCompletedAtMs, nowMs } = {}) {
-  for (const value of [weekEndsAtMs, refreshCompletedAtMs, nowMs]) score(value);
+  for (const value of [weekEndsAtMs, refreshCompletedAtMs, nowMs]) {
+    if (!Number.isSafeInteger(value) || value < 0) fail(MATCHUP_RESULT_CODES.inputInvalid, "A nonnegative timestamp is required.");
+  }
   if (refreshCompletedAtMs > nowMs) {
     fail(MATCHUP_RESULT_CODES.sourceFuture, "The final source completed in the future.");
   }

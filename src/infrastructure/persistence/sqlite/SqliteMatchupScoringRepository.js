@@ -1,3 +1,4 @@
+const { readExpandedStatistics } = require("./expandedStatisticsPersistence");
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
@@ -410,6 +411,7 @@ function createSqliteMatchupScoringRepository({ database } = {}) {
         playerGameSet,
         playerGameCoverage,
         playerGameObservations,
+        expandedScoring: refresh ? readExpandedStatistics(database, refresh.id) : null,
         baselinePlayerGameEvidence:
           Object.freeze(baselinePlayerGameEvidence),
         exclusionSets,

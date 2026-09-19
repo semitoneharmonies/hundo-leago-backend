@@ -59,7 +59,7 @@ function age(birthDate, nowMs) {
 }
 
 function statistics(row) {
-  return row.games_played === null
+  return row.games_played === null || (row.expanded_required && !row.scoring_stats_json)
     ? null
     : Object.freeze({
         gamesPlayed: row.games_played,
@@ -67,6 +67,10 @@ function statistics(row) {
         assists: row.assists,
         nhlPoints: row.nhl_points,
         fantasyPointsHundredths: row.fantasy_points_hundredths,
+        ...(row.scoring_stats_json ? {
+          scoringRuleVersion: "expanded-2026-v1",
+          scoringStats: Object.freeze(JSON.parse(row.scoring_stats_json)),
+        } : {}),
       });
 }
 

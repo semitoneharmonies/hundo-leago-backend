@@ -250,7 +250,7 @@ describe("T097 matchup-result correction policy", () => {
         () =>
           validateMatchupResultCorrectionInput({
             ...valid,
-            homeScoreHundredths: -1,
+            homeScoreHundredths: Number.MIN_SAFE_INTEGER - 1,
           }),
         "home_score_invalid",
       ],
@@ -742,6 +742,13 @@ function writeCalls(fixture) {
 }
 
 describe("T097 matchup-result correction service", () => {
+  test("accepts a commissioner correction after a signed calculated result", () => {
+    const fixture = createFixture({ context: baseContext({ version: { home_score_hundredths: -50, away_score_hundredths: -100 } }) });
+    const result = fixture.service.correct(correctionCommand({ input: correctionInput({ homeScoreHundredths: -150, awayScoreHundredths: -100 }) }));
+    assert.equal(result.code, "MATCHUP_RESULT_CORRECTED");
+    assert.equal(writeCalls(fixture)[0].input.correction.homeScoreHundredths, -150);
+    assert.equal(writeCalls(fixture)[0].input.correction.outcome, "away_win");
+  });
   test("appends a pre-final correction with mandatory audit, exact evidence, and no standings replacement", () => {
     const fixture = createFixture();
     const command = correctionCommand({

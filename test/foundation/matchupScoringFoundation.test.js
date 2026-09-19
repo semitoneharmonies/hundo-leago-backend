@@ -32,6 +32,12 @@ const {
 
 const MIGRATIONS_DIRECTORY = path.resolve(__dirname, "..", "..", "database", "migrations");
 const HOUR_MS = 60 * 60 * 1000;
+const { emptyScoringStats, EXPANDED_SCORING_VERSION } = require("../../src/domain/statistics/expandedScoringPolicy");
+const { persistExpandedStatistics } = require("../../src/infrastructure/persistence/sqlite/expandedStatisticsPersistence");
+const { createSqliteStatisticsRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteStatisticsRepository");
+const { createSqliteProviderResultCorrectionRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteProviderResultCorrectionRepository");
+const { createProviderResultCorrectionService } = require("../../src/application/services/matchups/createProviderResultCorrectionService");
+const { normalizeStatisticsRows } = require("../../src/domain/statistics/statisticsPolicy");
 const NOW_MS = 200 * HOUR_MS;
 const IDS = Object.freeze({
   league: uuid(1), otherLeague: uuid(2), season: uuid(3), week: uuid(4),
@@ -54,7 +60,63 @@ function uuid(value) {
   return `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 }
 
+test("expanded NHL refresh corrects a finalized matchup using its original locked lineup and keeps audit history", t => {
+  const { database, service } = createRuntime(t, { provider: "nhl-completed-games" });
+  database.prepare("INSERT INTO player_external_ids (id, player_id, provider, external_value, created_at_ms) VALUES (?, ?, 'nhl-catalog', '8', 1)").run(uuid(100), IDS.player);
+  database.prepare("UPDATE leagues SET current_season_id = ? WHERE id = ?").run(IDS.season, IDS.league);
+  database.prepare("UPDATE seasons SET fantasy_playoffs_start_at_ms = ?, fantasy_playoffs_end_at_ms = ? WHERE id = ?").run(NOW_MS + 10 * HOUR_MS, NOW_MS + 20 * HOUR_MS, IDS.season);
+  const initialStats = { ...emptyScoringStats(), evenStrengthGoals: 1, primaryAssists: 1 };
+  persistExpandedStatistics(database, { refreshId: IDS.liveRefresh, nhlSeasonKey: "20262027", playerIdentityProvider: "nhl-catalog",
+    rows: [{ externalPlayerId: "8", gamesPlayed: 12, goals: 2, assists: 3 }],
+    playerGameRows: [{ externalPlayerId: "8", nhlGameId: "2026020001", observedGameState: "final", goals: 1, assists: 1 }],
+    expandedScoring: { scoringRuleVersion: EXPANDED_SCORING_VERSION,
+      totalsRows: [{ playerId: "8", scoringStats: { ...initialStats, evenStrengthGoals: 2, primaryAssists: 3 } }],
+      playerGameRows: [{ playerId: "8", nhlGameId: "2026020001", gamesPlayed: 1, scoringStats: initialStats }] } });
+  const scope = { ...input(), provider: "nhl-completed-games" };
+  assert.equal(service.readLive(scope).home.scoreHundredths, 525);
+  persistFinalResult(database, 525);
+  const locksBefore = database.prepare("SELECT * FROM matchup_roster_players ORDER BY id").all();
+  const historyBefore = database.prepare("SELECT * FROM matchup_result_versions ORDER BY id").all();
+  let nextId = 1000;
+  const statistics = createSqliteStatisticsRepository({ database, createId: () => uuid(nextId++) });
+  const completedAtMs = NOW_MS + 5 * HOUR_MS;
+  const refreshId = uuid(101);
+  statistics.startRefresh({ id: refreshId, statSourceId: IDS.source, nhlSeasonKey: "20262027", startedAtMs: completedAtMs - 1 });
+  const requirements = statistics.readPlayerGameCoverageRequirements({ nhlSeasonKey: "20262027", playerIdentityProvider: "nhl-catalog" });
+  const correctedStats = { ...initialStats, evenStrengthGoals: 0, primaryAssists: 0, giveaways: 6 };
+  statistics.completeLiveRefresh({ refreshId, statSourceId: IDS.source, provider: "nhl-completed-games", playerIdentityProvider: "nhl-catalog",
+    nhlSeasonKey: "20262027", sourceVersion: "corrected-expanded", completedAtMs,
+    rows: normalizeStatisticsRows({ rows: [{ playerId: "8", gamesPlayed: 12, goals: 1, assists: 2 }], minimumPlayerCount: 1, sourceUpdatedAtMs: completedAtMs }),
+    playerGameRows: [{ externalPlayerId: "8", nhlGameId: "2026020001", nhlGameScheduledStartsAtMs: NOW_MS - 5 * HOUR_MS,
+      observedGameState: "final", goals: 0, assists: 0, nhlPoints: 0, fantasyPointsHundredths: 0, sourceUpdatedAtMs: completedAtMs }],
+    ...requirements,
+    playerGameCoverage: [{ playerId: IDS.player, providerPlayerId: "8", providerTeamId: "team-1", disposition: "expected_game",
+      nhlGameId: "2026020001", nhlGameScheduledStartsAtMs: NOW_MS - 5 * HOUR_MS, observedGameState: "final" }],
+    expandedScoring: { scoringRuleVersion: EXPANDED_SCORING_VERSION,
+      totalsRows: [{ playerId: "8", scoringStats: { ...correctedStats, evenStrengthGoals: 1, primaryAssists: 2 } }],
+      playerGameRows: [{ playerId: "8", nhlGameId: "2026020001", gamesPlayed: 1, scoringStats: correctedStats }] } });
+  const errors = [];
+  const corrections = createProviderResultCorrectionService({ repository: createSqliteProviderResultCorrectionRepository({ database }),
+    scoringService: service, clock: { nowMs: () => completedAtMs + 1 }, createId: () => uuid(nextId++), logger: { warn: (...args) => errors.push(args) } });
+  assert.deepEqual(corrections.reconcile(), { checked: 1, corrected: 1, unchanged: 0, awaitingData: 0, requiresPlayoffReview: 0 }, JSON.stringify(errors));
+  const versions = database.prepare("SELECT * FROM matchup_result_versions ORDER BY version_number").all();
+  assert.deepEqual(versions[0], historyBefore[0]);
+  assert.equal(versions[1].home_score_hundredths, -60);
+  assert.equal(versions[1].outcome, "away_win");
+  assert.equal(versions[1].source_type, "provider_correction");
+  assert.deepEqual(database.prepare("SELECT * FROM matchup_roster_players ORDER BY id").all(), locksBefore);
+  const final = service.readAtRefresh({ ...scope, nowMs: completedAtMs + 1, refreshId });
+  assert.equal(final.home.players[0].scoringStats.giveaways, 6);
+  assert.equal(final.home.players[0].scoreHundredths, -60);
+  const writesBefore = database.prepare("SELECT total_changes() AS count").get().count;
+  assert.equal(corrections.reconcile().unchanged, 1);
+  assert.equal(database.prepare("SELECT total_changes() AS count").get().count, writesBefore);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(database.pragma("foreign_key_check"), []);
+});
+
 function createPlayerGameEvidence({
+  provider = "sportsdataio-live",
   setId,
   refreshId,
   coverageEntryId,
@@ -108,7 +170,7 @@ function createPlayerGameEvidence({
     statSourceId: IDS.source,
     refreshId,
     nhlSeasonKey: "20262027",
-    provider: "sportsdataio-live",
+    provider,
     sourceVersion,
     capturedAtMs,
     requiredPlayers: omitCoverage
@@ -121,7 +183,7 @@ function createPlayerGameEvidence({
     statSourceId: IDS.source,
     refreshId,
     nhlSeasonKey: "20262027",
-    provider: "sportsdataio-live",
+    provider,
     sourceVersion,
     capturedAtMs,
     observations,
@@ -141,6 +203,7 @@ function createPlayerGameEvidence({
 function seed(
   database,
   {
+    provider = "sportsdataio-live",
     baselineGoals = 1,
     withPlayerGameEvidence = true,
     withExclusion = false,
@@ -194,8 +257,8 @@ function seed(
   ).run(IDS.player);
   database.prepare(
     "INSERT INTO stat_sources (id, provider, status, created_at_ms, updated_at_ms, version) " +
-    "VALUES (?, 'sportsdataio-live', 'active', 1, 1, 1)"
-  ).run(IDS.source);
+    "VALUES (?, ?, 'active', 1, 1, 1)"
+  ).run(IDS.source, provider);
   const insertRefresh = database.prepare(
     "INSERT INTO stat_refreshes (id, stat_source_id, nhl_season_key, source_version, status, started_at_ms, " +
       "completed_at_ms, player_count, error_code, version) VALUES (?, ?, '20262027', ?, ?, ?, ?, ?, ?, 1)"
@@ -255,6 +318,7 @@ function seed(
    }
   if (withPlayerGameEvidence) {
     const baseline = createPlayerGameEvidence({
+      provider,
       setId: IDS.baselineGameSet,
       refreshId: IDS.baselineRefresh,
       coverageEntryId: IDS.baselineCoverage,
@@ -268,6 +332,7 @@ function seed(
       evidenceSha256: baselineEvidenceSha256,
     });
     const current = createPlayerGameEvidence({
+      provider,
       setId: IDS.liveGameSet,
       refreshId: IDS.liveRefresh,
       coverageEntryId: IDS.liveCoverage,
@@ -308,7 +373,7 @@ function seed(
         "captured_at_ms, required_player_count, coverage_entry_count, " +
         "expected_player_game_count, coverage_schema_version, coverage_sha256, " +
         "observation_count, evidence_schema_version, evidence_sha256, created_at_ms, version) " +
-        "VALUES (@setId, @statSourceId, @refreshId, '20262027', 'sportsdataio-live', " +
+        "VALUES (@setId, @statSourceId, @refreshId, '20262027', @provider, " +
         "@sourceVersion, @capturedAtMs, @requiredPlayerCount, @coverageEntryCount, " +
         "@expectedPlayerGameCount, 1, @coverageSha256, @observationCount, 1, " +
         "@evidenceSha256, @capturedAtMs, 1)"
@@ -331,6 +396,7 @@ function seed(
       insertPlayerGameSet.run({
         ...metadata,
         statSourceId: IDS.source,
+        provider,
         requiredPlayerCount: evidence.root.requiredPlayerCount,
         coverageEntryCount: evidence.root.coverageEntryCount,
         expectedPlayerGameCount: evidence.root.expectedPlayerGameCount,
@@ -401,7 +467,7 @@ function seed(
     const gameStateEvidence =
       createNhlGameObservationSnapshotEvidence({
         observationSnapshotId: IDS.gameStateSnapshot,
-        provider: "sportsdataio-live",
+        provider,
         sourceVersion: "games-live",
         observedAtMs: lateSnapshotAtMs,
         freshnessStatus: "fresh",
@@ -534,7 +600,7 @@ function createRuntime(t, options) {
   });
   seed(connection.database, options);
   const repository = createSqliteMatchupScoringRepository({ database: connection.database });
-  const service = createMatchupScoringService({ repository });
+  const service = createMatchupScoringService({ repository, expandedScoringEnabled: options?.provider === "nhl-completed-games" });
   t.after(() => {
     if (connection.database.open) connection.database.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -542,18 +608,18 @@ function createRuntime(t, options) {
   return { database: connection.database, service };
 }
 
-function input(nowMs = NOW_MS) {
+function input(nowMs = NOW_MS, provider = "sportsdataio-live") {
   return {
     leagueId: IDS.league,
     seasonId: IDS.season,
     weekId: IDS.week,
     matchupId: IDS.matchup,
-    provider: "sportsdataio-live",
+    provider,
     nowMs,
   };
 }
 
-function persistFinalResult(database) {
+function persistFinalResult(database, homeScore = 325) {
   database.transaction(() => {
     database.prepare(
       "INSERT INTO stat_snapshots (id, stat_source_id, source_refresh_id, league_id, season_id, " +
@@ -587,7 +653,7 @@ function persistFinalResult(database) {
         "version_number, home_team_id, away_team_id, home_score_hundredths, " +
         "away_score_hundredths, outcome, source_snapshot_id, source_type, actor_user_id, " +
         "reason, supersedes_version_id, created_at_ms) " +
-        "VALUES (?, ?, ?, ?, 1, ?, ?, 325, 0, 'home_win', ?, 'calculated', NULL, NULL, " +
+        "VALUES (?, ?, ?, ?, 1, ?, ?, ?, 0, 'home_win', ?, 'calculated', NULL, NULL, " +
         "NULL, ?)"
     ).run(
       IDS.finalResultVersion,
@@ -596,6 +662,7 @@ function persistFinalResult(database) {
       IDS.finalResult,
       IDS.home,
       IDS.away,
+      homeScore,
       IDS.finalSnapshot,
       NOW_MS
     );

@@ -313,6 +313,9 @@ const RESET_NEVER_IMPORT_POLICY = deepFreeze([
 // migrate before importing. Shared environments apply migrations 0023 and
 // later only after the approved reset has completed.
 const RESET_V1_POST_RESET_TABLE_POLICY = deepFreeze([
+  { tableName: "expanded_stat_refreshes", introducedByMigrationId: 57, treatment: "require_empty" },
+  { tableName: "expanded_stat_totals", introducedByMigrationId: 57, treatment: "require_empty" },
+  { tableName: "expanded_player_game_stats", introducedByMigrationId: 57, treatment: "require_empty" },
   {
     tableName: "auction_administration_command_results",
     introducedByMigrationId: 30,

@@ -1,5 +1,6 @@
 const { randomUUID } = require("node:crypto");
 
+const { persistExpandedStatistics } = require("./expandedStatisticsPersistence");
 const {
   assertNhlSeasonKey,
 } = require("../../../domain/statistics/statisticsPolicy");
@@ -1077,6 +1078,7 @@ function createSqliteStatisticsRepository({
       observationCount: observationEvidence.observationCount,
       evidenceSha256: observationEvidence.evidenceSha256,
     });
+    persistExpandedStatistics(database, command);
     return {
       refresh: findRefresh.get({ refreshId: command.refreshId }),
       playerGameSet: findPlayerGameSet.get({
@@ -1226,6 +1228,7 @@ function createSqliteStatisticsRepository({
           completedAtMs: safeTimestamp(command?.completedAtMs),
           rows: command?.rows,
           playerGameRows: command?.playerGameRows,
+          ...(command?.expandedScoring === undefined ? {} : { expandedScoring: command.expandedScoring }),
           requiredPlayers:
             declaredRequirements.requiredPlayers,
           requiredPlayerGames:

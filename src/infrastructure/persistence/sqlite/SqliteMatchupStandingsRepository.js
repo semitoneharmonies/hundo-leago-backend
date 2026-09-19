@@ -1,3 +1,4 @@
+const { isCorrectionSource } = require("../../../domain/matchups/resultCorrectionSourcePolicy");
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
@@ -306,10 +307,8 @@ function createSqliteMatchupStandingsRepository({ database } = {}) {
       row.supersedes_version_id === null;
     const correctionSourceValid =
       row.result_status === "corrected" &&
-      row.source_type === "correction" &&
+      isCorrectionSource(row) &&
       row.version_number > 1 &&
-      typeof row.actor_user_id === "string" &&
-      UUID_PATTERN.test(row.actor_user_id) &&
       typeof row.reason === "string" &&
       row.reason.length >= 1 &&
       row.reason === row.reason.trim() &&
@@ -338,11 +337,9 @@ function createSqliteMatchupStandingsRepository({ database } = {}) {
       !Number.isSafeInteger(
         row.home_score_hundredths
       ) ||
-      row.home_score_hundredths < 0 ||
       !Number.isSafeInteger(
         row.away_score_hundredths
       ) ||
-      row.away_score_hundredths < 0 ||
       row.outcome !== expectedOutcome ||
       matchup.status !== "final" ||
       row.source_snapshot_id !==

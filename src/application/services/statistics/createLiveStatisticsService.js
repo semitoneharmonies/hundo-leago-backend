@@ -1,4 +1,6 @@
 const { randomUUID } = require("node:crypto");
+const { usesExpandedScoring } = require("../../../domain/statistics/expandedScoringPolicy");
+const { normalizeExpandedSnapshot } = require("../../../domain/statistics/expandedStatisticsSnapshotPolicy");
 
 const {
   STATISTICS_CODES,
@@ -119,6 +121,7 @@ function createLiveStatisticsService({
   providerName,
   playerIdentityProvider,
   minimumPlayerCount = 200,
+  expandedScoringEnabled = false,
   nowMs = Date.now,
   createId = randomUUID,
 } = {}) {
@@ -240,6 +243,7 @@ function createLiveStatisticsService({
     let normalizedCoverage;
     let sourceVersion;
     let capturedAtMs;
+    let expandedScoring;
     try {
       if (
         providerResult === null ||
@@ -283,6 +287,11 @@ function createLiveStatisticsService({
         minimumPlayerCount,
         sourceUpdatedAtMs: totalsSourceUpdatedAtMs,
       });
+      if (expandedScoringEnabled && usesExpandedScoring(seasonKey)) {
+        expandedScoring = normalizeExpandedSnapshot(providerResult.expandedScoring, {
+          nhlSeasonKey: seasonKey, totals: normalizedTotals, observations: normalizedPlayerGames,
+        });
+      }
     } catch (error) {
       const errorCode =
         error instanceof StatisticsPolicyError ||
@@ -338,6 +347,7 @@ function createLiveStatisticsService({
         completedAtMs: capturedAtMs,
         rows: normalizedTotals,
         playerGameRows: normalizedPlayerGames,
+        ...(expandedScoring === undefined ? {} : { expandedScoring }),
         requiredPlayers,
         requiredPlayerGames,
         requirementsSha256:

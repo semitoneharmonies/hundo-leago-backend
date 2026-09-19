@@ -318,7 +318,7 @@ function assertRuntime(runtime) {
     !runtime ||
     !runtime.database ||
     runtime.database.open !== true ||
-    ![54, 55, 56].includes(runtime.database.pragma("user_version", { simple: true }))
+    ![54, 55, 56, 57].includes(runtime.database.pragma("user_version", { simple: true }))
   ) {
     fail(
       "FREE_AGENT_DRAFT_BROWSER_FIXTURE_RUNTIME_INVALID",

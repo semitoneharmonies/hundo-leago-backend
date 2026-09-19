@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { isCorrectionSource } = require("../../../domain/matchups/resultCorrectionSourcePolicy");
 const { resolveTeamDisplayColours } = require("../../../domain/leagues/teamDisplayPolicy");
 
 const {
@@ -52,6 +53,7 @@ const VALID_RESULT_STATUSES = new Set([
 const VALID_RESULT_SOURCE_TYPES = new Set([
   "calculated",
   "correction",
+  "provider_correction",
 ]);
 const VALID_LOGO_MEDIA_TYPES = new Set(
   SUPPORTED_LOGO_MEDIA_TYPES
@@ -1105,9 +1107,8 @@ function inspectResults(
       result.supersedes_version_id === null;
     const correctionSourceValid =
       result?.result_status === "corrected" &&
-      result.source_type === "correction" &&
+      isCorrectionSource(result) &&
       versionNumber > 1 &&
-      UUID_PATTERN.test(result.actor_user_id || "") &&
       typeof result.reason === "string" &&
       result.reason.length >= 1 &&
       result.reason.length <= 500 &&
@@ -1165,11 +1166,9 @@ function inspectResults(
       !Number.isSafeInteger(
         result.home_score_hundredths
       ) ||
-      result.home_score_hundredths < 0 ||
       !Number.isSafeInteger(
         result.away_score_hundredths
       ) ||
-      result.away_score_hundredths < 0 ||
       !scoresMatchOutcome ||
       !isSafeTimestamp(
         result.result_finalized_at_ms
@@ -1355,9 +1354,7 @@ function inspectCorrectionOperations(
       !UUID_PATTERN.test(
         operation?.matchup_id || ""
       ) ||
-      !UUID_PATTERN.test(
-        operation?.actor_user_id || ""
-      ) ||
+      !isCorrectionSource({ source_type: operation?.matched_source_type, actor_user_id: operation?.actor_user_id, reason: operation?.reason }) ||
       !reasonValid ||
       typeof operation.metadata_json !== "string" ||
       operation.metadata_json.length < 2 ||
@@ -1395,8 +1392,7 @@ function inspectCorrectionOperations(
         operation.matched_matchup_result_id ||
       !Number.isSafeInteger(matchedVersionNumber) ||
       matchedVersionNumber < 2 ||
-      operation.matched_source_type !==
-        "correction" ||
+      !["correction", "provider_correction"].includes(operation.matched_source_type) ||
       operation.matched_actor_user_id !==
         operation.actor_user_id ||
       operation.matched_reason !== operation.reason ||

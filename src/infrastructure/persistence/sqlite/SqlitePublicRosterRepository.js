@@ -12,7 +12,7 @@ const {
   createSqliteCapReadRepository,
 } = require("./SqliteCapReadRepository");
 
-function createSqlitePublicRosterRepository({ database } = {}) {
+function createSqlitePublicRosterRepository({ database, expandedScoringEnabled = false } = {}) {
   const capRepository = createSqliteCapReadRepository({ database });
   let scopeStatement;
   let playersStatement;
@@ -86,7 +86,10 @@ function createSqlitePublicRosterRepository({ database } = {}) {
         stats.goals,
         stats.assists,
         stats.nhl_points,
-        stats.fantasy_points_hundredths,
+        CASE WHEN expanded.total_id IS NOT NULL
+          THEN CASE ownership.position_group WHEN 'D' THEN expanded.defence_fp_hundredths ELSE expanded.forward_fp_hundredths END
+          ELSE stats.fantasy_points_hundredths END AS fantasy_points_hundredths,
+        expanded.stats_json AS scoring_stats_json,
         stats.source_updated_at_ms
       FROM player_ownerships AS ownership
       INNER JOIN players AS player ON player.id = ownership.player_id
@@ -98,6 +101,7 @@ function createSqlitePublicRosterRepository({ database } = {}) {
       LEFT JOIN latest_stats AS stats
         ON stats.player_id = ownership.player_id
         AND stats.recency = 1
+      LEFT JOIN expanded_stat_totals AS expanded ON expanded.total_id = stats.id
       WHERE ownership.league_id = @leagueId
         AND ownership.season_id = @seasonId
         AND ownership.team_id = @teamId
@@ -176,7 +180,7 @@ function createSqlitePublicRosterRepository({ database } = {}) {
             remainingContractYears: row.remaining_contract_years,
             birthDate: row.birth_date,
             statistics:
-              row.games_played === null
+              row.games_played === null || (expandedScoringEnabled && scope.nhl_season_key === "20262027" && !row.scoring_stats_json)
                 ? null
                 : {
                     gamesPlayed: row.games_played,
@@ -185,6 +189,10 @@ function createSqlitePublicRosterRepository({ database } = {}) {
                     nhlPoints: row.nhl_points,
                     fantasyPointsHundredths:
                       row.fantasy_points_hundredths,
+                    ...(row.scoring_stats_json ? {
+                      scoringRuleVersion: "expanded-2026-v1",
+                      scoringStats: JSON.parse(row.scoring_stats_json),
+                    } : {}),
                   },
           };
         });

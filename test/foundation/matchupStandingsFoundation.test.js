@@ -21,6 +21,58 @@ const {
 } = require("../../src/infrastructure/persistence/sqlite/SqliteRepositoryError");
 
 const MIGRATIONS_DIRECTORY = path.resolve(__dirname, "..", "..", "database", "migrations");
+const { applyMigrations, discoverMigrations } = require("../../src/infrastructure/database/migrate");
+const { createSqliteProviderResultCorrectionRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteProviderResultCorrectionRepository");
+
+test("expanded migration preserves populated history and provider correction changes a winner atomically", t => {
+  const Database = require("better-sqlite3");
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  t.after(() => database.close());
+  const migrations = discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY });
+  applyMigrations({ database, migrations: migrations.filter(migration => migration.id <= 56), applicationBuildId: "expanded-before", now: () => 1 });
+  seed(database);
+  database.prepare("UPDATE leagues SET current_season_id = ? WHERE id = ?").run(IDS.season, IDS.league);
+  database.prepare("UPDATE seasons SET fantasy_playoffs_start_at_ms = 400 WHERE id = ?").run(IDS.season);
+  database.prepare("INSERT INTO standings_snapshots (id, league_id, season_id, snapshot_version, source_result_version, status, calculated_at_ms, created_at_ms) VALUES (?, ?, ?, 1, 2, 'current', 250, 250)").run(uuid(90), IDS.league, IDS.season);
+  database.prepare(`INSERT INTO standings_rows (id, league_id, season_id, standings_snapshot_id, team_id, rank, wins, losses, ties,
+    standings_points, fantasy_points_for_hundredths, fantasy_points_against_hundredths, fantasy_point_differential_hundredths, created_at_ms)
+    VALUES (?, ?, ?, ?, ?, 1, 1, 0, 0, 2, 300, 100, 200, 250)`).run(uuid(91), IDS.league, IDS.season, uuid(90), IDS.teamB);
+  const tables = database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations' ORDER BY name").all().map(row => row.name);
+  const contents = () => Object.fromEntries(tables.map(name => [name, database.prepare(`SELECT * FROM ${name}`).all().map(JSON.stringify).sort()]));
+  const before = contents();
+  applyMigrations({ database, migrations, applicationBuildId: "expanded-after", now: () => 2 });
+  assert.deepEqual(contents(), before);
+  assert.equal(database.pragma("user_version", { simple: true }), 57);
+  assert.deepEqual(database.pragma("foreign_key_check"), []);
+  assert.equal(database.pragma("integrity_check", { simple: true }), "ok");
+  database.prepare("INSERT INTO stat_sources (id, provider, status, created_at_ms, updated_at_ms, version) VALUES (?, 'nhl-completed-games', 'active', 1, 1, 1)").run(uuid(100));
+  database.prepare("INSERT INTO stat_refreshes (id, stat_source_id, nhl_season_key, source_version, status, started_at_ms, completed_at_ms, player_count, version) VALUES (?, ?, '20262027', 'new-nhl-evidence', 'succeeded', 399, 400, 1, 1)").run(uuid(101), uuid(100));
+  database.prepare("INSERT INTO expanded_stat_refreshes (refresh_id, scoring_rule_version, evidence_sha256, total_count, observation_count) VALUES (?, 'expanded-2026-v1', ?, 1, 0)").run(uuid(101), "a".repeat(64));
+  const repository = createSqliteProviderResultCorrectionRepository({ database, leagueIds: [IDS.league] });
+  const candidate = repository.listCandidates().find(row => row.matchup_id === IDS.matchAB);
+  const command = { leagueId: IDS.league, seasonId: IDS.season, weekId: IDS.week1, matchupId: IDS.matchAB,
+    resultId: candidate.result_id, expectedResultVersion: candidate.result_version, supersedesVersionId: candidate.result_version_id,
+    versionNumber: candidate.version_number + 1, refreshId: uuid(101), homeScoreHundredths: -20, awayScoreHundredths: -50,
+    resultVersionId: uuid(102), snapshotId: uuid(103), operationId: uuid(104), nowMs: 401 };
+  const failed = createSqliteProviderResultCorrectionRepository({ database, beforeCommit() { throw new Error("rollback"); } });
+  assert.throws(() => failed.commit(command), /rollback/);
+  assert.equal(database.prepare("SELECT count(*) AS n FROM matchup_result_versions WHERE id = ?").get(uuid(102)).n, 0);
+  assert.equal(database.prepare("SELECT count(*) AS n FROM matchup_operations WHERE id = ?").get(uuid(104)).n, 0);
+  assert.equal(repository.commit(command).status, "corrected");
+  assert.throws(() => repository.commit(command), { code: REPOSITORY_ERROR_CODES.versionConflict });
+  const history = database.prepare("SELECT * FROM matchup_result_versions WHERE matchup_result_id = ? ORDER BY version_number").all(IDS.resultAB);
+  assert.equal(history.length, 3);
+  assert.equal(history[1].outcome, "away_win");
+  assert.equal(history[2].outcome, "home_win");
+  assert.equal(history[2].actor_user_id, null);
+  assert.equal(history[2].source_type, "provider_correction");
+  const standings = createMatchupStandingsService({ repository: createSqliteMatchupStandingsRepository({ database }) }).read({ leagueId: IDS.league, seasonId: IDS.season });
+  const home = standings.rows.find(row => row.teamId === IDS.teamA);
+  assert.equal(home.wins, 1);
+  assert.equal(home.fantasyPointsForHundredths, -20);
+  assert.deepEqual(database.pragma("foreign_key_check"), []);
+});
 const IDS = Object.freeze({
   league: uuid(1), otherLeague: uuid(2), season: uuid(3), week1: uuid(4), week2: uuid(5),
   teamA: uuid(10), teamB: uuid(11), teamC: uuid(12), teamD: uuid(13), teamE: uuid(14),

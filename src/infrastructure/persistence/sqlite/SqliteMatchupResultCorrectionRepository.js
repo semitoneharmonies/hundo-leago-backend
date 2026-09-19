@@ -1,3 +1,4 @@
+const { isCorrectionSource } = require("../../../domain/matchups/resultCorrectionSourcePolicy");
 const {
   createEmptySocketRelated,
   createSocketEventMetadata,
@@ -216,6 +217,11 @@ function positiveInteger(value, description = "integer") {
   return value;
 }
 
+function signedInteger(value, description) {
+  if (!Number.isSafeInteger(value)) invalid(`A safe ${description} is required.`);
+  return value;
+}
+
 function nonnegativeInteger(
   value,
   description = "integer"
@@ -355,11 +361,11 @@ function normalizeCorrection(value) {
     ],
     "An exact matchup-result correction is required."
   );
-  const homeScoreHundredths = nonnegativeInteger(
+  const homeScoreHundredths = signedInteger(
     value.homeScoreHundredths,
     "home score"
   );
-  const awayScoreHundredths = nonnegativeInteger(
+  const awayScoreHundredths = signedInteger(
     value.awayScoreHundredths,
     "away score"
   );
@@ -432,11 +438,11 @@ function normalizeStandingsRow(value) {
     value.standingsPoints,
     "standings points"
   );
-  const pointsFor = nonnegativeInteger(
+  const pointsFor = signedInteger(
     value.fantasyPointsForHundredths,
     "fantasy points for"
   );
-  const pointsAgainst = nonnegativeInteger(
+  const pointsAgainst = signedInteger(
     value.fantasyPointsAgainstHundredths,
     "fantasy points against"
   );
@@ -1949,11 +1955,9 @@ function createSqliteMatchupResultCorrectionRepository({
         !Number.isSafeInteger(
           version.home_score_hundredths
         ) ||
-        version.home_score_hundredths < 0 ||
         !Number.isSafeInteger(
           version.away_score_hundredths
         ) ||
-        version.away_score_hundredths < 0 ||
         !UUID_PATTERN.test(
           version.source_snapshot_id || ""
         ) ||
@@ -1995,10 +1999,7 @@ function createSqliteMatchupResultCorrectionRepository({
 
       const previous = versions[index - 1];
       if (
-        version.source_type !== "correction" ||
-        !UUID_PATTERN.test(
-          version.actor_user_id || ""
-        ) ||
+        !isCorrectionSource(version) ||
         typeof version.reason !== "string" ||
         version.reason.length < 1 ||
         version.reason.length > 500 ||

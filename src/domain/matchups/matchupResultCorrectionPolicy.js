@@ -183,16 +183,14 @@ function validateMatchupResultCorrectionInput(value) {
     if (
       !Number.isSafeInteger(
         value.homeScoreHundredths
-      ) ||
-      value.homeScoreHundredths < 0
+      )
     ) {
       fail("home_score_invalid");
     }
     if (
       !Number.isSafeInteger(
         value.awayScoreHundredths
-      ) ||
-      value.awayScoreHundredths < 0
+      )
     ) {
       fail("away_score_invalid");
     }

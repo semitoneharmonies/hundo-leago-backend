@@ -442,6 +442,7 @@ function loadTargetRuntimeConfig({
     "FREE_AGENT_DRAFT_ROUTES_ENABLED"
   );
   const nhlCompletedStatisticsEnabled = optionalExactBoolean(env, "NHL_COMPLETED_STATISTICS_ENABLED") === true;
+  const expandedScoringEnabled = optionalExactBoolean(env, "EXPANDED_SCORING_ENABLED") === true;
   const matchupProcessingEnabled = optionalExactBoolean(env, "MATCHUP_PROCESSING_ENABLED") === true;
   let matchupProcessingLeagueIds = null;
   if (Object.hasOwn(env, "MATCHUP_PROCESSING_LEAGUE_IDS")) {
@@ -459,8 +460,12 @@ function loadTargetRuntimeConfig({
   if (matchupProcessingEnabled && !nhlCompletedStatisticsEnabled) {
     fail("MATCHUP_PROCESSING_ENABLED", "the completed-game NHL source must be enabled first");
   }
+  if (expandedScoringEnabled && !nhlCompletedStatisticsEnabled) {
+    fail("EXPANDED_SCORING_ENABLED", "the completed-game NHL source must be enabled first");
+  }
   const runtimeConfig = {
     nhlCompletedStatisticsEnabled,
+    expandedScoringEnabled,
     matchupProcessingEnabled,
     matchupProcessingLeagueIds,
     accountEmailDeliveryEnabled: exactBoolean(

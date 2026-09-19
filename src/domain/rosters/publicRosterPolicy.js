@@ -1,6 +1,7 @@
 const {
   isTeamPatternTemplate,
 } = require("../leagues/teamPatternPolicy");
+const { EXPANDED_SCORING_VERSION, calculateExpandedScore } = require("../statistics/expandedScoringPolicy");
 
 const CANONICAL_UUID_PATTERN =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -116,21 +117,32 @@ function calculateAge(birthDate, asOfDate) {
   return age;
 }
 
-function statistics(value) {
+function statistics(value, position) {
   if (value === null) return null;
+  const expanded = value.scoringRuleVersion === EXPANDED_SCORING_VERSION;
   assertExactObject(value, [
     "gamesPlayed",
     "goals",
     "assists",
     "nhlPoints",
     "fantasyPointsHundredths",
+    ...(expanded ? ["scoringRuleVersion", "scoringStats"] : []),
   ]);
+  let scored;
+  if (expanded) {
+    try { scored = calculateExpandedScore(value.scoringStats, position); }
+    catch { fail(PUBLIC_ROSTER_CODES.playerInvalid); }
+    if (scored.fantasyPointsHundredths !== value.fantasyPointsHundredths ||
+        value.goals !== scored.scoringStats.evenStrengthGoals + scored.scoringStats.powerPlayGoals + scored.scoringStats.shortHandedGoals ||
+        value.assists !== scored.scoringStats.primaryAssists + scored.scoringStats.secondaryAssists) fail(PUBLIC_ROSTER_CODES.playerInvalid);
+  }
   const projected = Object.freeze({
     gamesPlayed: nonnegative(value.gamesPlayed),
     goals: nonnegative(value.goals),
     assists: nonnegative(value.assists),
     nhlPoints: nonnegative(value.nhlPoints),
-    fantasyPointsHundredths: nonnegative(value.fantasyPointsHundredths),
+    fantasyPointsHundredths: expanded ? signedInteger(value.fantasyPointsHundredths) : nonnegative(value.fantasyPointsHundredths),
+    ...(expanded ? { scoringRuleVersion: EXPANDED_SCORING_VERSION, scoringStats: scored.scoringStats } : {}),
   });
   if (projected.nhlPoints !== projected.goals + projected.assists) {
     fail(PUBLIC_ROSTER_CODES.playerInvalid);
@@ -173,7 +185,7 @@ function player(value, asOfDate) {
     aavCents: value.aavCents,
     remainingContractYears,
     age: calculateAge(value.birthDate, asOfDate),
-    seasonStatistics: statistics(value.statistics),
+    seasonStatistics: statistics(value.statistics, value.position),
   });
 }
 

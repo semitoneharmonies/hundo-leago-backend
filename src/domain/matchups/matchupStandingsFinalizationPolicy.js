@@ -311,8 +311,6 @@ function normalizeStandingsRow(value) {
     "ties",
     "standingsPoints",
     "pointsPercentageHundredths",
-    "fantasyPointsForHundredths",
-    "fantasyPointsAgainstHundredths",
   ];
   if (
     typeof value.teamDisplayName !== "string" ||
@@ -327,6 +325,8 @@ function normalizeStandingsRow(value) {
     !Number.isSafeInteger(
       value.fantasyPointsDifferentialHundredths
     ) ||
+    !Number.isSafeInteger(value.fantasyPointsForHundredths) ||
+    !Number.isSafeInteger(value.fantasyPointsAgainstHundredths) ||
     !Number.isSafeInteger(value.rank) ||
     value.rank < 1 ||
     value.pointsPercentageHundredths > 10_000
