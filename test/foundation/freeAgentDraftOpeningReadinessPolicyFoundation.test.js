@@ -1564,12 +1564,14 @@ describe("Free Agent Draft opening readiness policy", () => {
     }
   });
 
-  test("enforces exact buyout basis rounding, eliminated schedules, and one obligation per contract", async (t) => {
+  test("accepts current and historical buyout rounding with exact schedules and one obligation per contract", async (t) => {
     for (const [aavCents, expectedPenaltyCents] of [
       [101, 25],
       [102, 26],
       [103, 26],
       [104, 26],
+      [375, 94],
+      [375, 100],
     ]) {
       await t.test(`AAV ${aavCents} rounds to ${expectedPenaltyCents}`, () => {
         const source = context();

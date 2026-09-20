@@ -56,6 +56,18 @@ test("offline financial inspection identifies relational defects without changin
     const report=inspect(file);assert.deepEqual(report.findings,[]);assert.equal(report.checkedRelationsConsistent,true);
     assert.ok(report.warnings.some(row=>row.code==="TEAM_OVER_CAP"));
   });
+  for (const amount of [94, 100]) await t.test(`preserves a saved $3.75 buyout with ${amount} cents annual penalty`, () => {
+    const buyoutId = id("buyout:leagueA");
+    const file = changed(db => {
+      const obligation = db.prepare("SELECT * FROM buyout_obligations WHERE id=?").get(buyoutId);
+      db.prepare("UPDATE contracts SET aav_cents=375, original_total_value_cents=375*original_term_years WHERE id=?").run(obligation.contract_id);
+      db.prepare("UPDATE contract_years SET aav_cents=375 WHERE contract_id=?").run(obligation.contract_id);
+      db.prepare("UPDATE buyout_obligations SET annual_penalty_basis_cents=? WHERE id=?").run(amount, buyoutId);
+      db.prepare("UPDATE buyout_years SET penalty_cents=? WHERE buyout_obligation_id=?").run(amount, buyoutId);
+    });
+    const report = inspect(file);
+    assert.equal(report.findings.some(row => row.recordId === buyoutId && row.code === "BUYOUT_POLICY_AMOUNT_REQUIRES_REVIEW"), false);
+  });
   const cases = [
     ["contract owner mismatch","ACTIVE_CONTRACT_OWNERSHIP_MISMATCH",db=>db.prepare("UPDATE contracts SET current_team_id=? WHERE id=?").run(id("team:leagueA:2"),contract1)],
     ["missing owned-player contract","ROSTER_CONTRACT_MISMATCH",db=>db.prepare("UPDATE contracts SET status='cancelled' WHERE id=?").run(contract1)],

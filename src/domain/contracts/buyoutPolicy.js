@@ -22,11 +22,12 @@ const BUYOUT_POLICY_CODES = Object.freeze({
 });
 
 class BuyoutPolicyError extends Error {
-  constructor(reasonCode) {
+  constructor(reasonCode, details = null) {
     super("The submitted contract buyout is invalid.");
     this.name = "BuyoutPolicyError";
     this.code = BUYOUT_POLICY_CODES.inputInvalid;
     this.reasonCode = reasonCode;
+    this.details = details;
   }
 }
 
@@ -85,9 +86,19 @@ function calculateBuyoutPenaltyCents(contractAavCents) {
   if (!Number.isSafeInteger(contractAavCents) || contractAavCents < 1) {
     fail(BUYOUT_POLICY_CODES.contractInvalid);
   }
-  const quotient = Math.floor(contractAavCents / 4);
-  const remainder = contractAavCents % 4;
-  return quotient + (remainder >= 2 ? 1 : 0);
+  // 25% of AAV, rounded up to a 25-cent increment, using integer cents.
+  const wholeDollars = Math.floor(contractAavCents / 100);
+  return (wholeDollars + (contractAavCents % 100 > 0 ? 1 : 0)) * 25;
+}
+
+function isSupportedPersistedBuyoutPenalty(contractAavCents, penaltyCents) {
+  // Historical obligations keep their original nearest-cent amount. This is
+  // for auditing saved obligations only; new buyouts always use the rule above.
+  const currentPenalty = calculateBuyoutPenaltyCents(contractAavCents);
+  const legacyPenalty = Math.floor(contractAavCents / 4) +
+    (contractAavCents % 4 >= 2 ? 1 : 0);
+  return Number.isSafeInteger(penaltyCents) && penaltyCents > 0 &&
+    (penaltyCents === currentPenalty || penaltyCents === legacyPenalty);
 }
 
 function validateBuyoutCommand(input) {
@@ -191,7 +202,9 @@ function createBuyoutAggregate(input) {
     contract.auction_buyout_lock_expires_at_ms !== null &&
     command.occurredAtMs < contract.auction_buyout_lock_expires_at_ms
   ) {
-    fail(BUYOUT_POLICY_CODES.lockActive);
+    throw new BuyoutPolicyError(BUYOUT_POLICY_CODES.lockActive, Object.freeze({
+      buyoutLockExpiresAtMs: contract.auction_buyout_lock_expires_at_ms,
+    }));
   }
   if (!ownership || typeof ownership !== "object" || Array.isArray(ownership)) {
     fail(BUYOUT_POLICY_CODES.ownershipInvalid);
@@ -279,6 +292,7 @@ module.exports = {
   BUYOUT_POLICY_CODES,
   BuyoutPolicyError,
   calculateBuyoutPenaltyCents,
+  isSupportedPersistedBuyoutPenalty,
   createBuyoutAggregate,
   validateBuyoutCommand,
 };

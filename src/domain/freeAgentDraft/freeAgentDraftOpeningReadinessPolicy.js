@@ -5,7 +5,7 @@ const {
   validateCandidateCardContract,
 } = require("./candidateCardPolicy");
 const {
-  calculateBuyoutPenaltyCents,
+  isSupportedPersistedBuyoutPenalty,
 } = require("../contracts/buyoutPolicy");
 const {
   createFreeAgentDraftClock,
@@ -1250,8 +1250,9 @@ function inspectAuthoritativeSeasonState({
         : null;
     if (
       schedule === null ||
-      obligation.annualPenaltyBasisCents !==
-        calculateBuyoutPenaltyCents(contract.aavCents) ||
+      !isSupportedPersistedBuyoutPenalty(
+        contract.aavCents, obligation.annualPenaltyBasisCents
+      ) ||
       !obligationScheduleIsExact({
         obligation,
         obligationYears: years,

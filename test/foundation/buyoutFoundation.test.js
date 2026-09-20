@@ -8,6 +8,7 @@ const {
   BUYOUT_POLICY_CODES,
   BuyoutPolicyError,
   calculateBuyoutPenaltyCents,
+  isSupportedPersistedBuyoutPenalty,
   createBuyoutAggregate,
   validateBuyoutCommand,
 } = require("../../src/domain/contracts/buyoutPolicy");
@@ -243,15 +244,24 @@ function seedConflictingActivity(context) {
 }
 
 describe("M4-08 buyout policy", () => {
-  test("rounds 25 percent to the nearest cent and projects every remaining year", () => {
-    assert.equal(calculateBuyoutPenaltyCents(100), 25);
-    assert.equal(calculateBuyoutPenaltyCents(333), 83);
-    assert.equal(calculateBuyoutPenaltyCents(334), 84);
+  test("rounds 25 percent up to the next quarter dollar and projects every remaining year", () => {
+    for (const [aav, penalty] of [[1, 25], [100, 25], [101, 50], [300, 75],
+      [301, 100], [333, 100], [334, 100], [375, 100], [400, 100], [401, 125]]) {
+      assert.equal(calculateBuyoutPenaltyCents(aav), penalty);
+    }
     const aggregate = createBuyoutAggregate(aggregateInput());
-    assert.equal(aggregate.annualPenaltyCents, 83);
-    assert.equal(aggregate.totalScheduledPenaltyCents, 249);
+    assert.equal(aggregate.annualPenaltyCents, 100);
+    assert.equal(aggregate.totalScheduledPenaltyCents, 300);
     assert.equal(aggregate.years.length, 3);
     assert.equal(Object.isFrozen(aggregate.years), true);
+  });
+
+  test("recognizes historical nearest-cent obligations without repricing them", () => {
+    assert.equal(isSupportedPersistedBuyoutPenalty(375, 94), true);
+    assert.equal(isSupportedPersistedBuyoutPenalty(375, 100), true);
+    for (const invalid of [0, 93, 95, 99, 101, 125, 100.5]) {
+      assert.equal(isSupportedPersistedBuyoutPenalty(375, invalid), false);
+    }
   });
 
   test("requires confirmation and enforces the lock until its exact expiry", () => {
@@ -270,7 +280,7 @@ describe("M4-08 buyout policy", () => {
       command: command({ occurredAtMs: NOW_MS + 2 }),
       contract: { ...aggregateInput().contract,
         auction_buyout_lock_expires_at_ms: NOW_MS + 2 },
-    })).annualPenaltyCents, 83);
+    })).annualPenaltyCents, 100);
   });
 
   test("accepts signed-ELC Prospect ownership and rejects unsigned or incompatible rights", () => {
@@ -278,7 +288,7 @@ describe("M4-08 buyout policy", () => {
       contract: { ...aggregateInput().contract, contract_type: "fantasy_elc" },
       ownership: { ...aggregateInput().ownership, ownership_kind: "Prospect Right", roster_category: "Prospect" },
     });
-    assert.equal(createBuyoutAggregate(signed).annualPenaltyCents, 83);
+    assert.equal(createBuyoutAggregate(signed).annualPenaltyCents, 100);
     assertPolicyError(
       () => createBuyoutAggregate({ ...signed, contract: { ...signed.contract, contract_type: "normal" } }),
       BUYOUT_POLICY_CODES.ownershipInvalid
@@ -287,6 +297,25 @@ describe("M4-08 buyout policy", () => {
 });
 
 describe("M4-08 atomic SQLite buyout", () => {
+  test("a $3.75 contract stays unchanged while locked, then buys out for $1 per year at expiry", (t) => {
+    const { database, repository } = createRuntime(t);
+    database.prepare("UPDATE contracts SET aav_cents=375, original_total_value_cents=1125, auction_buyout_lock_expires_at_ms=? WHERE id=?").run(NOW_MS + 2, IDS.contract);
+    database.prepare("UPDATE contract_years SET aav_cents=375 WHERE contract_id=?").run(IDS.contract);
+    const before = database.serialize();
+    assert.throws(() => repository.buyOut(command()), error => {
+      assert.equal(error.reasonCode, BUYOUT_POLICY_CODES.lockActive);
+      assert.deepEqual(error.details, { buyoutLockExpiresAtMs: NOW_MS + 2 });
+      return true;
+    });
+    assert.deepEqual(database.serialize(), before);
+    const result = repository.buyOut(command({ occurredAtMs: NOW_MS + 2 }));
+    assert.equal(result.annualPenaltyCents, 100);
+    assert.equal(result.totalScheduledPenaltyCents, 300);
+    assert.deepEqual(database.prepare("SELECT penalty_cents FROM buyout_years ORDER BY season_id").all(),
+      [{ penalty_cents: 100 }, { penalty_cents: 100 }, { penalty_cents: 100 }]);
+    assert.equal(count(database, "player_ownerships"), 0);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  });
   test("writes one durable contract update for a buyout without pending trades and replays without writes", (t) => {
     const { database, repository } = createRuntime(t, { signedProspect: true });
     const result = repository.buyOut(command());
@@ -465,7 +494,7 @@ describe("M4-08 atomic SQLite buyout", () => {
     const result = repository.buyOut(command());
     assert.equal(result.contract.status, "eliminated");
     assert.equal(result.contract.version, 2);
-    assert.equal(result.annualPenaltyCents, 83);
+    assert.equal(result.annualPenaltyCents, 100);
     assert.equal(result.years.length, 3);
     assert.equal(count(database, "player_ownerships"), 0);
     assert.equal(count(database, "buyout_obligations"), 1);
