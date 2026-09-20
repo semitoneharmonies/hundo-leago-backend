@@ -11,6 +11,10 @@ const SAFE_MESSAGES = Object.freeze({
     "The league-creation request is invalid.",
   LEAGUE_NAME_UNAVAILABLE:
     "The league name is unavailable.",
+  LEAGUE_DELETION_INVALID: "Confirm the league name and review the deletion before continuing.",
+  LEAGUE_NOT_FOUND: "This league no longer exists.",
+  LEAGUE_DELETION_PREVIEW_CHANGED: "The league changed. Review a fresh deletion preview before confirming again.",
+  LEAGUE_DELETION_BUSY: "A league job is in progress. Wait for it to finish, then review the deletion again.",
   PLATFORM_ADMINISTRATOR_REQUIRED:
     "Platform-administrator authority is required.",
 });
@@ -26,6 +30,7 @@ function assertMethod(value, method, description) {
 function createPlatformAdministrationRouter({
   requestSecurity,
   leagueCreationService,
+  leagueDeletionService,
   auditPrivacyDigest,
   networkSourceResolver = (request) => request.ip,
 } = {}) {
@@ -204,6 +209,38 @@ function createPlatformAdministrationRouter({
       }
     }
   );
+
+  if (leagueDeletionService) {
+    const handleDeletion = (method) => (request, response) => {
+      try {
+        const data = leagueDeletionService[method]({
+          leagueId: request.params.leagueId,
+          authenticated: method === "preview"
+            ? requestSecurity.getSessionBootstrap(request)
+            : requestSecurity.getAuthenticatedSession(request),
+          ...(method === "remove" ? {
+            input: request.body,
+            idempotencyKey: request.get("idempotency-key"),
+            auditContext: auditContext(request),
+          } : {}),
+        });
+        return response.status(200).json({ data, meta: { requestId: requestId(request) } });
+      } catch (error) {
+        const statuses = {
+          LEAGUE_DELETION_INVALID: 400, PLATFORM_ADMINISTRATOR_REQUIRED: 403,
+          LEAGUE_NOT_FOUND: 404, LEAGUE_DELETION_PREVIEW_CHANGED: 409,
+          LEAGUE_DELETION_BUSY: 409, IDEMPOTENCY_KEY_REUSED: 409,
+          IDEMPOTENCY_REQUEST_UNAVAILABLE: 409,
+        };
+        return errorResponse(request, response, statuses[error?.code] || 500,
+          statuses[error?.code] ? error.code : "ADMINISTRATION_REQUEST_FAILED");
+      }
+    };
+    router.get("/api/v1/admin/leagues/:leagueId/deletion-preview",
+      requestSecurity.authenticateBootstrap, handleDeletion("preview"));
+    router.delete("/api/v1/admin/leagues/:leagueId",
+      requestSecurity.authenticateUnsafe, handleDeletion("remove"));
+  }
 
   router.use((error, request, response, next) => {
     if (response.headersSent) {

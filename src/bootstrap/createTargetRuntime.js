@@ -287,6 +287,8 @@ const {
 const {
   createAdministrativeLeagueService,
 } = require("../application/services/leagues/createAdministrativeLeagueService");
+const { createLeagueDeletionService } = require("../application/services/leagues/createLeagueDeletionService");
+const { createSqliteLeagueDeletionRepository } = require("../infrastructure/persistence/sqlite/SqliteLeagueDeletionRepository");
 const {
   createCommissionerAssignmentService,
 } = require("../application/services/leagues/createCommissionerAssignmentService");
@@ -764,6 +766,8 @@ const TARGET_ENDPOINTS = Object.freeze([
   ["GET", "/api/v1/leagues/:leagueId/players", "player"],
   ["GET", "/api/v1/leagues/:leagueId/players/:playerId", "player"],
   ["POST", "/api/v1/admin/leagues", "platformAdministration"],
+  ["GET", "/api/v1/admin/leagues/:leagueId/deletion-preview", "platformAdministration"],
+  ["DELETE", "/api/v1/admin/leagues/:leagueId", "platformAdministration"],
   ["GET", "/api/v1/admin/users", "platformAdministration"],
   [
     "POST",
@@ -1733,6 +1737,7 @@ function createTargetRepositories({
       leagueOutboxWriter,
     }),
     leagueCreation: createSqliteLeagueCreationRepository({ database }),
+    leagueDeletion: createSqliteLeagueDeletionRepository({ database }),
     leagueInvitations: createSqliteLeagueInvitationRepository({
       database,
       leagueOutboxWriter,
@@ -2838,6 +2843,14 @@ function createTargetServices({
         : []),
       Object.freeze({ name: "league_outbox", runner: outboxPublicationJob }),
     ]),
+    deletion: createLeagueDeletionService({
+      repositoryContext: repositories.context,
+      repository: repositories.leagueDeletion,
+      platformAuthorization,
+      auditRepository: repositories.audit,
+      clock,
+      secureRandom,
+    }),
     creation: createAdministrativeLeagueService({
       repositoryContext: repositories.context,
       platformAuthorization,
@@ -3138,6 +3151,7 @@ function createTargetRouters({
     platformAdministration: createPlatformAdministrationRouter({
       ...sharedAudit,
       leagueCreationService: services.league.creation,
+      leagueDeletionService: services.league.deletion,
     }),
     publicRoster: createPublicRosterRouter({
       requestSecurity,
