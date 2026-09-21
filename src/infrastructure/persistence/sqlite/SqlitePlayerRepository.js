@@ -347,11 +347,11 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         "@cursorFantasyPoints IS NULL OR " +
         `${sortFantasyPoints} < @cursorFantasyPoints OR (` +
         `${sortFantasyPoints} = @cursorFantasyPoints AND (` +
-        "lower(players.full_name) > @cursorName OR " +
-        "(lower(players.full_name) = @cursorName AND players.id > @cursorId)" +
+        "(lower(players.last_name), lower(players.full_name), players.id) > " +
+        "(SELECT lower(last_name), lower(full_name), id FROM players WHERE id = @cursorId)" +
         "))) " +
         `ORDER BY ${sortFantasyPoints} DESC, ` +
-        "lower(players.full_name) ASC, players.id ASC " +
+        "lower(players.last_name) ASC, lower(players.full_name) ASC, players.id ASC " +
         "LIMIT @limit"
     );
   } catch (error) {
