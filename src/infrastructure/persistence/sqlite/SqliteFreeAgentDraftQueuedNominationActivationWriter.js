@@ -9,6 +9,7 @@ const {
 const {
   FREE_AGENT_DRAFT_QUEUED_NOMINATION_ACTIVATION_FAILURE_CODE,
   UUID_PATTERN,
+  PLAYER_UUID_PATTERN,
   buildFreeAgentDraftNominationOpenOccurrenceKey,
 } = require(
   "../../../domain/freeAgentDraft/freeAgentDraftPolicy"
@@ -213,10 +214,10 @@ function exactObject(value, fields, description) {
   return value;
 }
 
-function canonicalId(value, description) {
+function canonicalId(value, description, pattern = UUID_PATTERN) {
   if (
     typeof value !== "string" ||
-    !UUID_PATTERN.test(value)
+    !pattern.test(value)
   ) {
     invalid(
       `A canonical ${description} identifier is required.`,
@@ -424,7 +425,7 @@ function normalizeCommand(input, { failure }) {
       "opening rollover"
     ),
     openingAtMs,
-    playerId: canonicalId(input.playerId, "player"),
+    playerId: canonicalId(input.playerId, "player", PLAYER_UUID_PATTERN),
     expectedQueueVersion: positiveInteger(
       input.expectedQueueVersion,
       "nomination queue version"

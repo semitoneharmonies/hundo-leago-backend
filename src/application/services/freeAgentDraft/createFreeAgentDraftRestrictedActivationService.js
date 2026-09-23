@@ -2,6 +2,7 @@
 
 const {
   UUID_PATTERN,
+  PLAYER_UUID_PATTERN,
   buildFreeAgentDraftRestrictedActivationOccurrenceKey,
 } = require(
   "../../../domain/freeAgentDraft/freeAgentDraftPolicy"
@@ -72,6 +73,7 @@ const TERMINAL_FIELDS = Object.freeze([
   "sourceRecoveryId",
 ]);
 const EVIDENCE_FIELDS = Object.freeze([
+  "notificationIds",
   "offerEventIds",
   "outboxEventIds",
   "stateEventId",
@@ -149,10 +151,10 @@ function exactInput(value, fields, reasonCode) {
   }
 }
 
-function canonicalId(value, reasonCode) {
+function canonicalId(value, reasonCode, pattern = UUID_PATTERN) {
   if (
     typeof value !== "string" ||
-    !UUID_PATTERN.test(value)
+    !pattern.test(value)
   ) {
     failInput(reasonCode);
   }
@@ -274,7 +276,8 @@ function normalizeExecution(input) {
     allocationId,
     playerId: canonicalId(
       input.playerId,
-      "player_id_invalid"
+      "player_id_invalid",
+      PLAYER_UUID_PATTERN
     ),
     auctionId: canonicalId(
       input.auctionId,
@@ -450,7 +453,11 @@ function requireTerminal(
     !canonicalIdArray(evidence.offerEventIds) ||
     evidence.offerEventIds.length < 2 ||
     !UUID_PATTERN.test(evidence.stateEventId || "") ||
-    !canonicalIdArray(evidence.outboxEventIds, 2)
+    !canonicalIdArray(evidence.notificationIds) ||
+    !canonicalIdArray(
+      evidence.outboxEventIds,
+      2 + evidence.notificationIds.length
+    )
   ) {
     failState("terminal_result_invalid");
   }
@@ -458,6 +465,9 @@ function requireTerminal(
     ...result,
     evidence: Object.freeze({
       ...evidence,
+      notificationIds: Object.freeze([
+        ...evidence.notificationIds,
+      ]),
       offerEventIds: Object.freeze([
         ...evidence.offerEventIds,
       ]),

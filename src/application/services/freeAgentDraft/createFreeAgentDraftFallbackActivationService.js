@@ -2,6 +2,7 @@
 
 const {
   UUID_PATTERN,
+  PLAYER_UUID_PATTERN,
   buildFreeAgentDraftFallbackActivationOccurrenceKey,
 } = require(
   "../../../domain/freeAgentDraft/freeAgentDraftPolicy"
@@ -152,10 +153,10 @@ function exactInput(value, fields, reasonCode) {
   }
 }
 
-function canonicalId(value, reasonCode) {
+function canonicalId(value, reasonCode, pattern = UUID_PATTERN) {
   if (
     typeof value !== "string" ||
-    !UUID_PATTERN.test(value)
+    !pattern.test(value)
   ) {
     failInput(reasonCode);
   }
@@ -277,7 +278,8 @@ function normalizeExecution(input) {
     allocationId,
     playerId: canonicalId(
       input.playerId,
-      "player_id_invalid"
+      "player_id_invalid",
+      PLAYER_UUID_PATTERN
     ),
     auctionId: canonicalId(
       input.auctionId,
@@ -466,7 +468,10 @@ function requireTerminal(
     !UUID_PATTERN.test(evidence.stateEventId || "") ||
     !UUID_PATTERN.test(evidence.activityId || "") ||
     !canonicalIdArray(evidence.notificationIds) ||
-    !canonicalIdArray(evidence.outboxEventIds, 2)
+    !canonicalIdArray(
+      evidence.outboxEventIds,
+      3 + evidence.notificationIds.length
+    )
   ) {
     failState("terminal_result_invalid");
   }

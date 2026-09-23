@@ -2,6 +2,7 @@
 
 const {
   UUID_PATTERN,
+  PLAYER_UUID_PATTERN,
 } = require("./freeAgentDraftPolicy");
 
 const FREE_AGENT_DRAFT_ROLLOVER_FINALIZATION_POLICY_ERROR_CODE =
@@ -191,18 +192,18 @@ function exactObject(value, fields, reasonCode) {
   return value;
 }
 
-function canonicalId(value, reasonCode) {
+function canonicalId(value, reasonCode, pattern = UUID_PATTERN) {
   if (
     typeof value !== "string" ||
-    !UUID_PATTERN.test(value)
+    !pattern.test(value)
   ) {
     invalid(reasonCode);
   }
   return value;
 }
 
-function optionalId(value, reasonCode) {
-  if (value !== null) canonicalId(value, reasonCode);
+function optionalId(value, reasonCode, pattern = UUID_PATTERN) {
+  if (value !== null) canonicalId(value, reasonCode, pattern);
   return value;
 }
 
@@ -289,7 +290,8 @@ function normalizeAuctions(values) {
       id: canonicalId(value.id, "auction_id_invalid"),
       playerId: canonicalId(
         value.playerId,
-        "auction_player_id_invalid"
+        "auction_player_id_invalid",
+        PLAYER_UUID_PATTERN
       ),
       status: enumValue(
         value.status,
@@ -322,7 +324,8 @@ function normalizeAuctions(values) {
       ),
       recoveryPlayerId: optionalId(
         value.recoveryPlayerId,
-        "auction_recovery_player_id_invalid"
+        "auction_recovery_player_id_invalid",
+        PLAYER_UUID_PATTERN
       ),
       recoveryAuctionId: optionalId(
         value.recoveryAuctionId,
@@ -354,7 +357,8 @@ function normalizeNominations(values) {
       id: canonicalId(value.id, "nomination_id_invalid"),
       playerId: canonicalId(
         value.playerId,
-        "nomination_player_id_invalid"
+        "nomination_player_id_invalid",
+        PLAYER_UUID_PATTERN
       ),
       jobRunId: optionalId(
         value.jobRunId,
@@ -477,7 +481,8 @@ function normalizeRecoveries(values) {
       ),
       playerId: optionalId(
         value.playerId,
-        "recovery_player_id_invalid"
+        "recovery_player_id_invalid",
+        PLAYER_UUID_PATTERN
       ),
       jobRunId: optionalId(
         value.jobRunId,

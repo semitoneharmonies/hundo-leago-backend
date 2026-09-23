@@ -444,7 +444,7 @@ describe(
     );
 
     test(
-      "selects an exact top tie only through the committed draw and keeps projections deterministic under input reordering",
+      "selects the earliest original bid in a restricted tie regardless of stable ID or input order",
       () => {
         const floor = contract(300, 2);
         const laterLowerId = bid({
@@ -498,19 +498,19 @@ describe(
         assert.equal(first.outcome, "winner");
         assert.equal(
           first.drawReveal.selectionUsed,
-          true
+          false
         );
         assert.deepEqual(
           first.drawReveal.orderedBidIds,
-          [IDS.bid1, IDS.bid2]
+          []
         );
         assert.equal(
           first.winner.bidId,
-          first.drawReveal.selectedBidId
+          IDS.bid2
         );
         assert.equal(
           first.winner.teamId,
-          first.drawReveal.selectedTeamId
+          IDS.team2
         );
         assert.deepEqual(
           first.rankedBids.map(({ rank }) => rank),
@@ -518,7 +518,7 @@ describe(
         );
         assert.deepEqual(
           first.tiedTopBids.map(({ bidId }) => bidId),
-          [IDS.bid1, IDS.bid2]
+          [IDS.bid2, IDS.bid1]
         );
         assert.ok(Object.isFrozen(first));
         assert.ok(Object.isFrozen(first.rankedBids));
@@ -782,7 +782,7 @@ describe(
     );
 
     test(
-      "uses the committed draw for an exact queued top tie and is stable under bid reordering",
+      "uses stable bid ID only for identical timestamps in a queued tie and is stable under reordering",
       () => {
         const starter = bid({
           id: IDS.bid1,
@@ -811,14 +811,14 @@ describe(
         assert.deepEqual(replay, first);
         assert.equal(first.outcome, "winner");
         assert.equal(first.allocationId, null);
-        assert.equal(first.drawReveal.selectionUsed, true);
+        assert.equal(first.drawReveal.selectionUsed, false);
         assert.deepEqual(
           first.drawReveal.orderedBidIds,
-          [IDS.bid1, IDS.bid2]
+          []
         );
         assert.equal(
           first.winner.bidId,
-          first.drawReveal.selectedBidId
+          IDS.bid1
         );
         assert.deepEqual(
           first.tiedTopBids.map(({ bidId }) => bidId),
@@ -1120,5 +1120,30 @@ for (const kind of ['direct', 'queued', 'fallback', 'restricted']) {
     assert.equal(result.winner.finalAavCents, 200);
     assert.equal(result.winner.submittedTermYears, 3);
     assert.equal(result.drawReveal.selectionUsed, false);
+  });
+}
+
+for (const kind of ["direct", "queued", "fallback", "restricted"]) {
+  test("earliest original bid wins an exact tie regardless of draw nonce: " + kind, () => {
+    const floor = contract(100, 1);
+    const later = bid({ firstSubmittedAtMs: ROLLOVER_AT_MS - 1_000 });
+    const earlier = bid({ id: IDS.bid2, teamId: IDS.team2, firstSubmittedAtMs: ROLLOVER_AT_MS - 10_000 });
+    const participants = kind === "restricted" ? [
+      participant({ floor, activeImprovementBidId: IDS.bid1 }),
+      participant({ id: IDS.participant2, teamId: IDS.team2, floor, activeImprovementBidId: IDS.bid2 }),
+    ] : [];
+    for (const value of [0, 127, 255]) {
+      const nonceBytes = new Uint8Array(32).fill(value);
+      const draw = { ...createFreeAgentDraftAuctionDrawCommitment({ auctionId: IDS.auction, nonceBytes }), nonceBytes };
+      const input = resolutionInput({ kind, floor, bids: [later, earlier], participants, draw });
+      const result = evaluateFreeAgentDraftAuctionResolution(input);
+      assert.equal(result.winner.bidId, IDS.bid2);
+      assert.equal(result.winner.highestCompetingAavCents, 300);
+      assert.equal(result.drawReveal.selectionUsed, false);
+      assert.deepEqual(evaluateFreeAgentDraftAuctionResolution({ ...input, bids: [earlier, later] }), result);
+      // Equal recorded timestamps use the existing stable-ID fallback.
+      const sameTime = { ...earlier, firstSubmittedAtMs: later.firstSubmittedAtMs };
+      assert.equal(evaluateFreeAgentDraftAuctionResolution({ ...input, bids: [sameTime, later] }).winner.bidId, IDS.bid1);
+    }
   });
 }

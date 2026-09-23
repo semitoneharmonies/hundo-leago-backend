@@ -1072,6 +1072,41 @@ function seedFallbackAuction(database) {
 }
 
 describe("FAD-06 SQLite auction read repository", () => {
+  for (const kind of ["ordinary", "restricted", "fallback"]) {
+    test(`counts active teams without exposing competitor edits: ${kind}`, (t) => {
+      const runtime = createRuntime(t);
+      const database = runtime.database;
+      const auctionId = kind === "ordinary" ? IDS.ordinaryAuction
+        : kind === "restricted" ? IDS.restrictedAuction : IDS.fallbackAuction;
+      const competitorBidId = kind === "ordinary" ? IDS.ordinaryBidThree
+        : kind === "restricted" ? IDS.restrictedBidThree : uuid(999);
+      if (kind === "ordinary") seedOrdinaryActiveAuctions(database);
+      else if (kind === "restricted") seedRestrictedAuction(database);
+      else {
+        seedFallbackAuction(database);
+        seedBid(database, { id: competitorBidId, auctionId, teamId: IDS.teamThree, totalValueCents: 987 });
+      }
+      seedBid(database, { id: uuid(998), auctionId, teamId: IDS.teamThree, totalValueCents: 800, status: "withdrawn" });
+      const before = runtime.repository.readAuction(detailInput(auctionId));
+      assert.equal(before.bidCount, 2);
+      assert.equal(before.participatingTeamCount, 2);
+      assert.equal(before.administrativeBids.length, 0);
+      assert.equal(before.eligibleTeams.length, 0);
+      assert.equal(JSON.stringify(before).includes(competitorBidId), false);
+      assert.equal(JSON.stringify(before).includes("987"), false);
+      database.prepare(`UPDATE auction_bids SET total_value_cents = 1100,
+        last_edited_at_ms = ?, edit_count = 1, version = version + 1 WHERE id = ?`)
+        .run(NOW_MS - 1, competitorBidId);
+      const stored = database.serialize();
+      const after = runtime.repository.readAuction(detailInput(auctionId));
+      assert.deepEqual(after, before);
+      const listed = runtime.repository.listAuctions(listInput()).auctions.find((auction) => auction.auctionId === auctionId);
+      assert.equal(listed.participatingTeamCount, 2);
+      assert.equal(JSON.stringify(listed).includes("1100"), false);
+      assert.equal(stored.equals(database.serialize()), true);
+    });
+  }
+
   test("reads ordinary and tied auctions with unset team colours without changing stored profiles", (t) => {
     const runtime = createRuntime(t);
     seedOrdinaryActiveAuctions(runtime.database);

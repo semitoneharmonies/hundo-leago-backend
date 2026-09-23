@@ -13,7 +13,6 @@ const {
   FREE_AGENT_DRAFT_DRAW_ALGORITHM_VERSION,
   FreeAgentDraftAuctionDrawPolicyError,
   createFreeAgentDraftAuctionDrawCommitment,
-  createFreeAgentDraftAuctionDrawReveal,
   createFreeAgentDraftAuctionNoSelectionReveal,
 } = require("./freeAgentDraftAuctionDrawPolicy");
 
@@ -814,6 +813,7 @@ function rankBids(left, right) {
   return (
     right.aavCents - left.aavCents ||
     right.termYears - left.termYears ||
+    left.firstSubmittedAtMs - right.firstSubmittedAtMs ||
     left.id.localeCompare(right.id)
   );
 }
@@ -893,55 +893,6 @@ function noSelectionReveal(auction, draw) {
       null
     );
   } catch (error) {
-    if (error instanceof FreeAgentDraftAuctionDrawPolicyError) {
-      fail(
-        FREE_AGENT_DRAFT_AUCTION_RESOLUTION_CODES
-          .drawInvalid,
-        "draw_reveal_invalid"
-      );
-    }
-    throw error;
-  }
-}
-
-function selectedReveal(
-  auction,
-  draw,
-  tiedTop
-) {
-  try {
-    const reveal =
-      createFreeAgentDraftAuctionDrawReveal({
-        auctionId: auction.id,
-        commitmentHex: draw.commitmentHex,
-        nonceBytes: draw.nonceBytes,
-        rolloverAtMs: auction.resolvesAtMs,
-        tiedBidIds: tiedTop.map((bid) => bid.id),
-      });
-    const selected = tiedTop.find(
-      (bid) => bid.id === reveal.selectedBidId
-    );
-    if (!selected) {
-      fail(
-        FREE_AGENT_DRAFT_AUCTION_RESOLUTION_CODES
-          .drawInvalid,
-        "draw_selected_bid_invalid"
-      );
-    }
-    return immutable({
-      winner: selected,
-      drawReveal: drawRevealWithTeam(
-        reveal,
-        selected.teamId
-      ),
-    });
-  } catch (error) {
-    if (
-      error instanceof
-        FreeAgentDraftAuctionResolutionPolicyError
-    ) {
-      throw error;
-    }
     if (error instanceof FreeAgentDraftAuctionDrawPolicyError) {
       fail(
         FREE_AGENT_DRAFT_AUCTION_RESOLUTION_CODES
@@ -1221,21 +1172,13 @@ function evaluateFreeAgentDraftAuctionResolution(
       bid.aavCents === top.aavCents &&
       bid.termYears === top.termYears
   );
-  let winner = top;
-  let drawReveal;
-  let safeTiedTop = immutable([]);
-  if (tiedTop.length > 1) {
-    const selection = selectedReveal(
-      auction,
-      draw,
-      tiedTop
-    );
-    winner = selection.winner;
-    drawReveal = selection.drawReveal;
-    safeTiedTop = tiedTopProjection(tiedTop);
-  } else {
-    drawReveal = noSelectionReveal(auction, draw);
-  }
+  const winner = top;
+  // Close the existing commitment without a draw, preserving the stored
+  // receipt contract and historical draw replay while using first-bid ties.
+  const drawReveal = noSelectionReveal(auction, draw);
+  const safeTiedTop = tiedTop.length > 1
+    ? tiedTopProjection(tiedTop)
+    : immutable([]);
   const competitor = eligible
     .filter((bid) => bid.id !== winner.id)
     .sort(rankBids)[0] || null;

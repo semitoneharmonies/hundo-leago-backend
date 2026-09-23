@@ -4,6 +4,7 @@ const { randomUUID } = require("node:crypto");
 
 const {
   UUID_PATTERN,
+  PLAYER_UUID_PATTERN,
   buildFreeAgentDraftRestrictedActivationOccurrenceKey,
 } = require(
   "../../../domain/freeAgentDraft/freeAgentDraftPolicy"
@@ -154,10 +155,10 @@ function exactObject(value, fields, description) {
   return value;
 }
 
-function canonicalId(value, description) {
+function canonicalId(value, description, pattern = UUID_PATTERN) {
   if (
     typeof value !== "string" ||
-    !UUID_PATTERN.test(value)
+    !pattern.test(value)
   ) {
     invalid(
       `A canonical ${description} identifier is required.`,
@@ -309,7 +310,7 @@ function normalizeCommand(input) {
   return Object.freeze({
     ...lookup,
     occurrenceKey,
-    playerId: canonicalId(input.playerId, "player"),
+    playerId: canonicalId(input.playerId, "player", PLAYER_UUID_PATTERN),
     auctionId: canonicalId(input.auctionId, "auction"),
     rolloverId: canonicalId(input.rolloverId, "rollover"),
     expectedAllocationVersion: positiveInteger(

@@ -6,6 +6,7 @@ const {
 
 const {
   UUID_PATTERN,
+  PLAYER_UUID_PATTERN,
   buildFreeAgentDraftFallbackActivationOccurrenceKey,
 } = require(
   "../../domain/freeAgentDraft/freeAgentDraftPolicy"
@@ -226,7 +227,7 @@ function requireActivationDescriptor(value) {
     binding.allocationId !== parsed.allocationId ||
     binding.activationAtMs !==
       parsed.activationAtMs ||
-    !UUID_PATTERN.test(binding.playerId || "") ||
+    !PLAYER_UUID_PATTERN.test(binding.playerId || "") ||
     !UUID_PATTERN.test(binding.auctionId || "") ||
     !UUID_PATTERN.test(binding.rolloverId || "") ||
     (
@@ -358,7 +359,10 @@ function requireTerminal(result, claimed) {
     !UUID_PATTERN.test(evidence.stateEventId || "") ||
     !UUID_PATTERN.test(evidence.activityId || "") ||
     !canonicalIdArray(evidence.notificationIds) ||
-    !canonicalIdArray(evidence.outboxEventIds, 2)
+    !canonicalIdArray(
+      evidence.outboxEventIds,
+      3 + evidence.notificationIds.length
+    )
   ) {
     throw new TypeError(
       "FAD fallback-activation runner requires a durable terminal result"

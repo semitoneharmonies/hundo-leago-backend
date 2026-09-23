@@ -194,6 +194,49 @@ function assertInvalid(value) {
 }
 
 describe("FAD rollover finalization policy", () => {
+  test("accepts imported UUIDv5 players in resolved auctions and nominations", () => {
+    const playerId = "00000000-0000-5000-8000-000000000009";
+    const actual = evaluateFreeAgentDraftRolloverFinalization(input({
+      auctions: [auction(1, { playerId })],
+      nominations: [nomination(1, { playerId })],
+    }));
+    assert.equal(actual.outcome, "completed");
+    assert.equal(actual.evidence.normalAuctionCount, 1);
+    assert.equal(actual.evidence.terminalNominationCount, 1);
+  });
+
+  test("accepts imported UUIDv5 players in an exact failed-auction recovery chain", () => {
+    const playerId = "00000000-0000-5000-8000-000000000009";
+    const actual = evaluateFreeAgentDraftRolloverFinalization(input({
+      auctions: [auction(1, {
+        playerId,
+        status: "failed",
+        resolutionStatus: null,
+        resolutionOutcomeCode: null,
+        jobStatus: "failed",
+        recoveryId: IDS.recoveryOne,
+        recoveryStatus: "correction_required",
+        recoveryPlayerId: playerId,
+        recoveryAuctionId: IDS.auctionOne,
+        recoveryJobRunId: IDS.jobOne,
+        recoveryRolloverId: IDS.rollover,
+      })],
+      recoveries: [recovery(1, { playerId })],
+    }));
+    assert.equal(actual.outcome, "recovery_required");
+    assert.equal(actual.evidence.recoverableAuctionCount, 1);
+  });
+
+  test("keeps malformed player IDs and non-player UUIDv5 identifiers invalid", () => {
+    const versionFive = "00000000-0000-5000-8000-000000000009";
+    for (const playerId of [null, "8478402", versionFive.toUpperCase().replace("000000000009", "00000000000A"), versionFive.replace("-5000-", "-0000-")]) {
+      assertInvalid(input({ auctions: [auction(1, { playerId })] }));
+      assertInvalid(input({ nominations: [nomination(1, { playerId })] }));
+    }
+    assertInvalid(input({ auctions: [auction(1, { id: versionFive })] }));
+    assertInvalid(input({ rollover: rollover({ id: versionFive }) }));
+  });
+
   test("completes an empty due boundary and freezes the exact evidence projection", () => {
     const actual =
       evaluateFreeAgentDraftRolloverFinalization(input());

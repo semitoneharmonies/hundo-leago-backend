@@ -28,7 +28,7 @@ const IDS = Object.freeze({
   season: uuid(2),
   fad: uuid(3),
   allocation: uuid(4),
-  player: uuid(5),
+  player: uuid(5).replace("-4000-", "-5000-"),
   sourceAuction: uuid(6),
   fallbackAuction: uuid(7),
   rollover: uuid(8),
@@ -131,6 +131,9 @@ function terminal(overrides = {}) {
       outboxEventIds: [
         IDS.fadOutbox,
         IDS.auctionOutbox,
+        uuid(701),
+        uuid(702),
+        uuid(703),
       ],
     },
     replayed: false,

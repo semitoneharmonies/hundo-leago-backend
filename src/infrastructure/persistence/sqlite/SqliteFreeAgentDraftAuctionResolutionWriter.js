@@ -1059,8 +1059,31 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
         submission.actor_user_id AS submission_actor_user_id,
         submission.event_type AS submission_event_type,
         submission.metadata_json AS submission_metadata_json,
-        submission.occurred_at_ms AS submission_occurred_at_ms
+        submission.occurred_at_ms AS submission_occurred_at_ms,
+        nomination.opened_at_ms AS nomination_opened_at_ms,
+        nomination.submitted_by_membership_id AS nomination_membership_id
       FROM auction_bids AS bid
+      JOIN auctions AS auction
+        ON auction.league_id = bid.league_id
+       AND auction.season_id = bid.season_id
+       AND auction.id = bid.auction_id
+      JOIN auction_contexts AS context
+        ON context.league_id = bid.league_id
+       AND context.season_id = bid.season_id
+       AND context.auction_id = bid.auction_id
+      LEFT JOIN free_agent_draft_nomination_queue AS nomination
+        ON context.fad_origin = 'queued_nomination'
+       AND nomination.league_id = bid.league_id
+       AND nomination.season_id = bid.season_id
+       AND nomination.fad_id = context.fad_id
+       AND nomination.resolution_rollover_id = context.fad_rollover_id
+       AND nomination.opened_auction_id = bid.auction_id
+       AND nomination.opened_starter_bid_id = bid.id
+       AND nomination.player_id = auction.player_id
+       AND nomination.team_id = bid.team_id
+       AND nomination.submitted_by_user_id = bid.submitted_by_user_id
+       AND nomination.accepted_at_ms = bid.first_submitted_at_ms
+       AND nomination.status = 'opened'
       LEFT JOIN teams AS team
         ON team.league_id = bid.league_id
        AND team.id = bid.team_id
@@ -2252,10 +2275,15 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
   }
 
   function historicalAuthority(row) {
+    const queuedOpening =
+      row.submission_event_type === "auction_started" &&
+      row.nomination_opened_at_ms !== null &&
+      row.nomination_opened_at_ms === row.submission_occurred_at_ms;
     if (
       !row.submission_actor_user_id ||
       row.submission_actor_user_id !== row.submitted_by_user_id ||
-      row.submission_occurred_at_ms !== row.first_submitted_at_ms ||
+      (!queuedOpening &&
+        row.submission_occurred_at_ms !== row.first_submitted_at_ms) ||
       typeof row.submission_metadata_json !== "string"
     ) {
       return false;
@@ -2269,7 +2297,9 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
     if (
       !metadata ||
       !["manager", "commissioner"].includes(metadata.actorAuthority) ||
-      !UUID_PATTERN.test(metadata.actorMembershipId || "")
+      !UUID_PATTERN.test(metadata.actorMembershipId || "") ||
+      (queuedOpening &&
+        metadata.actorMembershipId !== row.nomination_membership_id)
     ) {
       return false;
     }
@@ -2278,7 +2308,7 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
       teamId: row.team_id,
       actorUserId: row.submission_actor_user_id,
       actorMembershipId: metadata.actorMembershipId,
-      occurredAtMs: row.submission_occurred_at_ms,
+      occurredAtMs: row.first_submitted_at_ms,
     };
     const membership = uniqueRow(
       findHistoricalMembershipStatement,
