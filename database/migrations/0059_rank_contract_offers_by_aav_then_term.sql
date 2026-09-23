@@ -8684,4 +8684,3 @@ BEGIN
 END;
 
 UPDATE application_metadata SET metadata_value = '59', updated_at_ms = max(updated_at_ms, 59) WHERE metadata_key = 'data_model_version' AND metadata_value = '58';
-
