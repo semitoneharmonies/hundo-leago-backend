@@ -2,6 +2,7 @@
 
 const {
   UUID_PATTERN,
+  PLAYER_UUID_PATTERN,
   buildFreeAgentDraftAllocationOccurrenceKey,
 } = require(
   "../../../domain/freeAgentDraft/freeAgentDraftPolicy"
@@ -158,10 +159,10 @@ function exactInput(value, fields, reasonCode) {
   }
 }
 
-function canonicalId(value, reasonCode) {
+function canonicalId(value, reasonCode, pattern = UUID_PATTERN) {
   if (
     typeof value !== "string" ||
-    !UUID_PATTERN.test(value)
+    !pattern.test(value)
   ) {
     failInput(reasonCode);
   }
@@ -222,7 +223,8 @@ function normalizeExecution(input) {
   );
   const playerId = canonicalId(
     input.playerId,
-    "player_id_invalid"
+    "player_id_invalid",
+    PLAYER_UUID_PATTERN
   );
   const occurrenceKey = boundedText(
     input.occurrenceKey,

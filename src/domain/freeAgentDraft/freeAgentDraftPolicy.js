@@ -1,5 +1,7 @@
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const PLAYER_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const FREE_AGENT_DRAFT_DAY_MS =
   24 * 60 * 60 * 1000;
@@ -1259,6 +1261,13 @@ function occurrenceUuid(value, reasonCode) {
   );
 }
 
+function occurrencePlayerUuid(value, reasonCode) {
+  if (typeof value !== "string" || !PLAYER_UUID_PATTERN.test(value)) {
+    failOccurrence(reasonCode);
+  }
+  return value;
+}
+
 function occurrenceTimestamp(value, reasonCode) {
   return safeTimestamp(
     value,
@@ -1304,7 +1313,7 @@ function buildFreeAgentDraftEligibilityOccurrenceKey(
     "fad",
     occurrenceUuid(input.fadId, "fad_id_invalid"),
     "eligibility-revalidate",
-    occurrenceUuid(
+    occurrencePlayerUuid(
       input.playerId,
       "player_id_invalid"
     ),
@@ -1362,7 +1371,7 @@ function buildFreeAgentDraftAllocationOccurrenceKey(
     "fad",
     occurrenceUuid(input.fadId, "fad_id_invalid"),
     "allocate",
-    occurrenceUuid(
+    occurrencePlayerUuid(
       input.playerId,
       "player_id_invalid"
     ),
@@ -1571,7 +1580,7 @@ function parseFreeAgentDraftOccurrenceKey(
     parsed = {
       type: "eligibility_revalidate",
       fadId,
-      playerId: occurrenceUuid(
+      playerId: occurrencePlayerUuid(
         parts[3],
         "player_id_invalid"
       ),
@@ -1636,7 +1645,7 @@ function parseFreeAgentDraftOccurrenceKey(
     parsed = {
       type: "allocate",
       fadId,
-      playerId: occurrenceUuid(
+      playerId: occurrencePlayerUuid(
         parts[3],
         "player_id_invalid"
       ),
@@ -1852,6 +1861,7 @@ module.exports = {
   FREE_AGENT_DRAFT_VIEWER_PHASES,
   FreeAgentDraftPolicyError,
   UUID_PATTERN,
+  PLAYER_UUID_PATTERN,
   buildFreeAgentDraftAllocationOccurrenceKey,
   buildFreeAgentDraftCompletionOccurrenceKey,
   buildFreeAgentDraftDeadlineOccurrenceKey,

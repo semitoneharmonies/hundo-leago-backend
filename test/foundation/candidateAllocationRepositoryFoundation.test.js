@@ -1591,6 +1591,19 @@ function assertRepositoryError(
 describe(
   "SQLite Candidate allocation repository foundation",
   () => {
+    test("preserves a quarter-dollar AAV tie floor and creates only its tied participants", (t) => {
+      const offer = { totalValueCents: 750, termYears: 3, eligibilityStatus: "valid",
+        cardAllocationEligibility: "eligible", slotGroup: "D", positionGroup: "D" };
+      const runtime = createRuntime(t, { nowMs: DEADLINE_AT_MS + 1000,
+        allowImmediateRestrictedActivation: true, offers: [offer, { ...offer }] });
+      const result = runtime.repository.resolvePending(runtime.command);
+      assert.equal(result.status, "restricted_active");
+      assert.deepEqual(result.restrictedAuction.floor, { totalValueCents: 750, termYears: 3, aavCents: 250 });
+      assert.equal(result.restrictedAuction.participants.length, 2);
+      assert.deepEqual(runtime.repository.resolvePending(runtime.command).restrictedAuction.floor,
+        result.restrictedAuction.floor);
+    });
+
     test(
       "persists one exact warning-offer direct award atomically and replays its immutable result",
       (t) => {

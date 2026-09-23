@@ -149,6 +149,16 @@ function harness({
 }
 
 describe("FAD Candidate allocation service", () => {
+  test("executes an imported UUIDv5 player allocation with its exact job binding", () => {
+    const playerId = IDS.player.replace("-4000-", "-5000-");
+    const occurrenceKey = buildFreeAgentDraftAllocationOccurrenceKey({ fadId: IDS.fad, playerId });
+    const expected = terminal({ playerId, occurrenceKey });
+    const { service, calls } = harness({ allocationResult: allocation({ playerId }), terminalResult: expected });
+    assert.deepEqual(service.executeClaimedAllocation(input({ playerId, occurrenceKey })), expected);
+    assert.equal(calls.find(([name]) => name === "resolve")[1].playerId, playerId);
+    assert.throws(() => service.executeClaimedAllocation(input({ playerId, occurrenceKey, leagueId: playerId })));
+  });
+
   test("loads the claimed allocation and forwards exact versions and lease identity", () => {
     const { calls, service } = harness();
 
