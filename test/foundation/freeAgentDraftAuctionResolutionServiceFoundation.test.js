@@ -245,13 +245,13 @@ describe("FAD-12 auction-resolution application service foundation", () => {
       submittedAavCents: 500,
       lowestOfferedAavCents: 400,
       lowestOfferedTotalValueCents: 500,
-      highestCompetingAavCents: 1_000,
+      highestCompetingAavCents: 450,
       highestCompetingTotalValueCents: 1_000,
       persistedSecondPriceInputCents: 1_000,
-      requiredWinningTotalValueCents: 1_000,
-      requiredWinningAavCents: 350,
-      finalTotalValueCents: 1_050,
-      finalAavCents: 350,
+      requiredWinningTotalValueCents: 1_350,
+      requiredWinningAavCents: 450,
+      finalTotalValueCents: 1_350,
+      finalAavCents: 450,
     });
     const runtime = createRuntime({
       result: totalFirstResult,

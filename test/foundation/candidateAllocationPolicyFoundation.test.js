@@ -172,7 +172,7 @@ describe(
     );
 
     test(
-      "ranks total first even when the lower total has the higher AAV",
+      "ranks higher AAV first even when its total value is lower",
       () => {
         const decision =
           decideCandidateAllocation({
@@ -194,23 +194,23 @@ describe(
 
         assert.equal(
           decision.decisionCode,
-          "highest_total"
+          "highest_aav"
         );
         assert.equal(
           decision.winner.offerId,
-          OFFER_1
+          OFFER_2
         );
         assert.equal(
           decision.winner.totalValueCents,
-          800
+          700
         );
         assert.equal(
           decision.winner.aavCents,
-          400
+          700
         );
         assert.equal(
           decision.eligibleOffers[1].aavCents,
-          700
+          400
         );
       }
     );
@@ -237,7 +237,7 @@ describe(
           });
         assert.equal(
           aavWinner.decisionCode,
-          "highest_equal_total_aav"
+          "highest_aav"
         );
         assert.equal(
           aavWinner.winner.offerId,
@@ -263,7 +263,7 @@ describe(
               offerId: OFFER_3,
               cardSnapshotId: SNAPSHOT_3,
               teamId: TEAM_3,
-              totalValueCents: 590,
+              totalValueCents: 290,
               termYears: 1,
             }),
             offer(),
@@ -323,7 +323,7 @@ describe(
                 offerId: OFFER_3,
                 cardSnapshotId: SNAPSHOT_3,
                 teamId: TEAM_3,
-                totalValueCents: 590,
+                totalValueCents: 290,
                 termYears: 1,
               }),
               offer({
@@ -577,7 +577,7 @@ describe(
     );
 
     test(
-      "requires both a total-first AAV-second strict improvement and the ordinary joining minimum",
+      "requires both an AAV-first longest-term-second improvement and the ordinary joining minimum",
       () => {
         const candidateMinimum =
           contract(100, 1);
@@ -659,8 +659,8 @@ describe(
               submittedBid: contract(700, 3),
             }
           );
-        assert.equal(higherTotal.comparison, 1);
-        assert.equal(higherTotal.eligible, true);
+        assert.equal(higherTotal.comparison, -1);
+        assert.equal(higherTotal.eligible, false);
         assert.ok(Object.isFrozen(higherTotal));
         assert.ok(
           Object.isFrozen(higherTotal.reasonCodes)
@@ -698,10 +698,34 @@ describe(
             floor,
             submittedBid: contract(700, 3),
           });
-        assert.equal(higherTotal.comparison, 1);
-        assert.equal(higherTotal.eligible, true);
+        assert.equal(higherTotal.comparison, -1);
+        assert.equal(higherTotal.eligible, false);
       }
     );
+
+    test("awards Draisaitl's higher AAV and uses longer term only at equal AAV", () => {
+      const decision = decideCandidateAllocation({
+        playerId: PLAYER_1,
+        offers: [
+          offer({ totalValueCents: 2200, termYears: 2 }),
+          offer({ offerId: OFFER_2, cardSnapshotId: SNAPSHOT_2, teamId: TEAM_2, totalValueCents: 1225, termYears: 1 }),
+        ],
+      });
+      assert.equal(decision.winner.teamId, TEAM_2);
+      assert.equal(decision.decisionCode, "highest_aav");
+      const longer = decideCandidateAllocation({
+        playerId: PLAYER_1,
+        offers: [
+          offer({ totalValueCents: 1200, termYears: 3 }),
+          offer({ offerId: OFFER_2, cardSnapshotId: SNAPSHOT_2, teamId: TEAM_2, totalValueCents: 400, termYears: 1 }),
+        ],
+      });
+      assert.equal(longer.winner.teamId, TEAM_1);
+      assert.equal(longer.decisionCode, "highest_equal_aav_term");
+      assert.equal(evaluateRestrictedCandidateImprovement({ candidateMinimum: contract(2200, 2), submittedBid: contract(1225, 1) }).eligible, true);
+      assert.equal(evaluateRestrictedCandidateImprovement({ candidateMinimum: contract(400, 1), submittedBid: contract(1200, 3) }).eligible, true);
+      assert.equal(evaluateRestrictedCandidateImprovement({ candidateMinimum: contract(1200, 3), submittedBid: contract(400, 1) }).eligible, false);
+    });
 
     test(
       "returns the immutable binding no-reservation FAD win policy",

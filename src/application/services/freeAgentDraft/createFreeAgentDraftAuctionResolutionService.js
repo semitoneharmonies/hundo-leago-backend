@@ -577,7 +577,7 @@ function safeDrawReveal(value, winner) {
   });
 }
 
-function safeWinner(value) {
+function safeWinner(value, { replayed, allocationLinked }) {
   const legacyWinner = hasExactOwnProperties(
     value,
     LEGACY_WINNER_FIELDS
@@ -652,9 +652,20 @@ function safeWinner(value) {
   if (totalFirstWinner) {
     const highestCompetingTotalValueCents =
       value.highestCompetingTotalValueCents;
+    const requiredAavCents = value.highestCompetingAavCents === null
+      ? submittedAavCents
+      : Math.max(value.lowestOfferedAavCents, value.highestCompetingAavCents);
+    const requiredAavTotal = requiredAavCents * value.submittedTermYears;
+    const historicalTotal = highestCompetingTotalValueCents === null
+      ? value.submittedTotalValueCents
+      : Math.max(value.lowestOfferedTotalValueCents, highestCompetingTotalValueCents);
+    const historicalPricing = replayed &&
+      value.requiredWinningTotalValueCents === historicalTotal &&
+      historicalTotal !== requiredAavTotal;
     const legacySubmittedPrice =
-      value.requiredWinningTotalValueCents ===
-        value.submittedTotalValueCents &&
+      (historicalPricing
+        ? value.requiredWinningTotalValueCents === value.submittedTotalValueCents
+        : requiredAavCents === submittedAavCents) &&
       (
         value.submittedTotalValueCents %
           value.submittedTermYears !== 0 ||
@@ -668,9 +679,9 @@ function safeWinner(value) {
       : Math.max(
           100,
           Math.ceil(
-            value.requiredWinningTotalValueCents /
-              value.submittedTermYears /
-              25
+            (historicalPricing
+              ? value.requiredWinningTotalValueCents / value.submittedTermYears
+              : requiredAavCents) / 25
           ) * 25
         );
     const expectedFinalTotalValueCents = legacySubmittedPrice
@@ -692,16 +703,16 @@ function safeWinner(value) {
         (highestCompetingTotalValueCents ?? 0) ||
       !safePositiveMoney(value.requiredWinningTotalValueCents) ||
       value.requiredWinningTotalValueCents !==
-        (highestCompetingTotalValueCents === null
-          ? value.submittedTotalValueCents
-          : Math.max(
-              value.lowestOfferedTotalValueCents,
-              highestCompetingTotalValueCents
-            )) ||
-      value.requiredWinningAavCents !==
-        expectedRequiredAavCents ||
-      value.finalTotalValueCents !==
-        expectedFinalTotalValueCents
+        (historicalPricing ? historicalTotal : requiredAavTotal) ||
+      (allocationLinked && !historicalPricing
+        ? value.requiredWinningAavCents !== value.finalAavCents ||
+          value.finalTotalValueCents < expectedFinalTotalValueCents ||
+          (!legacySubmittedPrice && (
+            value.finalAavCents % 25 !== 0 ||
+            value.finalTotalValueCents !== value.finalAavCents * value.submittedTermYears
+          ))
+        : value.requiredWinningAavCents !== expectedRequiredAavCents ||
+          value.finalTotalValueCents !== expectedFinalTotalValueCents)
     ) {
       failState("winner_pricing_invalid");
     }
@@ -868,7 +879,10 @@ function safeTerminalResult(
     failState("terminal_result_invalid");
   }
   const winner = winnerOutcome
-    ? safeWinner(result.winner)
+    ? safeWinner(result.winner, {
+        replayed: result.replayed,
+        allocationLinked: execution.allocationId !== null,
+      })
     : null;
   const drawReveal = safeDrawReveal(
     result.drawReveal,

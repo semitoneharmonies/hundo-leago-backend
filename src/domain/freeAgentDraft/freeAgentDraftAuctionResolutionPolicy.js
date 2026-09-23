@@ -812,8 +812,8 @@ function fallbackFloorReason(bid, floor) {
 
 function rankBids(left, right) {
   return (
-    right.totalValueCents - left.totalValueCents ||
     right.aavCents - left.aavCents ||
+    right.termYears - left.termYears ||
     left.id.localeCompare(right.id)
   );
 }
@@ -958,20 +958,16 @@ function restrictedFloorPrice(
   termYears,
   floor
 ) {
-  const requiredTotalValueCents = Math.max(
-    normalTotalValueCents,
-    floor.totalValueCents
-  );
   let aavCents = Math.max(
     100,
     Math.ceil(
-      requiredTotalValueCents / termYears / 25
+      Math.max(normalTotalValueCents / termYears, floor.aavCents) / 25
     ) * 25
   );
   let totalValueCents = aavCents * termYears;
   if (
-    totalValueCents === floor.totalValueCents &&
-    aavCents < floor.aavCents
+    aavCents === floor.aavCents &&
+    termYears < floor.termYears
   ) {
     aavCents += 25;
     totalValueCents = aavCents * termYears;
@@ -989,15 +985,16 @@ function winnerProjection({
     competitor?.aavCents ?? null;
   const highestCompetingTotalValueCents =
     competitor?.totalValueCents ?? null;
-  const requiredWinningTotalValueCents = competitor
+  const requiredAavCents = competitor
     ? Math.max(
-        winner.lowestOfferedTotalValueCents,
-        competitor.totalValueCents
+        winner.lowestOfferedAavCents,
+        competitor.aavCents
       )
-    : winner.totalValueCents;
+    : winner.aavCents;
+  const requiredWinningTotalValueCents =
+    requiredAavCents * winner.termYears;
   const legacySubmittedPrice =
-    requiredWinningTotalValueCents ===
-      winner.totalValueCents &&
+    requiredAavCents === winner.aavCents &&
     (
       winner.totalValueCents % winner.termYears !== 0 ||
       (
@@ -1009,9 +1006,7 @@ function winnerProjection({
     : Math.max(
         100,
         Math.ceil(
-          requiredWinningTotalValueCents /
-            winner.termYears /
-            25
+          requiredAavCents / 25
         ) * 25
       );
   let finalTotalValueCents = legacySubmittedPrice
@@ -1223,9 +1218,8 @@ function evaluateFreeAgentDraftAuctionResolution(
   const top = eligible[0];
   const tiedTop = eligible.filter(
     (bid) =>
-      bid.totalValueCents ===
-        top.totalValueCents &&
-      bid.aavCents === top.aavCents
+      bid.aavCents === top.aavCents &&
+      bid.termYears === top.termYears
   );
   let winner = top;
   let drawReveal;

@@ -276,8 +276,8 @@ function inspectBid(input, auction) {
 
 function rankBids(left, right) {
   return (
-    right.totalValueCents - left.totalValueCents ||
     right.aavCents - left.aavCents ||
+    right.termYears - left.termYears ||
     left.firstSubmittedAtMs - right.firstSubmittedAtMs ||
     left.id.localeCompare(right.id)
   );
@@ -388,15 +388,16 @@ function evaluateAuctionResolution(input) {
   );
   const winner = eligible[0];
   const competitor = eligible[1] || null;
-  const requiredWinningTotalValueCents = competitor
+  const requiredAavCents = competitor
     ? Math.max(
-        winner.lowestOfferedTotalValueCents,
-        competitor.totalValueCents
+        winner.lowestOfferedAavCents,
+        competitor.aavCents
       )
-    : winner.totalValueCents;
+    : winner.aavCents;
+  const requiredWinningTotalValueCents =
+    requiredAavCents * winner.termYears;
   const legacySubmittedPrice =
-    requiredWinningTotalValueCents ===
-      winner.totalValueCents &&
+    requiredAavCents === winner.aavCents &&
     (
       winner.totalValueCents % winner.termYears !== 0 ||
       (
@@ -408,9 +409,7 @@ function evaluateAuctionResolution(input) {
     : Math.max(
         100,
         Math.ceil(
-          requiredWinningTotalValueCents /
-            winner.termYears /
-            25
+          requiredAavCents / 25
         ) * 25
       );
   const finalTotalValueCents = legacySubmittedPrice

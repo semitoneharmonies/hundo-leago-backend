@@ -275,7 +275,7 @@ describe(
         const valid = bid({
           id: IDS.bid1,
           teamId: IDS.team1,
-          totalValueCents: 600,
+          totalValueCents: 1200,
           termYears: 2,
           lowestOfferedAavCents: 250,
         });
@@ -344,20 +344,20 @@ describe(
     );
 
     test(
-      "uses total value then AAV and applies total-first anti-bluff pricing without crossing the Candidate floor",
+      "ranks higher AAV ahead of longer lower-AAV offers and prices against competing AAV",
       () => {
         const floor = contract(500, 1);
         const winner = bid({
           id: IDS.bid1,
           teamId: IDS.team1,
-          totalValueCents: 600,
+          totalValueCents: 1250,
           termYears: 2,
           lowestOfferedAavCents: 200,
         });
         const competitor = bid({
           id: IDS.bid2,
           teamId: IDS.team2,
-          totalValueCents: 600,
+          totalValueCents: 1800,
           termYears: 3,
           lowestOfferedAavCents: 200,
         });
@@ -385,17 +385,17 @@ describe(
         assert.equal(result.winner.bidId, IDS.bid1);
         assert.equal(
           result.winner.highestCompetingAavCents,
-          200
+          600
         );
         assert.equal(
           result.winner.requiredWinningAavCents,
-          300
+          600
         );
         assert.equal(
           result.winner.finalTotalValueCents,
-          600
+          1200
         );
-        assert.equal(result.winner.finalAavCents, 300);
+        assert.equal(result.winner.finalAavCents, 600);
         assert.equal(
           result.drawReveal.selectionUsed,
           false
@@ -587,7 +587,7 @@ describe(
     test(
       "uses ordinary anti-bluff pricing for an allocation-linked fallback winner",
       () => {
-        const floor = contract(500, 1);
+        const floor = contract(400, 2);
         const result =
           evaluateFreeAgentDraftAuctionResolution(
             resolutionInput({
@@ -661,7 +661,7 @@ describe(
     test(
       "keeps a sole winner at its submitted price and exposes the schema-only zero second-price sentinel",
       () => {
-        const floor = contract(500, 1);
+        const floor = contract(500, 2);
         const result =
           evaluateFreeAgentDraftAuctionResolution(
             resolutionInput({
@@ -1109,3 +1109,16 @@ describe(
     );
   }
 );
+
+for (const kind of ['direct', 'queued', 'fallback', 'restricted']) {
+  test('equal AAV prefers longer term with AAV anti-bluff pricing: ' + kind, () => {
+    const floor = contract(100, 1);
+    const bids = [bid({totalValueCents: 600, termYears: 3, lowestOfferedAavCents: 200}), bid({id: IDS.bid2, teamId: IDS.team2, totalValueCents: 400, termYears: 2, lowestOfferedAavCents: 200})];
+    const participants = kind === 'restricted' ? [participant({floor, activeImprovementBidId: IDS.bid1}), participant({id: IDS.participant2, teamId: IDS.team2, floor, activeImprovementBidId: IDS.bid2})] : [];
+    const result = evaluateFreeAgentDraftAuctionResolution(resolutionInput({kind, floor, bids, participants}));
+    assert.equal(result.winner.bidId, IDS.bid1);
+    assert.equal(result.winner.finalAavCents, 200);
+    assert.equal(result.winner.submittedTermYears, 3);
+    assert.equal(result.drawReveal.selectionUsed, false);
+  });
+}

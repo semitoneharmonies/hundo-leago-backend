@@ -739,7 +739,7 @@ function seedBid(
   database,
   value,
   auctionId,
-  { totalValueCents, termYears, starting = false }
+  { totalValueCents, termYears, starting = false, lowestAavCents = null }
 ) {
   const submittedAtMs = AUCTION_OPENS_AT_MS + 1_000;
   insert(database, "auction_bids", {
@@ -751,8 +751,8 @@ function seedBid(
     submitted_by_user_id: value.user,
     total_value_cents: totalValueCents,
     term_years: termYears,
-    lowest_offered_aav_cents: Math.round(totalValueCents / termYears),
-    lowest_offered_total_value_cents: totalValueCents,
+    lowest_offered_aav_cents: lowestAavCents ?? Math.round(totalValueCents / termYears),
+    lowest_offered_total_value_cents: lowestAavCents === null ? totalValueCents : lowestAavCents * termYears,
     first_submitted_at_ms: submittedAtMs,
     last_edited_at_ms: submittedAtMs,
     edit_count: 0,
@@ -870,7 +870,10 @@ function seedResolutionScenario(database, mode) {
         : "candidate_tie_restricted",
     created_at_ms: AUCTION_OPENS_AT_MS,
   });
-  if (mode === "restricted_winner") {
+  if (mode === "restricted_aav") {
+    seedBid(database, MANAGERS[0], auctionId, { totalValueCents: 350, termYears: 1, lowestAavCents: 300 });
+    seedBid(database, MANAGERS[1], auctionId, { totalValueCents: 900, termYears: 3 });
+  } else if (mode === "restricted_winner") {
     seedBid(database, MANAGERS[0], auctionId, {
       totalValueCents: 900,
       termYears: 2,
@@ -917,6 +920,7 @@ function seedResolutionScenario(database, mode) {
     for (const [index, value] of MANAGERS.entries()) {
       const removed = mode === "restricted_removed" && index === 0;
       const hasImprovement =
+        mode === "restricted_aav" ||
         (mode === "restricted_winner" && index === 0) ||
         mode === "restricted_tie" ||
         (mode === "restricted_removed" && index === 1);
@@ -1629,6 +1633,34 @@ describe("SQLite FAD auction resolution writer foundation", () => {
     );
     assert.deepEqual(writer.listDue({ nowMs: 0, limit: 10 }), []);
     assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
+  });
+
+  test("AAV-first auction completes through the real job with a shorter winning term and floor-safe anti-bluff price", async (t) => {
+    const runtime = createScenarioRuntime(t, "restricted_aav");
+    let now = EXECUTES_AT_MS;
+    const clock = { nowMs: () => now++ };
+    const errors = [];
+    const service = createFreeAgentDraftAuctionResolutionService({
+      repository: runtime.writer, clock,
+      lateLockCoordinator: { async coordinateCommittedRoster() { return { status: "completed", lockId: uuid(19_900) }; } },
+    });
+    let id = 20_000;
+    const job = createResolveFreeAgentDraftAuctionsJob({
+      repository: runtime.writer, resolutionService: service, clock,
+      secureRandom: { id: () => uuid(++id) }, leaseOwner: LEASE_OWNER,
+      logger: { error(...args) { errors.push(args); } },
+    });
+    const processed = await job.run();
+    assert.equal(processed.succeeded, 1, JSON.stringify({ processed, errors }));
+    assert.equal(processed.failed, 0);
+    const result = runtime.writer.findResolution({ leagueId: IDS.league, auctionId: runtime.auctionId, occurrenceKey: runtime.key });
+    assert.equal(result.winner.teamId, MANAGERS[0].team);
+    assert.equal(result.winner.submittedTermYears, 1);
+    assert.equal(result.winner.highestCompetingAavCents, 300);
+    assert.equal(result.winner.finalAavCents, 325);
+    assert.equal(result.winner.finalTotalValueCents, 325);
+    assert.equal(result.replayed, true);
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
   });
 
   test("atomically resolves a restricted winner with sole-bid pricing sentinel and exact replay", (t) => {

@@ -41,6 +41,8 @@ const ALLOCATION_DECISION_CODES = Object.freeze([
   "sole_valid_offer",
   "highest_total",
   "highest_equal_total_aav",
+  "highest_aav",
+  "highest_equal_aav_term",
   "exact_total_and_term_tie",
   "no_valid_offer",
   "invalid_snapshot",

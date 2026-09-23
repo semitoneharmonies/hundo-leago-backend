@@ -375,7 +375,7 @@ describe("M5-03 deterministic auction resolution policy", () => {
     assert.equal(smallestValidTotalCents(175, 1), 175);
   });
 
-  test("ranks by total value, AAV, first time, then stable bid ID", () => {
+  test("ranks by AAV, longer term, first time, then stable bid ID", () => {
     const result = evaluateAuctionResolution({
       auction: auction(),
       bids: [
@@ -439,9 +439,9 @@ describe("M5-03 deterministic auction resolution policy", () => {
       competing.winner.highestCompetingTotalValueCents,
       500
     );
-    assert.equal(competing.winner.requiredWinningAavCents, 175);
-    assert.equal(competing.winner.finalTotalValueCents, 525);
-    assert.equal(competing.winner.finalAavCents, 175);
+    assert.equal(competing.winner.requiredWinningAavCents, 250);
+    assert.equal(competing.winner.finalTotalValueCents, 750);
+    assert.equal(competing.winner.finalAavCents, 250);
   });
 
   test("returns explicit before-deadline, playoff, ownership, and no-winner outcomes", () => {
@@ -905,4 +905,14 @@ describe("M5-03 durable auction resolution job-run leases", () => {
       1
     );
   });
+});
+
+test('higher AAV wins against a larger total and anti-bluff pricing preserves the winner term', () => {
+  for (const lowest of [1000, 1200]) {
+    const result = evaluateAuctionResolution({auction: auction(), bids: [bid({totalValueCents: 1225, termYears: 1, lowestOfferedAavCents: lowest}), bid({id: IDS.bidB, teamId: IDS.teamB, totalValueCents: 2200, termYears: 2, lowestOfferedAavCents: 1100})]});
+    assert.equal(result.winner.bidId, IDS.bidA);
+    assert.equal(result.winner.submittedTermYears, 1);
+    assert.equal(result.winner.finalAavCents, Math.max(lowest, 1100));
+    assert.equal(result.winner.finalTotalValueCents, Math.max(lowest, 1100));
+  }
 });
