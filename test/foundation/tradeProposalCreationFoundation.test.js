@@ -116,8 +116,10 @@ const IDS = Object.freeze({
   platformAdministratorMembership: uuid(56),
   receivingAssignment: uuid(54),
   entryDraft: uuid(9),
-  contractPlayer: uuid(10),
-  prospectPlayer: uuid(11),
+  // Imported catalogue players use UUIDv5; exercise them throughout acceptance,
+  // approval, idempotent replay, reversal, and malformed-receipt checks.
+  contractPlayer: uuid(10).replace("-4000-", "-5000-"),
+  prospectPlayer: uuid(11).replace("-4000-", "-5000-"),
   boughtOutPlayer: uuid(12),
   retentionAssetPlayer: uuid(13),
   contract: uuid(20),
