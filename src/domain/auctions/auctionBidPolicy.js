@@ -1,3 +1,5 @@
+const { compareAavFirstLongestTermSecond } = require("../freeAgentDraft/candidateAllocationPolicy");
+
 const COOLDOWN_MS = 75 * 60 * 1000;
 const UUID_PATTERN =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -207,20 +209,6 @@ function authorized(command, authority) {
   );
 }
 
-function isStrictlyAboveFloor(offer, totalValueCents, aavCents) {
-  return offer.totalValueCents > totalValueCents || (
-    offer.totalValueCents === totalValueCents &&
-    offer.aavCents > aavCents
-  );
-}
-
-function isAtOrAboveFloor(offer, totalValueCents, aavCents) {
-  return offer.totalValueCents > totalValueCents || (
-    offer.totalValueCents === totalValueCents &&
-    offer.aavCents >= aavCents
-  );
-}
-
 function bidContext(command, auction, participant) {
   const sourceKind = auction?.source_kind || "ordinary_weekly";
   if (sourceKind === "ordinary_weekly") {
@@ -277,6 +265,7 @@ function bidContext(command, auction, participant) {
       participant.minimum_total_value_cents
     ) &&
     participant.minimum_total_value_cents > 0 &&
+    [1, 2, 3].includes(participant.minimum_term_years) &&
     Number.isSafeInteger(participant.minimum_aav_cents) &&
     participant.minimum_aav_cents >= 100
   ) {
@@ -286,6 +275,7 @@ function bidContext(command, auction, participant) {
       minimumTotalValueCents:
         participant.minimum_total_value_cents,
       minimumAavCents: participant.minimum_aav_cents,
+      minimumTermYears: participant.minimum_term_years,
     });
   }
   if (
@@ -298,6 +288,7 @@ function bidContext(command, auction, participant) {
       auction.restricted_minimum_total_cents
     ) &&
     auction.restricted_minimum_total_cents > 0 &&
+    [1, 2, 3].includes(auction.restricted_minimum_term_years) &&
     Number.isSafeInteger(
       auction.restricted_minimum_aav_cents
     ) &&
@@ -310,29 +301,28 @@ function bidContext(command, auction, participant) {
         auction.restricted_minimum_total_cents,
       minimumAavCents:
         auction.restricted_minimum_aav_cents,
+      minimumTermYears: auction.restricted_minimum_term_years,
     });
   }
   fail(AUCTION_BID_CODES.auctionUnavailable);
 }
 
 function assertContextOffer(offer, context) {
+  if (!["restricted", "fallback"].includes(context.kind)) return;
+  const comparison = compareAavFirstLongestTermSecond(offer, {
+    totalValueCents: context.minimumTotalValueCents,
+    termYears: context.minimumTermYears,
+    aavCents: context.minimumAavCents,
+  });
   if (
     context.kind === "restricted" &&
-    !isStrictlyAboveFloor(
-      offer,
-      context.minimumTotalValueCents,
-      context.minimumAavCents
-    )
+    comparison <= 0
   ) {
     fail(AUCTION_BID_CODES.valueInvalid);
   }
   if (
     context.kind === "fallback" &&
-    !isAtOrAboveFloor(
-      offer,
-      context.minimumTotalValueCents,
-      context.minimumAavCents
-    )
+    comparison < 0
   ) {
     fail(AUCTION_BID_CODES.valueInvalid);
   }
