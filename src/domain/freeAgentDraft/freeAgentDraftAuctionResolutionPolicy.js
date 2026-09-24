@@ -1,3 +1,4 @@
+const { ACTUAL_OFFER_PRICING_RULE, selectActualWinningOffer } = require("../auctions/actualWinningOfferPolicy");
 const {
   AUCTION_RESOLUTION_CODES,
   AuctionResolutionPolicyError,
@@ -904,29 +905,9 @@ function noSelectionReveal(auction, draw) {
   }
 }
 
-function restrictedFloorPrice(
-  normalTotalValueCents,
-  termYears,
-  floor
-) {
-  let aavCents = Math.max(
-    100,
-    Math.ceil(
-      Math.max(normalTotalValueCents / termYears, floor.aavCents) / 25
-    ) * 25
-  );
-  let totalValueCents = aavCents * termYears;
-  if (
-    aavCents === floor.aavCents &&
-    termYears < floor.termYears
-  ) {
-    aavCents += 25;
-    totalValueCents = aavCents * termYears;
-  }
-  return totalValueCents;
-}
-
 function winnerProjection({
+  bidHistory,
+  dueAtMs,
   winner,
   competitor,
   context,
@@ -936,55 +917,21 @@ function winnerProjection({
     competitor?.aavCents ?? null;
   const highestCompetingTotalValueCents =
     competitor?.totalValueCents ?? null;
-  const requiredAavCents = competitor
-    ? Math.max(
-        winner.lowestOfferedAavCents,
-        competitor.aavCents
-      )
-    : winner.aavCents;
-  const requiredWinningTotalValueCents =
-    requiredAavCents * winner.termYears;
-  const legacySubmittedPrice =
-    requiredAavCents === winner.aavCents &&
-    (
-      winner.totalValueCents % winner.termYears !== 0 ||
-      (
-        winner.totalValueCents / winner.termYears
-      ) % 25 !== 0
-    );
-  let requiredWinningAavCents = legacySubmittedPrice
-    ? winner.aavCents
-    : Math.max(
-        100,
-        Math.ceil(
-          requiredAavCents / 25
-        ) * 25
-      );
-  let finalTotalValueCents = legacySubmittedPrice
-    ? winner.totalValueCents
-    : requiredWinningAavCents * winner.termYears;
-  if (context.kind === "restricted") {
-    finalTotalValueCents = restrictedFloorPrice(
-      finalTotalValueCents,
-      winner.termYears,
-      floor
-    );
-    requiredWinningAavCents =
-      finalTotalValueCents / winner.termYears;
-  }
-  if (
-    !Number.isSafeInteger(finalTotalValueCents) ||
-    finalTotalValueCents < 1 ||
-    finalTotalValueCents >
-      winner.totalValueCents
-  ) {
-    fail(
-      FREE_AGENT_DRAFT_AUCTION_RESOLUTION_CODES
-        .pricingInvalid,
-      "winning_price_exceeds_submitted_total"
-    );
-  }
+  const pricedOffer = selectActualWinningOffer({
+    winner, competitor, bidHistory, dueAtMs, validateOffer: validateSubmittedValue,
+    meetsFloor: (offer) => context.kind === "open" ||
+      (context.kind === "fallback" ? fallbackFloorReason(offer, floor) === null :
+        evaluateRestrictedCandidateImprovement({ candidateMinimum: floor, submittedBid: {
+          totalValueCents: offer.totalValueCents, termYears: offer.termYears,
+          aavCents: offer.aavCents } }).eligible),
+  });
+  const requiredWinningTotalValueCents = pricedOffer.totalValueCents;
+  const requiredWinningAavCents = pricedOffer.aavCents;
+  const finalTotalValueCents = pricedOffer.totalValueCents;
   return immutable({
+    pricingRule: ACTUAL_OFFER_PRICING_RULE,
+    pricedOffer,
+    finalTermYears: pricedOffer.termYears,
     bidId: winner.id,
     teamId: winner.teamId,
     submittedTotalValueCents:
@@ -1004,7 +951,7 @@ function winnerProjection({
     finalTotalValueCents,
     finalAavCents: calculateAavCents(
       finalTotalValueCents,
-      winner.termYears
+      pricedOffer.termYears
     ),
   });
 }
@@ -1021,12 +968,14 @@ function evaluateFreeAgentDraftAuctionResolution(
       "participants",
       "floor",
       "draw",
+      ...(Object.hasOwn(input ?? {}, "bidHistory") ? ["bidHistory"] : []),
     ],
     FREE_AGENT_DRAFT_AUCTION_RESOLUTION_CODES
       .inputInvalid,
     "resolution_fields_invalid"
   );
-  if (!Array.isArray(input.bids)) {
+  if (!Array.isArray(input.bids) ||
+      (Object.hasOwn(input, "bidHistory") && !Array.isArray(input.bidHistory))) {
     fail(
       FREE_AGENT_DRAFT_AUCTION_RESOLUTION_CODES
         .inputInvalid,
@@ -1188,6 +1137,8 @@ function evaluateFreeAgentDraftAuctionResolution(
     tiedTopBids: safeTiedTop,
     drawReveal,
     winner: winnerProjection({
+      bidHistory: input.bidHistory || [],
+      dueAtMs: auction.resolvesAtMs,
       winner,
       competitor,
       context,

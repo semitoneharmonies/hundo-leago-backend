@@ -869,7 +869,13 @@ function seedResolutionScenario(database, mode) {
         : "candidate_tie_restricted",
     created_at_ms: AUCTION_OPENS_AT_MS,
   });
-  if (mode === "restricted_aav") {
+  if (mode === "direct_historical_term") {
+    seedBid(database, MANAGERS[0], auctionId, {totalValueCents:2400,termYears:3,starting:true});
+    seedBid(database, MANAGERS[1], auctionId, {totalValueCents:2250,termYears:3});
+    database.prepare("UPDATE auction_bids SET total_value_cents=1000,term_years=1,lowest_offered_aav_cents=800,lowest_offered_total_value_cents=1000,edit_count=1,last_edited_at_ms=?,version=2 WHERE id=?").run(AUCTION_OPENS_AT_MS+2000,MANAGERS[0].bid);
+    const original=database.prepare("SELECT * FROM auction_events WHERE id=?").get(MANAGERS[0].bidEvent);
+    insert(database,"auction_events",{...original,id:uuid(29991),event_type:"bid_edited",occurred_at_ms:AUCTION_OPENS_AT_MS+2000,metadata_json:JSON.stringify({after:{totalValueCents:1000,termYears:1,aavCents:1000,editCount:1}})});
+  } else if (mode === "restricted_aav") {
     seedBid(database, MANAGERS[0], auctionId, { totalValueCents: 350, termYears: 1, lowestAavCents: 300 });
     seedBid(database, MANAGERS[1], auctionId, { totalValueCents: 900, termYears: 3 });
   } else if (mode === "restricted_winner") {
@@ -1067,7 +1073,7 @@ function assertFirstBidMigrationPreservesRows(database) {
   applyMigrations({ database, migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }), applicationBuildId: 'first-bid-preservation', now: () => EXECUTES_AT_MS });
   assert.deepEqual(snapshot(), before);
   assert.deepEqual(database.prepare('SELECT * FROM schema_migrations WHERE migration_id <= 59 ORDER BY migration_id').all(), ledger);
-  assert.equal(database.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key = 'data_model_version'").get().metadata_value, '60');
+  assert.equal(database.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key = 'data_model_version'").get().metadata_value, '61');
   assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
   assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
 }
@@ -1652,7 +1658,7 @@ describe("SQLite FAD auction resolution writer foundation", () => {
     assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   });
 
-  test("AAV-first auction completes through the real job with a shorter winning term and floor-safe anti-bluff price", async (t) => {
+  test("AAV-first auction completes through the real job with a shorter winning term and actual submitted price", async (t) => {
     const runtime = createScenarioRuntime(t, "restricted_aav");
     let now = EXECUTES_AT_MS;
     const clock = { nowMs: () => now++ };
@@ -1674,8 +1680,8 @@ describe("SQLite FAD auction resolution writer foundation", () => {
     assert.equal(result.winner.teamId, MANAGERS[0].team);
     assert.equal(result.winner.submittedTermYears, 1);
     assert.equal(result.winner.highestCompetingAavCents, 300);
-    assert.equal(result.winner.finalAavCents, 325);
-    assert.equal(result.winner.finalTotalValueCents, 325);
+    assert.equal(result.winner.finalAavCents, 350);
+    assert.equal(result.winner.finalTotalValueCents, 350);
     assert.equal(result.replayed, true);
     assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
   });
@@ -3902,3 +3908,22 @@ for (const [label, overrides, accepted] of [
     }
   });
 }
+
+test("actual earlier offer persists its complete term and replays without rewriting bids", (t) => {
+  const runtime=createScenarioRuntime(t,"direct_historical_term");
+  const bidValues = () => runtime.database.prepare("SELECT id,total_value_cents,term_years,first_submitted_at_ms,last_edited_at_ms,edit_count FROM auction_bids ORDER BY id").all();
+  const before=bidValues();
+  const {result}=claimAndExecute(runtime);
+  assert.equal(result.winner.finalAavCents,800);
+  assert.equal(result.winner.finalTermYears,3);
+  assert.equal(result.winner.finalTotalValueCents,2400);
+  assert.equal(result.winner.submittedTermYears,1);
+  const saved=runtime.database.prepare("SELECT * FROM auction_resolutions WHERE auction_id=?").get(runtime.auctionId);
+  assert.equal(saved.winning_term_years,3);
+  assert.equal(saved.final_contract_value_cents,2400);
+  const replay=runtime.writer.findResolution({leagueId:IDS.league,auctionId:runtime.auctionId,occurrenceKey:runtime.key});
+  assert.equal(replay.winner.finalTermYears,3);
+  assert.deepEqual(bidValues(),before);
+  assert.equal(runtime.database.prepare("SELECT status FROM auction_bids WHERE id=?").get(MANAGERS[0].bid).status,"won");
+  assert.deepEqual(runtime.database.pragma("foreign_key_check"),[]);
+});

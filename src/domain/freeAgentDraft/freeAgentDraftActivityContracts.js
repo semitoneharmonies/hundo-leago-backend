@@ -46,6 +46,10 @@ const MAXIMUM_METADATA_ENTRIES = 256;
 const MAXIMUM_METADATA_ARRAY_LENGTH = 100;
 const MAXIMUM_METADATA_STRING_CODE_POINTS = 500;
 const MAXIMUM_METADATA_JSON_BYTES = 16_384;
+const AUCTION_METADATA_LIMITS = Object.freeze({ entries: 8192, arrayLength: 1024, jsonBytes: 262144 });
+function isAuctionActivity(eventType) {
+  return eventType === "free_agent_draft_player_awarded" || eventType === "free_agent_draft_auction_no_winner";
+}
 
 class FreeAgentDraftActivityContractError extends Error {
   constructor(reasonCode) {
@@ -203,12 +207,12 @@ function canonicalMetadataValue(
         "activity_metadata_array_invalid"
       );
       if (
-        value.length > MAXIMUM_METADATA_ARRAY_LENGTH
+        value.length > (isAuctionActivity(state.eventType) ? AUCTION_METADATA_LIMITS.arrayLength : MAXIMUM_METADATA_ARRAY_LENGTH)
       ) {
         fail("activity_metadata_array_invalid");
       }
       state.entries += value.length;
-      if (state.entries > MAXIMUM_METADATA_ENTRIES) {
+      if (state.entries > (isAuctionActivity(state.eventType) ? AUCTION_METADATA_LIMITS.entries : MAXIMUM_METADATA_ENTRIES)) {
         fail("activity_metadata_size_invalid");
       }
       return Object.freeze(
@@ -230,7 +234,7 @@ function canonicalMetadataValue(
     );
     const fields = Object.getOwnPropertyNames(value).sort();
     state.entries += fields.length;
-    if (state.entries > MAXIMUM_METADATA_ENTRIES) {
+    if (state.entries > (isAuctionActivity(state.eventType) ? AUCTION_METADATA_LIMITS.entries : MAXIMUM_METADATA_ENTRIES)) {
       fail("activity_metadata_size_invalid");
     }
     const result = {};
@@ -288,7 +292,7 @@ function validateFreeAgentDraftActivityMetadata(
   const serialized = JSON.stringify(canonical);
   if (
     Buffer.byteLength(serialized, "utf8") >
-    MAXIMUM_METADATA_JSON_BYTES
+    (isAuctionActivity(eventType) ? AUCTION_METADATA_LIMITS.jsonBytes : MAXIMUM_METADATA_JSON_BYTES)
   ) {
     fail("activity_metadata_size_invalid");
   }

@@ -413,7 +413,7 @@ describe("M5-03 deterministic auction resolution policy", () => {
     assert.equal(result.winner.finalTotalValueCents, 400);
   });
 
-  test("uses the current offer for one bidder and anti-bluff pricing for competition", () => {
+  test("uses the current offer for one bidder and actual submitted pricing for competition", () => {
     const single = evaluateAuctionResolution({
       auction: auction(),
       bids: [bid()],
@@ -439,9 +439,9 @@ describe("M5-03 deterministic auction resolution policy", () => {
       competing.winner.highestCompetingTotalValueCents,
       500
     );
-    assert.equal(competing.winner.requiredWinningAavCents, 250);
-    assert.equal(competing.winner.finalTotalValueCents, 750);
-    assert.equal(competing.winner.finalAavCents, 250);
+    assert.equal(competing.winner.requiredWinningAavCents, 333);
+    assert.equal(competing.winner.finalTotalValueCents, 1_000);
+    assert.equal(competing.winner.finalAavCents, 333);
   });
 
   test("returns explicit before-deadline, playoff, ownership, and no-winner outcomes", () => {
@@ -907,12 +907,12 @@ describe("M5-03 durable auction resolution job-run leases", () => {
   });
 });
 
-test('higher AAV wins against a larger total and anti-bluff pricing preserves the winner term', () => {
+test('higher AAV wins against a larger total and only actual offers determine the price', () => {
   for (const lowest of [1000, 1200]) {
     const result = evaluateAuctionResolution({auction: auction(), bids: [bid({totalValueCents: 1225, termYears: 1, lowestOfferedAavCents: lowest}), bid({id: IDS.bidB, teamId: IDS.teamB, totalValueCents: 2200, termYears: 2, lowestOfferedAavCents: 1100})]});
     assert.equal(result.winner.bidId, IDS.bidA);
     assert.equal(result.winner.submittedTermYears, 1);
-    assert.equal(result.winner.finalAavCents, Math.max(lowest, 1100));
-    assert.equal(result.winner.finalTotalValueCents, Math.max(lowest, 1100));
+    assert.equal(result.winner.finalAavCents, 1225);
+    assert.equal(result.winner.finalTotalValueCents, 1225);
   }
 });

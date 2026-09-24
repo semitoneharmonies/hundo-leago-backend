@@ -120,7 +120,7 @@ function expectedRecoveryAuctionDelta({ reviewOptions, identifiers } = {}) {
     }
     const repository = createTargetRepositories({ database, secureRandom: createSecureRandom() }).auctionResolutions;
     const candidate = repository.loadCandidate({ leagueId, auctionId, nowMs });
-    const decision = evaluateAuctionResolution({ auction: candidate.auction, bids: candidate.bids });
+    const decision = evaluateAuctionResolution({ auction: candidate.auction, bids: candidate.bids, bidHistory: candidate.bidHistory });
     if (decision.outcome !== "winner" || !same(decision, review.pricingPreview.decision) ||
         !Number.isSafeInteger(auction.version + 1) || !Number.isSafeInteger(job.version + 2) ||
         !Number.isSafeInteger(job.attempt_count + 1)) fail("RECOVERY_AUCTION_DELTA_COMPLETION_UNSUPPORTED");
@@ -128,10 +128,10 @@ function expectedRecoveryAuctionDelta({ reviewOptions, identifiers } = {}) {
     const seasonIdentity = row => ({ id: row.id, leagueId: row.league_id, label: row.label, nhlSeasonKey: row.nhl_season_key, status: row.status });
     const schedule = planContractSeasons({ leagueId, targetSeason: seasonIdentity(season),
       existingSeasons: before.seasons.filter(row => row.league_id === leagueId).map(seasonIdentity),
-      futureSeasonIds: ids.futureSeasonIds, termYears: winner.submittedTermYears, nowMs });
-    const contract = createNormalContractAggregate({ contractId: ids.contractId, contractYearIds: ids.contractYearIds.slice(0, winner.submittedTermYears),
+      futureSeasonIds: ids.futureSeasonIds, termYears: (winner.finalTermYears ?? winner.submittedTermYears), nowMs });
+    const contract = createNormalContractAggregate({ contractId: ids.contractId, contractYearIds: ids.contractYearIds.slice(0, (winner.finalTermYears ?? winner.submittedTermYears)),
       contractEventId: ids.contractEventId, leagueId, playerId: player.id, teamId, originalTotalValueCents: winner.finalTotalValueCents,
-      termYears: winner.submittedTermYears, startSeasonId: seasonId, seasonIds: schedule.seasonIds,
+      termYears: (winner.finalTermYears ?? winner.submittedTermYears), startSeasonId: seasonId, seasonIds: schedule.seasonIds,
       acquisitionSourceType: "auction_resolution", acquisitionSourceId: ids.resolutionId,
       auctionBuyoutLockExpiresAtMs: nowMs + 14 * 24 * 60 * 60 * 1000, actorUserId: null, occurredAtMs: nowMs });
     const occupied = new Set(before.player_ownerships.filter(row => row.league_id === leagueId && row.season_id === seasonId && row.team_id === teamId &&
@@ -170,7 +170,7 @@ function expectedRecoveryAuctionDelta({ reviewOptions, identifiers } = {}) {
     add("auction_resolutions", { id: ids.resolutionId, league_id: leagueId, season_id: seasonId, auction_id: auctionId,
       scheduled_occurrence_key: job.occurrence_key, outcome_code: "winner", winning_team_id: teamId, winning_bid_id: winner.bidId,
       highest_bid_cents: winner.submittedTotalValueCents, second_price_input_cents: winner.highestCompetingTotalValueCents,
-      final_contract_value_cents: winner.finalTotalValueCents, winning_term_years: winner.submittedTermYears, final_aav_cents: winner.finalAavCents,
+      final_contract_value_cents: winner.finalTotalValueCents, winning_term_years: (winner.finalTermYears ?? winner.submittedTermYears), final_aav_cents: winner.finalAavCents,
       general_illegal: generalIllegal ? 1 : 0, warnings_json: JSON.stringify(warnings), contract_id: ids.contractId, ownership_id: ids.ownershipId,
       trigger_type: "automatic", triggered_by_user_id: null, idempotency_key: job.occurrence_key, status: "resolved", resolved_at_ms: nowMs });
     const bidHistory = before.auction_events.filter(row => row.league_id === leagueId && row.auction_id === auctionId && eligible.has(row.bid_id) &&
@@ -186,8 +186,8 @@ function expectedRecoveryAuctionDelta({ reviewOptions, identifiers } = {}) {
       metadata_json: JSON.stringify({ auctionId, resolutionId: ids.resolutionId, playerId: player.id, playerDisplayName: player.full_name, teamId,
         bidId: winner.bidId, contractId: ids.contractId, ownershipId: ids.ownershipId, submittedWinningTotalValueCents: winner.submittedTotalValueCents,
         submittedWinningTermYears: winner.submittedTermYears, submittedWinningAavCents: winner.submittedAavCents,
-        finalTotalValueCents: winner.finalTotalValueCents, finalAavCents: winner.finalAavCents, contractTermYears: winner.submittedTermYears,
-        remainingYears: winner.submittedTermYears, assignmentCategory: "Active", assignmentPositionGroup: position, assignmentSlotNumber: slotNumber,
+        finalTotalValueCents: winner.finalTotalValueCents, finalAavCents: winner.finalAavCents, contractTermYears: (winner.finalTermYears ?? winner.submittedTermYears),
+        remainingYears: (winner.finalTermYears ?? winner.submittedTermYears), assignmentCategory: "Active", assignmentPositionGroup: position, assignmentSlotNumber: slotNumber,
         generalIllegal, rankedBids: decision.rankedBids, bidHistory }), occurred_at_ms: nowMs });
     add("outbox_events", { id: ids.outboxEventId, league_id: leagueId, event_type: "auction.changed", aggregate_type: "auction", aggregate_id: auctionId,
       payload_json: JSON.stringify(createSocketEventEnvelope({ eventId: ids.outboxEventId, type: "auction.changed", leagueId, resourceId: auctionId,

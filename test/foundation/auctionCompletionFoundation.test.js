@@ -1488,3 +1488,22 @@ describe("M5-04 atomic SQLite auction completion", () => {
     }
   });
 });
+
+test("ordinary completion signs the earlier actual offer with its original longer term", async (t) => {
+  const runtime=createPersistenceRuntime(t,{bidA:{totalValueCents:2400,termYears:3,lowestOfferedAavCents:800},bidB:{totalValueCents:2250,termYears:3,lowestOfferedAavCents:750}});
+  runtime.database.prepare("UPDATE auction_bids SET total_value_cents=1000,term_years=1,lowest_offered_total_value_cents=1000,last_edited_at_ms=?,edit_count=1,version=2 WHERE id=?").run(OPEN_MS+2000,PERSISTED.bidA);
+  const original=runtime.database.prepare("SELECT * FROM auction_events WHERE bid_id=?").get(PERSISTED.bidA);
+  const changed={...original,id:uuid(29991),event_type:"bid_edited",occurred_at_ms:OPEN_MS+2000,metadata_json:JSON.stringify({after:{totalValueCents:1000,termYears:1,aavCents:1000,editCount:1}})};
+  const keys=Object.keys(changed);
+  runtime.database.prepare('INSERT INTO auction_events ('+keys.join(',')+') VALUES ('+keys.map(key=>'@'+key).join(',')+')').run(changed);
+  const result=await resolve(runtime.service);
+  assert.equal(result.status,"resolved");
+  const saved=runtime.database.prepare("SELECT * FROM auction_resolutions WHERE auction_id=?").get(PERSISTED.auction);
+  assert.equal(saved.winning_term_years,3);
+  assert.equal(saved.final_aav_cents,800);
+  assert.equal(saved.final_contract_value_cents,2400);
+  const activity=JSON.parse(runtime.database.prepare("SELECT metadata_json FROM league_activity WHERE related_id=?").get(result.resolutionId).metadata_json);
+  assert.equal(activity.submittedWinningTermYears,1);
+  assert.equal(activity.contractTermYears,3);
+  assert.deepEqual(runtime.database.pragma("foreign_key_check"),[]);
+});

@@ -364,12 +364,17 @@ function createReadSchema(database) {
       winning_bid_id TEXT,
       winning_team_id TEXT,
       final_contract_value_cents INTEGER,
+      winning_term_years INTEGER,
       final_aav_cents INTEGER,
       contract_id TEXT,
       ownership_id TEXT,
       outcome_code TEXT,
       status TEXT NOT NULL,
       resolved_at_ms INTEGER NOT NULL
+    );
+    CREATE TABLE commissioner_corrections (
+      id TEXT PRIMARY KEY, league_id TEXT, feature TEXT, feature_record_id TEXT,
+      after_snapshot_json TEXT, corrected_at_ms INTEGER
     );
     CREATE TABLE league_activity (
       id TEXT PRIMARY KEY,
@@ -1670,6 +1675,7 @@ describe("FAD-06 SQLite auction read repository", () => {
       winning_bid_id: IDS.resolvedBidOne,
       winning_team_id: IDS.teamOne,
       final_contract_value_cents: 700,
+      winning_term_years: 3,
       final_aav_cents: 233,
       contract_id: uuid(60),
       ownership_id: uuid(61),
@@ -1705,6 +1711,7 @@ describe("FAD-06 SQLite auction read repository", () => {
       },
       submittedTotalValueCents: 900,
       submittedTermYears: 3,
+      finalTermYears: 3,
       submittedAavCents: 300,
       finalContractValueCents: 700,
       finalAavCents: 233,
@@ -1715,6 +1722,18 @@ describe("FAD-06 SQLite auction read repository", () => {
       drawEvidence: null,
       resolvedAtMs: NOW_MS - DAY_MS,
     });
+
+    runtime.database.prepare("UPDATE auction_resolutions SET winning_term_years=1, final_aav_cents=700 WHERE id=?").run(IDS.ordinaryResolution);
+    const historicalTerm = runtime.repository.readAuction(detailInput(IDS.resolvedAuction));
+    assert.equal(historicalTerm.result.submittedTermYears, 3);
+    assert.equal(historicalTerm.result.finalTermYears, 1);
+    assert.equal(historicalTerm.result.finalAavCents, 700);
+
+    runtime.database.prepare("INSERT INTO commissioner_corrections VALUES (?,?,?,?,?,?)").run(uuid(29990),IDS.league,"contract",uuid(60),JSON.stringify({authoritative:{id:uuid(60),leagueId:IDS.league,originalTotalValueCents:900,originalTermYears:3,aavCents:300}}),NOW_MS);
+    const correctedResult=runtime.repository.readAuction(detailInput(IDS.resolvedAuction)).result;
+    assert.equal(correctedResult.finalAavCents,300);
+    assert.equal(correctedResult.finalTermYears,3);
+    assert.equal(runtime.database.prepare("SELECT final_aav_cents FROM auction_resolutions WHERE id=?").get(IDS.ordinaryResolution).final_aav_cents,700);
 
     seedAuction(runtime.database, {
       id: IDS.noWinnerAuction,
@@ -2314,6 +2333,7 @@ describe("FAD-06 SQLite auction read repository", () => {
       winning_bid_id: tieReveal.selectedBidId,
       winning_team_id: selectedTeamId,
       final_contract_value_cents: 700,
+      winning_term_years: 2,
       final_aav_cents: 350,
       contract_id: uuid(70),
       ownership_id: uuid(71),
@@ -2412,6 +2432,7 @@ describe("FAD-06 SQLite auction read repository", () => {
       winning_bid_id: IDS.nonTieBid,
       winning_team_id: IDS.teamTwo,
       final_contract_value_cents: 500,
+      winning_term_years: 1,
       final_aav_cents: 500,
       contract_id: uuid(65),
       ownership_id: uuid(66),

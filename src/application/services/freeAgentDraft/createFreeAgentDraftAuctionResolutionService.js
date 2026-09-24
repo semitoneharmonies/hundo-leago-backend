@@ -582,12 +582,13 @@ function safeWinner(value, { replayed, allocationLinked }) {
     value,
     LEGACY_WINNER_FIELDS
   );
+  const actualOfferWinner = hasExactOwnProperties(value, [...TOTAL_FIRST_WINNER_FIELDS, "pricingRule", "pricedOffer", "finalTermYears"]);
   const totalFirstWinner = hasExactOwnProperties(
     value,
     TOTAL_FIRST_WINNER_FIELDS
   );
   if (
-    (!legacyWinner && !totalFirstWinner) ||
+    (!legacyWinner && !totalFirstWinner && !actualOfferWinner) ||
     !UUID_PATTERN.test(value.bidId || "") ||
     !UUID_PATTERN.test(value.teamId || "") ||
     !UUID_PATTERN.test(value.contractId || "") ||
@@ -621,15 +622,15 @@ function safeWinner(value, { replayed, allocationLinked }) {
     );
     finalAavCents = calculateAavCents(
       value.finalTotalValueCents,
-      value.submittedTermYears
+      actualOfferWinner ? value.finalTermYears : value.submittedTermYears
     );
   } catch {
     failState("winner_invalid");
   }
   if (
     value.finalAavCents !== finalAavCents ||
-    value.finalTotalValueCents >
-      value.submittedTotalValueCents ||
+    (!actualOfferWinner && value.finalTotalValueCents >
+      value.submittedTotalValueCents) ||
     value.lowestOfferedAavCents > submittedAavCents ||
     value.finalAavCents > submittedAavCents ||
     (legacyWinner && (
@@ -649,10 +650,27 @@ function safeWinner(value, { replayed, allocationLinked }) {
   ) {
     failState("winner_pricing_invalid");
   }
+  if (actualOfferWinner) {
+    const offer = value.pricedOffer;
+    if (value.pricingRule !== "lowest_actual_winning_offer_v1" ||
+        !hasExactOwnProperties(offer, ["totalValueCents", "termYears", "aavCents", "occurredAtMs"]) ||
+        !Number.isSafeInteger(offer.occurredAtMs) || offer.occurredAtMs < 0 ||
+        !Number.isSafeInteger(value.finalTermYears) || value.finalTermYears < 1 || value.finalTermYears > 3 ||
+        offer.termYears !== value.finalTermYears || offer.totalValueCents !== value.finalTotalValueCents ||
+        offer.aavCents !== value.finalAavCents || value.requiredWinningTotalValueCents !== offer.totalValueCents ||
+        value.requiredWinningAavCents !== offer.aavCents || value.submittedAavCents !== submittedAavCents ||
+        value.persistedSecondPriceInputCents !== (value.highestCompetingTotalValueCents ?? 0)) {
+      failState("winner_pricing_invalid");
+    }
+  }
   if (totalFirstWinner) {
     const highestCompetingTotalValueCents =
       value.highestCompetingTotalValueCents;
-    const requiredAavCents = value.highestCompetingAavCents === null
+    const repairedSubmittedOffer = replayed &&
+      value.finalTotalValueCents === value.submittedTotalValueCents &&
+      value.requiredWinningTotalValueCents === value.submittedTotalValueCents &&
+      value.requiredWinningAavCents === submittedAavCents;
+    const requiredAavCents = repairedSubmittedOffer || value.highestCompetingAavCents === null
       ? submittedAavCents
       : Math.max(value.lowestOfferedAavCents, value.highestCompetingAavCents);
     const requiredAavTotal = requiredAavCents * value.submittedTermYears;

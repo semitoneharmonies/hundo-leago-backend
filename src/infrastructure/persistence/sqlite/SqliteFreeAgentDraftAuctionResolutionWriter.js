@@ -2528,6 +2528,7 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
       bids: Object.freeze(bids),
       participants: Object.freeze(participants),
       decision: evaluateFreeAgentDraftAuctionResolution({
+        bidHistory: eligibleBidHistory({ leagueId: row.league_id, auctionId: row.auction_id }, { rankedBids: bids.map((bid) => ({ bidId: bid.id })) }),
         context: {
           sourceKind: row.source_kind,
           origin: row.fad_origin,
@@ -3082,7 +3083,7 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
           winnerEvidence.teamId !== row.winning_team_id ||
           winnerEvidence.submittedTotalValueCents !==
             row.highest_bid_cents ||
-          winnerEvidence.submittedTermYears !==
+          (winnerEvidence.finalTermYears ?? winnerEvidence.submittedTermYears) !==
             row.winning_term_years ||
           winnerEvidence.lowestOfferedAavCents !==
             row.lowest_offered_aav_cents ||
@@ -3913,7 +3914,7 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
         status: season.status,
       })),
       futureSeasonIds,
-      termYears: decision.winner.submittedTermYears,
+      termYears: (decision.winner.finalTermYears ?? decision.winner.submittedTermYears),
       nowMs: command.resolvedAtMs,
     });
     for (const season of seasonPlan.seasonsToCreate) {
@@ -3948,14 +3949,14 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
       contractId,
       contractYearIds: contractYearIds.slice(
         0,
-        decision.winner.submittedTermYears
+        (decision.winner.finalTermYears ?? decision.winner.submittedTermYears)
       ),
       contractEventId,
       leagueId: command.leagueId,
       playerId: row.player_id,
       teamId: decision.winner.teamId,
       originalTotalValueCents: decision.winner.finalTotalValueCents,
-      termYears: decision.winner.submittedTermYears,
+      termYears: (decision.winner.finalTermYears ?? decision.winner.submittedTermYears),
       startSeasonId: row.season_id,
       seasonIds: seasonPlan.seasonIds,
       acquisitionSourceType: "auction_resolution",
@@ -4340,7 +4341,7 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
         }
         const values = row.event_type === "auction_started"
           ? metadata
-          : metadata?.after;
+          : (metadata?.after ?? metadata);
         return {
           bidId: row.bid_id,
           teamId: row.team_id,
@@ -5065,7 +5066,7 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
         ? decision.winner.finalTotalValueCents
         : null,
       winning_term_years: winner
-        ? decision.winner.submittedTermYears
+        ? (decision.winner.finalTermYears ?? decision.winner.submittedTermYears)
         : null,
       final_aav_cents: winner ? decision.winner.finalAavCents : null,
       general_illegal: legality.generalIllegal ? 1 : 0,

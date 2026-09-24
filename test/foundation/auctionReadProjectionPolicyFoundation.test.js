@@ -265,6 +265,7 @@ function terminalResult({
     winningTeam: resolved ? team(winningTeamId) : null,
     submittedTotalValueCents: resolved ? 600 : null,
     submittedTermYears: resolved ? 2 : null,
+    finalTermYears: resolved ? 2 : null,
     submittedAavCents: resolved ? 300 : null,
     finalContractValueCents: resolved ? 600 : null,
     finalAavCents: resolved ? 300 : null,
