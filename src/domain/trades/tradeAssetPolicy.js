@@ -179,7 +179,7 @@ function validateTradeAssetInput(input) {
   return Object.freeze(asset);
 }
 
-function assetIdentity(asset) {
+function assetIdentity(asset, sourceTeamId) {
   if (asset.contractId) return `contract:${asset.contractId}`;
   if (asset.playerId) return `player:${asset.playerId}`;
   if (asset.draftPickId) return `draft_pick:${asset.draftPickId}`;
@@ -195,7 +195,7 @@ function assetIdentity(asset) {
   if (asset.requestedRetentionContractId) {
     return `requested_retention:${asset.requestedRetentionContractId}`;
   }
-  return `future_consideration_instruction:${asset.futureConsiderationDescription}`;
+  return `future_consideration_instruction:${sourceTeamId}:${asset.futureConsiderationDescription}`;
 }
 
 function validateSide(value) {
@@ -240,10 +240,15 @@ function validateTradeProposalCreationInput(input) {
     }
   }
   const identities = new Set();
-  for (const asset of [...proposingAssets, ...receivingAssets]) {
-    const identity = assetIdentity(asset);
-    if (identities.has(identity)) fail(TRADE_ASSET_CODES.duplicate);
-    identities.add(identity);
+  for (const [sourceTeamId, assets] of [
+    [proposingTeamId, proposingAssets],
+    [receivingTeamId, receivingAssets],
+  ]) {
+    for (const asset of assets) {
+      const identity = assetIdentity(asset, sourceTeamId);
+      if (identities.has(identity)) fail(TRADE_ASSET_CODES.duplicate);
+      identities.add(identity);
+    }
   }
   return Object.freeze({
     proposingTeamId,

@@ -274,6 +274,18 @@ describe("M5-11 isolated trade HTTP contract", () => {
     );
   });
 
+  test("bounds oversized trade requests before invoking a service", async (t) => {
+    const calls = [];
+    const baseUrl = await startApi(t, services(calls));
+    const response = await fetch(`${baseUrl}/api/v1/leagues/${LEAGUE_ID}/trades`, {
+      method: "POST", headers: headers({ "idempotency-key": "oversized-trade" }),
+      body: JSON.stringify({ padding: "x".repeat(512 * 1024) }),
+    });
+    assert.equal(response.status, 413);
+    assert.equal((await response.json()).error.code, "TRADE_REQUEST_TOO_LARGE");
+    assert.equal(calls.length, 0);
+  });
+
   test("rejects non-empty lifecycle bodies before a service call", async (t) => {
     const calls = [];
     const baseUrl = await startApi(t, services(calls));

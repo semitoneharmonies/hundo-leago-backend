@@ -215,6 +215,19 @@ describe("M5-06 typed trade-asset policy", () => {
     );
   });
 
+  test("distinguishes matching future-consideration wording owed by opposite teams", () => {
+    const consideration = { type: "future_consideration_instruction", description: "Future considerations" };
+    const input = { ...assetInput(), proposingAssets: [consideration], receivingAssets: [consideration] };
+    const normalized = validateTradeProposalCreationInput(input);
+    const commands = createTradeAssetCommands({ input: normalized, assetIds: [uuid(800), uuid(801)], createdAtMs: NOW_MS });
+    assert.notEqual(commands[0].sourceTeamId, commands[1].sourceTeamId);
+    assert.equal(commands[0].futureConsiderationDescription, commands[1].futureConsiderationDescription);
+    assertReason(
+      () => validateTradeProposalCreationInput({ ...input, proposingAssets: [consideration, consideration] }),
+      TRADE_ASSET_CODES.duplicate
+    );
+  });
+
   test("derives authoritative directions, sequence, timing, and idempotency", () => {
     const input = validateTradeProposalCreationInput(assetInput());
     const assetIds = Array.from(

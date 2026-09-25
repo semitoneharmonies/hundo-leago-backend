@@ -142,7 +142,8 @@ function createTradeRouter({
   router.use(requestSecurity.requireAllowedOrigin);
   router.use(requestSecurity.requireJson);
   router.use(requestSecurity.requireCompatibleFetchMetadata);
-  router.use(express.json({ limit: "32kb", strict: true }));
+  // Up to 100 assets per side may include 500-character Unicode descriptions.
+  router.use(express.json({ limit: "512kb", strict: true }));
 
   router.get(
     "/api/v1/leagues/:leagueId/trades",

@@ -1009,6 +1009,13 @@ async function assertAsyncExecutionReason(action, reasonCode) {
   });
 }
 
+test("legal trade HTTP acceptance matrix", async (t) => {
+  await require("../helpers/tradeAcceptanceMatrix").runTradeAcceptanceMatrix(t, {
+    createRuntime, IDS, NOW_MS, uuid, insertPlayer, insertContract,
+    authenticated, sourceState,
+  });
+});
+
 describe("M5-06 atomic pending trade-proposal creation", () => {
   test("signed Prospect buyout cancels pending and awaiting-approval proposals through real services", async (t) => {
     const runtime = createRuntime(t);
