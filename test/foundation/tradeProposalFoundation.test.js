@@ -789,6 +789,7 @@ describe("M5-05 trade proposal SELECT-only foundation", () => {
       "listVisible",
       "loadFoundationState",
       "previewAcceptance",
+      "previewProposal",
       "readDetail",
       "transitionLifecycle",
     ]);
