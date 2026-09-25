@@ -164,6 +164,7 @@ const RESULT_FIELDS = Object.freeze([
   "resolvedAtMs",
   "submittedAavCents",
   "submittedTermYears",
+  "finalTermYears",
   "submittedTotalValueCents",
   "winningTeam",
 ]);
@@ -898,6 +899,7 @@ function validateTerminalResult(value, projection, isFad) {
   for (const field of [
     "submittedTotalValueCents",
     "submittedTermYears",
+    "finalTermYears",
     "submittedAavCents",
     "finalContractValueCents",
     "finalAavCents",
@@ -908,6 +910,7 @@ function validateTerminalResult(value, projection, isFad) {
     value.winningTeam,
     value.submittedTotalValueCents,
     value.submittedTermYears,
+    value.finalTermYears,
     value.submittedAavCents,
     value.finalContractValueCents,
     value.finalAavCents,
@@ -924,13 +927,14 @@ function validateTerminalResult(value, projection, isFad) {
     );
     if (
       value.submittedTermYears > 3 ||
+      !Number.isSafeInteger(value.finalTermYears) || value.finalTermYears < 1 || value.finalTermYears > 3 ||
       roundedAavCents(
         value.submittedTotalValueCents,
         value.submittedTermYears
       ) !== value.submittedAavCents ||
       roundedAavCents(
         value.finalContractValueCents,
-        value.submittedTermYears
+        value.finalTermYears
       ) !== value.finalAavCents
     ) {
       fail(reason);

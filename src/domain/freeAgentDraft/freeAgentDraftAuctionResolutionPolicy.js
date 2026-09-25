@@ -1,3 +1,4 @@
+const { ACTUAL_OFFER_PRICING_RULE, selectActualWinningOffer } = require("../auctions/actualWinningOfferPolicy");
 const {
   AUCTION_RESOLUTION_CODES,
   AuctionResolutionPolicyError,
@@ -13,7 +14,6 @@ const {
   FREE_AGENT_DRAFT_DRAW_ALGORITHM_VERSION,
   FreeAgentDraftAuctionDrawPolicyError,
   createFreeAgentDraftAuctionDrawCommitment,
-  createFreeAgentDraftAuctionDrawReveal,
   createFreeAgentDraftAuctionNoSelectionReveal,
 } = require("./freeAgentDraftAuctionDrawPolicy");
 
@@ -812,8 +812,9 @@ function fallbackFloorReason(bid, floor) {
 
 function rankBids(left, right) {
   return (
-    right.totalValueCents - left.totalValueCents ||
     right.aavCents - left.aavCents ||
+    right.termYears - left.termYears ||
+    left.firstSubmittedAtMs - right.firstSubmittedAtMs ||
     left.id.localeCompare(right.id)
   );
 }
@@ -904,82 +905,9 @@ function noSelectionReveal(auction, draw) {
   }
 }
 
-function selectedReveal(
-  auction,
-  draw,
-  tiedTop
-) {
-  try {
-    const reveal =
-      createFreeAgentDraftAuctionDrawReveal({
-        auctionId: auction.id,
-        commitmentHex: draw.commitmentHex,
-        nonceBytes: draw.nonceBytes,
-        rolloverAtMs: auction.resolvesAtMs,
-        tiedBidIds: tiedTop.map((bid) => bid.id),
-      });
-    const selected = tiedTop.find(
-      (bid) => bid.id === reveal.selectedBidId
-    );
-    if (!selected) {
-      fail(
-        FREE_AGENT_DRAFT_AUCTION_RESOLUTION_CODES
-          .drawInvalid,
-        "draw_selected_bid_invalid"
-      );
-    }
-    return immutable({
-      winner: selected,
-      drawReveal: drawRevealWithTeam(
-        reveal,
-        selected.teamId
-      ),
-    });
-  } catch (error) {
-    if (
-      error instanceof
-        FreeAgentDraftAuctionResolutionPolicyError
-    ) {
-      throw error;
-    }
-    if (error instanceof FreeAgentDraftAuctionDrawPolicyError) {
-      fail(
-        FREE_AGENT_DRAFT_AUCTION_RESOLUTION_CODES
-          .drawInvalid,
-        "draw_reveal_invalid"
-      );
-    }
-    throw error;
-  }
-}
-
-function restrictedFloorPrice(
-  normalTotalValueCents,
-  termYears,
-  floor
-) {
-  const requiredTotalValueCents = Math.max(
-    normalTotalValueCents,
-    floor.totalValueCents
-  );
-  let aavCents = Math.max(
-    100,
-    Math.ceil(
-      requiredTotalValueCents / termYears / 25
-    ) * 25
-  );
-  let totalValueCents = aavCents * termYears;
-  if (
-    totalValueCents === floor.totalValueCents &&
-    aavCents < floor.aavCents
-  ) {
-    aavCents += 25;
-    totalValueCents = aavCents * termYears;
-  }
-  return totalValueCents;
-}
-
 function winnerProjection({
+  bidHistory,
+  dueAtMs,
   winner,
   competitor,
   context,
@@ -989,56 +917,21 @@ function winnerProjection({
     competitor?.aavCents ?? null;
   const highestCompetingTotalValueCents =
     competitor?.totalValueCents ?? null;
-  const requiredWinningTotalValueCents = competitor
-    ? Math.max(
-        winner.lowestOfferedTotalValueCents,
-        competitor.totalValueCents
-      )
-    : winner.totalValueCents;
-  const legacySubmittedPrice =
-    requiredWinningTotalValueCents ===
-      winner.totalValueCents &&
-    (
-      winner.totalValueCents % winner.termYears !== 0 ||
-      (
-        winner.totalValueCents / winner.termYears
-      ) % 25 !== 0
-    );
-  let requiredWinningAavCents = legacySubmittedPrice
-    ? winner.aavCents
-    : Math.max(
-        100,
-        Math.ceil(
-          requiredWinningTotalValueCents /
-            winner.termYears /
-            25
-        ) * 25
-      );
-  let finalTotalValueCents = legacySubmittedPrice
-    ? winner.totalValueCents
-    : requiredWinningAavCents * winner.termYears;
-  if (context.kind === "restricted") {
-    finalTotalValueCents = restrictedFloorPrice(
-      finalTotalValueCents,
-      winner.termYears,
-      floor
-    );
-    requiredWinningAavCents =
-      finalTotalValueCents / winner.termYears;
-  }
-  if (
-    !Number.isSafeInteger(finalTotalValueCents) ||
-    finalTotalValueCents < 1 ||
-    finalTotalValueCents >
-      winner.totalValueCents
-  ) {
-    fail(
-      FREE_AGENT_DRAFT_AUCTION_RESOLUTION_CODES
-        .pricingInvalid,
-      "winning_price_exceeds_submitted_total"
-    );
-  }
+  const pricedOffer = selectActualWinningOffer({
+    winner, competitor, bidHistory, dueAtMs, validateOffer: validateSubmittedValue,
+    meetsFloor: (offer) => context.kind === "open" ||
+      (context.kind === "fallback" ? fallbackFloorReason(offer, floor) === null :
+        evaluateRestrictedCandidateImprovement({ candidateMinimum: floor, submittedBid: {
+          totalValueCents: offer.totalValueCents, termYears: offer.termYears,
+          aavCents: offer.aavCents } }).eligible),
+  });
+  const requiredWinningTotalValueCents = pricedOffer.totalValueCents;
+  const requiredWinningAavCents = pricedOffer.aavCents;
+  const finalTotalValueCents = pricedOffer.totalValueCents;
   return immutable({
+    pricingRule: ACTUAL_OFFER_PRICING_RULE,
+    pricedOffer,
+    finalTermYears: pricedOffer.termYears,
     bidId: winner.id,
     teamId: winner.teamId,
     submittedTotalValueCents:
@@ -1058,7 +951,7 @@ function winnerProjection({
     finalTotalValueCents,
     finalAavCents: calculateAavCents(
       finalTotalValueCents,
-      winner.termYears
+      pricedOffer.termYears
     ),
   });
 }
@@ -1075,12 +968,14 @@ function evaluateFreeAgentDraftAuctionResolution(
       "participants",
       "floor",
       "draw",
+      ...(Object.hasOwn(input ?? {}, "bidHistory") ? ["bidHistory"] : []),
     ],
     FREE_AGENT_DRAFT_AUCTION_RESOLUTION_CODES
       .inputInvalid,
     "resolution_fields_invalid"
   );
-  if (!Array.isArray(input.bids)) {
+  if (!Array.isArray(input.bids) ||
+      (Object.hasOwn(input, "bidHistory") && !Array.isArray(input.bidHistory))) {
     fail(
       FREE_AGENT_DRAFT_AUCTION_RESOLUTION_CODES
         .inputInvalid,
@@ -1223,25 +1118,16 @@ function evaluateFreeAgentDraftAuctionResolution(
   const top = eligible[0];
   const tiedTop = eligible.filter(
     (bid) =>
-      bid.totalValueCents ===
-        top.totalValueCents &&
-      bid.aavCents === top.aavCents
+      bid.aavCents === top.aavCents &&
+      bid.termYears === top.termYears
   );
-  let winner = top;
-  let drawReveal;
-  let safeTiedTop = immutable([]);
-  if (tiedTop.length > 1) {
-    const selection = selectedReveal(
-      auction,
-      draw,
-      tiedTop
-    );
-    winner = selection.winner;
-    drawReveal = selection.drawReveal;
-    safeTiedTop = tiedTopProjection(tiedTop);
-  } else {
-    drawReveal = noSelectionReveal(auction, draw);
-  }
+  const winner = top;
+  // Close the existing commitment without a draw, preserving the stored
+  // receipt contract and historical draw replay while using first-bid ties.
+  const drawReveal = noSelectionReveal(auction, draw);
+  const safeTiedTop = tiedTop.length > 1
+    ? tiedTopProjection(tiedTop)
+    : immutable([]);
   const competitor = eligible
     .filter((bid) => bid.id !== winner.id)
     .sort(rankBids)[0] || null;
@@ -1251,6 +1137,8 @@ function evaluateFreeAgentDraftAuctionResolution(
     tiedTopBids: safeTiedTop,
     drawReveal,
     winner: winnerProjection({
+      bidHistory: input.bidHistory || [],
+      dueAtMs: auction.resolvesAtMs,
       winner,
       competitor,
       context,

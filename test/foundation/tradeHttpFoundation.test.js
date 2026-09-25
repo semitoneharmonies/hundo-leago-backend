@@ -58,7 +58,7 @@ function services(calls, overrides = {}) {
   return {
     tradeReadService: { read: record("read", "TRADE_PROPOSAL_FOUND") },
     tradeProposalService: { list: record("list", "TRADE_PROPOSALS_FOUND") },
-    tradeCreationService: { create: record("create", "TRADE_PROPOSAL_CREATED") },
+    tradeCreationService: { create: record("create", "TRADE_PROPOSAL_CREATED"), counter: record("counter", "TRADE_COUNTER_PROPOSAL_CREATED") },
     tradeLifecycleService: { respond: record("respond", "TRADE_PROPOSAL_UPDATED") },
     tradeAcceptancePreviewService: {
       preview: record("acceptancePreview", "TRADE_ACCEPTANCE_PREVIEWED"),
@@ -98,6 +98,22 @@ function headers(extra = {}) {
 }
 
 describe("M5-11 isolated trade HTTP contract", () => {
+  test("requires the unsafe-request boundary and passes the source ID for counter proposals", async (t) => {
+    const calls = [];
+    const baseUrl = await startApi(t, services(calls));
+    const url = `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/trades/${TRADE_ID}/counter`;
+    const input = { proposingTeamId: TRADE_ID, receivingTeamId: LEAGUE_ID, proposingAssets: [], receivingAssets: [] };
+    const rejected = await fetch(url, { method: "POST", headers: headers({ "x-test-csrf": "missing" }), body: JSON.stringify(input) });
+    assert.equal(rejected.status, 403);
+    assert.equal(calls.length, 0);
+    const sent = await fetch(url, { method: "POST", headers: headers({ "idempotency-key": "counter-request" }), body: JSON.stringify(input) });
+    assert.equal(sent.status, 201);
+    assert.equal(calls[0].method, "counter");
+    assert.equal(calls[0].input.tradeId, TRADE_ID);
+    assert.equal(calls[0].input.leagueId, LEAGUE_ID);
+    assert.equal(calls[0].input.idempotencyKey, "counter-request");
+    assert.deepEqual(calls[0].input.input, input);
+  });
   test("routes all eight list, detail, proposal, preview, and lifecycle operations", async (t) => {
     const calls = [];
     const securityCalls = [];
@@ -272,6 +288,18 @@ describe("M5-11 isolated trade HTTP contract", () => {
       (await retentionResponse.json()).error.code,
       "TRADE_INPUT_INVALID"
     );
+  });
+
+  test("bounds oversized trade requests before invoking a service", async (t) => {
+    const calls = [];
+    const baseUrl = await startApi(t, services(calls));
+    const response = await fetch(`${baseUrl}/api/v1/leagues/${LEAGUE_ID}/trades`, {
+      method: "POST", headers: headers({ "idempotency-key": "oversized-trade" }),
+      body: JSON.stringify({ padding: "x".repeat(768 * 1024) }),
+    });
+    assert.equal(response.status, 413);
+    assert.equal((await response.json()).error.code, "TRADE_REQUEST_TOO_LARGE");
+    assert.equal(calls.length, 0);
   });
 
   test("rejects non-empty lifecycle bodies before a service call", async (t) => {

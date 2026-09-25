@@ -138,6 +138,8 @@ function seedParticipantEvidence(
       total_value_cents: totalValueCents,
       term_years: termYears,
       lowest_offered_aav_cents: lowestOfferedAavCents,
+      ...(database.pragma("table_info(auction_bids)").some(({ name }) => name === "lowest_offered_total_value_cents")
+        ? { lowest_offered_total_value_cents: totalValueCents } : {}),
       first_submitted_at_ms: 100,
       last_edited_at_ms: 200,
       edit_count: 1,
@@ -215,6 +217,27 @@ function assertParticipantFence(error) {
   );
   return true;
 }
+
+test("schema 59 enforces higher AAV then longer term for current restricted improvements", (t) => {
+  const { database } = createRuntime(t, "fad-participant-aav-term-59-", 59);
+  for (const [index, totalValueCents, termYears, accepted] of [
+    [1, 325, 1, true],
+    [2, 900, 3, true],
+    [3, 825, 3, false],
+    [4, 300, 1, false],
+  ]) {
+    const ids = seedParticipantEvidence(database, 800_000 + index * 100, {
+      totalValueCents, termYears, lowestOfferedAavCents: 200,
+    });
+    const before = participantRow(database, ids.participant);
+    if (accepted) {
+      assert.equal(commitCurrentBidEvidence(database, ids.participant).changes, 1);
+    } else {
+      assert.throws(() => commitCurrentBidEvidence(database, ids.participant), assertParticipantFence);
+      assert.deepEqual(participantRow(database, ids.participant), before);
+    }
+  }
+});
 
 test("schema 42 upgrades schema 41 to accept an equal-total offer by its higher current rounded AAV", (t) => {
   const runtime = createRuntime(t, "fad-participant-aav-upgrade-", 41);

@@ -193,6 +193,7 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
     assert.deepEqual(
       RESET_V1_POST_RESET_TABLE_POLICY,
       [
+        { tableName: "trade_participants", introducedByMigrationId: 62, treatment: "require_empty" },
         {
           tableName: "expanded_stat_refreshes",
           introducedByMigrationId: 57,
@@ -482,9 +483,9 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
         },
       ]
     );
-    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 54);
-    assert.equal(classifiedTables.length, 136);
-    assert.equal(new Set(classifiedTables).size, 136);
+    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 55);
+    assert.equal(classifiedTables.length, 137);
+    assert.equal(new Set(classifiedTables).size, 137);
     assert.deepEqual(
       [...classifiedTables].sort(),
       [...catalogTables].sort()

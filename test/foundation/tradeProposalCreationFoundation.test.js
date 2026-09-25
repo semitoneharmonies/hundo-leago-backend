@@ -5,6 +5,18 @@ const os = require("node:os");
 const path = require("node:path");
 const { describe, test } = require("node:test");
 
+test("three-team trade HTTP flow", async (t) => {
+  await require("../helpers/threeTeamTradeFlow").runThreeTeamTradeFlow(t, {
+    createRuntime, IDS, NOW_MS, authenticated, sourceState,
+  });
+});
+
+test("atomic counter proposal HTTP flow", async (t) => {
+  await require("../helpers/counterProposalFlow").runCounterProposalFlow(t, {
+    createRuntime, IDS, NOW_MS, authenticated, creationInput, ordinaryCreationInput, sourceState,
+  });
+});
+
 const {
   TRADE_ASSET_CODES,
   TradeAssetPolicyError,
@@ -116,8 +128,10 @@ const IDS = Object.freeze({
   platformAdministratorMembership: uuid(56),
   receivingAssignment: uuid(54),
   entryDraft: uuid(9),
-  contractPlayer: uuid(10),
-  prospectPlayer: uuid(11),
+  // Imported catalogue players use UUIDv5; exercise them throughout acceptance,
+  // approval, idempotent replay, reversal, and malformed-receipt checks.
+  contractPlayer: uuid(10).replace("-4000-", "-5000-"),
+  prospectPlayer: uuid(11).replace("-4000-", "-5000-"),
   boughtOutPlayer: uuid(12),
   retentionAssetPlayer: uuid(13),
   contract: uuid(20),
@@ -1006,6 +1020,13 @@ async function assertAsyncExecutionReason(action, reasonCode) {
     return true;
   });
 }
+
+test("legal trade HTTP acceptance matrix", async (t) => {
+  await require("../helpers/tradeAcceptanceMatrix").runTradeAcceptanceMatrix(t, {
+    createRuntime, IDS, NOW_MS, uuid, insertPlayer, insertContract,
+    authenticated, sourceState,
+  });
+});
 
 describe("M5-06 atomic pending trade-proposal creation", () => {
   test("signed Prospect buyout cancels pending and awaiting-approval proposals through real services", async (t) => {

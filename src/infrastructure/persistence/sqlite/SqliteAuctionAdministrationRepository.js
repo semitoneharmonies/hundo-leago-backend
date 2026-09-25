@@ -5,6 +5,7 @@ const { resolveTeamDisplayColours } = require("../../../domain/leagues/teamDispl
 const { requireFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
 
 const { randomUUID } = require("node:crypto");
+const { compareAavFirstLongestTermSecond } = require("../../../domain/freeAgentDraft/candidateAllocationPolicy");
 
 const {
   COOLDOWN_MS,
@@ -2204,23 +2205,35 @@ function createSqliteAuctionAdministrationRepository({
     }
     const nextVersion = bid.version + 1;
     const nextAav = command.request.body.aavCents;
+    const minimumContract = restrictedParticipant
+      ? {
+        totalValueCents: restrictedParticipant.minimum_total_value_cents,
+        termYears: restrictedParticipant.minimum_term_years,
+        aavCents: restrictedParticipant.minimum_aav_cents,
+      }
+      : auction.fad_origin === "restricted_no_improvement_fallback"
+        ? {
+          totalValueCents: auction.restricted_minimum_total_cents,
+          termYears: auction.restricted_minimum_term_years,
+          aavCents: auction.restricted_minimum_aav_cents,
+        }
+        : null;
+    const floorComparison = minimumContract === null ? null
+      : compareAavFirstLongestTermSecond({
+        totalValueCents: command.request.body.totalValueCents,
+        termYears: command.request.body.termYears,
+        aavCents: nextAav,
+      }, minimumContract);
     if (
-      restrictedParticipant &&
-      !(
-        command.request.body.totalValueCents >
-          restrictedParticipant.minimum_total_value_cents ||
-        (
-          command.request.body.totalValueCents ===
-            restrictedParticipant.minimum_total_value_cents &&
-          nextAav >
-            restrictedParticipant.minimum_aav_cents
-        )
-      )
+      minimumContract !== null &&
+      (restrictedParticipant ? floorComparison <= 0 : floorComparison < 0)
     ) {
       fail(
         AUCTION_ADMINISTRATION_REPOSITORY_CODES
           .stateConflict,
-        "A restricted auction edit must strictly improve the Candidate minimum."
+        restrictedParticipant
+          ? "A restricted auction edit must strictly improve the Candidate minimum by AAV, then contract length."
+          : "A fallback auction edit must meet the Candidate minimum by AAV, then contract length."
       );
     }
     const idempotencyRequestId = nextId();
@@ -3651,6 +3664,9 @@ function createSqliteAuctionAdministrationRepository({
           AS fad_allocation_status,
         free_agent_draft_player_allocations.version
           AS fad_allocation_version,
+        free_agent_draft_player_allocations.restricted_minimum_total_cents,
+        free_agent_draft_player_allocations.restricted_minimum_term_years,
+        free_agent_draft_player_allocations.restricted_minimum_aav_cents,
         players.full_name AS player_full_name,
         COALESCE(
           (

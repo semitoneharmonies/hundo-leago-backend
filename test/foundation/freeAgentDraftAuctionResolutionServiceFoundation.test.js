@@ -245,13 +245,13 @@ describe("FAD-12 auction-resolution application service foundation", () => {
       submittedAavCents: 500,
       lowestOfferedAavCents: 400,
       lowestOfferedTotalValueCents: 500,
-      highestCompetingAavCents: 1_000,
+      highestCompetingAavCents: 450,
       highestCompetingTotalValueCents: 1_000,
       persistedSecondPriceInputCents: 1_000,
-      requiredWinningTotalValueCents: 1_000,
-      requiredWinningAavCents: 350,
-      finalTotalValueCents: 1_050,
-      finalAavCents: 350,
+      requiredWinningTotalValueCents: 1_350,
+      requiredWinningAavCents: 450,
+      finalTotalValueCents: 1_350,
+      finalAavCents: 450,
     });
     const runtime = createRuntime({
       result: totalFirstResult,
@@ -743,4 +743,33 @@ describe("FAD-12 auction-resolution application service foundation", () => {
       /late-lock coordinator/u
     );
   });
+});
+
+test("accepts an actual earlier offer with a longer final term and larger total", async () => {
+  const receipt=terminalResult({totalFirst:true});
+  Object.assign(receipt.winner,{
+    pricingRule:"lowest_actual_winning_offer_v1",
+    pricedOffer:{totalValueCents:2400,termYears:3,aavCents:800,occurredAtMs:RESOLVES_AT_MS-1000},
+    finalTermYears:3,submittedTotalValueCents:1000,submittedTermYears:1,submittedAavCents:1000,
+    lowestOfferedAavCents:800,lowestOfferedTotalValueCents:1000,
+    highestCompetingAavCents:750,highestCompetingTotalValueCents:2250,persistedSecondPriceInputCents:2250,
+    requiredWinningTotalValueCents:2400,requiredWinningAavCents:800,finalTotalValueCents:2400,finalAavCents:800,
+  });
+  const runtime=createRuntime({result:receipt});
+  const result=await runtime.service.executeClaimedResolution(execution());
+  assert.equal(result.winner.finalTermYears,3);
+  assert.equal(result.winner.finalAavCents,800);
+});
+
+test("replays a pre-marker repaired full submitted price without repricing history", async () => {
+  const receipt=terminalResult({totalFirst:true,replayed:true});
+  Object.assign(receipt.winner,{
+    submittedTotalValueCents:2800,submittedTermYears:2,submittedAavCents:1400,
+    lowestOfferedAavCents:1200,lowestOfferedTotalValueCents:2400,
+    highestCompetingAavCents:1275,highestCompetingTotalValueCents:3825,persistedSecondPriceInputCents:3825,
+    requiredWinningTotalValueCents:2800,requiredWinningAavCents:1400,finalTotalValueCents:2800,finalAavCents:1400,
+  });
+  const runtime=createRuntime({result:receipt});
+  const result=await runtime.service.executeClaimedResolution(execution());
+  assert.equal(result.winner.finalAavCents,1400);
 });

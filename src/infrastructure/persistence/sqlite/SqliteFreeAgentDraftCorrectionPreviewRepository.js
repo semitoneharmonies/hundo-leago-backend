@@ -1061,11 +1061,11 @@ function createSqliteFreeAgentDraftCorrectionPreviewRepository({
             outcomeCode = "restricted_tied";
           } else if (
             top &&
-            offer.totalValueCents < top.totalValueCents
+            offer.aavCents < top.aavCents
           ) {
-            outcomeCode = "lost_lower_total";
-          } else {
             outcomeCode = "lost_lower_aav";
+          } else {
+            outcomeCode = "lost_lower_total";
           }
           return Object.freeze({
             snapshotEntryId: offer.offerId,

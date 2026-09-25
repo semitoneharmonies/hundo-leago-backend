@@ -5,6 +5,7 @@ const {
 } = require("../shared/sha256");
 
 const {
+  CANONICAL_UUID_PATTERN,
   parseCandidateCardSlotKey,
 } = require("./candidateCardPolicy");
 
@@ -103,10 +104,10 @@ function exactFields(value, fields) {
   );
 }
 
-function stableId(value, reasonCode) {
+function stableId(value, reasonCode, pattern = UUID_PATTERN) {
   if (
     typeof value !== "string" ||
-    !UUID_PATTERN.test(value)
+    !pattern.test(value)
   ) {
     fail(reasonCode);
   }
@@ -253,7 +254,7 @@ function decodeCursor(value, query) {
     ) ||
     parsed.filterSha256 !==
       filterSha256(query) ||
-    !UUID_PATTERN.test(parsed.playerId || "")
+    !CANONICAL_UUID_PATTERN.test(parsed.playerId || "")
   ) {
     fail("cursor_invalid");
   }
@@ -358,7 +359,8 @@ function encodeCandidateEligiblePlayerCursor(
     normalizeSortName(sortName);
   const canonicalPlayerId = stableId(
     playerId,
-    "cursor_value_invalid"
+    "cursor_value_invalid",
+    CANONICAL_UUID_PATTERN
   );
   return Buffer.from(
     JSON.stringify({

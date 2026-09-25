@@ -3,6 +3,7 @@
 const {
   FREE_AGENT_DRAFT_QUEUED_NOMINATION_ACTIVATION_FAILURE_CODE,
   UUID_PATTERN,
+  PLAYER_UUID_PATTERN,
   buildFreeAgentDraftNominationOpenOccurrenceKey,
 } = require(
   "../../../domain/freeAgentDraft/freeAgentDraftPolicy"
@@ -193,10 +194,10 @@ function exactInput(value, fields, reasonCode) {
   if (!hasExactFields(value, fields)) failInput(reasonCode);
 }
 
-function canonicalId(value, reasonCode) {
+function canonicalId(value, reasonCode, pattern = UUID_PATTERN) {
   if (
     typeof value !== "string" ||
-    !UUID_PATTERN.test(value)
+    !pattern.test(value)
   ) {
     failInput(reasonCode);
   }
@@ -304,7 +305,8 @@ function normalizeExecution(input) {
     queueId,
     playerId: canonicalId(
       input.playerId,
-      "player_id_invalid"
+      "player_id_invalid",
+      PLAYER_UUID_PATTERN
     ),
     openingRolloverId: canonicalId(
       input.openingRolloverId,

@@ -179,7 +179,7 @@ function validateTradeAssetInput(input) {
   return Object.freeze(asset);
 }
 
-function assetIdentity(asset) {
+function assetIdentity(asset, sourceTeamId, destinationTeamId = "") {
   if (asset.contractId) return `contract:${asset.contractId}`;
   if (asset.playerId) return `player:${asset.playerId}`;
   if (asset.draftPickId) return `draft_pick:${asset.draftPickId}`;
@@ -195,7 +195,7 @@ function assetIdentity(asset) {
   if (asset.requestedRetentionContractId) {
     return `requested_retention:${asset.requestedRetentionContractId}`;
   }
-  return `future_consideration_instruction:${asset.futureConsiderationDescription}`;
+  return `future_consideration_instruction:${sourceTeamId}:${destinationTeamId}:${asset.futureConsiderationDescription}`;
 }
 
 function validateSide(value) {
@@ -210,6 +210,7 @@ function validateSide(value) {
 }
 
 function validateTradeProposalCreationInput(input) {
+  if (input && Object.hasOwn(input, "participants")) return validateThreeTeamInput(input);
   exactObject(input, [
     "proposingTeamId",
     "receivingTeamId",
@@ -240,10 +241,15 @@ function validateTradeProposalCreationInput(input) {
     }
   }
   const identities = new Set();
-  for (const asset of [...proposingAssets, ...receivingAssets]) {
-    const identity = assetIdentity(asset);
-    if (identities.has(identity)) fail(TRADE_ASSET_CODES.duplicate);
-    identities.add(identity);
+  for (const [sourceTeamId, assets] of [
+    [proposingTeamId, proposingAssets],
+    [receivingTeamId, receivingAssets],
+  ]) {
+    for (const asset of assets) {
+      const identity = assetIdentity(asset, sourceTeamId);
+      if (identities.has(identity)) fail(TRADE_ASSET_CODES.duplicate);
+      identities.add(identity);
+    }
   }
   return Object.freeze({
     proposingTeamId,
@@ -251,6 +257,37 @@ function validateTradeProposalCreationInput(input) {
     proposingAssets: Object.freeze(proposingAssets),
     receivingAssets: Object.freeze(receivingAssets),
   });
+}
+
+function validateThreeTeamInput(input) {
+  exactObject(input, ["proposingTeamId", "participants"]);
+  const proposingTeamId = stableId(input.proposingTeamId);
+  if (!Array.isArray(input.participants) || input.participants.length !== 3) fail(TRADE_ASSET_CODES.assetCountInvalid);
+  const teamIds = input.participants.map((side) => {
+    exactObject(side, ["teamId", "assets"]);
+    return stableId(side.teamId);
+  });
+  if (new Set(teamIds).size !== 3 || teamIds[0] !== proposingTeamId) fail(TRADE_ASSET_CODES.conflict);
+  const identities = new Set();
+  const participants = input.participants.map((side) => {
+    if (!Array.isArray(side.assets) || side.assets.length < 1 || side.assets.length > MAX_ASSETS_PER_SIDE) fail(TRADE_ASSET_CODES.assetCountInvalid);
+    const assets = side.assets.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) fail(TRADE_ASSET_CODES.inputInvalid);
+      const { destinationTeamId, ...assetInput } = item;
+      if (!teamIds.includes(destinationTeamId) || destinationTeamId === side.teamId) fail(TRADE_ASSET_CODES.conflict);
+      const asset = validateTradeAssetInput(assetInput);
+      const identity = assetIdentity(asset, side.teamId, destinationTeamId);
+      if (identities.has(identity)) fail(TRADE_ASSET_CODES.duplicate);
+      identities.add(identity);
+      return Object.freeze({ ...asset, destinationTeamId });
+    });
+    if (!assets.some(asset => asset.inputType !== "requested_retention")) fail(TRADE_ASSET_CODES.minimumContributionRequired);
+    for (const asset of assets) {
+      if (asset.requestedRetentionContractId && !assets.some(contract => contract.contractId === asset.requestedRetentionContractId && contract.destinationTeamId === asset.destinationTeamId)) fail(TRADE_ASSET_CODES.retentionInvalid);
+    }
+    return Object.freeze({ teamId: side.teamId, assets: Object.freeze(assets) });
+  });
+  return Object.freeze({ proposingTeamId, receivingTeamId: teamIds[1], participants: Object.freeze(participants) });
 }
 
 function assertNewTradeProposalAssetTypes(assets) {
@@ -274,6 +311,16 @@ function createTradeAssetCommands({
   assetIds,
   createdAtMs,
 } = {}) {
+  if (input.participants) {
+    const transfers = input.participants.flatMap(side => side.assets.map(asset => ({ ...asset, sourceTeamId: side.teamId })));
+    if (!Array.isArray(assetIds) || assetIds.length !== transfers.length) fail(TRADE_ASSET_CODES.inputInvalid);
+    return Object.freeze(transfers.map((asset, index) => Object.freeze({
+      ...asset, id: stableId(assetIds[index]),
+      // Legacy direction is retained for old readers; source/destination are authoritative.
+      direction: asset.sourceTeamId === input.proposingTeamId ? "proposing_to_receiving" : "receiving_to_proposing",
+      sequence: index + 1, createdAtMs: safeTimestamp(createdAtMs),
+    })));
+  }
   if (
     !Array.isArray(assetIds) ||
     assetIds.length !==
@@ -335,6 +382,7 @@ function validateCreationFoundation(input) {
 
 function validateTradeProposalCreationCommand(input) {
   exactObject(input, [
+    ...(Object.hasOwn(input, "participantTeamIds") ? ["participantTeamIds"] : []),
     "tradeId",
     "eventId",
     "idempotencyRequestId",
@@ -353,6 +401,9 @@ function validateTradeProposalCreationCommand(input) {
     "assets",
   ]);
   const foundation = validateCreationFoundation(input);
+  const participantTeamIds = input.participantTeamIds;
+  if (participantTeamIds && (!Array.isArray(participantTeamIds) || participantTeamIds.length !== 3 || new Set(participantTeamIds).size !== 3 || participantTeamIds[0] !== foundation.proposingTeamId || participantTeamIds[1] !== foundation.receivingTeamId)) fail(TRADE_ASSET_CODES.conflict);
+  if (participantTeamIds) participantTeamIds.forEach(stableId);
   const expiresAtMs = safeTimestamp(input.expiresAtMs);
   const effectiveDeadlineAtMs = safeTimestamp(input.effectiveDeadlineAtMs);
   const idempotencyExpiresAtMs = safeTimestamp(input.idempotencyExpiresAtMs);
@@ -363,7 +414,7 @@ function validateTradeProposalCreationCommand(input) {
     idempotencyExpiresAtMs <= foundation.createdAtMs ||
     !Array.isArray(input.assets) ||
     input.assets.length < 2 ||
-    input.assets.length > MAX_ASSETS_PER_SIDE * 2
+    input.assets.length > MAX_ASSETS_PER_SIDE * (participantTeamIds ? 3 : 2)
   ) {
     fail(TRADE_ASSET_CODES.timestampInvalid);
   }
@@ -398,8 +449,8 @@ function validateTradeProposalCreationCommand(input) {
         : foundation.proposingTeamId;
     if (
       asset.direction !== expectedDirection ||
-      asset.destinationTeamId !== expectedDestination ||
-      ![foundation.proposingTeamId, foundation.receivingTeamId].includes(
+      (participantTeamIds ? !participantTeamIds.includes(asset.destinationTeamId) || asset.destinationTeamId === asset.sourceTeamId : asset.destinationTeamId !== expectedDestination) ||
+      !(participantTeamIds || [foundation.proposingTeamId, foundation.receivingTeamId]).includes(
         asset.sourceTeamId
       ) ||
       asset.sequence !== index + 1 ||
@@ -414,6 +465,7 @@ function validateTradeProposalCreationCommand(input) {
   });
   return Object.freeze({
     ...foundation,
+    ...(participantTeamIds ? { participantTeamIds: Object.freeze([...participantTeamIds]) } : {}),
     tradeId: foundation.proposalId,
     eventId: stableId(input.eventId),
     idempotencyRequestId: stableId(input.idempotencyRequestId),

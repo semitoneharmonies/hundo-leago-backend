@@ -62,6 +62,21 @@ const ALLOCATION_ID = uuid(7);
 const QUEUE_ID = uuid(8);
 const EXTENSION_SOURCE_ID = uuid(9);
 
+test("player occurrences round-trip imported UUIDv5 IDs while scope IDs remain UUIDv4", () => {
+  const playerId = PLAYER_ID.replace("-4000-", "-5000-");
+  const allocation = buildFreeAgentDraftAllocationOccurrenceKey({ fadId: FAD_ID, playerId });
+  assert.equal(parseFreeAgentDraftOccurrenceKey(allocation).playerId, playerId);
+  const eligibility = buildFreeAgentDraftEligibilityOccurrenceKey({
+    fadId: FAD_ID, playerId, sourceOperationId: SOURCE_OPERATION_ID,
+  });
+  assert.equal(parseFreeAgentDraftOccurrenceKey(eligibility).playerId, playerId);
+  for (const invalid of ["ABCDEFAB-0000-5000-8000-000000000005", playerId + " ", playerId.replace("-5000-", "-6000-")]) {
+    assert.throws(() => buildFreeAgentDraftAllocationOccurrenceKey({ fadId: FAD_ID, playerId: invalid }));
+  }
+  assert.throws(() => buildFreeAgentDraftAllocationOccurrenceKey({ fadId: playerId, playerId }));
+  assert.throws(() => buildFreeAgentDraftEligibilityOccurrenceKey({ fadId: FAD_ID, playerId, sourceOperationId: playerId }));
+});
+
 function assertPolicyError(
   callback,
   { code, reasonCode }

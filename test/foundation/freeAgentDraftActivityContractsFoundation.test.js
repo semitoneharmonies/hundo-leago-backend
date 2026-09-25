@@ -399,3 +399,11 @@ describe("FAD-14 League Activity contracts", () => {
     );
   });
 });
+
+it("retains a busy auction's complete bid history while bounding metadata", () => {
+  const history=Array.from({length:40},(_,i)=>({bidId:IDS.team,teamId:IDS.team,eventType:"bid_edited",totalValueCents:1000+i*25,termYears:2,aavCents:500,editCount:i,occurredAtMs:i}));
+  const input={fadId:IDS.fad,playerId:IDS.player,teamId:IDS.team,bidHistory:history};
+  assert.equal(validateFreeAgentDraftActivityMetadata("free_agent_draft_player_awarded",input).bidHistory.length,40);
+  assert.throws(()=>validateFreeAgentDraftActivityMetadata("free_agent_draft_completed",input),contractError("activity_metadata_size_invalid"));
+  assert.throws(()=>validateFreeAgentDraftActivityMetadata("free_agent_draft_player_awarded",{...input,bidHistory:Array(1025).fill(history[0])}));
+});

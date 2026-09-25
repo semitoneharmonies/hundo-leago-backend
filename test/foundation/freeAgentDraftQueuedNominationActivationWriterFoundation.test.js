@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { createHash } = require("node:crypto");
+const { createHash, randomUUID, randomBytes } = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -79,7 +79,7 @@ function identities(index = 1) {
     week: uuid(base + 3),
     readiness: uuid(base + 4),
     fad: uuid(base + 5),
-    player: uuid(base + 6),
+    player: uuid(base + 6).replace(/-4([0-9a-f]{3})-/, "-5$1-"),
     playerSource: uuid(base + 7),
     user: uuid(base + 8),
     membership: uuid(base + 9),
@@ -163,11 +163,28 @@ function seedQueuedNomination(database, ids, index = 1) {
     updated_at_ms: 1,
     version: 1,
   });
+  insert(database, "league_settings", {
+    league_id: ids.league,
+    salary_cap_cents: 10_000,
+    trade_deadline_at_ms: null,
+    maximum_teams: 20,
+    active_forward_slots: 12,
+    active_defence_slots: 6,
+    bench_slots: 4,
+    maximum_bench_aav_cents: 400,
+    injured_reserve_slots: 4,
+    prospect_slots_unlimited: 1,
+    scoring_rule_version: 1,
+    standings_rule_version: 1,
+    created_at_ms: 1,
+    updated_at_ms: 1,
+    version: 1,
+  });
   insert(database, "seasons", {
     id: ids.season,
     league_id: ids.league,
     label: `2026-27-${index}`,
-    nhl_season_key: `2026202${index}`,
+    nhl_season_key: "20262027",
     status: "active",
     regular_season_starts_at_ms: OPENING_AT_MS,
     regular_season_ends_at_ms: OPENING_AT_MS + 200 * DAY_MS,
@@ -743,6 +760,70 @@ function requeueRecovery(database, ids, acceptedAtMs, reason) {
 }
 
 describe("FAD-13 queued-nomination activation writer", () => {
+  for (const nominationMatches of [true, false]) {
+    test(`resolves a queued opening bid only with matching original nomination evidence (${nominationMatches})`, (t) => {
+      const fixture = createFixture(t, `queued-resolution-${nominationMatches}`);
+      claim(fixture.database);
+      const opened = fixture.writer.executeClaimed(executeCommand());
+      if (!nominationMatches) {
+        withoutTriggers(fixture.database, () => {
+          fixture.database.prepare(
+            "UPDATE free_agent_draft_nomination_queue SET accepted_at_ms = accepted_at_ms + 1, binding_confirmed_at_ms = binding_confirmed_at_ms + 1, created_at_ms = created_at_ms + 1 WHERE id = ?"
+          ).run(PRIMARY.queue);
+        });
+      }
+      const { createTargetRepositories } = require("../../src/bootstrap/createTargetRuntime");
+      const writer = createTargetRepositories({
+        database: fixture.database,
+        secureRandom: { id: randomUUID, bytes: randomBytes },
+      }).freeAgentDraftAuctionResolutionWriter;
+      const nowMs = opened.resolvesAtMs + 1;
+      const due = writer.listDue({ nowMs, limit: 10 }).find((row) => row.auctionId === opened.auctionId);
+      assert.ok(due);
+      const jobExecution = {
+        runId: due.jobRunId,
+        leaseOwner: "queued-opening-resolution-test",
+        leaseToken: randomUUID(),
+        leaseExpiresAtMs: nowMs + HOUR_MS,
+      };
+      const acquired = writer.claimDue({
+        leagueId: PRIMARY.league,
+        seasonId: PRIMARY.season,
+        auctionId: opened.auctionId,
+        occurrenceKey: due.occurrenceKey,
+        expectedAuctionVersion: due.auctionVersion,
+        expectedJobVersion: due.jobRunVersion,
+        nowMs,
+        jobExecution,
+      });
+      assert.equal(acquired.acquired, true);
+      const resolved = writer.executeClaimed({
+        leagueId: PRIMARY.league,
+        seasonId: PRIMARY.season,
+        fadId: PRIMARY.fad,
+        allocationId: null,
+        playerId: PRIMARY.player,
+        rolloverId: opened.resolutionRolloverId,
+        auctionId: opened.auctionId,
+        occurrenceKey: due.occurrenceKey,
+        expectedAuctionVersion: acquired.auctionVersion,
+        expectedAllocationVersion: 0,
+        expectedJobVersion: acquired.jobRunVersion,
+        resolvedAtMs: nowMs,
+        jobExecution,
+      });
+      assert.equal(resolved.outcome, nominationMatches ? "winner" : "no_winner");
+      if (nominationMatches) {
+        assert.equal(resolved.winner.bidId, opened.starterBidId);
+        assert.equal(resolved.winner.teamId, PRIMARY.team);
+        assert.equal(fixture.database.prepare(
+          "SELECT team_id FROM player_ownerships WHERE id = ?"
+        ).get(resolved.winner.ownershipId).team_id, PRIMARY.team);
+      }
+      assert.deepEqual(fixture.database.pragma("foreign_key_check"), []);
+    });
+  }
+
   test("opens a queued nomination into the configured two-hour final round", (t) => {
     const fixture = createFixture(t, 'custom-final-round');
     const resolutionAtMs = OPENING_AT_MS + 2 * HOUR_MS;

@@ -11,6 +11,9 @@ const RETAINED_TABLES = new Set([
 // reviewed for erasure before this digest is advanced; unknown guards are never
 // silently suspended by the deletion endpoint.
 const REVIEWED_SCHEMA_SHA256 = new Set([
+  // Schema 62 keeps the reviewed auction guards and includes league-scoped
+  // three-team responses in the same atomic deletion and preservation checks.
+  "72e1b08e7c71b01975c2230da1b732082d0ead40b4935b5257dbfbbeb3ba90b7",
   "05343a2501a75487e54e10788f92ccd54e3436ee1e4c0bafdad1a4e979e815a2",
   // Existing staging allocation-table rebuild omits the historical whole-dollar
   // offer check. Its columns, foreign keys and deletion guards are identical.

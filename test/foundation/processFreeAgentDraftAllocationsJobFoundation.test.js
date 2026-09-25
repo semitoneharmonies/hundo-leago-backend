@@ -205,6 +205,19 @@ function expectedSummary(overrides = {}) {
 }
 
 describe("FAD Candidate allocation scheduled job", () => {
+  test("claims and executes a canonical imported UUIDv5 player job", async () => {
+    const original = descriptor();
+    const playerId = original.binding.playerId.replace("-4000-", "-5000-");
+    const due = { ...original,
+      occurrenceKey: buildFreeAgentDraftAllocationOccurrenceKey({ fadId: IDS.fad, playerId }),
+      parsedOccurrence: { ...original.parsedOccurrence, playerId },
+      binding: { ...original.binding, playerId },
+    };
+    const { calls, job } = harness({ due: [due] });
+    assert.deepEqual(await job.run(), expectedSummary());
+    assert.equal(calls.find(([name]) => name === "execute")[1].playerId, playerId);
+  });
+
   test("filters other work and forwards the exact claimed allocation witness", async () => {
     const other = {
       jobType: "fad_rollover",

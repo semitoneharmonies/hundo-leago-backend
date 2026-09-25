@@ -678,6 +678,35 @@ describe("league-scoped player read service", () => {
     assert.equal(before.equals(runtime.database.serialize()), true);
   });
 
+  test("paginates zero-point ties by last name without writing", (t) => {
+    const runtime = createRuntime(t);
+    runtime.database.prepare("UPDATE player_stat_totals SET fantasy_points_hundredths = 0").run();
+    const rename = runtime.database.prepare(
+      "UPDATE players SET first_name = ?, last_name = ?, full_name = ? WHERE id = ?"
+    );
+    rename.run("Aaron", "Zulu", "Aaron Zulu", PLAYER_ONE_ID);
+    rename.run("Zach", "Alpha", "Zach Alpha", PLAYER_TWO_ID);
+    const before = runtime.database.serialize();
+    const options = {
+      authenticated: authenticated(USER_A_ID),
+      leagueId: LEAGUE_A_ID,
+      limit: 1,
+      sort: "fantasyPoints",
+    };
+    const first = runtime.service.list(options);
+    assert.equal(first.players[0].id, PLAYER_TWO_ID);
+    assert.equal(first.page.hasMore, true);
+    const second = runtime.service.list({ ...options, cursor: first.page.nextCursor });
+    assert.equal(second.players[0].id, PLAYER_ONE_ID);
+    assert.equal(second.page.hasMore, false);
+    assert.equal(before.equals(runtime.database.serialize()), true);
+
+    rename.run("Aaron", "Alpha", "Aaron Alpha", PLAYER_ONE_ID);
+    const tied = runtime.service.list(options);
+    assert.equal(tied.players[0].id, PLAYER_ONE_ID);
+    assert.equal(runtime.service.list({ ...options, cursor: tied.page.nextCursor }).players[0].id, PLAYER_TWO_ID);
+  });
+
   test("rejects unsupported league-player sort modes", (t) => {
     const runtime = createRuntime(t);
     assert.throws(

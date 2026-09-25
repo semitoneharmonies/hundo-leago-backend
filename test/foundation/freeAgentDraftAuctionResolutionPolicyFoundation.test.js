@@ -275,7 +275,7 @@ describe(
         const valid = bid({
           id: IDS.bid1,
           teamId: IDS.team1,
-          totalValueCents: 600,
+          totalValueCents: 1200,
           termYears: 2,
           lowestOfferedAavCents: 250,
         });
@@ -344,20 +344,20 @@ describe(
     );
 
     test(
-      "uses total value then AAV and applies total-first anti-bluff pricing without crossing the Candidate floor",
+      "ranks higher AAV ahead of longer lower-AAV offers and charges an actual submitted offer",
       () => {
         const floor = contract(500, 1);
         const winner = bid({
           id: IDS.bid1,
           teamId: IDS.team1,
-          totalValueCents: 600,
+          totalValueCents: 1250,
           termYears: 2,
           lowestOfferedAavCents: 200,
         });
         const competitor = bid({
           id: IDS.bid2,
           teamId: IDS.team2,
-          totalValueCents: 600,
+          totalValueCents: 1800,
           termYears: 3,
           lowestOfferedAavCents: 200,
         });
@@ -385,17 +385,17 @@ describe(
         assert.equal(result.winner.bidId, IDS.bid1);
         assert.equal(
           result.winner.highestCompetingAavCents,
-          200
+          600
         );
         assert.equal(
           result.winner.requiredWinningAavCents,
-          300
+          625
         );
         assert.equal(
           result.winner.finalTotalValueCents,
-          600
+          1250
         );
-        assert.equal(result.winner.finalAavCents, 300);
+        assert.equal(result.winner.finalAavCents, 625);
         assert.equal(
           result.drawReveal.selectionUsed,
           false
@@ -444,7 +444,7 @@ describe(
     );
 
     test(
-      "selects an exact top tie only through the committed draw and keeps projections deterministic under input reordering",
+      "selects the earliest original bid in a restricted tie regardless of stable ID or input order",
       () => {
         const floor = contract(300, 2);
         const laterLowerId = bid({
@@ -498,19 +498,19 @@ describe(
         assert.equal(first.outcome, "winner");
         assert.equal(
           first.drawReveal.selectionUsed,
-          true
+          false
         );
         assert.deepEqual(
           first.drawReveal.orderedBidIds,
-          [IDS.bid1, IDS.bid2]
+          []
         );
         assert.equal(
           first.winner.bidId,
-          first.drawReveal.selectedBidId
+          IDS.bid2
         );
         assert.equal(
           first.winner.teamId,
-          first.drawReveal.selectedTeamId
+          IDS.team2
         );
         assert.deepEqual(
           first.rankedBids.map(({ rank }) => rank),
@@ -518,7 +518,7 @@ describe(
         );
         assert.deepEqual(
           first.tiedTopBids.map(({ bidId }) => bidId),
-          [IDS.bid1, IDS.bid2]
+          [IDS.bid2, IDS.bid1]
         );
         assert.ok(Object.isFrozen(first));
         assert.ok(Object.isFrozen(first.rankedBids));
@@ -585,9 +585,9 @@ describe(
     );
 
     test(
-      "uses ordinary anti-bluff pricing for an allocation-linked fallback winner",
+      "uses actual-offer pricing for an allocation-linked fallback winner",
       () => {
-        const floor = contract(500, 1);
+        const floor = contract(400, 2);
         const result =
           evaluateFreeAgentDraftAuctionResolution(
             resolutionInput({
@@ -624,9 +624,9 @@ describe(
         );
         assert.equal(
           result.winner.finalTotalValueCents,
-          600
+          900
         );
-        assert.equal(result.winner.finalAavCents, 200);
+        assert.equal(result.winner.finalAavCents, 300);
       }
     );
 
@@ -661,7 +661,7 @@ describe(
     test(
       "keeps a sole winner at its submitted price and exposes the schema-only zero second-price sentinel",
       () => {
-        const floor = contract(500, 1);
+        const floor = contract(500, 2);
         const result =
           evaluateFreeAgentDraftAuctionResolution(
             resolutionInput({
@@ -697,7 +697,7 @@ describe(
     );
 
     test(
-      "admits the direct starter and all other active valid bids with ordinary anti-bluff pricing",
+      "admits the direct starter and all other active valid bids with actual-offer pricing",
       () => {
         const result =
           evaluateFreeAgentDraftAuctionResolution(
@@ -737,7 +737,7 @@ describe(
         );
         assert.equal(
           result.winner.finalTotalValueCents,
-          600
+          900
         );
         assert.equal(result.drawReveal.selectionUsed, false);
       }
@@ -782,7 +782,7 @@ describe(
     );
 
     test(
-      "uses the committed draw for an exact queued top tie and is stable under bid reordering",
+      "uses stable bid ID only for identical timestamps in a queued tie and is stable under reordering",
       () => {
         const starter = bid({
           id: IDS.bid1,
@@ -811,14 +811,14 @@ describe(
         assert.deepEqual(replay, first);
         assert.equal(first.outcome, "winner");
         assert.equal(first.allocationId, null);
-        assert.equal(first.drawReveal.selectionUsed, true);
+        assert.equal(first.drawReveal.selectionUsed, false);
         assert.deepEqual(
           first.drawReveal.orderedBidIds,
-          [IDS.bid1, IDS.bid2]
+          []
         );
         assert.equal(
           first.winner.bidId,
-          first.drawReveal.selectedBidId
+          IDS.bid1
         );
         assert.deepEqual(
           first.tiedTopBids.map(({ bidId }) => bidId),
@@ -1109,3 +1109,78 @@ describe(
     );
   }
 );
+
+for (const kind of ['direct', 'queued', 'fallback', 'restricted']) {
+  test('equal AAV prefers longer term with AAV anti-bluff pricing: ' + kind, () => {
+    const floor = contract(100, 1);
+    const bids = [bid({totalValueCents: 600, termYears: 3, lowestOfferedAavCents: 200}), bid({id: IDS.bid2, teamId: IDS.team2, totalValueCents: 400, termYears: 2, lowestOfferedAavCents: 200})];
+    const participants = kind === 'restricted' ? [participant({floor, activeImprovementBidId: IDS.bid1}), participant({id: IDS.participant2, teamId: IDS.team2, floor, activeImprovementBidId: IDS.bid2})] : [];
+    const result = evaluateFreeAgentDraftAuctionResolution(resolutionInput({kind, floor, bids, participants}));
+    assert.equal(result.winner.bidId, IDS.bid1);
+    assert.equal(result.winner.finalAavCents, 200);
+    assert.equal(result.winner.submittedTermYears, 3);
+    assert.equal(result.drawReveal.selectionUsed, false);
+  });
+}
+
+for (const kind of ["direct", "queued", "fallback", "restricted"]) {
+  test("earliest original bid wins an exact tie regardless of draw nonce: " + kind, () => {
+    const floor = contract(100, 1);
+    const later = bid({ firstSubmittedAtMs: ROLLOVER_AT_MS - 1_000 });
+    const earlier = bid({ id: IDS.bid2, teamId: IDS.team2, firstSubmittedAtMs: ROLLOVER_AT_MS - 10_000 });
+    const participants = kind === "restricted" ? [
+      participant({ floor, activeImprovementBidId: IDS.bid1 }),
+      participant({ id: IDS.participant2, teamId: IDS.team2, floor, activeImprovementBidId: IDS.bid2 }),
+    ] : [];
+    for (const value of [0, 127, 255]) {
+      const nonceBytes = new Uint8Array(32).fill(value);
+      const draw = { ...createFreeAgentDraftAuctionDrawCommitment({ auctionId: IDS.auction, nonceBytes }), nonceBytes };
+      const input = resolutionInput({ kind, floor, bids: [later, earlier], participants, draw });
+      const result = evaluateFreeAgentDraftAuctionResolution(input);
+      assert.equal(result.winner.bidId, IDS.bid2);
+      assert.equal(result.winner.highestCompetingAavCents, 300);
+      assert.equal(result.drawReveal.selectionUsed, false);
+      assert.deepEqual(evaluateFreeAgentDraftAuctionResolution({ ...input, bids: [earlier, later] }), result);
+      // Equal recorded timestamps use the existing stable-ID fallback.
+      const sameTime = { ...earlier, firstSubmittedAtMs: later.firstSubmittedAtMs };
+      assert.equal(evaluateFreeAgentDraftAuctionResolution({ ...input, bids: [sameTime, later] }).winner.bidId, IDS.bid1);
+    }
+  });
+}
+
+for (const kind of ["ordinary", "direct", "queued", "fallback"]) {
+  const cases = [
+    { name: "Marner does not inherit a competitor price", current: [1400,2], prior:[1200,2], rival:[1275,3], expected:[1400,2] },
+    { name: "valid lower offer keeps its term even when its total is higher", current:[1000,1], prior:[800,3], rival:[750,3], expected:[800,3] },
+    { name: "lower offer with shorter term loses an AAV tie", current:[1000,2], prior:[800,1], rival:[800,3], expected:[1000,2] },
+    { name: "original timestamp breaks an exact historical tie", current:[1000,2], prior:[800,3], rival:[800,3], expected:[800,3] },
+    { name: "earlier rival defeats identical historical offer", current:[1000,2], prior:[800,3], rival:[800,3], rivalEarlier:true, expected:[1000,2] },
+    { name: "sole bidder pays its lower actual offer", current:[1000,2], prior:[800,1], expected:[800,1] },
+    { name: "lowest accumulator alone cannot establish a real offer", current:[1000,2], rival:[750,3], expected:[1000,2] },
+    { name: "future history cannot reduce the price", current:[1000,2], prior:[800,3], future:true, rival:[750,3], expected:[1000,2] },
+  ];
+  for (const scenario of cases) test(kind + ": " + scenario.name, () => {
+    const [price,term] = scenario.current;
+    const winner = bid({totalValueCents:price*term,termYears:term,lowestOfferedAavCents:300,lowestOfferedTotalValueCents:300*term});
+    const bids=[winner];
+    if(scenario.rival) bids.push(bid({id:IDS.bid2,teamId:IDS.team2,totalValueCents:scenario.rival[0]*scenario.rival[1],termYears:scenario.rival[1],firstSubmittedAtMs:winner.firstSubmittedAtMs+(scenario.rivalEarlier?-100:100)}));
+    const bidHistory=scenario.prior?[{bidId:winner.id,teamId:winner.teamId,totalValueCents:scenario.prior[0]*scenario.prior[1],termYears:scenario.prior[1],occurredAtMs:scenario.future?ROLLOVER_AT_MS+1:winner.firstSubmittedAtMs}]:[];
+    const input=resolutionInput({kind:kind==='ordinary'?'direct':kind,bids});
+    const result=kind==='ordinary'?evaluateAuctionResolution({auction:{...input.auction,playoffsStartAtMs:ROLLOVER_AT_MS+1000},bids,bidHistory}):evaluateFreeAgentDraftAuctionResolution({...input,bidHistory});
+    assert.equal(result.winner.finalAavCents,scenario.expected[0]);
+    assert.equal(result.winner.finalTermYears,scenario.expected[1]);
+    assert.equal(result.winner.finalTotalValueCents,scenario.expected[0]*scenario.expected[1]);
+  });
+}
+
+for (const scenario of [{prior:[400,3],expected:[400,3]}, {prior:[300,2],expected:[800,1]}]) {
+  test("restricted pricing keeps an actual offer only when it improves the original floor: " + scenario.prior, () => {
+    const floor=contract(600,2);
+    const winner=bid({totalValueCents:800,termYears:1,lowestOfferedAavCents:300});
+    const input=resolutionInput({floor,bids:[winner],participants:[participant({floor,activeImprovementBidId:winner.id}),participant({floor,id:IDS.participant2,teamId:IDS.team2})]});
+    input.bidHistory=[{bidId:winner.id,teamId:winner.teamId,totalValueCents:scenario.prior[0]*scenario.prior[1],termYears:scenario.prior[1],occurredAtMs:winner.firstSubmittedAtMs}];
+    const result=evaluateFreeAgentDraftAuctionResolution(input);
+    assert.equal(result.winner.finalAavCents,scenario.expected[0]);
+    assert.equal(result.winner.finalTermYears,scenario.expected[1]);
+  });
+}

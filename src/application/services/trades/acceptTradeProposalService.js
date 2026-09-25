@@ -82,7 +82,7 @@ function committedBatch(result) {
   const trade = result?.trade;
   if (
     !Array.isArray(teams) ||
-    teams.length !== 2 ||
+    teams.length !== (result.participants?.length || 2) ||
     !trade ||
     !UUID_PATTERN.test(trade.league_id || "") ||
     !UUID_PATTERN.test(trade.season_id || "") ||
@@ -93,10 +93,7 @@ function committedBatch(result) {
     throw new TypeError("trade acceptance requires its committed team receipt");
   }
 
-  const expectedTeamIds = new Set([
-    trade.proposing_team_id,
-    trade.receiving_team_id,
-  ]);
+  const expectedTeamIds = new Set(result.participants ? result.participants.map(p => p.teamId) : [trade.proposing_team_id, trade.receiving_team_id]);
   const seenOwnershipIds = new Set();
   let previousTeamId = null;
   const committedTeams = teams.map((team) => {
@@ -164,7 +161,7 @@ function projectResult(result, lateLock, action = "accept") {
   const awaitingCommissionerApproval =
     result.trade.status === "awaiting_commissioner_approval";
   return Object.freeze({
-    code: awaitingCommissionerApproval
+    code: result.participantResponse ? "TRADE_PARTICIPANT_ACCEPTED" : awaitingCommissionerApproval
       ? result.replayed
         ? "TRADE_ACCEPTANCE_REPLAYED"
         : "TRADE_AWAITING_COMMISSIONER_APPROVAL"
@@ -182,7 +179,8 @@ function projectResult(result, lateLock, action = "accept") {
       seasonId: result.trade.season_id,
       proposingTeamId: result.trade.proposing_team_id,
       receivingTeamId: result.trade.receiving_team_id,
-      status: awaitingCommissionerApproval
+      ...(result.participants ? { participants: result.participants } : {}),
+      status: result.participantResponse ? ({ proposed: "Pending", declined: "Rejected", cancelled: "Cancelled", expired: "Expired", completed: "Accepted", awaiting_commissioner_approval: "Awaiting Commissioner Approval" }[result.trade.status] || result.trade.status) : awaitingCommissionerApproval
         ? "Awaiting Commissioner Approval"
         : "Accepted",
       storageStatus: result.trade.status,
@@ -253,7 +251,7 @@ function createAcceptTradeProposalService({
     const actor = teamAuthorization.requireManager(
       authenticated,
       proposal.league_id,
-      proposal.receiving_team_id
+      repository.findRespondingTeamId ? repository.findRespondingTeamId({ leagueId: proposal.league_id, tradeId: proposal.trade_id, receivingTeamId: proposal.receiving_team_id, actorUserId: authenticated.user.id }) : proposal.receiving_team_id
     );
     const occurredAtMs = safeNow(clock);
     const result = repository.executeAcceptance({
@@ -273,7 +271,7 @@ function createAcceptTradeProposalService({
         idempotencyKey: canonicalIdempotencyKey(idempotencyKey),
         idempotencyExpiresAtMs: occurredAtMs + IDEMPOTENCY_LIFETIME_MS,
       });
-    if (result.trade.status === "awaiting_commissioner_approval") {
+    if (result.participantResponse || result.trade.status === "awaiting_commissioner_approval") {
       return projectResult(
         result,
         Object.freeze({ status: "not_applicable" })

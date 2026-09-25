@@ -739,9 +739,8 @@ function seedBid(
   database,
   value,
   auctionId,
-  { totalValueCents, termYears, starting = false }
+  { totalValueCents, termYears, starting = false, lowestAavCents = null, submittedAtMs = AUCTION_OPENS_AT_MS + 1_000 }
 ) {
-  const submittedAtMs = AUCTION_OPENS_AT_MS + 1_000;
   insert(database, "auction_bids", {
     id: value.bid,
     league_id: IDS.league,
@@ -751,8 +750,8 @@ function seedBid(
     submitted_by_user_id: value.user,
     total_value_cents: totalValueCents,
     term_years: termYears,
-    lowest_offered_aav_cents: Math.round(totalValueCents / termYears),
-    lowest_offered_total_value_cents: totalValueCents,
+    lowest_offered_aav_cents: lowestAavCents ?? Math.round(totalValueCents / termYears),
+    lowest_offered_total_value_cents: lowestAavCents === null ? totalValueCents : lowestAavCents * termYears,
     first_submitted_at_ms: submittedAtMs,
     last_edited_at_ms: submittedAtMs,
     edit_count: 0,
@@ -870,16 +869,26 @@ function seedResolutionScenario(database, mode) {
         : "candidate_tie_restricted",
     created_at_ms: AUCTION_OPENS_AT_MS,
   });
-  if (mode === "restricted_winner") {
+  if (mode === "direct_historical_term") {
+    seedBid(database, MANAGERS[0], auctionId, {totalValueCents:2400,termYears:3,starting:true});
+    seedBid(database, MANAGERS[1], auctionId, {totalValueCents:2250,termYears:3});
+    database.prepare("UPDATE auction_bids SET total_value_cents=1000,term_years=1,lowest_offered_aav_cents=800,lowest_offered_total_value_cents=1000,edit_count=1,last_edited_at_ms=?,version=2 WHERE id=?").run(AUCTION_OPENS_AT_MS+2000,MANAGERS[0].bid);
+    const original=database.prepare("SELECT * FROM auction_events WHERE id=?").get(MANAGERS[0].bidEvent);
+    insert(database,"auction_events",{...original,id:uuid(29991),event_type:"bid_edited",occurred_at_ms:AUCTION_OPENS_AT_MS+2000,metadata_json:JSON.stringify({after:{totalValueCents:1000,termYears:1,aavCents:1000,editCount:1}})});
+  } else if (mode === "restricted_aav") {
+    seedBid(database, MANAGERS[0], auctionId, { totalValueCents: 350, termYears: 1, lowestAavCents: 300 });
+    seedBid(database, MANAGERS[1], auctionId, { totalValueCents: 900, termYears: 3 });
+  } else if (mode === "restricted_winner") {
     seedBid(database, MANAGERS[0], auctionId, {
       totalValueCents: 900,
       termYears: 2,
     });
   } else if (mode === "restricted_tie") {
-    for (const value of MANAGERS) {
+    for (const [index, value] of MANAGERS.entries()) {
       seedBid(database, value, auctionId, {
         totalValueCents: 900,
         termYears: 2,
+        submittedAtMs: AUCTION_OPENS_AT_MS + (index === 0 ? 2_000 : 1_000),
       });
     }
   } else if (mode === "restricted_removed") {
@@ -917,6 +926,7 @@ function seedResolutionScenario(database, mode) {
     for (const [index, value] of MANAGERS.entries()) {
       const removed = mode === "restricted_removed" && index === 0;
       const hasImprovement =
+        mode === "restricted_aav" ||
         (mode === "restricted_winner" && index === 0) ||
         mode === "restricted_tie" ||
         (mode === "restricted_removed" && index === 1);
@@ -1027,7 +1037,7 @@ function seedResolutionScenario(database, mode) {
   };
 }
 
-function withDatabase(t) {
+function withDatabase(t, schemaVersion = Infinity) {
   const temporaryRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "hundo-fad-auction-resolution-")
   );
@@ -1043,12 +1053,29 @@ function withDatabase(t) {
     database: connection.database,
     migrations: discoverMigrations({
       migrationsDirectory: MIGRATIONS_DIRECTORY,
-    }),
+    }).filter((migration) => migration.id <= schemaVersion),
     applicationBuildId:
       "fad-auction-resolution-writer-foundation",
     now: () => 1,
   });
   return connection.database;
+}
+
+function assertFirstBidMigrationPreservesRows(database) {
+  const tables = database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+  const snapshot = () => Object.fromEntries(tables.filter(({ name }) => name !== 'schema_migrations').map(({ name }) => {
+    const rows = database.prepare('SELECT * FROM "' + name.replaceAll('"', '""') + '"').all()
+      .filter((row) => name !== 'application_metadata' || row.metadata_key !== 'data_model_version');
+    return [name, rows.map((row) => JSON.stringify(row)).sort()];
+  }));
+  const before = snapshot();
+  const ledger = database.prepare('SELECT * FROM schema_migrations ORDER BY migration_id').all();
+  applyMigrations({ database, migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }), applicationBuildId: 'first-bid-preservation', now: () => EXECUTES_AT_MS });
+  assert.deepEqual(snapshot(), before);
+  assert.deepEqual(database.prepare('SELECT * FROM schema_migrations WHERE migration_id <= 59 ORDER BY migration_id').all(), ledger);
+  assert.equal(database.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key = 'data_model_version'").get().metadata_value, '61');
+  assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
 }
 
 function createWriter(database) {
@@ -1068,9 +1095,9 @@ function createWriter(database) {
 function createScenarioRuntime(
   t,
   mode,
-  { missingJob = false, beforeCommit } = {}
+  { missingJob = false, beforeCommit, schemaVersion = Infinity } = {}
 ) {
-  const database = withDatabase(t);
+  const database = withDatabase(t, schemaVersion);
   const triggers = captureAndDropTriggers(database);
   seedBase(database);
   MANAGERS.forEach((value, index) =>
@@ -1631,6 +1658,34 @@ describe("SQLite FAD auction resolution writer foundation", () => {
     assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
   });
 
+  test("AAV-first auction completes through the real job with a shorter winning term and actual submitted price", async (t) => {
+    const runtime = createScenarioRuntime(t, "restricted_aav");
+    let now = EXECUTES_AT_MS;
+    const clock = { nowMs: () => now++ };
+    const errors = [];
+    const service = createFreeAgentDraftAuctionResolutionService({
+      repository: runtime.writer, clock,
+      lateLockCoordinator: { async coordinateCommittedRoster() { return { status: "completed", lockId: uuid(19_900) }; } },
+    });
+    let id = 20_000;
+    const job = createResolveFreeAgentDraftAuctionsJob({
+      repository: runtime.writer, resolutionService: service, clock,
+      secureRandom: { id: () => uuid(++id) }, leaseOwner: LEASE_OWNER,
+      logger: { error(...args) { errors.push(args); } },
+    });
+    const processed = await job.run();
+    assert.equal(processed.succeeded, 1, JSON.stringify({ processed, errors }));
+    assert.equal(processed.failed, 0);
+    const result = runtime.writer.findResolution({ leagueId: IDS.league, auctionId: runtime.auctionId, occurrenceKey: runtime.key });
+    assert.equal(result.winner.teamId, MANAGERS[0].team);
+    assert.equal(result.winner.submittedTermYears, 1);
+    assert.equal(result.winner.highestCompetingAavCents, 300);
+    assert.equal(result.winner.finalAavCents, 350);
+    assert.equal(result.winner.finalTotalValueCents, 350);
+    assert.equal(result.replayed, true);
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+  });
+
   test("atomically resolves a restricted winner with sole-bid pricing sentinel and exact replay", (t) => {
     const runtime = createScenarioRuntime(t, "restricted_winner");
     const { result } = claimAndExecute(runtime);
@@ -2081,20 +2136,22 @@ describe("SQLite FAD auction resolution writer foundation", () => {
     );
   });
 
-  test("persists the committed exact-top draw and freezes only its selected winner and tied loser", (t) => {
-    const runtime = createScenarioRuntime(t, "restricted_tie");
+  test("persists the earliest restricted bidder as winner without a draw and replays the same result", (t) => {
+    const runtime = createScenarioRuntime(t, "restricted_tie", { schemaVersion: 59 });
+    assertFirstBidMigrationPreservesRows(runtime.database);
     const { result } = claimAndExecute(runtime);
 
     assert.equal(result.outcome, "winner");
-    assert.equal(result.drawReveal.selectionUsed, true);
+    assert.equal(result.drawReveal.selectionUsed, false);
+    assert.equal(result.winner.bidId, MANAGERS[1].bid);
     assert.deepEqual(
       result.drawReveal.orderedBidIds,
-      MANAGERS.map((value) => value.bid).sort()
+      []
     );
-    assert.equal(Number.isSafeInteger(result.drawReveal.counter), true);
-    assert.equal(result.drawReveal.digestHex.length, 64);
-    assert.equal(result.drawReveal.selectedBidId, result.winner.bidId);
-    assert.equal(result.drawReveal.selectedTeamId, result.winner.teamId);
+    assert.equal(result.drawReveal.counter, null);
+    assert.equal(result.drawReveal.digestHex, null);
+    assert.equal(result.drawReveal.selectedBidId, null);
+    assert.equal(result.drawReveal.selectedTeamId, null);
     const bids = runtime.database.prepare(`
       SELECT id, team_id, status
       FROM auction_bids
@@ -2105,7 +2162,7 @@ describe("SQLite FAD auction resolution writer foundation", () => {
     assert.equal(bids.filter((bid) => bid.status === "lost").length, 1);
     assert.equal(
       bids.find((bid) => bid.status === "won").id,
-      result.drawReveal.selectedBidId
+      result.winner.bidId
     );
     const draw = runtime.database.prepare(`
       SELECT
@@ -2137,6 +2194,24 @@ describe("SQLite FAD auction resolution writer foundation", () => {
     });
     assert.deepEqual(replay.drawReveal, result.drawReveal);
     assert.equal(replay.winner.bidId, result.winner.bidId);
+  });
+
+  test("first-bid migration preserves a completed historical resolution and its replay", (t) => {
+    const runtime = createScenarioRuntime(t, "direct_winner", { schemaVersion: 59 });
+    const { result } = claimAndExecute(runtime);
+    assertFirstBidMigrationPreservesRows(runtime.database);
+    const replay = runtime.writer.findResolution({
+      leagueId: IDS.league,
+      auctionId: runtime.auctionId,
+      occurrenceKey: runtime.key,
+    });
+    assert.equal(replay.resolutionId, result.resolutionId);
+    assert.deepEqual(replay.winner, result.winner);
+    assert.deepEqual(replay.drawReveal, result.drawReveal);
+    assert.equal(replay.replayed, true);
+    assert.throws(() => runtime.database.prepare(`
+      UPDATE free_agent_draft_draws SET selected_bid_id = ? WHERE auction_id = ?
+    `).run(MANAGERS[1].bid, runtime.auctionId));
   });
 
   test("excludes a removed participant's higher current bid and invalidates it before draw freezing", (t) => {
@@ -2986,20 +3061,21 @@ describe("SQLite FAD auction resolution writer foundation", () => {
     );
   });
 
-  test("persists an allocation-null queued-nomination exact tie through its committed private draw", (t) => {
+  test("persists an allocation-null queued tie by timestamp and stable ID without a draw", (t) => {
     const runtime = createScenarioRuntime(t, "queued_tie");
     const { result } = claimAndExecute(runtime);
 
     assert.equal(result.outcome, "winner");
     assert.equal(result.allocationId, null);
     assert.equal(result.allocationVersion, 0);
-    assert.equal(result.drawReveal.selectionUsed, true);
+    assert.equal(result.drawReveal.selectionUsed, false);
+    assert.equal(result.winner.bidId, MANAGERS[0].bid);
     assert.deepEqual(
       result.drawReveal.orderedBidIds,
-      MANAGERS.map((value) => value.bid).sort()
+      []
     );
-    assert.equal(result.drawReveal.selectedBidId, result.winner.bidId);
-    assert.equal(result.drawReveal.selectedTeamId, result.winner.teamId);
+    assert.equal(result.drawReveal.selectedBidId, null);
+    assert.equal(result.drawReveal.selectedTeamId, null);
     assert.equal(result.winner.highestCompetingAavCents, 300);
     assertRapidResultPublicationEvidence(
       runtime,
@@ -3778,4 +3854,76 @@ describe("SQLite FAD auction resolution writer foundation", () => {
       []
     );
   });
+});
+
+for (const [label, overrides, accepted] of [
+  ["earliest original bid", { winner: "bid-a" }, true],
+  ["later tied bidder", { winner: "bid-b" }, false],
+  ["higher AAV before time", { winner: "bid-b", secondAav: 400 }, true],
+  ["longer term before time", { winner: "bid-b", secondTerm: 3 }, true],
+  ["stable ID for identical timestamps", { winner: "bid-a", secondTime: 100 }, true],
+  ["wrong stable ID for identical timestamps", { winner: "bid-b", secondTime: 100 }, false],
+  ["random selection fields", { winner: "bid-a", randomSelection: true }, false],
+]) {
+  test("first-bid database guard: " + label, (t) => {
+    const Database = require("better-sqlite3");
+    const database = new Database(":memory:");
+    t.after(() => database.close());
+    database.exec(`
+      CREATE TABLE application_metadata (metadata_key, metadata_value, updated_at_ms);
+      INSERT INTO application_metadata VALUES ('data_model_version', '59', 59);
+      CREATE TABLE auctions (id, league_id, season_id, status);
+      CREATE TABLE auction_resolutions (league_id, auction_id, resolved_at_ms, winning_bid_id, winning_team_id);
+      CREATE TABLE auction_bids (id, league_id, auction_id, first_submitted_at_ms);
+      CREATE TABLE fad_frozen_eligible_bids (bid_id, team_id, league_id, auction_id, aav_cents, term_years);
+      CREATE TABLE free_agent_draft_draws (
+        id, league_id, season_id, fad_id, allocation_id, auction_id,
+        algorithm_version, nonce_bytes, commitment_hex, created_at_ms,
+        revealed_at_ms, updated_at_ms, version, ordered_tied_bid_ids_json,
+        ordered_tied_team_ids_json, selected_bid_id, selected_team_id,
+        selected_index, rejection_counter, selected_digest_hex
+      );
+      CREATE TRIGGER free_agent_draft_draws_reveal_update BEFORE UPDATE ON free_agent_draft_draws BEGIN SELECT 1; END;
+      INSERT INTO auctions VALUES ('auction', 'league', 'season', 'resolving');
+      INSERT INTO free_agent_draft_draws (id, league_id, season_id, fad_id, auction_id, version, created_at_ms)
+        VALUES ('draw', 'league', 'season', 'fad', 'auction', 1, 0);
+    `);
+    database.exec(fs.readFileSync(path.join(MIGRATIONS_DIRECTORY, "0060_resolve_fad_auction_ties_by_first_bid.sql"), "utf8"));
+    database.prepare("INSERT INTO auction_resolutions VALUES ('league', 'auction', 1000, ?, ?)")
+      .run(overrides.winner, overrides.winner === "bid-a" ? "team-a" : "team-b");
+    database.prepare("INSERT INTO auction_bids VALUES (?, 'league', 'auction', ?)").run("bid-a", 100);
+    database.prepare("INSERT INTO auction_bids VALUES (?, 'league', 'auction', ?)").run("bid-b", overrides.secondTime ?? 200);
+    database.prepare("INSERT INTO fad_frozen_eligible_bids VALUES (?, ?, 'league', 'auction', ?, ?)")
+      .run("bid-a", "team-a", 300, 2);
+    database.prepare("INSERT INTO fad_frozen_eligible_bids VALUES (?, ?, 'league', 'auction', ?, ?)")
+      .run("bid-b", "team-b", overrides.secondAav ?? 300, overrides.secondTerm ?? 2);
+    const seal = () => database.prepare(`UPDATE free_agent_draft_draws SET
+      revealed_at_ms = 1000, updated_at_ms = 1000, version = 2,
+      ordered_tied_bid_ids_json = '[]', ordered_tied_team_ids_json = '[]', selected_bid_id = ?
+      WHERE id = 'draw'`).run(overrides.randomSelection ? overrides.winner : null);
+    if (accepted) assert.equal(seal().changes, 1);
+    else {
+      assert.throws(seal, /FAD result must use AAV/);
+      assert.equal(database.prepare("SELECT version FROM free_agent_draft_draws").get().version, 1);
+    }
+  });
+}
+
+test("actual earlier offer persists its complete term and replays without rewriting bids", (t) => {
+  const runtime=createScenarioRuntime(t,"direct_historical_term");
+  const bidValues = () => runtime.database.prepare("SELECT id,total_value_cents,term_years,first_submitted_at_ms,last_edited_at_ms,edit_count FROM auction_bids ORDER BY id").all();
+  const before=bidValues();
+  const {result}=claimAndExecute(runtime);
+  assert.equal(result.winner.finalAavCents,800);
+  assert.equal(result.winner.finalTermYears,3);
+  assert.equal(result.winner.finalTotalValueCents,2400);
+  assert.equal(result.winner.submittedTermYears,1);
+  const saved=runtime.database.prepare("SELECT * FROM auction_resolutions WHERE auction_id=?").get(runtime.auctionId);
+  assert.equal(saved.winning_term_years,3);
+  assert.equal(saved.final_contract_value_cents,2400);
+  const replay=runtime.writer.findResolution({leagueId:IDS.league,auctionId:runtime.auctionId,occurrenceKey:runtime.key});
+  assert.equal(replay.winner.finalTermYears,3);
+  assert.deepEqual(bidValues(),before);
+  assert.equal(runtime.database.prepare("SELECT status FROM auction_bids WHERE id=?").get(MANAGERS[0].bid).status,"won");
+  assert.deepEqual(runtime.database.pragma("foreign_key_check"),[]);
 });

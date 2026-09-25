@@ -1,3 +1,4 @@
+const { ACTUAL_OFFER_PRICING_RULE, selectActualWinningOffer } = require("./actualWinningOfferPolicy");
 const UUID_PATTERN =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
@@ -276,8 +277,8 @@ function inspectBid(input, auction) {
 
 function rankBids(left, right) {
   return (
-    right.totalValueCents - left.totalValueCents ||
     right.aavCents - left.aavCents ||
+    right.termYears - left.termYears ||
     left.firstSubmittedAtMs - right.firstSubmittedAtMs ||
     left.id.localeCompare(right.id)
   );
@@ -301,10 +302,11 @@ function safeRankedBid(bid, rank) {
 function evaluateAuctionResolution(input) {
   exactObject(
     input,
-    ["auction", "bids"],
+    ["auction", "bids", ...(Object.hasOwn(input ?? {}, "bidHistory") ? ["bidHistory"] : [])],
     AUCTION_RESOLUTION_CODES.inputInvalid
   );
-  if (!Array.isArray(input.bids)) {
+  if (!Array.isArray(input.bids) ||
+      (Object.hasOwn(input, "bidHistory") && !Array.isArray(input.bidHistory))) {
     fail(AUCTION_RESOLUTION_CODES.inputInvalid);
   }
   const auction = canonicalAuction(input.auction);
@@ -388,37 +390,11 @@ function evaluateAuctionResolution(input) {
   );
   const winner = eligible[0];
   const competitor = eligible[1] || null;
-  const requiredWinningTotalValueCents = competitor
-    ? Math.max(
-        winner.lowestOfferedTotalValueCents,
-        competitor.totalValueCents
-      )
-    : winner.totalValueCents;
-  const legacySubmittedPrice =
-    requiredWinningTotalValueCents ===
-      winner.totalValueCents &&
-    (
-      winner.totalValueCents % winner.termYears !== 0 ||
-      (
-        winner.totalValueCents / winner.termYears
-      ) % 25 !== 0
-    );
-  const requiredWinningAavCents = legacySubmittedPrice
-    ? winner.aavCents
-    : Math.max(
-        100,
-        Math.ceil(
-          requiredWinningTotalValueCents /
-            winner.termYears /
-            25
-        ) * 25
-      );
-  const finalTotalValueCents = legacySubmittedPrice
-    ? winner.totalValueCents
-    : requiredWinningAavCents * winner.termYears;
-  if (finalTotalValueCents > winner.totalValueCents) {
-    fail(AUCTION_RESOLUTION_CODES.valueInvalid);
-  }
+  const pricedOffer = selectActualWinningOffer({ winner, competitor,
+    bidHistory: input.bidHistory || [], dueAtMs: auction.resolvesAtMs, validateOffer: validateSubmittedValue });
+  const requiredWinningTotalValueCents = pricedOffer.totalValueCents;
+  const requiredWinningAavCents = pricedOffer.aavCents;
+  const finalTotalValueCents = pricedOffer.totalValueCents;
   return freeze({
     ...base,
     outcome: "winner",
@@ -426,6 +402,9 @@ function evaluateAuctionResolution(input) {
     skippedBids,
     rankedBids,
     winner: freeze({
+      pricingRule: ACTUAL_OFFER_PRICING_RULE,
+      pricedOffer,
+      finalTermYears: pricedOffer.termYears,
       bidId: winner.id,
       teamId: winner.teamId,
       submittedTotalValueCents: winner.totalValueCents,
@@ -442,7 +421,7 @@ function evaluateAuctionResolution(input) {
       finalTotalValueCents,
       finalAavCents: calculateAavCents(
         finalTotalValueCents,
-        winner.termYears
+        pricedOffer.termYears
       ),
     }),
   });

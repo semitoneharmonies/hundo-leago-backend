@@ -3588,6 +3588,43 @@ describe(
       }
     );
 
+    test("commissioner restricted edit compares all cross-term offers by AAV then term", (t) => {
+      const runtime = createRuntime(t);
+      installRestrictedContext(runtime);
+      for (const [aavCents, termYears, acceptable] of [
+        [300, 1, true],
+        [200, 3, false],
+        [250, 1, false],
+        [250, 2, false],
+        [250, 3, true],
+      ]) {
+        runtime.database.exec("BEGIN");
+        try {
+        const generatedIdsBefore = runtime.generatedIdCount();
+        const before = { bid: bidRow(runtime.database), participant: participantRow(runtime.database) };
+        const command = commandFor(runtime, "edit_bid", {
+          body: bodyFor("edit_bid", { aavCents, termYears }),
+        });
+        if (!acceptable) {
+          assertRepositoryError(() => runtime.repository.administer(command),
+            AUCTION_ADMINISTRATION_REPOSITORY_CODES.stateConflict);
+          assert.deepEqual({ bid: bidRow(runtime.database), participant: participantRow(runtime.database) }, before);
+          assert.equal(runtime.generatedIdCount(), generatedIdsBefore);
+          continue;
+        }
+        const result = runtime.repository.administer(command);
+        assert.equal(result.replayed, false);
+        const bid = bidRow(runtime.database);
+        assert.equal(bid.total_value_cents, aavCents * termYears);
+        assert.equal(bid.term_years, termYears);
+        assert.equal(bid.first_submitted_at_ms, before.bid.first_submitted_at_ms);
+        assert.equal(runtime.repository.administer(command).replayed, true);
+        } finally {
+          runtime.database.exec("ROLLBACK");
+        }
+      }
+    });
+
     test(
       "T-081 permanently removes a restricted participant with exact platform-admin authority and rolls back atomically",
       (t) => {

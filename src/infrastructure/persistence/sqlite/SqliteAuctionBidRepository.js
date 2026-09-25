@@ -386,6 +386,8 @@ function createSqliteAuctionBidRepository({ database } = {}) {
         free_agent_draft_player_allocations
           .restricted_minimum_total_cents,
         free_agent_draft_player_allocations
+          .restricted_minimum_term_years,
+        free_agent_draft_player_allocations
           .restricted_minimum_aav_cents,
         (
           SELECT COUNT(*)

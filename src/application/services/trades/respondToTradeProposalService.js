@@ -103,7 +103,7 @@ function createRespondToTradeProposalService({
     }
     const participantTeamId =
       body.action === "reject"
-        ? proposal.receiving_team_id
+        ? (repository.findRespondingTeamId ? repository.findRespondingTeamId({ leagueId, tradeId: proposal.trade_id, receivingTeamId: proposal.receiving_team_id, actorUserId: authenticated.user.id }) : proposal.receiving_team_id)
         : proposal.proposing_team_id;
     const actor = authority(
       authenticated,
@@ -132,7 +132,12 @@ function createRespondToTradeProposalService({
     return projectResult(result, body.action);
   }
 
-  return Object.freeze({ respond });
+  function acknowledge({ leagueId, tradeId, authenticated } = {}) {
+    const body = require("../../../domain/trades/tradeLifecyclePolicy").validateTradeAcceptancePreviewInput({ tradeId });
+    leagueAuthorization.requireActiveMembership(authenticated, leagueId);
+    return repository.acknowledge({ leagueId, tradeId: body.tradeId, actorUserId: authenticated.user.id, occurredAtMs: safeNow(clock) });
+  }
+  return Object.freeze({ respond, acknowledge });
 }
 
 module.exports = {

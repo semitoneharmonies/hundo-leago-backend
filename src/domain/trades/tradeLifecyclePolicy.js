@@ -197,7 +197,7 @@ function assertTradeLifecycleState({ command, context } = {}) {
     context.league_status === "active" &&
     context.membership_user_id === command.actorUserId &&
     context.membership_status === "active" &&
-    context.assignment_team_id === expectedManagerTeamId(command) &&
+    context.assignment_team_id === (context.multi_trade_actor_team_id || expectedManagerTeamId(command)) &&
     context.assignment_status === "accepted" &&
     context.assignment_accepted_at_ms !== null &&
     context.assignment_ended_at_ms === null;
@@ -279,7 +279,7 @@ function assertTradeAcceptancePreviewState({ command, context } = {}) {
     context.league_status === "active" &&
     context.membership_user_id === command.actorUserId &&
     context.membership_status === "active" &&
-    context.assignment_team_id === command.receivingTeamId &&
+    context.assignment_team_id === (context.multi_trade_actor_team_id || command.receivingTeamId) &&
     context.assignment_status === "accepted" &&
     context.assignment_accepted_at_ms !== null &&
     context.assignment_ended_at_ms === null;

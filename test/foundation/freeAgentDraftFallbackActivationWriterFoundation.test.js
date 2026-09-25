@@ -82,7 +82,7 @@ const IDS = Object.freeze({
   weekOne: uuid(3),
   readiness: uuid(4),
   fad: uuid(5),
-  player: uuid(6),
+  player: uuid(6).replace("-4000-", "-5000-"),
   sourceAuction: uuid(7),
   fallbackAuction: uuid(8),
   allocation: uuid(9),

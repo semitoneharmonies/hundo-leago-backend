@@ -43,7 +43,7 @@ test("expanded migration preserves populated history and provider correction cha
   const before = contents();
   before.application_metadata = before.application_metadata.map(JSON.parse).map(row => row.metadata_key === "data_model_version"
     ? { ...row, metadata_value: "57", updated_at_ms: Math.max(row.updated_at_ms, 57) } : row).map(JSON.stringify).sort();
-  applyMigrations({ database, migrations, applicationBuildId: "expanded-after", now: () => 2 });
+  applyMigrations({ database, migrations: migrations.filter(migration => migration.id <= 57), applicationBuildId: "expanded-after", now: () => 2 });
   assert.deepEqual(contents(), before);
   assert.equal(database.pragma("user_version", { simple: true }), 57);
   assert.equal(database.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key = 'data_model_version'").get().metadata_value, "57");

@@ -48,7 +48,7 @@ const LEASE_OWNER =
 function descriptor(index = 1, overrides = {}) {
   const runId = uuid(10 + index);
   const allocationId = uuid(20 + index);
-  const playerId = uuid(30 + index);
+  const playerId = uuid(30 + index).replace("-4000-", "-5000-");
   const auctionId = uuid(40 + index);
   const rolloverId = uuid(50 + index);
   const occurrenceKey =
@@ -143,6 +143,9 @@ function terminal(command, overrides = {}) {
       outboxEventIds: [
         IDS.fadOutbox,
         IDS.auctionOutbox,
+        uuid(701),
+        uuid(702),
+        uuid(703),
       ],
     },
     replayed: false,

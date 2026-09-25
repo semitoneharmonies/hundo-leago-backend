@@ -310,10 +310,8 @@ function safeOfferProjection(offer) {
 
 function rankOffers(left, right) {
   return (
-    right.totalValueCents -
-      left.totalValueCents ||
     right.aavCents - left.aavCents ||
-    left.termYears - right.termYears ||
+    right.termYears - left.termYears ||
     left.teamId.localeCompare(right.teamId) ||
     left.offerId.localeCompare(right.offerId)
   );
@@ -511,16 +509,14 @@ function decideCandidateAllocation(input = {}) {
   const second = eligibleOffers[1] || null;
   if (
     !second ||
-    second.totalValueCents <
-      top.totalValueCents ||
-    second.aavCents < top.aavCents
+    second.aavCents < top.aavCents ||
+    second.termYears < top.termYears
   ) {
     const decisionCode = !second
       ? "sole_valid_offer"
-      : second.totalValueCents <
-          top.totalValueCents
-        ? "highest_total"
-        : "highest_equal_total_aav";
+      : second.aavCents < top.aavCents
+        ? "highest_aav"
+        : "highest_equal_aav_term";
     return immutable({
       ...base,
       outcome: "automatic_award",
@@ -532,8 +528,7 @@ function decideCandidateAllocation(input = {}) {
 
   const tiedOffers = eligibleOffers.filter(
     (offer) =>
-      offer.totalValueCents ===
-        top.totalValueCents &&
+      offer.aavCents === top.aavCents &&
       offer.termYears === top.termYears
   );
   if (tiedOffers.length < 2) {
@@ -591,27 +586,27 @@ function canonicalBid(value) {
   });
 }
 
-function compareTotalFirstAavSecond(
+function compareAavFirstLongestTermSecond(
   left,
   right
 ) {
   const canonicalLeft = canonicalBid(left);
   const canonicalRight = canonicalFloor(right);
   if (
-    canonicalLeft.totalValueCents !==
-    canonicalRight.totalValueCents
-  ) {
-    return canonicalLeft.totalValueCents >
-      canonicalRight.totalValueCents
-      ? 1
-      : -1;
-  }
-  if (
     canonicalLeft.aavCents !==
     canonicalRight.aavCents
   ) {
     return canonicalLeft.aavCents >
       canonicalRight.aavCents
+      ? 1
+      : -1;
+  }
+  if (
+    canonicalLeft.termYears !==
+    canonicalRight.termYears
+  ) {
+    return canonicalLeft.termYears >
+      canonicalRight.termYears
       ? 1
       : -1;
   }
@@ -634,7 +629,7 @@ function evaluateRestrictedCandidateImprovement(
     input.submittedBid
   );
   const comparison =
-    compareTotalFirstAavSecond(
+    compareAavFirstLongestTermSecond(
       submittedBid,
       candidateMinimum
     );
@@ -680,7 +675,7 @@ function evaluateFallbackFloorBid(input = {}) {
     input.submittedBid
   );
   const comparison =
-    compareTotalFirstAavSecond(
+    compareAavFirstLongestTermSecond(
       submittedBid,
       floor
     );
@@ -722,7 +717,7 @@ module.exports = {
   CandidateAllocationPolicyError,
   FAD_BINDING_NO_RESERVATION_POLICY,
   FAD_RESTRICTED_JOINING_MINIMUM_TOTALS,
-  compareTotalFirstAavSecond,
+  compareAavFirstLongestTermSecond,
   createRestrictedCandidateMinimum,
   decideCandidateAllocation,
   evaluateFallbackFloorBid,

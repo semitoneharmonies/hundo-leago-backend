@@ -463,7 +463,12 @@ function createAuctionService({
     const canonicalLeagueId = validateStableId(leagueId);
     const candidateBody = exactStartInput(input);
     const teamId = validateStableId(candidateBody.teamId);
-    const playerId = validateStableId(candidateBody.playerId);
+    const playerId = candidateBody.playerId;
+    if (!isUuid(playerId)) {
+      const error = new TypeError("The auction player identifier is invalid.");
+      error.code = "AUCTION_INPUT_INVALID";
+      throw error;
+    }
     const authority = startAuthority(
       authenticated,
       canonicalLeagueId,

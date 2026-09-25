@@ -6,6 +6,7 @@ const {
 
 const {
   UUID_PATTERN,
+  PLAYER_UUID_PATTERN,
   buildFreeAgentDraftRestrictedActivationOccurrenceKey,
 } = require(
   "../../domain/freeAgentDraft/freeAgentDraftPolicy"
@@ -79,6 +80,7 @@ const TERMINAL_FIELDS = Object.freeze([
   "sourceRecoveryId",
 ]);
 const EVIDENCE_FIELDS = Object.freeze([
+  "notificationIds",
   "offerEventIds",
   "outboxEventIds",
   "stateEventId",
@@ -221,7 +223,7 @@ function requireActivationDescriptor(value) {
     binding.allocationId !== parsed.allocationId ||
     binding.activationAtMs !==
       parsed.activationAtMs ||
-    !UUID_PATTERN.test(binding.playerId || "") ||
+    !PLAYER_UUID_PATTERN.test(binding.playerId || "") ||
     !UUID_PATTERN.test(binding.auctionId || "") ||
     !UUID_PATTERN.test(binding.rolloverId || "")
   ) {
@@ -331,11 +333,13 @@ function requireTerminal(result, claimed) {
     !exactObject(evidence, EVIDENCE_FIELDS) ||
     !canonicalIdArray(evidence.offerEventIds, 2) ||
     !UUID_PATTERN.test(evidence.stateEventId || "") ||
+    !canonicalIdArray(evidence.notificationIds) ||
     !canonicalIdArray(
       evidence.outboxEventIds,
       2
     ) ||
-    evidence.outboxEventIds.length !== 2
+    evidence.outboxEventIds.length !==
+      2 + evidence.notificationIds.length
   ) {
     throw new TypeError(
       "FAD restricted-activation runner requires a durable terminal result"

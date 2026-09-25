@@ -60,7 +60,7 @@ const DAY_MS = 86_400_000;
 function descriptor(index = 1, overrides = {}) {
   const runId = uuid(100 + index);
   const queueId = uuid(200 + index);
-  const playerId = uuid(300 + index);
+  const playerId = uuid(300 + index).replace("-4000-", "-5000-");
   const occurrenceKey =
     buildFreeAgentDraftNominationOpenOccurrenceKey({
       fadId: IDS.fad,

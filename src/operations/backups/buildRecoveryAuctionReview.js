@@ -107,7 +107,7 @@ function buildRecoveryAuctionReview({ preparedDatabase, restoredDatabase, preser
     const repository = createTargetRepositories({ database: preparedDatabase, secureRandom: createSecureRandom() }).auctionResolutions;
     const candidate = repository.loadCandidate({ leagueId, auctionId, nowMs: observedAtMs });
     if (!candidate) fail("RECOVERY_AUCTION_REVIEW_CANDIDATE_INVALID");
-    const pricing = evaluateAuctionResolution({ auction: candidate.auction, bids: candidate.bids });
+    const pricing = evaluateAuctionResolution({ auction: candidate.auction, bids: candidate.bids, bidHistory: candidate.bidHistory });
     const rules = preparedDatabase.prepare("SELECT * FROM league_settings WHERE league_id=? ORDER BY league_id").all(leagueId);
     const callbacks = {
       openCandidateCardsInLeague: preparedDatabase.prepare("SELECT COUNT(*) n FROM candidate_cards c JOIN free_agent_drafts f " +

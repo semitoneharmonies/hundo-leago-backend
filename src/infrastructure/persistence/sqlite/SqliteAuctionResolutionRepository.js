@@ -868,6 +868,7 @@ function createSqliteAuctionResolutionRepository({
       ),
       effectivePosition,
       bids: freeze(bids),
+      bidHistory: eligibleBidHistory(parameters, { rankedBids: bids.map((bid) => ({ bidId: bid.id })) }),
     });
   }
 
@@ -875,6 +876,7 @@ function createSqliteAuctionResolutionRepository({
     const decision = evaluateAuctionResolution({
       auction: candidate.auction,
       bids: candidate.bids,
+      bidHistory: candidate.bidHistory,
     });
     if (decision.outcome === "not_due") return decision;
     const base = {
@@ -1023,7 +1025,7 @@ function createSqliteAuctionResolutionRepository({
         }
         const values = row.event_type === "auction_started"
           ? metadata
-          : metadata?.after;
+          : (metadata?.after ?? metadata);
         return freeze({
           bidId: row.bid_id,
           teamId: row.team_id,
@@ -1070,7 +1072,7 @@ function createSqliteAuctionResolutionRepository({
         status: row.status,
       })),
       futureSeasonIds: command.futureSeasonIds,
-      termYears: decision.winner.submittedTermYears,
+      termYears: (decision.winner.finalTermYears ?? decision.winner.submittedTermYears),
       nowMs: command.nowMs,
     });
     for (const planned of seasonPlan.seasonsToCreate) {
@@ -1099,14 +1101,14 @@ function createSqliteAuctionResolutionRepository({
       contractId: command.contractId,
       contractYearIds: command.contractYearIds.slice(
         0,
-        decision.winner.submittedTermYears
+        (decision.winner.finalTermYears ?? decision.winner.submittedTermYears)
       ),
       contractEventId: command.contractEventId,
       leagueId: command.leagueId,
       playerId: candidate.auction.playerId,
       teamId: decision.winner.teamId,
       originalTotalValueCents: decision.winner.finalTotalValueCents,
-      termYears: decision.winner.submittedTermYears,
+      termYears: (decision.winner.finalTermYears ?? decision.winner.submittedTermYears),
       startSeasonId: candidate.seasonId,
       seasonIds: seasonPlan.seasonIds,
       acquisitionSourceType: "auction_resolution",
@@ -1205,7 +1207,7 @@ function createSqliteAuctionResolutionRepository({
         decision.winner.highestCompetingTotalValueCents,
       final_contract_value_cents:
         decision.winner.finalTotalValueCents,
-      winning_term_years: decision.winner.submittedTermYears,
+      winning_term_years: (decision.winner.finalTermYears ?? decision.winner.submittedTermYears),
       final_aav_cents: decision.winner.finalAavCents,
       general_illegal: legality.generalIllegal ? 1 : 0,
       warnings_json: JSON.stringify(legality.warnings),
@@ -1249,8 +1251,8 @@ function createSqliteAuctionResolutionRepository({
           decision.winner.submittedAavCents,
         finalTotalValueCents: decision.winner.finalTotalValueCents,
         finalAavCents: decision.winner.finalAavCents,
-        contractTermYears: decision.winner.submittedTermYears,
-        remainingYears: decision.winner.submittedTermYears,
+        contractTermYears: (decision.winner.finalTermYears ?? decision.winner.submittedTermYears),
+        remainingYears: (decision.winner.finalTermYears ?? decision.winner.submittedTermYears),
         assignmentCategory: "Active",
         assignmentPositionGroup: candidate.effectivePosition,
         assignmentSlotNumber: slotNumber,

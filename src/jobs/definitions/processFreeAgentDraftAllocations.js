@@ -6,6 +6,7 @@ const {
 
 const {
   UUID_PATTERN,
+  PLAYER_UUID_PATTERN,
   buildFreeAgentDraftAllocationOccurrenceKey,
 } = require(
   "../../domain/freeAgentDraft/freeAgentDraftPolicy"
@@ -176,7 +177,7 @@ function requireAllocationDescriptor(value) {
     !exactObject(parsed, PARSED_FIELDS) ||
     parsed.type !== "allocate" ||
     parsed.fadId !== value.fadId ||
-    !UUID_PATTERN.test(parsed.playerId || "") ||
+    !PLAYER_UUID_PATTERN.test(parsed.playerId || "") ||
     !exactObject(binding, BINDING_FIELDS) ||
     binding.type !== "allocate" ||
     binding.resourceType !== "allocation" ||

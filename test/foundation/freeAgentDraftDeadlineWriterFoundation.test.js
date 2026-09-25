@@ -53,7 +53,8 @@ const IDS = Object.freeze({
   participantOne: uuid(17),
   participantTwo: uuid(18),
   participantThree: uuid(19),
-  playerA: uuid(20),
+  // Imported catalogue players use UUIDv5; exercise deadline publication with one.
+  playerA: uuid(20).replace("-4000-", "-5000-"),
   playerB: uuid(21),
   playerC: uuid(22),
   carryoverPlayer: uuid(23),
@@ -1232,7 +1233,7 @@ describe("SQLite Free Agent Draft deadline writer foundation", () => {
         FROM free_agent_draft_player_allocations
         ORDER BY player_id
       `).all().map(({ player_id: playerId }) => playerId),
-      [IDS.playerA, IDS.playerB, IDS.playerC]
+      [IDS.playerA, IDS.playerB, IDS.playerC].sort()
     );
     const allocations = runtime.database.prepare(`
       SELECT player_id, status, decision_code,
@@ -1249,7 +1250,7 @@ describe("SQLite Free Agent Draft deadline writer foundation", () => {
     `).all();
     assert.deepEqual(
       allocations.map(({ player_id: playerId }) => playerId),
-      [IDS.playerA, IDS.playerB, IDS.playerC]
+      [IDS.playerA, IDS.playerB, IDS.playerC].sort()
     );
     for (const allocation of allocations) {
       assert.deepEqual(
@@ -1296,7 +1297,7 @@ describe("SQLite Free Agent Draft deadline writer foundation", () => {
       IDS.playerA,
       IDS.playerB,
       IDS.playerC,
-    ];
+    ].sort();
     for (const [index, job] of allocationJobs.entries()) {
       assert.deepEqual(
         job.occurrence_key,

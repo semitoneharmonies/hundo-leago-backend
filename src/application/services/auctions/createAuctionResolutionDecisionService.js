@@ -31,6 +31,7 @@ function createAuctionResolutionDecisionService({ repository } = {}) {
         decision: evaluateAuctionResolution({
           auction: candidate.auction,
           bids: candidate.bids,
+          bidHistory: candidate.bidHistory || [],
         }),
       });
     },

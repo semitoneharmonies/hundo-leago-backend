@@ -13,7 +13,7 @@ const {
 const LEAGUE_ID = "00000000-0000-4000-8000-000000000001";
 const SEASON_ID = "00000000-0000-4000-8000-000000000002";
 const TEAM_ID = "00000000-0000-4000-8000-000000000003";
-const PLAYER_ID = "00000000-0000-4000-8000-000000000004";
+const PLAYER_ID = "47c61deb-cb7a-5890-af71-9f7e1efcfc8d";
 const AUCTION_ID = "00000000-0000-4000-8000-000000000005";
 const BID_ID = "00000000-0000-4000-8000-000000000006";
 const USER_ID = "00000000-0000-4000-8000-000000000007";
@@ -438,6 +438,37 @@ function auctionServiceStub(overrides = {}) {
 }
 
 describe("M5-02 auction application service", () => {
+  test("accepts canonical player identifiers while retaining strict non-player boundaries", () => {
+    for (const playerId of [PLAYER_ID, "00000000-0000-4000-8000-000000000004"]) {
+      const fixture = serviceDependencies();
+      createAuctionService(fixture.dependencies).start({
+        leagueId: LEAGUE_ID,
+        input: { playerId, teamId: TEAM_ID, aavCents: 100, termYears: 1 },
+        idempotencyKey: "canonical-player",
+        authenticated: {},
+      });
+      assert.equal(fixture.calls.find(({ method }) => method === "startAuction").input.playerId, playerId);
+    }
+    for (const playerId of [null, "invalid", PLAYER_ID.toUpperCase(), PLAYER_ID.replace("-5890-", "-7890-")]) {
+      const fixture = serviceDependencies();
+      assert.throws(() => createAuctionService(fixture.dependencies).start({
+        leagueId: LEAGUE_ID,
+        input: { playerId, teamId: TEAM_ID, aavCents: 100, termYears: 1 },
+        idempotencyKey: "invalid-player",
+        authenticated: {},
+      }), { code: "AUCTION_INPUT_INVALID" });
+      assert.deepEqual(fixture.calls, []);
+    }
+    const fixture = serviceDependencies();
+    assert.throws(() => createAuctionService(fixture.dependencies).start({
+      leagueId: LEAGUE_ID,
+      input: { playerId: PLAYER_ID, teamId: PLAYER_ID, aavCents: 100, termYears: 1 },
+      idempotencyKey: "invalid-team",
+      authenticated: {},
+    }), { code: "TEAM_INPUT_INVALID" });
+    assert.deepEqual(fixture.calls, []);
+  });
+
   test("passes authenticated read scope and exact manager bid authority", () => {
     const fixture = serviceDependencies();
     fixture.dependencies.leagueAuthorization.requireCommissioner = () => {

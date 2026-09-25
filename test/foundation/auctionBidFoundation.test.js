@@ -984,6 +984,7 @@ describe("M5-02 auction bid policy", () => {
       allocation_status: "restricted_fallback_open",
       fallback_open_auction_id: IDS.auction,
       restricted_minimum_total_cents: 300,
+      restricted_minimum_term_years: 3,
       restricted_minimum_aav_cents: 100,
       opened_at_ms: NOW_MS,
     });
@@ -2160,7 +2161,59 @@ describe("M5-02 atomic sealed-bid persistence", () => {
     assert.equal(semanticHash(runtime.database), beforeSecond);
   });
 
-  test("uses the restricted edit's current AAV rather than its historical lowest AAV at an equal-total floor", (t) => {
+  for (const kind of ["restricted", "fallback"]) {
+    for (const action of ["submit", "edit"]) {
+      test(`${kind} ${action} compares all cross-term offers by AAV then term`, (t) => {
+        const runtime = configureFadBidRuntime(createPersistenceRuntime(t), {
+          kind, minimumTotalValueCents: 1400,
+          minimumTermYears: 2, minimumAavCents: 700,
+        });
+        for (const [aavCents, termYears, acceptable] of [
+          [800, 1, true],
+          [600, 3, false],
+          [700, 1, false],
+          [700, 2, kind === "fallback"],
+          [700, 3, true],
+        ]) {
+          runtime.database.exec("BEGIN");
+          try {
+          const initialAtMs = NOW_MS + 1;
+          let expectedBidVersion = null;
+          if (action === "edit") {
+            runtime.repository.putBid(persistenceCommand({
+              aavCents: 800, termYears: 2, occurredAtMs: initialAtMs,
+              bindingIllegalityConfirmed: true,
+            }));
+            expectedBidVersion = 1;
+          }
+          const before = semanticHash(runtime.database);
+          const occurredAtMs = initialAtMs + (action === "edit" ? COOLDOWN_MS : 0);
+          const submittedCommand = persistenceCommand({
+            bidId: uuid(350), eventId: uuid(351), idempotencyRequestId: uuid(352),
+            idempotencyKey: "aav-term-floor", aavCents, termYears,
+            occurredAtMs, expectedBidVersion, bindingIllegalityConfirmed: true,
+          });
+          if (!acceptable) {
+            assertPolicyError(() => runtime.repository.putBid(submittedCommand), AUCTION_BID_CODES.valueInvalid);
+            assert.equal(semanticHash(runtime.database), before);
+            continue;
+          }
+          const result = runtime.repository.putBid(submittedCommand);
+          assert.equal(result.bid.aavCents, aavCents);
+          assert.equal(result.bid.termYears, termYears);
+          assert.equal(result.bid.firstSubmittedAtMs, initialAtMs);
+          const after = semanticHash(runtime.database);
+          assert.equal(runtime.repository.putBid(submittedCommand).replayed, true);
+          assert.equal(semanticHash(runtime.database), after);
+          } finally {
+            runtime.database.exec("ROLLBACK");
+          }
+        }
+      });
+    }
+  }
+
+  test("uses the restricted edit's current AAV rather than its historical lowest AAV across terms", (t) => {
     const runtime = configureFadBidRuntime(
       createPersistenceRuntime(t),
       {
@@ -2173,7 +2226,7 @@ describe("M5-02 atomic sealed-bid persistence", () => {
     const submittedAtMs = NOW_MS + 1;
     const submitted = runtime.repository.putBid(
       persistenceCommand({
-        totalValueCents: 700,
+        aavCents: 300,
         termYears: 3,
         occurredAtMs: submittedAtMs,
         idempotencyExpiresAtMs:
@@ -2181,7 +2234,7 @@ describe("M5-02 atomic sealed-bid persistence", () => {
         bindingIllegalityConfirmed: true,
       })
     );
-    assert.equal(submitted.bid.aavCents, 225);
+    assert.equal(submitted.bid.aavCents, 300);
 
     const editedAtMs = submittedAtMs + COOLDOWN_MS;
     const edited = runtime.repository.putBid(
@@ -2207,7 +2260,7 @@ describe("M5-02 atomic sealed-bid persistence", () => {
         FROM auction_bids
         WHERE id = ?
       `).get(uuid(100)).lowest_offered_aav_cents,
-      225
+      300
     );
   });
 });

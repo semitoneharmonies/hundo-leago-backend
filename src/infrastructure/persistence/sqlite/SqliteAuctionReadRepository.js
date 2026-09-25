@@ -1177,6 +1177,7 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
         winningTeam: null,
         submittedTotalValueCents: null,
         submittedTermYears: null,
+        finalTermYears: null,
         submittedAavCents: null,
         finalContractValueCents: null,
         finalAavCents: null,
@@ -1213,19 +1214,33 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
       incompatible("The winning bid identity is inconsistent.");
     }
     const winningBid = winningBids[0];
+    let corrected = null;
+    if (resolution.corrected_contract_json) {
+      try { corrected = JSON.parse(resolution.corrected_contract_json).authoritative; }
+      catch { incompatible("The contract correction receipt is invalid."); }
+      if (!corrected || corrected.id !== resolution.contract_id ||
+          corrected.leagueId !== head.league_id ||
+          !Number.isSafeInteger(corrected.originalTotalValueCents) ||
+          !Number.isSafeInteger(corrected.originalTermYears) ||
+          corrected.originalTermYears < 1 || corrected.originalTermYears > 3 ||
+          corrected.aavCents !== calculateAavCents(corrected.originalTotalValueCents, corrected.originalTermYears)) {
+        incompatible("The corrected auction contract is inconsistent.");
+      }
+    }
     return freeze({
       outcomeCode: "resolved",
       winningTeam: teamProjection(winningBid),
       submittedTotalValueCents:
         winningBid.total_value_cents,
       submittedTermYears: winningBid.term_years,
+      finalTermYears: corrected?.originalTermYears ?? resolution.winning_term_years,
       submittedAavCents: calculateAavCents(
         winningBid.total_value_cents,
         winningBid.term_years
       ),
       finalContractValueCents:
-        resolution.final_contract_value_cents,
-      finalAavCents: resolution.final_aav_cents,
+        corrected?.originalTotalValueCents ?? resolution.final_contract_value_cents,
+      finalAavCents: corrected?.aavCents ?? resolution.final_aav_cents,
       contractId: resolution.contract_id,
       ownershipId: resolution.ownership_id,
       activityId,
@@ -2039,12 +2054,18 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
         winning_team_id,
         winning_bid_id,
         final_contract_value_cents,
+        winning_term_years,
         final_aav_cents,
         contract_id,
         ownership_id,
         outcome_code,
         status AS resolution_status,
-        resolved_at_ms
+        resolved_at_ms,
+        (SELECT after_snapshot_json FROM commissioner_corrections
+         WHERE league_id = auction_resolutions.league_id
+           AND feature = 'contract'
+           AND feature_record_id = auction_resolutions.contract_id
+         ORDER BY corrected_at_ms DESC, id DESC LIMIT 1) AS corrected_contract_json
       FROM auction_resolutions
       WHERE league_id = @leagueId
         AND auction_id = @auctionId

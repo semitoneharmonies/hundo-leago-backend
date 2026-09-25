@@ -1,4 +1,7 @@
 const crypto = require("node:crypto");
+const { PLAYER_UUID_PATTERN } = require(
+  "../../../domain/freeAgentDraft/freeAgentDraftPolicy"
+);
 
 const {
   REPOSITORY_ERROR_CODES,
@@ -84,22 +87,22 @@ function exactObject(value, keys, description) {
   return value;
 }
 
-function canonicalId(value, description) {
+function canonicalId(value, description, pattern = UUID_PATTERN) {
   if (
     typeof value !== "string" ||
-    !UUID_PATTERN.test(value)
+    !pattern.test(value)
   ) {
     invalid(`A canonical ${description} identifier is required.`);
   }
   return value;
 }
 
-function canonicalIdArray(value, description) {
+function canonicalIdArray(value, description, pattern = UUID_PATTERN) {
   if (!Array.isArray(value) || value.length > 200) {
     invalid(`A bounded ${description} identifier list is required.`);
   }
   const normalized = value.map((id) =>
-    canonicalId(id, description)
+    canonicalId(id, description, pattern)
   );
   if (new Set(normalized).size !== normalized.length) {
     invalid(`${description} identifiers must be unique.`);
@@ -143,7 +146,8 @@ function normalizeInput(input) {
   );
   const affectedPlayerIds = canonicalIdArray(
     input.affectedPlayerIds,
-    "affected player"
+    "affected player",
+    PLAYER_UUID_PATTERN
   );
   if (
     affectedTeamIds.length === 0 &&

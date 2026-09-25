@@ -31,7 +31,7 @@ const IDS = Object.freeze({
   teamB: uuid(22),
   teamC: uuid(23),
   playerEntry: uuid(31),
-  playerOwnership: uuid(32),
+  playerOwnership: uuid(32).replace("-4000-", "-5000-"),
   entry: uuid(41),
   ownership: uuid(42),
   operation: uuid(51),

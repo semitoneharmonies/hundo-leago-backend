@@ -381,14 +381,14 @@ test("repository inspection hashes exact inputs and reports status without expos
   assert.equal(calls.length, 3);
 });
 
-test("backend release-source inspection reports schema 57 while the historical approval remains pinned to 54", () => {
+test("backend release-source inspection reports schema 62 while the historical approval remains pinned to 54", () => {
   const facts = inspectBackendReleaseFacts({
     directory: path.resolve(__dirname, "..", ".."),
   });
   assert.deepEqual(facts.migrationSource, {
     baseSchemaVersion: EXPECTED_BASE_SCHEMA_VERSION,
-    targetSchemaVersion: 57,
-    migrationCount: 57,
+    targetSchemaVersion: 62,
+    migrationCount: 62,
     postBaseMigrationCount: 35,
     contiguous: true,
     checksumSetSha256:

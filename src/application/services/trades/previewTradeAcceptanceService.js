@@ -100,7 +100,7 @@ function createPreviewTradeAcceptanceService({
     const actor = approvalActor || teamAuthorization.requireManager(
       authenticated,
       proposal.league_id,
-      proposal.receiving_team_id
+      repository.findRespondingTeamId ? repository.findRespondingTeamId({ leagueId: proposal.league_id, tradeId: proposal.trade_id, receivingTeamId: proposal.receiving_team_id, actorUserId: authenticated.user.id }) : proposal.receiving_team_id
     );
     return projectResult(
       repository.previewAcceptance({

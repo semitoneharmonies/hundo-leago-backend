@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 const Database = require("better-sqlite3");
 const express = require("express");
-const { migrateDatabase } = require("../../src/infrastructure/database/migrate");
+const { migrateDatabase, discoverMigrations, applyMigrations } = require("../../src/infrastructure/database/migrate");
 const { seedFixture } = require("../../src/operations/release/createReleaseQaFixture");
 const { createSqliteRepositoryContext } = require("../../src/infrastructure/persistence/sqlite/createSqliteRepositoryContext");
 const { createSqliteLeagueDeletionRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteLeagueDeletionRepository");
@@ -30,8 +30,8 @@ before(async () => {
   db.close();
 });
 
-function setup(t, overrides = {}) {
-  const db = new Database(fixture);
+function setup(t, overrides = {}, fixtureBytes = fixture) {
+  const db = new Database(fixtureBytes);
   db.pragma("foreign_keys = ON");
   t.after(() => db.close());
   const context = createSqliteRepositoryContext({ database: db });
@@ -119,24 +119,35 @@ test("preview is read-only; populated deletion preserves every unrelated row and
   assert.throws(() => r.service.remove({ ...command, leagueId: crypto.randomUUID() }), { code: "IDEMPOTENCY_KEY_REUSED" });
 });
 
-test("reviewed historical staging allocation schema supports atomic deletion", (t) => {
-  const r = setup(t);
+test("upgrading the historical staging allocation schema preserves atomic deletion", async (t) => {
+  const legacy = new Database(":memory:");
+  legacy.pragma("foreign_keys = ON");
+  const migrationsDirectory = path.resolve(__dirname, "../../database/migrations");
+  const migrations = discoverMigrations({ migrationsDirectory });
+  applyMigrations({ database: legacy, migrations: migrations.filter(({ id }) => id <= 57), applicationBuildId: "historical-staging-test" });
   const table = "free_agent_draft_player_allocations";
-  const original = r.db.prepare("SELECT sql FROM sqlite_schema WHERE name = ?").get(table).sql;
+  const original = legacy.prepare("SELECT sql FROM sqlite_schema WHERE name = ?").get(table).sql;
   const historical = original.replace(`CREATE TABLE ${table}`, `CREATE TABLE "${table}"`)
     .replace("\n      AND (\n        restricted_minimum_term_years = 1\n        OR restricted_minimum_total_cents % 100 = 0\n      )", "");
   assert.notEqual(historical, original);
   // Reproduce the exact previously rebuilt table definition only in this
   // disposable in-memory fixture. Runtime deletion never edits sqlite_schema.
-  r.db.unsafeMode(true);
+  legacy.unsafeMode(true);
   try {
-    r.db.pragma("writable_schema = ON");
-    r.db.prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'table' AND name = ?").run(historical, table);
+    legacy.pragma("writable_schema = ON");
+    legacy.prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'table' AND name = ?").run(historical, table);
   } finally {
-    r.db.pragma("writable_schema = OFF");
-    r.db.unsafeMode(false);
+    legacy.pragma("writable_schema = OFF");
+    legacy.unsafeMode(false);
   }
-  r.db.pragma(`schema_version = ${r.db.pragma("schema_version", { simple: true }) + 1}`);
+  legacy.pragma(`schema_version = ${legacy.pragma("schema_version", { simple: true }) + 1}`);
+  migrateDatabase({ database: legacy, migrationsDirectory, applicationBuildId: "staging-trade-upgrade-test" });
+  const seeded = legacy.transaction(() => seedFixture(legacy, "test-only-unused-password-hash")).immediate();
+  await Promise.all(seeded.acceptancePromises);
+  seeded.assertLateLockCoverage();
+  const bytes = legacy.serialize();
+  legacy.close();
+  const r = setup(t, {}, bytes);
   const before = rows(r.db);
   const guards = triggers(r.db);
   const result = r.service.remove(r.command());

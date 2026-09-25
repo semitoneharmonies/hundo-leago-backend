@@ -740,7 +740,7 @@ function createFixture(t, prefix, base, {
     connection.database.pragma("user_version", {
       simple: true,
     }),
-    57
+    62
   );
   const fixtureIds = ids(base);
   const actions = actionMatrix(fixtureIds);

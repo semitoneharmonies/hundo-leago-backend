@@ -8141,6 +8141,48 @@ describe(
   }
 );
 
+test("SQLite imported-player search paginates and whole-card second save completes a previously half-filled card", (t) => {
+  const runtime = createRuntime(t);
+  const candidates = {};
+  CANDIDATE_CARD_SLOT_KEYS.forEach((slotKey, index) => {
+    const playerId = uuid(20_000 + index).replace("-4000-", "-5000-");
+    seedSelectablePlayer(runtime, {
+      playerId,
+      positionGroup: slotKey.startsWith("D") ? "D" : "F",
+      fullName: `Imported Player ${String(index).padStart(2, "0")}`,
+    });
+    candidates[slotKey] = { playerId, aavCents: 100, termYears: 3 };
+  });
+  const firstPage = readEligiblePlayers(runtime, { slotKey: "B01", q: "imported player", limit: 12 });
+  assert.equal(firstPage.data.length, 12);
+  assert.equal(firstPage.page.hasMore, true);
+  const secondPage = readEligiblePlayers(runtime, {
+    slotKey: "B01", q: "imported player", limit: 12, cursor: firstPage.page.nextCursor,
+  });
+  assert.equal(secondPage.data.length, 10);
+  assert.equal(secondPage.page.hasMore, false);
+  assert.equal(new Set([...firstPage.data, ...secondPage.data].map(({ player }) => player.playerId)).size, 22);
+  const first = runtime.repository.saveCurrent(wholeSaveCommand(runtime, {
+    expectedCardVersion: 1,
+    candidates: Object.fromEntries(Object.entries(candidates).slice(0, 11)),
+    requestId: uuid(21_000), clientKey: "second-save-first",
+    revisionId: uuid(21_001), entryIdBase: 21_100,
+  }));
+  assert.equal(first.card.cardVersion, 2);
+  const secondCommand = wholeSaveCommand(runtime, {
+    expectedCardVersion: 2, candidates,
+    requestId: uuid(22_000), clientKey: "second-save-complete",
+    revisionId: uuid(22_001), entryIdBase: 22_100,
+  });
+  secondCommand.nowMs += 300_000;
+  const second = runtime.repository.saveCurrent(secondCommand);
+  assert.equal(second.card.cardVersion, 3);
+  assert.equal(second.card.completeness.code, "complete");
+  assert.equal(second.card.capProjection.proposedCandidateAavCents, 1_800);
+  assert.equal(second.card.slots.filter((slot) => slot.occupantKind === "candidate").length, 22);
+  assert.equal(second.changedEntryIds.length, 11);
+});
+
 test("SQLite whole-card save persists partial rows atomically, preserves safe identities, records normalized changes, and replays exactly", (t) => {
   const runtime = createRuntime(t);
   const partialPlayerId = uuid(9_101);

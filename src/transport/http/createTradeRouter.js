@@ -142,7 +142,8 @@ function createTradeRouter({
   router.use(requestSecurity.requireAllowedOrigin);
   router.use(requestSecurity.requireJson);
   router.use(requestSecurity.requireCompatibleFetchMetadata);
-  router.use(express.json({ limit: "32kb", strict: true }));
+  // Up to three teams with 100 assets each, including Unicode descriptions.
+  router.use(express.json({ limit: "768kb", strict: true }));
 
   router.get(
     "/api/v1/leagues/:leagueId/trades",
@@ -166,6 +167,24 @@ function createTradeRouter({
       try {
         return success(request, response, 201, tradeCreationService.create({
           leagueId: request.params.leagueId,
+          input: request.body,
+          idempotencyKey: request.get("idempotency-key"),
+          authenticated: requestSecurity.getAuthenticatedSession(request),
+        }));
+      } catch (caught) {
+        return mapError(request, response, caught);
+      }
+    }
+  );
+
+  router.post(
+    "/api/v1/leagues/:leagueId/trades/:tradeId/counter",
+    requestSecurity.authenticateUnsafe,
+    (request, response) => {
+      try {
+        return success(request, response, 201, tradeCreationService.counter({
+          leagueId: request.params.leagueId,
+          tradeId: request.params.tradeId,
           input: request.body,
           idempotencyKey: request.get("idempotency-key"),
           authenticated: requestSecurity.getAuthenticatedSession(request),
@@ -235,6 +254,14 @@ function createTradeRouter({
       }
     }
   );
+
+  router.post("/api/v1/leagues/:leagueId/trades/:tradeId/acknowledge", requestSecurity.authenticateUnsafe, requireEmptyBody,
+    (request, response) => {
+      try { return success(request, response, 200, tradeLifecycleService.acknowledge({
+        leagueId: request.params.leagueId, tradeId: request.params.tradeId,
+        authenticated: requestSecurity.getAuthenticatedSession(request),
+      })); } catch (caught) { return mapError(request, response, caught); }
+    });
 
   router.post(
     "/api/v1/leagues/:leagueId/trades/:tradeId/approve",

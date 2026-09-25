@@ -6,6 +6,7 @@ const {
 
 const {
   UUID_PATTERN,
+  PLAYER_UUID_PATTERN,
   buildFreeAgentDraftNominationOpenOccurrenceKey,
 } = require(
   "../../domain/freeAgentDraft/freeAgentDraftPolicy"
@@ -247,7 +248,7 @@ function requireActivationDescriptor(value) {
     binding.fadId !== value.fadId ||
     binding.queueId !== parsed.queueId ||
     binding.rolloverAtMs !== parsed.rolloverAtMs ||
-    !UUID_PATTERN.test(binding.playerId || "") ||
+    !PLAYER_UUID_PATTERN.test(binding.playerId || "") ||
     !UUID_PATTERN.test(binding.rolloverId || "")
   ) {
     throw new TypeError(
