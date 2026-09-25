@@ -516,7 +516,7 @@ describe(
   "FAD-06 ordinary auction compatibility characterization",
   () => {
     test(
-      "ranks total value, AAV, original time, then stable ID and preserves exact due pricing",
+      "ranks AAV, term, original time, then stable ID and charges an actual offer at the deadline",
       () => {
         const highAav = policyBid(2, {
           totalValueCents: 1_500,
@@ -608,6 +608,9 @@ describe(
         assert.equal(exactDue.dueAtMs, DUE_MS);
         assert.equal(exactDue.outcome, "winner");
         assert.deepEqual(exactDue.winner, {
+          pricingRule: "lowest_actual_winning_offer_v1",
+          pricedOffer: { totalValueCents: 1_000, termYears: 3, aavCents: 333, occurredAtMs: pricingBids[0].firstSubmittedAtMs },
+          finalTermYears: 3,
           bidId: pricingBids[0].id,
           teamId: pricingBids[0].teamId,
           submittedTotalValueCents: 1_000,
@@ -617,10 +620,10 @@ describe(
           lowestOfferedTotalValueCents: 300,
           highestCompetingAavCents: 250,
           highestCompetingTotalValueCents: 500,
-          requiredWinningTotalValueCents: 500,
-          requiredWinningAavCents: 175,
-          finalTotalValueCents: 525,
-          finalAavCents: 175,
+          requiredWinningTotalValueCents: 1_000,
+          requiredWinningAavCents: 333,
+          finalTotalValueCents: 1_000,
+          finalAavCents: 333,
         });
       }
     );

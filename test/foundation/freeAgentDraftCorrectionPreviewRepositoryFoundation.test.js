@@ -490,9 +490,9 @@ function seedLockedOffers(database) {
     entryId: IDS.correctEntry,
     sourceEntryId: IDS.correctSourceEntry,
     slotNumber: 1,
-    totalValueCents: 600,
+    totalValueCents: 1200,
     termYears: 2,
-    aavCents: 300,
+    aavCents: 600,
   });
   seedOffer(database, {
     snapshotId: IDS.wrongSnapshot,
@@ -703,18 +703,18 @@ function seedExactTieCorrectionRequired(database) {
   database
     .prepare(`
       UPDATE candidate_card_snapshot_entries
-      SET proposed_total_value_cents = 600,
+      SET proposed_total_value_cents = 1200,
           proposed_term_years = 2,
-          proposed_aav_cents = 300
+          proposed_aav_cents = 600
       WHERE id = ?
     `)
     .run(IDS.wrongEntry);
   database
     .prepare(`
       UPDATE candidate_card_snapshots
-      SET proposed_candidate_aav_cents = 300,
-          maximum_possible_cap_cents = 300,
-          maximum_cap_space_cents = 99700
+      SET proposed_candidate_aav_cents = 600,
+          maximum_possible_cap_cents = 600,
+          maximum_cap_space_cents = 99400
       WHERE id = ?
     `)
     .run(IDS.wrongSnapshot);
@@ -1132,7 +1132,7 @@ describe(
         ),
         [
           [500, 1, 500],
-          [600, 2, 300],
+          [1200, 2, 600],
         ]
       );
       assert.deepEqual(
@@ -1154,11 +1154,11 @@ describe(
       );
       assert.equal(
         preview.recomputedDecision.decisionCode,
-        "highest_total"
+        "highest_aav"
       );
       assert.equal(
         preview.previewFingerprint,
-        "d3d4dc12bfb2a75466a24d4ee296269dfffa88c6b7f75e7f4c5eea872423b662"
+        "a8d47f44e6dadb8208322a0ad9ba737cd6d40cc2d7ac378254798bae9aed8638"
       );
       assert.deepEqual(
         preview.deltas.map(
@@ -1407,8 +1407,8 @@ describe(
           ]
         ),
         [
-          [600, 2, 300],
-          [600, 2, 300],
+          [1200, 2, 600],
+          [1200, 2, 600],
         ]
       );
       assert.equal(
@@ -1426,9 +1426,9 @@ describe(
             auctionId: null,
             status: "scheduled",
             participantTeamIds: [],
-            minimumTotalValueCents: 600,
+            minimumTotalValueCents: 1200,
             minimumTermYears: 2,
-            minimumAavCents: 300,
+            minimumAavCents: 600,
           },
           recoveryStatus: "resolved",
         }
@@ -1456,18 +1456,18 @@ describe(
         [
           {
             teamId: IDS.teamCorrect,
-            totalValueCents: 600,
+            totalValueCents: 1200,
             termYears: 2,
-            aavCents: 300,
+            aavCents: 600,
             valid: true,
             rank: 1,
             outcomeCode: "restricted_tied",
           },
           {
             teamId: IDS.teamWrong,
-            totalValueCents: 600,
+            totalValueCents: 1200,
             termYears: 2,
-            aavCents: 300,
+            aavCents: 600,
             valid: true,
             rank: 2,
             outcomeCode: "restricted_tied",
@@ -1522,7 +1522,7 @@ describe(
       );
       assert.equal(
         preview.previewFingerprint,
-        "9a3fa93b3a2b12e503a4356cb64376985f256853ac43297e9b5dd2d3d053df9c"
+        "02bce6601a0fc68fb1ebe6d1ab3d8db0926d4d9656d741813dd4085c68f1947b"
       );
       assert.deepEqual(
         runtime.repository.previewAllocationCorrection(

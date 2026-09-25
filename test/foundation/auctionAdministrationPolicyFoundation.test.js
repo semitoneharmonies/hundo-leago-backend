@@ -299,6 +299,19 @@ function restrictedCancellationData(
   };
 }
 
+test("current final-term projections and historical cancellation receipts both replay safely", () => {
+  for (const data of [responseDataFor("cancel_auction"), restrictedCancellationData()]) {
+    const legacy = structuredClone(data);
+    assert.deepEqual(validateAuctionAdministrationStoredResult(storedResultFor("cancel_auction", { data })).data, legacy);
+    data.auction.result.finalTermYears = null;
+    assert.deepEqual(validateAuctionAdministrationStoredResult(storedResultFor("cancel_auction", { data })).data, data);
+    for (const invalid of [0, 1, 4, "2", undefined]) {
+      data.auction.result.finalTermYears = invalid;
+      assert.throws(() => validateAuctionAdministrationStoredResult(storedResultFor("cancel_auction", { data })));
+    }
+  }
+});
+
 function resolutionData(overrides = {}) {
   return {
     operationId: JOB_RUN_ID,

@@ -1661,7 +1661,7 @@ describe(
         );
         assert.equal(
           result.decisionCode,
-          "highest_equal_total_aav"
+          "highest_aav"
         );
         assert.equal(
           result.winner.snapshotEntryId,
@@ -3482,8 +3482,8 @@ describe(
                 .snapshotEntryId,
               {
                 valid: 1,
-                rank: 1,
-                outcome: "winner",
+                rank: 2,
+                outcome: "lost_lower_aav",
                 status:
                   "correction_required",
               },
@@ -3493,9 +3493,9 @@ describe(
                 .snapshotEntryId,
               {
                 valid: 1,
-                rank: 2,
+                rank: 1,
                 outcome:
-                  "lost_lower_total",
+                  "winner",
                 status:
                   "correction_required",
               },

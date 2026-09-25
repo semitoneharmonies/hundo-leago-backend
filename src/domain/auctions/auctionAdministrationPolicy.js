@@ -904,9 +904,18 @@ function validateMinimumContract(value) {
 function validateAuctionTerminalResult(value, status) {
   const reason =
     AUCTION_ADMINISTRATION_REASON_CODES.dataInvalid;
+  // Older durable receipts predate the explicit final contract term. Keep
+  // their exact shape replayable while validating the current projection.
+  const hasFinalTerm = isPlainObject(value) && Object.hasOwn(value, "finalTermYears");
   if (
-    !hasExactDataFields(value, AUCTION_RESULT_FIELDS)
+    !hasExactDataFields(value, hasFinalTerm
+      ? [...AUCTION_RESULT_FIELDS, "finalTermYears"].sort() : AUCTION_RESULT_FIELDS)
   ) {
+    failResult(reason);
+  }
+  if (hasFinalTerm && (status === "resolved"
+    ? !Number.isSafeInteger(value.finalTermYears) || value.finalTermYears < 1 || value.finalTermYears > 3
+    : value.finalTermYears !== null)) {
     failResult(reason);
   }
   const outcomeByStatus = Object.freeze({

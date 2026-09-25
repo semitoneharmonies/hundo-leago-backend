@@ -494,9 +494,9 @@ function seedOffers(database) {
     entryId: IDS.correctEntry,
     sourceEntryId: IDS.correctSourceEntry,
     slotNumber: 1,
-    totalValueCents: 600,
+    totalValueCents: 1200,
     termYears: 2,
-    aavCents: 300,
+    aavCents: 600,
   });
   seedOffer(database, {
     snapshotId: IDS.wrongSnapshot,
@@ -742,18 +742,18 @@ function seedExactTie(database) {
   database
     .prepare(`
       UPDATE candidate_card_snapshot_entries
-      SET proposed_total_value_cents = 600,
+      SET proposed_total_value_cents = 1200,
           proposed_term_years = 2,
-          proposed_aav_cents = 300
+          proposed_aav_cents = 600
       WHERE id = ?
     `)
     .run(IDS.wrongEntry);
   database
     .prepare(`
       UPDATE candidate_card_snapshots
-      SET proposed_candidate_aav_cents = 300,
-          maximum_possible_cap_cents = 300,
-          maximum_cap_space_cents = 99700
+      SET proposed_candidate_aav_cents = 600,
+          maximum_possible_cap_cents = 600,
+          maximum_cap_space_cents = 99400
       WHERE id = ?
     `)
     .run(IDS.wrongSnapshot);
@@ -1263,9 +1263,9 @@ describe(
         {
           status: "active",
           current_team_id: IDS.teamCorrect,
-          original_total_value_cents: 600,
+          original_total_value_cents: 1200,
           original_term_years: 2,
-          aav_cents: 300,
+          aav_cents: 600,
           version: 1,
         }
       );
@@ -1393,7 +1393,7 @@ describe(
           storedPreview.recomputedDecision.winner.termYears,
           storedPreview.recomputedDecision.winner.aavCents,
         ],
-        [600, 2, 300]
+        [1200, 2, 600]
       );
       const storedResponse = JSON.parse(receipt.response_json);
       assert.deepEqual(
@@ -1444,7 +1444,7 @@ describe(
           fullAllocation.winner.termYears,
           fullAllocation.winner.aavCents,
         ],
-        [600, 2, 300]
+        [1200, 2, 600]
       );
       const legacyFullMoneyData = {
         ...result.data,
