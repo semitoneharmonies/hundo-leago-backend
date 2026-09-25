@@ -347,6 +347,54 @@ describe("M5-09 activity and notification policy", () => {
 });
 
 describe("M5-09 authenticated League Activity", () => {
+  test("includes saved FAD auction wins in all and auction pages without exposing direct allocations or writing", (t) => {
+    const runtime = createRuntime(t);
+    const winner = {
+      submittedAavCents: 375, submittedTermYears: 2,
+      submittedTotalValueCents: 750, finalAavCents: 375,
+      finalTotalValueCents: 750,
+    };
+    for (const [id, leagueId, relatedType, eventType] of [
+      [220, LEAGUE_A, "auction_resolution", "free_agent_draft_player_awarded"],
+      [221, LEAGUE_A, "auction_resolution", "free_agent_draft_player_awarded"],
+      [222, LEAGUE_A, "free_agent_draft", "free_agent_draft_player_awarded"],
+      [223, LEAGUE_B, "auction_resolution", "free_agent_draft_player_awarded"],
+      [224, LEAGUE_A, "auction_resolution", "auction_signing_completed"],
+    ]) {
+      runtime.context.repositories.league_activity.insert({
+        id: uuid(id), league_id: leagueId, season_id: null,
+        event_type: eventType, actor_user_id: null, actor_authority: "system",
+        team_id: null, player_id: null, related_type: relatedType,
+        related_id: uuid(id + 100), display_summary: "Saved auction result.",
+        reason: null, metadata_json: JSON.stringify({ winner }),
+        occurred_at_ms: NOW_MS + id,
+      });
+    }
+    const before = runtime.database.serialize();
+    for (const category of ["all", "auction"]) {
+      let cursor = null;
+      const ids = [];
+      do {
+        const page = runtime.activity.list({ leagueId: LEAGUE_A,
+          query: { category, limit: 1, ...(cursor ? { cursor } : {}) },
+          authenticated: authenticated(USER_A) });
+        for (const item of page.activity) {
+          ids.push(item.id);
+          if ([uuid(220), uuid(221)].includes(item.id)) {
+            assert.deepEqual(item.metadata.winner, winner);
+          }
+        }
+        cursor = page.page.nextCursor;
+      } while (cursor);
+      assert.deepEqual(ids.filter(id => [220, 221, 222, 223, 224].some(n => uuid(n) === id)),
+        [uuid(224), uuid(221), uuid(220)]);
+    }
+    const competition = runtime.activity.list({ leagueId: LEAGUE_A,
+      query: { category: "competition" }, authenticated: authenticated(USER_A) });
+    assert.equal(competition.activity.length, 0);
+    assert.deepEqual(runtime.database.serialize(), before);
+  });
+
   test("is league-scoped, cursor-paginated, and byte-for-byte read-only", (t) => {
     const runtime = createRuntime(t);
     const before = runtime.database.prepare("SELECT total_changes() AS n").get().n;

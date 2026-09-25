@@ -65,7 +65,9 @@ function createSqliteLeagueActivityRepository({ database } = {}) {
     `;
     const category = `CASE
       WHEN lower(activity.event_type) LIKE '%trade%' THEN 'trade'
-      WHEN lower(activity.event_type) LIKE '%auction%' THEN 'auction'
+      WHEN lower(activity.event_type) LIKE '%auction%'
+        OR (activity.event_type = 'free_agent_draft_player_awarded'
+          AND activity.related_type = 'auction_resolution') THEN 'auction'
       WHEN lower(activity.event_type) LIKE '%buyout%' THEN 'buyout'
       WHEN lower(activity.event_type) LIKE '%commissioner%'
         OR lower(activity.event_type) LIKE '%correction%' THEN 'commissioner'
@@ -90,7 +92,9 @@ function createSqliteLeagueActivityRepository({ database } = {}) {
       LEFT JOIN players AS player
         ON player.id = activity.player_id
       WHERE activity.league_id = @leagueId
-        AND activity.event_type NOT IN ('roster_moved', 'fad_allocation_player_acquired', 'free_agent_draft_player_awarded')
+        AND activity.event_type NOT IN ('roster_moved', 'fad_allocation_player_acquired')
+        AND (activity.event_type <> 'free_agent_draft_player_awarded'
+          OR activity.related_type = 'auction_resolution')
         AND (@category = 'all' OR (${category}) = @category)
       ORDER BY activity.occurred_at_ms DESC, activity.id DESC
       LIMIT @fetchLimit
@@ -106,7 +110,9 @@ function createSqliteLeagueActivityRepository({ database } = {}) {
       LEFT JOIN players AS player
         ON player.id = activity.player_id
       WHERE activity.league_id = @leagueId
-        AND activity.event_type NOT IN ('roster_moved', 'fad_allocation_player_acquired', 'free_agent_draft_player_awarded')
+        AND activity.event_type NOT IN ('roster_moved', 'fad_allocation_player_acquired')
+        AND (activity.event_type <> 'free_agent_draft_player_awarded'
+          OR activity.related_type = 'auction_resolution')
         AND (@category = 'all' OR (${category}) = @category)
         AND (
           activity.occurred_at_ms < @cursorOccurredAtMs
