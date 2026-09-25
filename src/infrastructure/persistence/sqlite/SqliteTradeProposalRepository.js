@@ -180,6 +180,7 @@ function createLifecycleRequestHash(command) {
         leagueId: command.leagueId,
         tradeId: command.tradeId,
         action: command.action,
+        ...(command.respondingTeamId === undefined ? {} : { respondingTeamId: command.respondingTeamId }),
         actorUserId: command.actorUserId,
         actorMembershipId: command.actorMembershipId,
         actorAuthority: command.actorAuthority,
@@ -196,6 +197,7 @@ function createExecutionRequestHash(command) {
       JSON.stringify({
         leagueId: command.leagueId,
         tradeId: command.tradeId,
+        ...(command.respondingTeamId === undefined ? {} : { respondingTeamId: command.respondingTeamId }),
         actorUserId: command.actorUserId,
         actorMembershipId: command.actorMembershipId,
         actorAuthority: command.actorAuthority,
@@ -1970,27 +1972,8 @@ function createSqliteTradeProposalRepository({
     });
   }
 
-  function acceptancePreview(rawCommand) {
-    const validated = validateTradeAcceptancePreviewCommand(rawCommand);
-    const teamIds = participants.ids(validated);
-    const command = { ...validated, participantIdsJson: JSON.stringify(teamIds) };
-    const context = unique(
-      loadLifecycleStateStatement,
-      { ...command, participantTeamId: responseTeam(command) },
-      "A trade acceptance-preview state was not unique."
-    );
-    if (context && participants.list(command).length) context.multi_trade_actor_team_id = responseTeam(command);
-    assertTradeAcceptancePreviewState({ command, context });
-    assertActiveParticipants(command);
-    const persistedAssets = listTradeAssetsStatement.all(command);
-    if (persistedAssets.length < 2) {
-      throw repositoryError(
-        REPOSITORY_ERROR_CODES.schemaIncompatible,
-        "The trade acceptance preview has incomplete assets."
-      );
-    }
-    const assets = Object.freeze(persistedAssets.map(persistedAssetCommand));
-    const currentAssets = snapshotAssets({ ...command, assets });
+  // Shared read-only projection for draft and acceptance previews.
+  function projectAcceptanceAssets({ command, teamIds, assets, currentAssets }) {
     const settings = unique(
       loadAcceptanceSettingsStatement,
       command,
@@ -2144,6 +2127,46 @@ function createSqliteTradeProposalRepository({
         before: beforeTeams.get(teamId),
       }))
     );
+    return { teams, plannedRosterSlotByAssetId, plannedRosterCategoryByAssetId };
+  }
+
+  const draftPreview = database.transaction(rawCommand => {
+    const validated = validateTradeProposalCreationCommand(rawCommand);
+    const teamIds = validated.participantTeamIds || [validated.proposingTeamId, validated.receivingTeamId];
+    const command = { ...validated, participantIdsJson: JSON.stringify(teamIds) };
+    assertNewTradeProposalAssetTypes(command.assets);
+    assertNewTradeProposalCreationAuthority(command);
+    for (const receivingTeamId of teamIds.slice(1)) {
+      const participantCommand = { ...command, receivingTeamId };
+      assertTradeProposalFoundationState({ command: participantCommand, context: loadFoundationState(participantCommand) });
+    }
+    const currentAssets = snapshotAssets(command);
+    const { teams } = projectAcceptanceAssets({ command, teamIds, assets: command.assets, currentAssets });
+    return Object.freeze({ teams, generallyIllegal: teams.some(team => team.generallyIllegal) });
+  });
+
+  function acceptancePreview(rawCommand) {
+    const validated = validateTradeAcceptancePreviewCommand(rawCommand);
+    const teamIds = participants.ids(validated);
+    const command = { ...validated, participantIdsJson: JSON.stringify(teamIds) };
+    const context = unique(
+      loadLifecycleStateStatement,
+      { ...command, participantTeamId: responseTeam(command) },
+      "A trade acceptance-preview state was not unique."
+    );
+    if (context && participants.list(command).length) context.multi_trade_actor_team_id = responseTeam(command);
+    assertTradeAcceptancePreviewState({ command, context });
+    assertActiveParticipants(command);
+    const persistedAssets = listTradeAssetsStatement.all(command);
+    if (persistedAssets.length < 2) {
+      throw repositoryError(
+        REPOSITORY_ERROR_CODES.schemaIncompatible,
+        "The trade acceptance preview has incomplete assets."
+      );
+    }
+    const assets = Object.freeze(persistedAssets.map(persistedAssetCommand));
+    const currentAssets = snapshotAssets({ ...command, assets });
+    const { teams, plannedRosterSlotByAssetId, plannedRosterCategoryByAssetId } = projectAcceptanceAssets({ command, teamIds, assets, currentAssets });
     return Object.freeze({
       trade: Object.freeze({ ...context }),
       assets: Object.freeze(
@@ -2324,7 +2347,7 @@ function createSqliteTradeProposalRepository({
     for (const recipient of listReceivingManagersStatement.all({ ...command, receivingTeamId })) {
       notificationsRepository.insert({
         id: deterministicUuid(
-          `trade-proposal-notification:${command.eventId}:${recipient.user_id}`
+          `trade-proposal-notification:${command.eventId}:${recipient.user_id}${command.participantTeamIds ? `:${receivingTeamId}` : ""}`
         ),
         userId: recipient.user_id,
         leagueId: command.leagueId,
@@ -2358,6 +2381,7 @@ function createSqliteTradeProposalRepository({
       // Nested SQLite transactions are savepoints: a failure here rolls back
       // the new proposal, notification, history, and idempotency record too.
       lifecycleTransaction({
+        ...(participants.list({ ...command, tradeId: original.trade_id }).length ? { respondingTeamId: command.proposingTeamId } : {}),
         tradeId: original.trade_id,
         eventId: deterministicUuid(`trade-counter-decline-event:${command.eventId}`),
         idempotencyRequestId: deterministicUuid(`trade-counter-decline-request:${command.idempotencyRequestId}`),
@@ -2376,7 +2400,7 @@ function createSqliteTradeProposalRepository({
         idempotencyExpiresAtMs: command.idempotencyExpiresAtMs,
       });
     } else if (original?.trade_status === "declined") {
-      participants.acknowledge({ ...command, tradeId: original.trade_id, occurredAtMs: command.createdAtMs });
+      participants.acknowledge({ ...command, tradeId: original.trade_id, respondingTeamId: command.proposingTeamId, occurredAtMs: command.createdAtMs });
     }
     return aggregate({
       leagueId: command.leagueId,
@@ -3094,13 +3118,17 @@ function createSqliteTradeProposalRepository({
   }
   function participantAcceptanceAggregate(command, replayed) {
     const trade = findTradeStatement.get(command);
-    const event = database.prepare("SELECT * FROM trade_events WHERE league_id = @leagueId AND trade_id = @tradeId AND event_type = 'participant_accepted' AND actor_user_id = @actorUserId").get(command);
+    const event = findParticipantAcceptance(command);
     if (!trade || !event) throw new TradeExecutionPolicyError(TRADE_EXECUTION_CODES.stateInvalid);
     return { replayed, participantResponse: true, trade: projectEffectiveTrade(trade), ...participants.projection(command),
       event: { ...event, metadata: JSON.parse(event.metadata_json) } };
   }
+  function findParticipantAcceptance(command) {
+    return database.prepare("SELECT * FROM trade_events WHERE league_id = @leagueId AND trade_id = @tradeId AND event_type = 'participant_accepted' AND actor_user_id = @actorUserId AND json_extract(metadata_json, '$.respondingTeamId') = @respondingTeamId")
+      .get({ ...command, respondingTeamId: responseTeam(command) });
+  }
   function executionOutcomeAggregate({ command, replayed, action }) {
-    if (action === "accept" && database.prepare("SELECT 1 FROM trade_events WHERE league_id = @leagueId AND trade_id = @tradeId AND event_type = 'participant_accepted' AND actor_user_id = @actorUserId").get(command)) return participantAcceptanceAggregate(command, replayed);
+    if (action === "accept" && findParticipantAcceptance(command)) return participantAcceptanceAggregate(command, replayed);
     if (action === "accept") {
       const acceptance = unique(
         findFutureConsiderationAcceptanceStatement,
@@ -3167,6 +3195,7 @@ function createSqliteTradeProposalRepository({
       assertTradeExecutionState({ command, context });
     }
     const preview = acceptancePreview({
+      ...(command.respondingTeamId === undefined ? {} : { respondingTeamId: command.respondingTeamId }),
       tradeId: command.tradeId,
       leagueId: command.leagueId,
       seasonId: command.seasonId,
@@ -3800,6 +3829,9 @@ function createSqliteTradeProposalRepository({
           tableName: "trades",
         });
       }
+    },
+    previewProposal(rawCommand) {
+      return draftPreview.deferred(rawCommand);
     },
     previewAcceptance(rawCommand) {
       try {

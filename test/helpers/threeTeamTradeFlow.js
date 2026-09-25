@@ -52,12 +52,99 @@ async function runThreeTeamTradeFlow(t, { createRuntime, IDS, NOW_MS, authentica
     });
   }
   async function create(body = input(), user = IDS.manager) {
+    const bytes = db.serialize();
+    const preview = await request('/preview', body, user);
+    assert.equal(preview.status, 200, JSON.stringify(preview));
+    assert.equal(preview.data.code, 'TRADE_PROPOSAL_PREVIEWED');
+    assert.equal(preview.data.teams.length, 3);
+    assert.equal(bytes.equals(db.serialize()), true, 'draft preview must not create a trade or write any state');
     const result = await request('', body, user);
     assert.equal(result.status, 201, JSON.stringify(result));
     assert.equal(result.data.proposal.participants.length, 3);
     return result.data.proposal.id;
   }
   const managers = new Map([[IDS.teamA, IDS.manager], [IDS.teamB, IDS.receivingManager], [teamC, managerC]]);
+  await scenario('screenshot-shaped three-player and three-pick cycle previews and completes', async () => {
+    for (const [n, teamId] of [[100, IDS.teamB], [200, teamC]]) {
+      clone('players', IDS.contractPlayer, { id: uuid(n), full_name: `Cycle player ${n}` });
+      clone('contracts', IDS.contract, { id: uuid(n + 1), player_id: uuid(n), current_team_id: teamId });
+      clone('contract_years', IDS.contractYear, { id: uuid(n + 2), contract_id: uuid(n + 1) });
+      clone('player_ownerships', IDS.ownership, { id: uuid(n + 3), player_id: uuid(n), team_id: teamId });
+    }
+    clone('draft_picks', IDS.draftPick, { id: uuid(104), round_number: 2, original_team_id: IDS.teamA, current_owner_team_id: IDS.teamA });
+    clone('draft_picks', IDS.draftPick, { id: uuid(204), round_number: 1, original_team_id: IDS.teamB, current_owner_team_id: IDS.teamB });
+    const body = { proposingTeamId: IDS.teamA, participants: [
+      { teamId: IDS.teamA, assets: [{ type: 'contract', contractId: IDS.contract, destinationTeamId: IDS.teamB }, { type: 'draft_pick', draftPickId: uuid(104), destinationTeamId: teamC }] },
+      { teamId: IDS.teamB, assets: [{ type: 'contract', contractId: uuid(101), destinationTeamId: teamC }, { type: 'draft_pick', draftPickId: uuid(204), destinationTeamId: IDS.teamA }] },
+      { teamId: teamC, assets: [{ type: 'contract', contractId: uuid(201), destinationTeamId: IDS.teamA }, { type: 'draft_pick', draftPickId: IDS.draftPick, destinationTeamId: IDS.teamB }] },
+    ] };
+    const id = await create(body), before = sourceState(db);
+    const draft = await request('/preview', body);
+    const acceptance = await request(`/${id}/acceptance-preview`, undefined, IDS.receivingManager);
+    assert.deepEqual(draft.data.teams, acceptance.data.teams);
+    assert.equal((await request(`/${id}/accept`, {}, IDS.receivingManager)).status, 200);
+    assert.equal(sourceState(db), before);
+    const final = await request(`/${id}/accept`, {}, managerC);
+    assert.equal(final.status, 200, JSON.stringify(final));
+    assert.equal(final.data.proposal.storageStatus, 'completed');
+    assert.deepEqual(final.data.teams, draft.data.teams);
+    for (const side of body.participants) for (const asset of side.assets) {
+      const owner = asset.type === 'contract'
+        ? db.prepare('SELECT current_team_id team_id FROM contracts WHERE id = ?').get(asset.contractId)
+        : db.prepare('SELECT current_owner_team_id team_id FROM draft_picks WHERE id = ?').get(asset.draftPickId);
+      assert.equal(owner.team_id, asset.destinationTeamId);
+    }
+  });
+  await scenario('one manager can receive a proposal for two different teams', async () => {
+    const receiver = db.prepare("SELECT user_id, membership_id FROM team_manager_assignments WHERE team_id = ? AND status = 'accepted' AND ended_at_ms IS NULL").get(IDS.teamB);
+    db.prepare('UPDATE team_manager_assignments SET user_id = ?, membership_id = ? WHERE id = ?').run(receiver.user_id, receiver.membership_id, uuid(4));
+    const before = sourceState(db);
+    const id = await create();
+    const notifications = db.prepare("SELECT id,message_data_json FROM notifications WHERE related_record_id = ? AND user_id = ? ORDER BY id").all(id, receiver.user_id);
+    assert.equal(notifications.length, 2);
+    assert.equal(new Set(notifications.map(n => n.id)).size, 2);
+    assert.deepEqual(notifications.map(n => JSON.parse(n.message_data_json).receivingTeamId).sort(), [IDS.teamB,teamC].sort());
+    assert.equal(sourceState(db),before);
+    const bytes = db.serialize();
+    for (const respondingTeamId of [undefined, IDS.teamA, uuid(99)]) {
+      const response = await request(`/${id}/accept`, respondingTeamId ? { respondingTeamId } : {}, receiver.user_id);
+      assert.equal(response.status, 403, JSON.stringify(response));
+    }
+    assert.equal(bytes.equals(db.serialize()), true, 'ambiguous or unauthorized responses never write');
+    const firstTeam = { respondingTeamId: IDS.teamB }, secondTeam = { respondingTeamId: teamC };
+    assert.equal((await request(`/${id}/acceptance-preview?respondingTeamId=${teamC}`, undefined, receiver.user_id)).status, 200);
+    const first = await request(`/${id}/accept`, firstTeam, receiver.user_id, 'shared-first');
+    assert.equal(first.status, 200, JSON.stringify(first));
+    assert.equal(first.data.proposal.storageStatus, 'proposed');
+    assert.equal(sourceState(db), before);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM notifications WHERE related_record_id = ? AND read_at_ms IS NULL').get(id).n, 1);
+    assert.equal((await request(`/${id}/accept`, secondTeam, receiver.user_id, 'shared-first')).status, 409, 'same key cannot switch teams');
+    const final = await request(`/${id}/accept`, secondTeam, receiver.user_id, 'shared-final');
+    assert.equal(final.status, 200, JSON.stringify(final));
+    assert.equal(final.data.proposal.storageStatus, 'completed');
+    assert.equal(final.data.teams.length, 3);
+    const committed = db.serialize();
+    assert.equal((await request(`/${id}/accept`, secondTeam, receiver.user_id, 'shared-final')).data.code, 'TRADE_ACCEPTANCE_REPLAYED');
+    assert.equal((await request(`/${id}/accept`, firstTeam, receiver.user_id, 'shared-first')).data.event.id, first.data.event.id);
+    assert.equal(committed.equals(db.serialize()), true, 'each team receipt replays without writes');
+  });
+  for (const counterWhileOpen of [false, true]) await scenario(`shared manager can decline, counter and acknowledge per team (${counterWhileOpen})`, async () => {
+    const receiver = db.prepare("SELECT user_id, membership_id FROM team_manager_assignments WHERE team_id = ? AND status = 'accepted' AND ended_at_ms IS NULL").get(IDS.teamB);
+    db.prepare('UPDATE team_manager_assignments SET user_id = ?, membership_id = ? WHERE id = ?').run(receiver.user_id, receiver.membership_id, uuid(4));
+    const id = await create(), before = sourceState(db);
+    if (!counterWhileOpen) {
+      assert.equal((await request(`/${id}/decline`, { respondingTeamId: IDS.teamB }, receiver.user_id)).status, 200);
+      assert.equal((await request(`/${id}/accept`, { respondingTeamId: teamC }, receiver.user_id)).status, 409);
+      assert.equal(db.prepare('SELECT COUNT(*) n FROM notifications WHERE related_record_id = ? AND read_at_ms IS NULL').get(id).n, 1);
+      assert.equal((await request(`/${id}/acknowledge`, { respondingTeamId: teamC }, receiver.user_id)).status, 200);
+    }
+    const counter = input(); counter.proposingTeamId = teamC; counter.participants = [counter.participants[2],counter.participants[0],counter.participants[1]];
+    const result = await request(`/${id}/counter`, counter, receiver.user_id);
+    assert.equal(result.status, 201, JSON.stringify(result));
+    assert.deepEqual(result.data.proposal.participants.map(p => p.decision), ['accepted','pending','pending']);
+    assert.equal(db.prepare('SELECT status FROM trades WHERE id = ?').get(id).status, 'declined');
+    assert.equal(sourceState(db), before);
+  });
   for (const proposer of managers.keys()) for (const reverse of [false, true]) await scenario(`all assets move atomically: proposer ${proposer}, reverse acceptance ${reverse}`, async () => {
     const body = input(); body.participants.sort((a, b) => (b.teamId === proposer) - (a.teamId === proposer)); body.proposingTeamId = proposer;
     const before = sourceState(db);
@@ -68,6 +155,9 @@ async function runThreeTeamTradeFlow(t, { createRuntime, IDS, NOW_MS, authentica
     const preview = await request(`/${id}/acceptance-preview`, undefined, receivers[0]);
     assert.equal(preview.status, 200, JSON.stringify(preview)); assert.equal(preview.data.teams.length, 3);
     assert.equal(bytes.equals(db.serialize()), true, 'GET preview must be read-only');
+    const draft = await request('/preview', body, managers.get(proposer));
+    assert.deepEqual(draft.data.teams, preview.data.teams, 'draft and acceptance project identical cap, roster and retention impacts');
+    assert.equal(bytes.equals(db.serialize()), true);
     const first = await request(`/${id}/accept`, {}, receivers[0], 'first-accept');
     assert.equal(first.status, 200, JSON.stringify(first)); assert.equal(first.data.proposal.storageStatus, 'proposed');
     const otherViewer = await request(`/${id}`, undefined, receivers[1]);
@@ -150,7 +240,16 @@ async function runThreeTeamTradeFlow(t, { createRuntime, IDS, NOW_MS, authentica
     ['duplicate asset', b => { b.participants[2].assets.push(b.participants[0].assets[0]); }],
     ['misrouted retention', b => { b.participants[0].assets[1].destinationTeamId = teamC; }],
   ]) await scenario(`invalid ${name} has no writes`, async () => {
-    const body = input(); change(body); const bytes = db.serialize(); assert((await request('', body)).status >= 400); assert.equal(bytes.equals(db.serialize()), true);
+    const body = input(); change(body); const bytes = db.serialize(); assert((await request('/preview', body)).status >= 400); assert((await request('', body)).status >= 400); assert.equal(bytes.equals(db.serialize()), true);
+  });
+  await scenario('draft preview requires proposer authority and current ownership', async () => {
+    const bytes = db.serialize();
+    for (const user of [managerC, IDS.receivingManager, IDS.commissioner]) assert.equal((await request('/preview', input(), user)).status, 403);
+    assert.equal(bytes.equals(db.serialize()), true);
+    db.prepare('UPDATE draft_picks SET current_owner_team_id = ? WHERE id = ?').run(IDS.teamA, IDS.draftPick);
+    const stale = db.serialize();
+    assert.equal((await request('/preview', input())).status, 409);
+    assert.equal(stale.equals(db.serialize()), true);
   });
   await scenario('stale third-team asset prevents final execution', async () => {
     const id = await create(); await request(`/${id}/accept`, {}, IDS.receivingManager);

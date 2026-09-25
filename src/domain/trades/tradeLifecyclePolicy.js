@@ -98,15 +98,16 @@ function lifecycleAction(value) {
 }
 
 function validateTradeLifecycleInput(input) {
-  exactObject(input, ["tradeId", "action"]);
+  exactObject(input, [...(input?.respondingTeamId === undefined ? [] : ["respondingTeamId"]), "tradeId", "action"]);
   return Object.freeze({
+    ...(input.respondingTeamId === undefined ? {} : { respondingTeamId: stableId(input.respondingTeamId) }),
     tradeId: stableId(input.tradeId),
     action: lifecycleAction(input.action),
   });
 }
 
 function validateTradeLifecycleCommand(input) {
-  exactObject(input, [
+  exactObject(input, [...(input?.respondingTeamId === undefined ? [] : ["respondingTeamId"]),
     "tradeId",
     "eventId",
     "idempotencyRequestId",
@@ -138,6 +139,7 @@ function validateTradeLifecycleCommand(input) {
     fail(TRADE_LIFECYCLE_CODES.timestampInvalid);
   }
   const command = {
+    ...(input.respondingTeamId === undefined ? {} : { respondingTeamId: stableId(input.respondingTeamId) }),
     tradeId: stableId(input.tradeId),
     eventId: stableId(input.eventId),
     idempotencyRequestId: stableId(input.idempotencyRequestId),
@@ -208,12 +210,12 @@ function assertTradeLifecycleState({ command, context } = {}) {
 }
 
 function validateTradeAcceptancePreviewInput(input) {
-  exactObject(input, ["tradeId"]);
-  return Object.freeze({ tradeId: stableId(input.tradeId) });
+  exactObject(input, [...(input?.respondingTeamId === undefined ? [] : ["respondingTeamId"]), "tradeId"]);
+  return Object.freeze({ ...(input.respondingTeamId === undefined ? {} : { respondingTeamId: stableId(input.respondingTeamId) }), tradeId: stableId(input.tradeId) });
 }
 
 function validateTradeAcceptancePreviewCommand(input) {
-  exactObject(input, [
+  exactObject(input, [...(input?.respondingTeamId === undefined ? [] : ["respondingTeamId"]),
     "tradeId",
     "leagueId",
     "seasonId",
@@ -234,6 +236,7 @@ function validateTradeAcceptancePreviewCommand(input) {
     fail(TRADE_LIFECYCLE_CODES.authorityInvalid);
   }
   const command = Object.freeze({
+    ...(input.respondingTeamId === undefined ? {} : { respondingTeamId: stableId(input.respondingTeamId) }),
     tradeId: stableId(input.tradeId),
     leagueId: stableId(input.leagueId),
     seasonId: stableId(input.seasonId),

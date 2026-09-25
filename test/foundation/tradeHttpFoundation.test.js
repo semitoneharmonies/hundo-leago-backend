@@ -58,7 +58,7 @@ function services(calls, overrides = {}) {
   return {
     tradeReadService: { read: record("read", "TRADE_PROPOSAL_FOUND") },
     tradeProposalService: { list: record("list", "TRADE_PROPOSALS_FOUND") },
-    tradeCreationService: { create: record("create", "TRADE_PROPOSAL_CREATED"), counter: record("counter", "TRADE_COUNTER_PROPOSAL_CREATED") },
+    tradeCreationService: { create: record("create", "TRADE_PROPOSAL_CREATED"), counter: record("counter", "TRADE_COUNTER_PROPOSAL_CREATED"), preview: record("draftPreview", "TRADE_PROPOSAL_PREVIEWED") },
     tradeLifecycleService: { respond: record("respond", "TRADE_PROPOSAL_UPDATED") },
     tradeAcceptancePreviewService: {
       preview: record("acceptancePreview", "TRADE_ACCEPTANCE_PREVIEWED"),
@@ -98,6 +98,18 @@ function headers(extra = {}) {
 }
 
 describe("M5-11 isolated trade HTTP contract", () => {
+  test("draft preview requires an authenticated CSRF-protected request and never calls creation", async (t) => {
+    const calls = [], baseUrl = await startApi(t, services(calls));
+    const url = `${baseUrl}/api/v1/leagues/${LEAGUE_ID}/trades/preview`, input = { participants: [] };
+    for (const extra of [{ "x-test-session": "missing" }, { "x-test-csrf": "missing" }]) {
+      assert.equal((await fetch(url, { method: "POST", headers: headers(extra), body: JSON.stringify(input) })).status, 403);
+    }
+    assert.equal(calls.length, 0);
+    const response = await fetch(url, { method: "POST", headers: headers(), body: JSON.stringify(input) });
+    assert.equal(response.status, 200);
+    assert.deepEqual(calls.map(call => call.method), ["draftPreview"]);
+    assert.deepEqual(calls[0].input.input, input);
+  });
   test("requires the unsafe-request boundary and passes the source ID for counter proposals", async (t) => {
     const calls = [];
     const baseUrl = await startApi(t, services(calls));

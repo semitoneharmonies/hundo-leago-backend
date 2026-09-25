@@ -29,7 +29,10 @@ function createSqliteTradeParticipants(database) {
     })) } : {};
   }
   function actorTeam(input, { includeProposer = false } = {}) {
-    if (!list(input).length) return input.receivingTeamId;
+    if (!list(input).length) {
+      if (input.respondingTeamId && input.respondingTeamId !== input.receivingTeamId) throw new TradeLifecyclePolicyError(TRADE_LIFECYCLE_CODES.roleDenied);
+      return input.receivingTeamId;
+    }
     const matches = database.prepare(`SELECT p.team_id FROM trade_participants p
       JOIN team_manager_assignments a ON a.league_id = p.league_id AND a.team_id = p.team_id
       JOIN league_memberships m ON m.league_id = a.league_id AND m.id = a.membership_id AND m.user_id = a.user_id
@@ -38,13 +41,15 @@ function createSqliteTradeParticipants(database) {
         AND a.status = 'accepted' AND a.accepted_at_ms IS NOT NULL AND a.ended_at_ms IS NULL
         AND m.status = 'active' AND u.status = 'active'
         AND (@includeProposer = 1 OR p.sequence <> 1)`).all({ ...input, includeProposer: includeProposer ? 1 : 0 });
-    if (matches.length !== 1) throw new TradeLifecyclePolicyError(TRADE_LIFECYCLE_CODES.roleDenied);
-    return matches[0].team_id;
+    const selected = input.respondingTeamId ? matches.filter(p => p.team_id === input.respondingTeamId) : matches;
+    if (selected.length !== 1) throw new TradeLifecyclePolicyError(TRADE_LIFECYCLE_CODES.roleDenied);
+    return selected[0].team_id;
   }
   function clearNotifications(input) {
     database.prepare(`UPDATE notifications SET read_at_ms = MAX(created_at_ms, @occurredAtMs), version = version + 1
       WHERE league_id = @leagueId AND related_feature = 'trade' AND related_record_id = @tradeId
-        AND user_id = @actorUserId AND read_at_ms IS NULL`).run(input);
+        AND user_id = @actorUserId AND read_at_ms IS NULL
+        AND json_extract(message_data_json, '$.receivingTeamId') = @respondingTeamId`).run(input);
   }
   function respond(input, teamId, decision) {
     const result = database.prepare(`UPDATE trade_participants SET decision = @decision,
@@ -54,7 +59,7 @@ function createSqliteTradeParticipants(database) {
       WHERE league_id = @leagueId AND trade_id = @tradeId AND team_id = @teamId
         AND (decision = 'pending' OR (@decision = 'declined' AND decision = 'accepted'))`).run({ ...input, teamId, decision });
     if (result.changes !== 1) throw new TradeLifecyclePolicyError(TRADE_LIFECYCLE_CODES.notPending);
-    clearNotifications(input);
+    clearNotifications({ ...input, respondingTeamId: teamId });
   }
   const acknowledge = database.transaction(input => {
     const trade = database.prepare('SELECT status FROM trades WHERE league_id = @leagueId AND id = @tradeId').get(input);
@@ -63,7 +68,7 @@ function createSqliteTradeParticipants(database) {
     const teamId = actorTeam(input, { includeProposer: true });
     database.prepare(`UPDATE trade_participants SET acknowledged_at_ms = @occurredAtMs
       WHERE league_id = @leagueId AND trade_id = @tradeId AND team_id = @teamId AND acknowledged_at_ms IS NULL`).run({ ...input, teamId });
-    clearNotifications(input);
+    clearNotifications({ ...input, respondingTeamId: teamId });
     return { code: 'TRADE_ACKNOWLEDGED', tradeId: input.tradeId, teamId };
   });
   function create(command) {

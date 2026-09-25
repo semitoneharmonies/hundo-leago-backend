@@ -251,10 +251,11 @@ function createAcceptTradeProposalService({
     const actor = teamAuthorization.requireManager(
       authenticated,
       proposal.league_id,
-      repository.findRespondingTeamId ? repository.findRespondingTeamId({ leagueId: proposal.league_id, tradeId: proposal.trade_id, receivingTeamId: proposal.receiving_team_id, actorUserId: authenticated.user.id }) : proposal.receiving_team_id
+      repository.findRespondingTeamId ? repository.findRespondingTeamId({ leagueId: proposal.league_id, tradeId: proposal.trade_id, receivingTeamId: proposal.receiving_team_id, ...(body.respondingTeamId === undefined ? {} : { respondingTeamId: body.respondingTeamId }), actorUserId: authenticated.user.id }) : proposal.receiving_team_id
     );
     const occurredAtMs = safeNow(clock);
     const result = repository.executeAcceptance({
+      ...(body.respondingTeamId === undefined ? {} : { respondingTeamId: body.respondingTeamId }),
         tradeId: proposal.trade_id,
         eventId: secureRandom.id(),
         idempotencyRequestId: secureRandom.id(),

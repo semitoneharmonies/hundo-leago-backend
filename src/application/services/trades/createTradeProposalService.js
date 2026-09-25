@@ -90,7 +90,7 @@ function createTradeProposalService({
   assertMethod(clock, "nowMs", "a clock");
   assertMethod(secureRandom, "id", "secure identifiers");
 
-  function create({ leagueId, input, idempotencyKey, authenticated, counterTradeId = null } = {}) {
+  function buildCommand({ leagueId, input, idempotencyKey, authenticated } = {}) {
     const body = validateTradeProposalCreationInput(input);
     const canonicalIdempotencyKey = boundedIdempotencyKey(idempotencyKey);
     const authority = teamAuthorization.requireManager(
@@ -152,6 +152,20 @@ function createTradeProposalService({
       idempotencyExpiresAtMs: createdAtMs + IDEMPOTENCY_LIFETIME_MS,
       assets,
     };
+    return command;
+  }
+
+  function preview(request = {}) {
+    const command = buildCommand({ ...request, idempotencyKey: "read-only-draft-preview" });
+    return Object.freeze({
+      code: "TRADE_PROPOSAL_PREVIEWED",
+      leagueId: command.leagueId,
+      ...repository.previewProposal(command),
+    });
+  }
+
+  function create({ counterTradeId = null, ...request } = {}) {
+    const command = buildCommand(request);
     const result = counterTradeId === null
       ? repository.createProposal(command)
       : repository.createCounterProposal(command, counterTradeId);
@@ -168,7 +182,7 @@ function createTradeProposalService({
     return create({ ...request, counterTradeId });
   }
 
-  return Object.freeze({ create, counter });
+  return Object.freeze({ create, counter, preview });
 }
 
 module.exports = {

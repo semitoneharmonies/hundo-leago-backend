@@ -100,10 +100,11 @@ function createPreviewTradeAcceptanceService({
     const actor = approvalActor || teamAuthorization.requireManager(
       authenticated,
       proposal.league_id,
-      repository.findRespondingTeamId ? repository.findRespondingTeamId({ leagueId: proposal.league_id, tradeId: proposal.trade_id, receivingTeamId: proposal.receiving_team_id, actorUserId: authenticated.user.id }) : proposal.receiving_team_id
+      repository.findRespondingTeamId ? repository.findRespondingTeamId({ leagueId: proposal.league_id, tradeId: proposal.trade_id, receivingTeamId: proposal.receiving_team_id, ...(body.respondingTeamId === undefined ? {} : { respondingTeamId: body.respondingTeamId }), actorUserId: authenticated.user.id }) : proposal.receiving_team_id
     );
     return projectResult(
       repository.previewAcceptance({
+      ...(body.respondingTeamId === undefined ? {} : { respondingTeamId: body.respondingTeamId }),
         tradeId: proposal.trade_id,
         leagueId: proposal.league_id,
         seasonId: proposal.season_id,
