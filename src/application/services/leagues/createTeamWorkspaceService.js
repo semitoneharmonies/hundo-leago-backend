@@ -233,6 +233,7 @@ function safeWorkspace(record, nowMs, canManage) {
       version: scope.team_version,
     }),
     players,
+    capOutlook: record.capOutlook || null,
     cap: Object.freeze({
       limitCents: cap.capLimitCents,
       usageCents: cap.capUsageCents,
