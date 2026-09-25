@@ -5,7 +5,7 @@ const { canonicalize } = require("../../infrastructure/migration/sourceInventory
 const { discoverMigrations, assertMigrationCompatibility } = require("../../infrastructure/database/migrate");
 const { normalContractValue } = require("../../domain/contracts/contractPolicy");
 const { calculateRetentionCeilingCents } = require("../../domain/contracts/retentionPolicy");
-const { calculateBuyoutPenaltyCents } = require("../../domain/contracts/buyoutPolicy");
+const { isSupportedPersistedBuyoutPenalty } = require("../../domain/contracts/buyoutPolicy");
 const { createSqliteCapReadRepository } = require("../../infrastructure/persistence/sqlite/SqliteCapReadRepository");
 const { inspectRecoveryInventory } = require("./inspectRecoveryInventory");
 
@@ -121,7 +121,7 @@ function inspectRecoveryFinancialConsistency({ database, plaintextSha256, expect
             add("OBLIGATION_SEASON_MISMATCH", table, obligation);
           }
           for (const year of years) if (year[yearAmount] !== obligation[amount]) add("OBLIGATION_YEAR_AMOUNT_MISMATCH", yearTable, year);
-          if (!retention && obligation[amount] !== calculateBuyoutPenaltyCents(contract.aav_cents)) add("BUYOUT_POLICY_AMOUNT_REQUIRES_REVIEW", table, obligation);
+          if (!retention && !isSupportedPersistedBuyoutPenalty(contract.aav_cents, obligation[amount])) add("BUYOUT_POLICY_AMOUNT_REQUIRES_REVIEW", table, obligation);
           if (obligation.status === "active") {
             if (remaining.filter(year => year.status === "current").length !== 1 ||
                 !["active","eliminated"].includes(contract.status) || (!retention && contract.status !== "eliminated")) {

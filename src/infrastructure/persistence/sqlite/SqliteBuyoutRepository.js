@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { isRapidAuctionBuyoutLockExempt } = require("../../../domain/contracts/rapidAuctionBuyoutLockPolicy");
 const {
   createEmptySocketRelated,
   createSocketEventMetadata,
@@ -84,11 +85,13 @@ function createSqliteBuyoutRepository({
   });
 
   let contractStatement;
+  let auctionAcquisitionStatement;
   let ownershipStatement;
   let remainingYearsStatement;
   let pendingTradesStatement;
   let eliminateYearStatement;
   let deleteOwnershipStatement;
+  let deleteDisplayOrderStatement;
   let buyoutTransaction;
   try {
     const outboxWriter = resolveSqliteLeagueOutboxWriter({ database, leagueOutboxWriter });
@@ -99,6 +102,31 @@ function createSqliteBuyoutRepository({
       "SELECT * FROM contracts " +
         "WHERE id = @contractId AND league_id = @leagueId LIMIT 2"
     );
+    auctionAcquisitionStatement = database.prepare(`
+      SELECT resolution.id AS resolutionId,
+        resolution.contract_id AS contractId,
+        resolution.league_id AS leagueId,
+        resolution.season_id AS seasonId,
+        auction.player_id AS playerId,
+        resolution.status, resolution.outcome_code AS outcomeCode,
+        context.source_kind AS sourceKind, draft.id AS fadId
+      FROM auction_resolutions AS resolution
+      JOIN auctions AS auction
+        ON auction.id = resolution.auction_id
+       AND auction.league_id = resolution.league_id
+       AND auction.season_id = resolution.season_id
+      JOIN auction_contexts AS context
+        ON context.auction_id = auction.id
+       AND context.league_id = auction.league_id
+       AND context.season_id = auction.season_id
+      JOIN free_agent_drafts AS draft
+        ON draft.id = context.fad_id
+       AND draft.league_id = context.league_id
+       AND draft.season_id = context.season_id
+      WHERE resolution.id = @resolutionId
+        AND resolution.league_id = @leagueId
+        AND resolution.contract_id = @contractId
+    `);
     ownershipStatement = database.prepare(
       "SELECT * FROM player_ownerships " +
         "WHERE id = @ownershipId AND league_id = @leagueId LIMIT 2"
@@ -126,6 +154,10 @@ function createSqliteBuyoutRepository({
         "rollover_at_ms = @occurredAtMs " +
         "WHERE id = @contractYearId AND league_id = @leagueId " +
         "AND contract_id = @contractId AND status = @expectedStatus"
+    );
+    deleteDisplayOrderStatement = database.prepare(
+      "DELETE FROM roster_display_order_entries " +
+        "WHERE league_id = @leagueId AND ownership_id = @ownershipId"
     );
     deleteOwnershipStatement = database.prepare(
       "DELETE FROM player_ownerships " +
@@ -170,11 +202,22 @@ function createSqliteBuyoutRepository({
       }
       const contractBefore = freezeRow(contractRows[0]);
       const ownershipBefore = freezeRow(ownershipRows[0]);
+      const auctionAcquisition = contractBefore.acquisition_source_type === "auction_resolution"
+        ? auctionAcquisitionStatement.get({
+          resolutionId: contractBefore.acquisition_source_id,
+          leagueId: command.leagueId,
+          contractId: command.contractId,
+        }) ?? null
+        : null;
+      const lockExemption = isRapidAuctionBuyoutLockExempt(contractBefore, auctionAcquisition)
+        ? { buyoutLockExemption: "fad_rapid_auction" }
+        : {};
       const remainingRows = remainingYearsStatement.all(command);
       const aggregate = createBuyoutAggregate({
         command,
         contract: contractBefore,
         ownership: ownershipBefore,
+        auctionAcquisition,
         remainingContractYears: remainingRows.map((year) => ({
           contractYearId: year.id,
           seasonId: year.season_id,
@@ -249,6 +292,7 @@ function createSqliteBuyoutRepository({
           source_type: "buyout",
           source_id: command.buyoutId,
           metadata_json: JSON.stringify({
+            ...lockExemption,
             aavCents: contractBefore.aav_cents,
             annualPenaltyCents: aggregate.annualPenaltyCents,
             remainingYears: aggregate.years.length,
@@ -297,6 +341,7 @@ function createSqliteBuyoutRepository({
           display_summary: "Contract bought out; player released.",
           reason: command.reason,
           metadata_json: JSON.stringify({
+            ...lockExemption,
             contractId: command.contractId,
             ownershipId: command.ownershipId,
             annualPenaltyCents: aggregate.annualPenaltyCents,
@@ -312,6 +357,7 @@ function createSqliteBuyoutRepository({
           occurred_at_ms: command.occurredAtMs,
         })
       );
+      deleteDisplayOrderStatement.run(command);
       const deleted = deleteOwnershipStatement.run(command);
       if (deleted.changes !== 1) {
         throw repositoryError(

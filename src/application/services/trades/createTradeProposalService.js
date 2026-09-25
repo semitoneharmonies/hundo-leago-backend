@@ -11,6 +11,7 @@ const {
 } = require("../../../domain/trades/tradeProposalPolicy");
 
 const IDEMPOTENCY_LIFETIME_MS = 24 * 60 * 60 * 1000;
+const { validateTradeAcceptancePreviewInput } = require("../../../domain/trades/tradeLifecyclePolicy");
 
 function assertMethod(value, method, description) {
   if (!value || typeof value[method] !== "function") {
@@ -88,7 +89,7 @@ function createTradeProposalService({
   assertMethod(clock, "nowMs", "a clock");
   assertMethod(secureRandom, "id", "secure identifiers");
 
-  function create({ leagueId, input, idempotencyKey, authenticated } = {}) {
+  function create({ leagueId, input, idempotencyKey, authenticated, counterTradeId = null } = {}) {
     const body = validateTradeProposalCreationInput(input);
     const canonicalIdempotencyKey = boundedIdempotencyKey(idempotencyKey);
     const authority = teamAuthorization.requireManager(
@@ -131,7 +132,7 @@ function createTradeProposalService({
       assetIds,
       createdAtMs,
     });
-    const result = repository.createProposal({
+    const command = {
       tradeId,
       eventId: secureRandom.id(),
       idempotencyRequestId: secureRandom.id(),
@@ -148,11 +149,24 @@ function createTradeProposalService({
       idempotencyKey: canonicalIdempotencyKey,
       idempotencyExpiresAtMs: createdAtMs + IDEMPOTENCY_LIFETIME_MS,
       assets,
+    };
+    const result = counterTradeId === null
+      ? repository.createProposal(command)
+      : repository.createCounterProposal(command, counterTradeId);
+    const projected = projectResult(result);
+    return counterTradeId === null ? projected : Object.freeze({
+      ...projected,
+      code: result.replayed ? "TRADE_COUNTER_PROPOSAL_REPLAYED" : "TRADE_COUNTER_PROPOSAL_CREATED",
+      originalProposal: Object.freeze({ id: counterTradeId, status: "Rejected", storageStatus: "declined" }),
     });
-    return projectResult(result);
   }
 
-  return Object.freeze({ create });
+  function counter({ tradeId, ...request } = {}) {
+    const { tradeId: counterTradeId } = validateTradeAcceptancePreviewInput({ tradeId });
+    return create({ ...request, counterTradeId });
+  }
+
+  return Object.freeze({ create, counter });
 }
 
 module.exports = {

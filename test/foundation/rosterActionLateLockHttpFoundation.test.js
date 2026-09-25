@@ -22,6 +22,28 @@ const IDS = Object.freeze({
 });
 const REQUEST_ID = "fad-roster-late-lock-http";
 
+test("locked buyout returns its actionable 409 message and expiry", async (t) => {
+  const { BuyoutPolicyError, BUYOUT_POLICY_CODES } = require("../../src/domain/contracts/buyoutPolicy");
+  const expiry = Date.parse("2026-09-22T01:25:13.364Z");
+  let coordinated = false;
+  const service = createService({
+    move() { throw new Error("movement is outside the buyout test"); },
+    buyOut() { throw new BuyoutPolicyError(BUYOUT_POLICY_CODES.lockActive, { buyoutLockExpiresAtMs: expiry }); },
+    coordinateCommittedRoster() { coordinated = true; },
+  });
+  const baseUrl = await startApi(t, service);
+  const response = await post(buyoutUrl(baseUrl), {
+    confirmed: true, expectedContractVersion: 2, expectedOwnershipVersion: 3,
+  });
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: {
+    code: "BUYOUT_LOCK_ACTIVE",
+    message: "This player is still within the 14-day free-agent signing buyout lock.",
+    requestId: REQUEST_ID, details: { buyoutLockExpiresAtMs: expiry },
+  } });
+  assert.equal(coordinated, false);
+});
+
 function middleware(request, response, next) {
   next();
 }

@@ -7,7 +7,7 @@ const SAFE_MESSAGES = Object.freeze({
     "This player's contract exceeds the maximum Bench AAV.",
   BUYOUT_CONTRACT_NOT_ELIGIBLE: "This contract is not eligible for buyout.",
   BUYOUT_CONTRACT_NOT_OWNED: "This team does not own that contract.",
-  BUYOUT_LOCK_ACTIVE: "This contract is still protected by its auction buyout lock.",
+  BUYOUT_LOCK_ACTIVE: "This player is still within the 14-day free-agent signing buyout lock.",
   BUYOUT_PENDING_TRADE_EXISTS:
     "This contract cannot be bought out while it is included in a pending trade.",
   INJURED_RESERVE_FULL: "All injured-reserve slots are in use.",

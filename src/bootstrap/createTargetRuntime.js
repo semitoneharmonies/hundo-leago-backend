@@ -1004,6 +1004,7 @@ const TARGET_ENDPOINTS = Object.freeze([
   ],
   ["GET", "/api/v1/leagues/:leagueId/trades", "trade"],
   ["POST", "/api/v1/leagues/:leagueId/trades", "trade"],
+  ["POST", "/api/v1/leagues/:leagueId/trades/:tradeId/counter", "trade"],
   ["GET", "/api/v1/leagues/:leagueId/trades/:tradeId", "trade"],
   [
     "GET",

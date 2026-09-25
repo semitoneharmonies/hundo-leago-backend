@@ -5,6 +5,12 @@ const os = require("node:os");
 const path = require("node:path");
 const { describe, test } = require("node:test");
 
+test("atomic counter proposal HTTP flow", async (t) => {
+  await require("../helpers/counterProposalFlow").runCounterProposalFlow(t, {
+    createRuntime, IDS, NOW_MS, authenticated, creationInput, ordinaryCreationInput, sourceState,
+  });
+});
+
 const {
   TRADE_ASSET_CODES,
   TradeAssetPolicyError,

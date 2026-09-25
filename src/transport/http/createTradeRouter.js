@@ -177,6 +177,24 @@ function createTradeRouter({
     }
   );
 
+  router.post(
+    "/api/v1/leagues/:leagueId/trades/:tradeId/counter",
+    requestSecurity.authenticateUnsafe,
+    (request, response) => {
+      try {
+        return success(request, response, 201, tradeCreationService.counter({
+          leagueId: request.params.leagueId,
+          tradeId: request.params.tradeId,
+          input: request.body,
+          idempotencyKey: request.get("idempotency-key"),
+          authenticated: requestSecurity.getAuthenticatedSession(request),
+        }));
+      } catch (caught) {
+        return mapError(request, response, caught);
+      }
+    }
+  );
+
   router.get(
     "/api/v1/leagues/:leagueId/trades/:tradeId",
     requestSecurity.authenticateBootstrap,

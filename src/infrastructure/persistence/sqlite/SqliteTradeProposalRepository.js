@@ -495,7 +495,7 @@ function createSqliteTradeProposalRepository({
       FROM idempotency_requests
       WHERE league_id = @leagueId
         AND actor_user_id = @actorUserId
-        AND operation = '${OPERATION}'
+        AND operation = @operation
         AND client_key = @idempotencyKey
       LIMIT 2
     `);
@@ -505,7 +505,7 @@ function createSqliteTradeProposalRepository({
         request_hash, status, result_type, result_id,
         created_at_ms, completed_at_ms, expires_at_ms
       ) VALUES (
-        @idempotencyRequestId, @leagueId, @actorUserId, '${OPERATION}',
+        @idempotencyRequestId, @leagueId, @actorUserId, @operation,
         @idempotencyKey, @requestHash, 'started', NULL, NULL,
         @createdAtMs, NULL, @idempotencyExpiresAtMs
       )
@@ -2205,8 +2205,11 @@ function createSqliteTradeProposalRepository({
     });
   }
 
-  const createTransaction = database.transaction((rawCommand) => {
-    const command = validateTradeProposalCreationCommand(rawCommand);
+  const createTransaction = database.transaction((rawCommand, counterTradeId = null) => {
+    const command = {
+      ...validateTradeProposalCreationCommand(rawCommand),
+      operation: counterTradeId === null ? OPERATION : `trade.counter:${stableId(counterTradeId)}`,
+    };
     const requestHash = createRequestHash(command);
     const existing = unique(
       findIdempotencyStatement,
@@ -2229,6 +2232,21 @@ function createSqliteTradeProposalRepository({
       });
     }
 
+    let original;
+    if (counterTradeId !== null) {
+      original = unique(findLifecycleParticipantsStatement,
+        { leagueId: command.leagueId, tradeId: counterTradeId },
+        "A countered trade was not unique.");
+      if (!original) throw new TradeLifecyclePolicyError(TRADE_LIFECYCLE_CODES.notFound);
+      if (original.trade_status !== "proposed") {
+        throw new TradeLifecyclePolicyError(TRADE_LIFECYCLE_CODES.notPending);
+      }
+      if (original.season_id !== command.seasonId ||
+          original.receiving_team_id !== command.proposingTeamId ||
+          original.proposing_team_id !== command.receivingTeamId) {
+        throw new TradeLifecyclePolicyError(TRADE_LIFECYCLE_CODES.roleDenied);
+      }
+    }
     assertNewTradeProposalAssetTypes(command.assets);
     assertNewTradeProposalCreationAuthority(command);
     insertIdempotencyStatement.run({ ...command, requestHash });
@@ -2254,6 +2272,7 @@ function createSqliteTradeProposalRepository({
       actorAuthority: command.actorAuthority,
       assetIds: assets.map((asset) => asset.id),
       assetCount: assets.length,
+      ...(counterTradeId === null ? {} : { counteredTradeId: counterTradeId }),
     });
     insertEventStatement.run({ ...command, eventMetadataJson });
     insertTradePublication({
@@ -2273,6 +2292,7 @@ function createSqliteTradeProposalRepository({
         proposingTeamId: command.proposingTeamId,
         receivingTeamId: command.receivingTeamId,
         status: "Pending",
+        ...(counterTradeId === null ? {} : { counteredTradeId: counterTradeId }),
         assets: assets.map((asset) => ({
           id: asset.id,
           assetType: asset.assetType,
@@ -2316,6 +2336,28 @@ function createSqliteTradeProposalRepository({
         REPOSITORY_ERROR_CODES.versionConflict,
         "The trade proposal idempotency result changed concurrently."
       );
+    }
+    if (original) {
+      // Nested SQLite transactions are savepoints: a failure here rolls back
+      // the new proposal, notification, history, and idempotency record too.
+      lifecycleTransaction({
+        tradeId: original.trade_id,
+        eventId: deterministicUuid(`trade-counter-decline-event:${command.eventId}`),
+        idempotencyRequestId: deterministicUuid(`trade-counter-decline-request:${command.idempotencyRequestId}`),
+        leagueId: command.leagueId,
+        seasonId: command.seasonId,
+        proposingTeamId: original.proposing_team_id,
+        receivingTeamId: original.receiving_team_id,
+        expectedVersion: original.version,
+        action: "reject",
+        actorUserId: command.actorUserId,
+        actorMembershipId: command.actorMembershipId,
+        actorAuthority: command.actorAuthority,
+        occurredAtMs: command.createdAtMs,
+        effectiveDeadlineAtMs: original.effective_deadline_at_ms,
+        idempotencyKey: `counter:${command.tradeId}`,
+        idempotencyExpiresAtMs: command.idempotencyExpiresAtMs,
+      });
     }
     return aggregate({
       leagueId: command.leagueId,
@@ -3592,6 +3634,16 @@ function createSqliteTradeProposalRepository({
   });
 
   return Object.freeze({
+    createCounterProposal(rawCommand, originalTradeId) {
+      try {
+        return createTransaction.immediate(rawCommand, stableId(originalTradeId));
+      } catch (error) {
+        if (error instanceof TradeAssetPolicyError ||
+            error instanceof TradeProposalFoundationPolicyError ||
+            error instanceof TradeLifecyclePolicyError) throw error;
+        throw mapRepositoryError(error, { operation: "createCounterProposal", tableName: "trades" });
+      }
+    },
     createProposal(rawCommand) {
       try {
         return createTransaction.immediate(rawCommand);
