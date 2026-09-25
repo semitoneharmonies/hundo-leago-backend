@@ -1,4 +1,5 @@
 const { historicalSchema54Migrations } = require("../helpers/historicalSchema54Migrations");
+require("../helpers/historicalSchema54CandidateDecisions");
 "use strict";
 
 const assert = require("node:assert/strict");

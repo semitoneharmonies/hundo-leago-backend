@@ -585,6 +585,11 @@ describe("M5-03 read-only SQLite auction resolution candidates", () => {
       nowMs: NOW_MS,
     });
     assert.deepEqual(
+      candidate.bidHistory.map(({ bidId, totalValueCents, termYears, occurredAtMs }) =>
+        [bidId, totalValueCents, termYears, occurredAtMs]),
+      [[IDS.bidA, 1_050, 3, OPEN_MS], [IDS.bidB, 500, 2, OPEN_MS + 1]]
+    );
+    assert.deepEqual(
       candidate.bids.map(({ id, isStartingBid, authorityValid }) => ({
         id,
         isStartingBid,

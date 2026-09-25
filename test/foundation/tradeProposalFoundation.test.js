@@ -779,10 +779,13 @@ describe("M5-05 trade proposal SELECT-only foundation", () => {
   test("repository surface exposes only the approved read and atomic-create operations", (t) => {
     const runtime = createRuntime(t);
     assert.deepEqual(Object.keys(runtime.repository).sort(), [
+      "acknowledge",
+      "createCounterProposal",
       "createProposal",
       "executeAcceptance",
       "executeApproval",
       "findLifecycleParticipants",
+      "findRespondingTeamId",
       "listVisible",
       "loadFoundationState",
       "previewAcceptance",

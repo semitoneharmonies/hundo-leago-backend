@@ -1459,6 +1459,7 @@ function createSqliteAuctionResolutionRepository({
           auctionVersion: candidate.auctionVersion,
           seasonId: candidate.seasonId,
           bids: candidate.bids,
+          bidHistory: candidate.bidHistory,
         });
       } catch (error) {
         throw mapRepositoryError(error, {

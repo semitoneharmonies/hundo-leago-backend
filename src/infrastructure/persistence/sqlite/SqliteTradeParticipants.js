@@ -3,10 +3,16 @@ const crypto = require('node:crypto');
 
 // Participant rows are additive; absent rows mean an unchanged two-team trade.
 function createSqliteTradeParticipants(database) {
-  const rows = database.prepare(`SELECT p.*, t.name FROM trade_participants p
-    JOIN teams t ON t.league_id = p.league_id AND t.id = p.team_id
-    WHERE p.league_id = @leagueId AND p.trade_id = @tradeId ORDER BY p.sequence`);
+  let rows;
   function list(input) {
+    if (!rows) {
+      // Held historical copies retain their two-team schema. Never migrate
+      // during a read, and still fail if a current schema is missing its table.
+      if (database.pragma('user_version', { simple: true }) < 62) return [];
+      rows = database.prepare(`SELECT p.*, t.name FROM trade_participants p
+        JOIN teams t ON t.league_id = p.league_id AND t.id = p.team_id
+        WHERE p.league_id = @leagueId AND p.trade_id = @tradeId ORDER BY p.sequence`);
+    }
     const result = rows.all(input);
     if (result.length && (result.length !== 3 || result.some((p, index) => p.sequence !== index + 1))) throw new TradeLifecyclePolicyError(TRADE_LIFECYCLE_CODES.stateInvalid);
     return result;
@@ -62,6 +68,7 @@ function createSqliteTradeParticipants(database) {
   });
   function create(command) {
     if (!command.participantTeamIds) return;
+    if (database.pragma('user_version', { simple: true }) < 62) throw new TradeLifecyclePolicyError(TRADE_LIFECYCLE_CODES.stateInvalid);
     const insert = database.prepare(`INSERT INTO trade_participants
       (id, league_id, trade_id, team_id, sequence, decision, responded_by_user_id, responded_by_membership_id, responded_at_ms)
       VALUES (@id, @leagueId, @tradeId, @teamId, @sequence, @decision, @userId, @membershipId, @respondedAtMs)`);

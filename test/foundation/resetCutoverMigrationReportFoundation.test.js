@@ -59,7 +59,7 @@ function zeroMoneyFamily(familyId) {
 
 function projection({
   bundleId = sourceBundleId(),
-  schemaVersion = 57,
+  schemaVersion = 62,
   targetHash = "b".repeat(64),
 } = {}) {
   const reset = createResetManifest();
@@ -404,7 +404,7 @@ describe("FAD-04 committed reset migration-report repository", () => {
         leagueId: uuid(2),
       });
     assert.equal(found.id, uuid(1));
-    assert.equal(found.databaseSchemaVersion, 57);
+    assert.equal(found.databaseSchemaVersion, 62);
 
     runtime.database.pragma("user_version = 41");
     const postMigrationReplay =
