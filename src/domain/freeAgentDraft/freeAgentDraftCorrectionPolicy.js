@@ -1756,6 +1756,25 @@ function projectFreeAgentDraftCorrectionPreviewForPublic(value) {
       preview.recomputedDecision
     ),
     deltas: preview.deltas.map(redactAfterSummaryMoney),
+    // Correction diagnostics must not associate this player with private trade
+    // IDs, states or counts. Keep the canonical safety checks and opaque
+    // fingerprint unchanged; callers still cannot apply a blocked correction.
+    blockers: redactTradeDiagnostics(preview.blockers),
+    warnings: redactTradeDiagnostics(preview.warnings),
+  });
+}
+
+function redactTradeDiagnostics(diagnostics) {
+  let dependencyIncluded = false;
+  return diagnostics.flatMap((diagnostic) => {
+    if (diagnostic.code !== "FAD_CORRECTION_TRADE_DRIFT") return [diagnostic];
+    if (dependencyIncluded) return [];
+    dependencyIncluded = true;
+    return [{
+      code: "FAD_CORRECTION_DEPENDENCY_DRIFT",
+      message: "Linked records prevent direct correction.",
+      resourceId: null,
+    }];
   });
 }
 

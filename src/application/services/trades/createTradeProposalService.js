@@ -39,6 +39,7 @@ function projectResult(result) {
       seasonId: result.trade.season_id,
       proposingTeamId: result.trade.proposing_team_id,
       receivingTeamId: result.trade.receiving_team_id,
+      ...(result.participants ? { participants: result.participants } : {}),
       creatingActor: Object.freeze({
         userId: result.trade.proposing_user_id,
         membershipId: result.trade.creating_membership_id,
@@ -89,7 +90,7 @@ function createTradeProposalService({
   assertMethod(clock, "nowMs", "a clock");
   assertMethod(secureRandom, "id", "secure identifiers");
 
-  function create({ leagueId, input, idempotencyKey, authenticated, counterTradeId = null } = {}) {
+  function buildCommand({ leagueId, input, idempotencyKey, authenticated } = {}) {
     const body = validateTradeProposalCreationInput(input);
     const canonicalIdempotencyKey = boundedIdempotencyKey(idempotencyKey);
     const authority = teamAuthorization.requireManager(
@@ -124,7 +125,7 @@ function createTradeProposalService({
       tradeDeadlineAtMs: context.trade_deadline_at_ms,
     });
     const assetIds = Array.from(
-      { length: body.proposingAssets.length + body.receivingAssets.length },
+      { length: body.participants ? body.participants.reduce((sum, side) => sum + side.assets.length, 0) : body.proposingAssets.length + body.receivingAssets.length },
       () => secureRandom.id()
     );
     const assets = createTradeAssetCommands({
@@ -133,6 +134,7 @@ function createTradeProposalService({
       createdAtMs,
     });
     const command = {
+      ...(body.participants ? { participantTeamIds: body.participants.map(side => side.teamId) } : {}),
       tradeId,
       eventId: secureRandom.id(),
       idempotencyRequestId: secureRandom.id(),
@@ -150,6 +152,20 @@ function createTradeProposalService({
       idempotencyExpiresAtMs: createdAtMs + IDEMPOTENCY_LIFETIME_MS,
       assets,
     };
+    return command;
+  }
+
+  function preview(request = {}) {
+    const command = buildCommand({ ...request, idempotencyKey: "read-only-draft-preview" });
+    return Object.freeze({
+      code: "TRADE_PROPOSAL_PREVIEWED",
+      leagueId: command.leagueId,
+      ...repository.previewProposal(command),
+    });
+  }
+
+  function create({ counterTradeId = null, ...request } = {}) {
+    const command = buildCommand(request);
     const result = counterTradeId === null
       ? repository.createProposal(command)
       : repository.createCounterProposal(command, counterTradeId);
@@ -166,7 +182,7 @@ function createTradeProposalService({
     return create({ ...request, counterTradeId });
   }
 
-  return Object.freeze({ create, counter });
+  return Object.freeze({ create, counter, preview });
 }
 
 module.exports = {

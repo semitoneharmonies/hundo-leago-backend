@@ -103,7 +103,7 @@ function createRespondToTradeProposalService({
     }
     const participantTeamId =
       body.action === "reject"
-        ? proposal.receiving_team_id
+        ? (repository.findRespondingTeamId ? repository.findRespondingTeamId({ leagueId, tradeId: proposal.trade_id, receivingTeamId: proposal.receiving_team_id, ...(body.respondingTeamId === undefined ? {} : { respondingTeamId: body.respondingTeamId }), actorUserId: authenticated.user.id }) : proposal.receiving_team_id)
         : proposal.proposing_team_id;
     const actor = authority(
       authenticated,
@@ -112,6 +112,7 @@ function createRespondToTradeProposalService({
     );
     const occurredAtMs = safeNow(clock);
     const result = repository.transitionLifecycle({
+      ...(body.respondingTeamId === undefined ? {} : { respondingTeamId: body.respondingTeamId }),
       tradeId: proposal.trade_id,
       eventId: secureRandom.id(),
       idempotencyRequestId: secureRandom.id(),
@@ -132,7 +133,12 @@ function createRespondToTradeProposalService({
     return projectResult(result, body.action);
   }
 
-  return Object.freeze({ respond });
+  function acknowledge({ leagueId, tradeId, respondingTeamId, authenticated } = {}) {
+    const body = require("../../../domain/trades/tradeLifecyclePolicy").validateTradeAcceptancePreviewInput({ tradeId, ...(respondingTeamId === undefined ? {} : { respondingTeamId }) });
+    leagueAuthorization.requireActiveMembership(authenticated, leagueId);
+    return repository.acknowledge({ leagueId, ...(body.respondingTeamId === undefined ? {} : { respondingTeamId: body.respondingTeamId }), tradeId: body.tradeId, actorUserId: authenticated.user.id, occurredAtMs: safeNow(clock) });
+  }
+  return Object.freeze({ respond, acknowledge });
 }
 
 module.exports = {

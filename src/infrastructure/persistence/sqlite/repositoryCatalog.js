@@ -28,6 +28,7 @@ function repositoryDefinition(
 }
 
 const DEFINITIONS = [
+  repositoryDefinition("trade_participants", REPOSITORY_SCOPES.requiredLeague),
   repositoryDefinition("expanded_stat_refreshes", REPOSITORY_SCOPES.global, { keyColumn: "refresh_id" }),
   repositoryDefinition("expanded_stat_totals", REPOSITORY_SCOPES.global, { keyColumn: "total_id" }),
   repositoryDefinition("expanded_player_game_stats", REPOSITORY_SCOPES.global, { keyColumn: "observation_id" }),
@@ -698,14 +699,14 @@ validateRepositoryCatalog(DEFINITIONS);
 const REPOSITORY_CATALOG = Object.freeze([...DEFINITIONS]);
 // Retired reset/restore protocols remain pinned to their original table set.
 const SCHEMA_54_REPOSITORY_CATALOG = Object.freeze(REPOSITORY_CATALOG.filter(
-  ({ tableName }) => !["expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats"].includes(tableName)
+  ({ tableName }) => !["trade_participants", "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats"].includes(tableName)
 ));
 
 function getRepositoryCatalogForSchemaVersion(schemaVersion) {
   if (!Number.isSafeInteger(schemaVersion) || schemaVersion < 1) {
     throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible, "A migrated database schema is required.");
   }
-  return [54, 55, 56].includes(schemaVersion) ? SCHEMA_54_REPOSITORY_CATALOG : REPOSITORY_CATALOG;
+  return [54, 55, 56].includes(schemaVersion) ? SCHEMA_54_REPOSITORY_CATALOG : schemaVersion < 64 ? REPOSITORY_CATALOG.filter(({ tableName }) => tableName !== "trade_participants") : REPOSITORY_CATALOG;
 }
 const REPOSITORY_CATALOG_BY_TABLE = Object.freeze(
   Object.fromEntries(

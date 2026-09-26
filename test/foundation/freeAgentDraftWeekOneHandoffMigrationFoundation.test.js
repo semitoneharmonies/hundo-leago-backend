@@ -6,7 +6,7 @@ const Database=require('better-sqlite3');
 const {applyMigrations,discoverMigrations}=require('../../src/infrastructure/database/migrate');
 let schema,definitions,view;
 before(()=>{
- schema=new Database(':memory:');applyMigrations({database:schema,migrations:discoverMigrations({migrationsDirectory:path.resolve(__dirname,'../../database/migrations')}),applicationBuildId:'handoff-regression',now:()=>1});
+ schema=new Database(':memory:');applyMigrations({database:schema,migrations:discoverMigrations({migrationsDirectory:path.resolve(__dirname,'../../database/migrations')}).filter(migration=>migration.id<=63),applicationBuildId:'handoff-regression',now:()=>1});
  definitions=schema.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(({name})=>`CREATE TABLE "${name}" (${schema.pragma(`table_info("${name}")`).map(c=>`"${c.name}" ${c.type}`).join(',')});`).join('\n');
  view=schema.prepare("SELECT sql FROM sqlite_schema WHERE name='free_agent_draft_approved_week_one_handoffs'").get().sql;
 });

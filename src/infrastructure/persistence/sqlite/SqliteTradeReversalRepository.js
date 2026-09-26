@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { createSqliteTradeParticipants } = require("./SqliteTradeParticipants");
 
 const {
   TRADE_REVERSAL_CODES,
@@ -278,6 +279,7 @@ function createSqliteTradeReversalRepository({
       "createSqliteTradeReversalRepository requires a Candidate Card summer synchronizer"
     );
   }
+  const participants = createSqliteTradeParticipants(database);
   let findTargetStatement;
   let loadContextStatement;
   let listAssetsStatement;
@@ -1228,10 +1230,8 @@ function createSqliteTradeReversalRepository({
   }
 
   function reconstructReversalReceipt({ command, trade, event, metadata }) {
-    const participantTeamIds = [
-      trade.proposing_team_id,
-      trade.receiving_team_id,
-    ].sort((left, right) => left.localeCompare(right));
+    const participantTeamIds = participants.ids({ leagueId: trade.league_id, tradeId: trade.id,
+      proposingTeamId: trade.proposing_team_id, receivingTeamId: trade.receiving_team_id }).sort((left, right) => left.localeCompare(right));
     if (
       trade.league_id !== command.leagueId ||
       trade.season_id !== command.seasonId ||
@@ -2066,8 +2066,8 @@ function createSqliteTradeReversalRepository({
         leagueId: command.leagueId,
         affectedTeamIds: [
           ...new Set([
-            context.proposing_team_id,
-            context.receiving_team_id,
+            ...participants.ids({ leagueId: command.leagueId, tradeId: command.tradeId,
+              proposingTeamId: context.proposing_team_id, receivingTeamId: context.receiving_team_id }),
           ]),
         ].sort(),
         affectedPlayerIds: [

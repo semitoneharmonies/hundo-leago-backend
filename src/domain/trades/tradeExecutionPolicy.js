@@ -66,12 +66,13 @@ function safeTimestamp(value) {
 }
 
 function validateTradeExecutionInput(input) {
-  exactObject(input, ["tradeId"]);
-  return Object.freeze({ tradeId: stableId(input.tradeId) });
+  exactObject(input, [...(input?.respondingTeamId === undefined ? [] : ["respondingTeamId"]), "tradeId"]);
+  return Object.freeze({ ...(input.respondingTeamId === undefined ? {} : { respondingTeamId: stableId(input.respondingTeamId) }), tradeId: stableId(input.tradeId) });
 }
 
 function validateExecutionCommand(input, allowedAuthorities) {
   exactObject(input, [
+    ...(input?.respondingTeamId === undefined ? [] : ["respondingTeamId"]),
     "tradeId",
     "eventId",
     "idempotencyRequestId",
@@ -104,6 +105,7 @@ function validateExecutionCommand(input, allowedAuthorities) {
     fail(TRADE_EXECUTION_CODES.idempotencyInvalid);
   }
   const command = {
+    ...(input.respondingTeamId === undefined ? {} : { respondingTeamId: stableId(input.respondingTeamId) }),
     tradeId: stableId(input.tradeId),
     eventId: stableId(input.eventId),
     idempotencyRequestId: stableId(input.idempotencyRequestId),
@@ -196,7 +198,7 @@ function assertTradeExecutionState({ command, context } = {}) {
     context.league_status === "active" &&
     context.membership_user_id === command.actorUserId &&
     context.membership_status === "active" &&
-    context.assignment_team_id === command.receivingTeamId &&
+    context.assignment_team_id === (context.multi_trade_actor_team_id || command.receivingTeamId) &&
     context.assignment_status === "accepted" &&
     context.assignment_accepted_at_ms !== null &&
     context.assignment_ended_at_ms === null;

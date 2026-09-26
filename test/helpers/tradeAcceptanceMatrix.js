@@ -239,7 +239,7 @@ async function runTradeAcceptanceMatrix(t, helpers) {
       db.prepare("UPDATE draft_picks SET current_owner_team_id = ?, version = version + 1 WHERE id = ?").run(IDS.teamB, left.pick.id);
       const before = db.serialize();
       const response = await fetch(`${base}/${proposed.proposal.id}/accept`, { method: "POST",
-        headers: { "content-type": "application/json", "x-test-user": IDS.receivingManager, "idempotency-key": `stale-accept-${next++}` }, body: "{}" });
+        headers: { "content-type": "application/json", "x-test-user": IDS.receivingManager, "idempotency-key": `stale-accept-${next++}` }, body: "{}", signal: AbortSignal.timeout(10000) });
       assert.equal(response.status, 409);
       assert.equal((await response.json()).error.code, "TRADE_REQUEST_CONFLICT");
       assert.equal(before.equals(db.serialize()), true);

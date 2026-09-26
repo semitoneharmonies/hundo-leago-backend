@@ -135,6 +135,15 @@ function createTradeRouter({
     next();
   }
 
+  function responseTeam(value) {
+    const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : null;
+    if (!keys || keys.some(key => key !== "respondingTeamId")) throw Object.assign(new Error("Invalid response"), { code: "TRADE_INPUT_INVALID" });
+    return keys.length ? { respondingTeamId: value.respondingTeamId } : {};
+  }
+  function requireResponseBody(request, response, next) {
+    try { responseTeam(request.body); next(); } catch (error) { mapError(request, response, error); }
+  }
+
   const router = express.Router();
   router.use(requestSecurity.assignRequestId);
   router.use(requestSecurity.securityHeaders);
@@ -142,8 +151,8 @@ function createTradeRouter({
   router.use(requestSecurity.requireAllowedOrigin);
   router.use(requestSecurity.requireJson);
   router.use(requestSecurity.requireCompatibleFetchMetadata);
-  // Up to 100 assets per side may include 500-character Unicode descriptions.
-  router.use(express.json({ limit: "512kb", strict: true }));
+  // Up to three teams with 100 assets each, including Unicode descriptions.
+  router.use(express.json({ limit: "768kb", strict: true }));
 
   router.get(
     "/api/v1/leagues/:leagueId/trades",
@@ -176,6 +185,15 @@ function createTradeRouter({
       }
     }
   );
+
+  // A JSON-body preview: authenticated and CSRF-protected, with no persisted writes.
+  router.post("/api/v1/leagues/:leagueId/trades/preview", requestSecurity.authenticateUnsafe,
+    (request, response) => {
+      try { return success(request, response, 200, tradeCreationService.preview({
+        leagueId: request.params.leagueId, input: request.body,
+        authenticated: requestSecurity.getAuthenticatedSession(request),
+      })); } catch (caught) { return mapError(request, response, caught); }
+    });
 
   router.post(
     "/api/v1/leagues/:leagueId/trades/:tradeId/counter",
@@ -222,7 +240,7 @@ function createTradeRouter({
           200,
           tradeAcceptancePreviewService.preview({
             leagueId: request.params.leagueId,
-            input: { tradeId: request.params.tradeId },
+            input: { tradeId: request.params.tradeId, ...responseTeam(request.query) },
             authenticated: requestSecurity.getSessionBootstrap(request),
           })
         );
@@ -235,7 +253,7 @@ function createTradeRouter({
   router.post(
     "/api/v1/leagues/:leagueId/trades/:tradeId/accept",
     requestSecurity.authenticateUnsafe,
-    requireEmptyBody,
+    requireResponseBody,
     async (request, response) => {
       try {
         return success(
@@ -244,7 +262,7 @@ function createTradeRouter({
           200,
           await tradeAcceptanceService.accept({
             leagueId: request.params.leagueId,
-            input: { tradeId: request.params.tradeId },
+            input: { tradeId: request.params.tradeId, ...responseTeam(request.body) },
             idempotencyKey: request.get("idempotency-key"),
             authenticated: requestSecurity.getAuthenticatedSession(request),
           })
@@ -254,6 +272,14 @@ function createTradeRouter({
       }
     }
   );
+
+  router.post("/api/v1/leagues/:leagueId/trades/:tradeId/acknowledge", requestSecurity.authenticateUnsafe, requireResponseBody,
+    (request, response) => {
+      try { return success(request, response, 200, tradeLifecycleService.acknowledge({
+        leagueId: request.params.leagueId, tradeId: request.params.tradeId, ...responseTeam(request.body),
+        authenticated: requestSecurity.getAuthenticatedSession(request),
+      })); } catch (caught) { return mapError(request, response, caught); }
+    });
 
   router.post(
     "/api/v1/leagues/:leagueId/trades/:tradeId/approve",
@@ -285,12 +311,12 @@ function createTradeRouter({
     router.post(
       `/api/v1/leagues/:leagueId/trades/:tradeId/${path}`,
       requestSecurity.authenticateUnsafe,
-      requireEmptyBody,
+      action === "reject" ? requireResponseBody : requireEmptyBody,
       (request, response) => {
         try {
           return success(request, response, 200, tradeLifecycleService.respond({
             leagueId: request.params.leagueId,
-            input: { tradeId: request.params.tradeId, action },
+            input: { tradeId: request.params.tradeId, action, ...responseTeam(request.body) },
             idempotencyKey: request.get("idempotency-key"),
             authenticated: requestSecurity.getAuthenticatedSession(request),
           }));

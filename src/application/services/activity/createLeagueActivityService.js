@@ -69,6 +69,8 @@ function createLeagueActivityService({
       limit: page.limit,
       cursor: page.cursor,
       category: page.category,
+      viewerUserId: authority.actorUserId,
+      viewerMembershipId: authority.membershipId,
     });
     const activity = Object.freeze(result.rows.map(projectRow));
     const last = result.rows.at(-1);
