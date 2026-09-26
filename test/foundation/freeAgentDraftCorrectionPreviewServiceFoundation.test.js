@@ -172,6 +172,43 @@ function createHarness({
 }
 
 describe("Free Agent Draft correction-preview service foundation", () => {
+  test("does not identify private trades through player correction diagnostics", () => {
+    const tradeIds = [uuid(81), uuid(82)];
+    const repositoryResult = validPreview({
+      reversible: false,
+      blockers: [
+        ...tradeIds.map((resourceId) => ({
+          code: "FAD_CORRECTION_TRADE_DRIFT",
+          message: "Linked trade status proposed at version 2 prevents direct correction.",
+          resourceId,
+        })),
+        {
+          code: "FAD_CORRECTION_OWNERSHIP_HISTORY_DRIFT",
+          message: "Ownership history prevents direct correction.",
+          resourceId: IDS.player,
+        },
+      ],
+    });
+    const before = structuredClone(repositoryResult);
+    for (const authority of ["commissioner", "platform_administrator"]) {
+      const { service } = createHarness({ authority, repositoryResult });
+      const result = service.preview(input());
+      assert.equal(result.reversible, false);
+      assert.equal(result.previewFingerprint, repositoryResult.previewFingerprint);
+      assert.deepEqual(result.blockers, [
+        {
+          code: "FAD_CORRECTION_DEPENDENCY_DRIFT",
+          message: "Linked records prevent direct correction.",
+          resourceId: null,
+        },
+        repositoryResult.blockers[2],
+      ]);
+      for (const tradeId of tradeIds) assert.ok(!JSON.stringify(result).includes(tradeId));
+      assert.ok(!JSON.stringify(result).includes("proposed"));
+    }
+    assert.deepEqual(repositoryResult, before);
+  });
+
   test("requires exact authorization and read-repository dependencies", () => {
     assert.throws(
       () => createFreeAgentDraftCorrectionPreviewService(),
