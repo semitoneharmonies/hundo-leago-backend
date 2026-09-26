@@ -30,6 +30,24 @@ test("the approved default covers every scoring day once and excludes both break
   }
 });
 
+test("all baselines and roster locks use day one including Tuesday opening and Saturday after Christmas", () => {
+  for (const timeZone of [zone, "Etc/GMT+7"]) {
+    const calendar = defaultSeasonCalendar("20262027", timeZone);
+    const plan = planExplicitMatchupSchedule({ ...input, ...calendar, timeZone });
+    const day = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
+    const hour = new Intl.DateTimeFormat("en-US", { timeZone, hour: "2-digit", hourCycle: "h23" });
+    for (const week of plan.weeks) {
+      assert.equal(day.format(week.baselineAtMs), day.format(week.startsAtMs));
+      assert.equal(day.format(week.locksAtMs), day.format(week.startsAtMs));
+      assert.equal(hour.format(week.baselineAtMs), "01");
+      assert.equal(hour.format(week.locksAtMs), "16");
+    }
+    assert.equal(day.format(plan.weeks[0].startsAtMs), "2026-09-29");
+    assert.equal(day.format(plan.weeks[12].startsAtMs), "2026-12-26");
+    assert.equal(day.format(plan.weeks[17].startsAtMs), "2027-02-08");
+  }
+});
+
 test("only the exact approved season/calendar gets partial-week and break behavior", () => {
   assert.equal(defaultSeasonCalendar("20272028", zone), null);
   assert.equal(isDefaultSeasonCalendar(defaults, zone), true);

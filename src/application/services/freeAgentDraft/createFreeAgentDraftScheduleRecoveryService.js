@@ -715,6 +715,7 @@ function inspectCanonicalSchedule({
   leagueId,
   seasonId,
   weeks,
+  completionAtMs,
 }) {
   if (!Array.isArray(weeks) || weeks.length < 1) {
     failContext("weeks_invalid");
@@ -817,33 +818,47 @@ function inspectCanonicalSchedule({
   if (planned.weeks.length !== canonicalWeeks.length) {
     failState("schedule_does_not_reach_playoffs");
   }
-  for (
-    let index = 0;
-    index < planned.weeks.length;
-    index += 1
-  ) {
-    const expected = planned.weeks[index];
-    const current = canonicalWeeks[index];
-    if (
-      current.weekKey !== expected.weekKey ||
-      current.sequence !== expected.sequence ||
-      current.startsAtMs !== expected.startsAtMs ||
-      current.baselineAtMs !== expected.baselineAtMs ||
-      current.locksAtMs !== expected.locksAtMs ||
-      current.endsAtMs !== expected.endsAtMs ||
-      current.rollsOverAtMs !==
-        expected.rollsOverAtMs ||
-      !sameStrings(
+  const matchesSavedWeeks = (candidate) =>
+    candidate.weeks.length === canonicalWeeks.length &&
+    canonicalWeeks.every((current, index) => {
+      const expected = candidate.weeks[index];
+      return current.weekKey === expected.weekKey &&
+      current.sequence === expected.sequence &&
+      current.startsAtMs === expected.startsAtMs &&
+      current.baselineAtMs === expected.baselineAtMs &&
+      current.locksAtMs === expected.locksAtMs &&
+      current.endsAtMs === expected.endsAtMs &&
+      current.rollsOverAtMs === expected.rollsOverAtMs &&
+      sameStrings(
         sortedPairKeys(current.matchups),
         sortedPairKeys(expected.pairs)
-      ) ||
+      ) &&
       (current.bye === null
         ? null
-        : current.bye.teamId) !==
-        expected.byeTeamId
-    ) {
-      failState("schedule_week_not_canonical");
-    }
+        : current.bye.teamId) === expected.byeTeamId;
+    });
+  if (
+    !matchesSavedWeeks(planned) &&
+    completionAtMs !== null &&
+    completionAtMs < generation.weekOneStartsAtMs &&
+    calendar.timeZone === "America/Vancouver" &&
+    isDefaultSeasonCalendar(calendar, calendar.timeZone) &&
+    generation.weekOneStartsAtMs === calendar.nhlRegularSeasonStartsAtMs
+  ) {
+    // B.C. adopted permanent UTC-7 in 2026. Already-approved schedules may
+    // contain the former Vancouver winter offsets, still used by Los Angeles.
+    // Accept only that entire exact schedule for completion before opening;
+    // never rewrite saved instants or relax validation for schedule recovery.
+    planned = planExplicitMatchupSchedule({
+      teamIds: participantTeamIds,
+      ...calendar,
+      timeZone: "America/Los_Angeles",
+      firstWeekStartsAtMs: canonicalWeeks[0].startsAtMs,
+      nowMs: canonicalWeeks[0].startsAtMs - 1,
+    });
+  }
+  if (!matchesSavedWeeks(planned)) {
+    failState("schedule_week_not_canonical");
   }
 
   return Object.freeze({
@@ -984,6 +999,7 @@ function inspectContext(context) {
     leagueId,
     seasonId,
     weeks: context.weeks,
+    completionAtMs: recovery.kind === "completion" ? recovery.atMs : null,
   });
   const jobs = inspectJobs({
     generation,

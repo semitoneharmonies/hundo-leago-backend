@@ -57,7 +57,11 @@ test("matchup health recognizes release-QA and SportsDataIO refresh sources with
     seasonId: fixtureId("season:leagueA:current"),
   };
 
-  const fixtureHealth = repository.readSchedule(scope).health;
+  const changesBeforeRead = connection.database.prepare("SELECT total_changes() n").get().n;
+  const readSchedule = repository.readSchedule(scope);
+  assert.equal(readSchedule.season.timezone, "America/Vancouver");
+  assert.equal(connection.database.prepare("SELECT total_changes() n").get().n, changesBeforeRead);
+  const fixtureHealth = readSchedule.health;
   assert.equal(fixtureHealth.latest.status, "succeeded");
   assert.equal(fixtureHealth.latestSuccessful.status, "succeeded");
   assert.equal(

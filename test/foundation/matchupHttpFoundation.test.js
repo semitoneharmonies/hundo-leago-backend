@@ -180,6 +180,8 @@ function integrationFixture({
     authority: "commissioner",
   },
   scheduleServiceOverride = null,
+  locksAtMs = rawWeek().locks_at_ms,
+  timeZone = "America/Vancouver",
 } = {}) {
   const calls = [];
   const authority = {
@@ -193,12 +195,12 @@ function integrationFixture({
     },
   };
   const schedule = {
-    season: { id: SEASON_ID, nhl_season_key: "20262027", version: 3 },
+    season: { id: SEASON_ID, nhl_season_key: "20262027", version: 3, timezone: timeZone },
     health: {
       latest: { status: "succeeded", started_at_ms: 8_000, completed_at_ms: 9_000 },
       latestSuccessful: { status: "succeeded", completed_at_ms: 9_000 },
     },
-    weeks: [rawWeek()],
+    weeks: [{ ...rawWeek(), locks_at_ms: locksAtMs }],
     matchups: [matchupRow],
     byes: [],
   };
@@ -788,6 +790,19 @@ function actualShiftFixture(
 }
 
 describe("M6-12 matchup HTTP integration service", () => {
+  test("formats saved lock deadlines using the scheduling server's league timezone without writes", () => {
+    const locksAtMs = Date.parse("2026-12-27T00:00:00Z");
+    for (const [timeZone, expected] of [
+      ["Etc/GMT+7", /Saturday, December 26, 2026 at 5:00 PM/],
+      ["America/Los_Angeles", /Saturday, December 26, 2026 at 4:00 PM/],
+    ]) {
+      const { service, calls } = integrationFixture({ locksAtMs, timeZone });
+      const result = service.listWeeks({ leagueId: LEAGUE_ID, seasonId: SEASON_ID, authenticated: { valid: true } });
+      assert.equal(result.weeks[0].locksAtMs, locksAtMs);
+      assert.match(result.weeks[0].locksAtDisplay, expected);
+      assert.deepEqual(calls.map(({ method }) => method), ["member", "readSchedule"]);
+    }
+  });
   test("projects schedule, current week, week detail, matchup detail, health, and standings safely", () => {
     const { calls, service } = integrationFixture();
     const input = { leagueId: LEAGUE_ID, seasonId: SEASON_ID, authenticated: { valid: true } };

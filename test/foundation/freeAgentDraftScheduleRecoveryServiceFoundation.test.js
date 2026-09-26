@@ -310,6 +310,73 @@ function makeContext({
   };
 }
 
+function legacyOpeningContext() {
+  const { scoringBreaks, ...calendar } = defaultSeasonCalendar(
+    "20262027", "America/Los_Angeles"
+  );
+  assert.equal(scoringBreaks.length, 2);
+  const context = makeContext({
+    calendar: { ...calendar, timeZone: "America/Los_Angeles" },
+    recoveryKind: "completion",
+    recoveryAtMs: Date.parse("2026-09-29T06:00:01Z"),
+  });
+  context.calendar.timeZone = "America/Vancouver";
+  return context;
+}
+
+function usePermanentVancouverTime(t) {
+  const DateTimeFormat = Intl.DateTimeFormat;
+  t.mock.method(Intl, "DateTimeFormat", function (locale, options) {
+    return new DateTimeFormat(locale, options?.timeZone === "America/Vancouver"
+      ? { ...options, timeZone: "Etc/GMT+7" }
+      : options);
+  });
+}
+
+test("pre-opening completion preserves the exact saved Vancouver calendar across timezone-data updates", (t) => {
+  const context = legacyOpeningContext();
+  const before = JSON.stringify(context);
+  usePermanentVancouverTime(t);
+  const random = makeSecureRandom();
+  const result = createFreeAgentDraftScheduleRecoveryService({ secureRandom: random }).planRecovery(context);
+  assert.equal(result.action, "no_op");
+  assert.equal(result.decision.competitionFirstMatchupStartsAtMs, Date.parse("2026-09-29T07:00:00Z"));
+  assert.equal(random.calls, 0);
+  assert.equal(JSON.stringify(context), before);
+});
+
+test("legacy calendar compatibility still rejects altered dates, pairings, and jobs", (t) => {
+  const base = legacyOpeningContext();
+  usePermanentVancouverTime(t);
+  for (const mutate of [
+    context => { context.weeks[7].baselineAtMs += 1000; },
+    context => { context.weeks[7].locksAtMs += 3600000; },
+    context => {
+      const pair = context.weeks[7].matchups[0];
+      [pair.homeTeamId, pair.awayTeamId] = [pair.awayTeamId, pair.homeTeamId];
+    },
+    context => { context.jobs[0].bindingScheduleVersion += 1; },
+    context => { context.jobs[0].scheduledForMs += 1000; },
+  ]) {
+    const context = jsonClone(base);
+    mutate(context);
+    assert.throws(() => plan(context), { code: "FAD_SCHEDULE_RECOVERY_STATE_INVALID" });
+  }
+});
+
+test("legacy calendar acceptance cannot bypass late completion or pre-open recovery", (t) => {
+  const base = legacyOpeningContext();
+  usePermanentVancouverTime(t);
+  for (const atMs of [Date.parse("2026-09-29T07:00:00Z"), Date.parse("2026-09-29T07:00:01Z")]) {
+    const context = jsonClone(base);
+    context.recovery.atMs = atMs;
+    assert.throws(() => plan(context), { reasonCode: "schedule_week_not_canonical" });
+  }
+  const preOpen = jsonClone(base);
+  preOpen.recovery = { kind: "pre_open", atMs: Date.parse("2026-09-01T07:00:00Z"), frozenFadFirstMatchupStartsAtMs: null };
+  assert.throws(() => plan(preOpen), { reasonCode: "schedule_week_not_canonical" });
+});
+
 function plan(context, secureRandom = makeSecureRandom()) {
   return {
     result:
