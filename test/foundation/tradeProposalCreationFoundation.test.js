@@ -5,6 +5,12 @@ const os = require("node:os");
 const path = require("node:path");
 const { describe, test } = require("node:test");
 
+test("trade fog-of-war HTTP privacy", async (t) => {
+  await require("../helpers/tradeVisibilityFlow").runTradeVisibilityFlow(t, {
+    createRuntime, IDS, NOW_MS, authenticated, ordinaryCreationInput, creationInput,
+  });
+});
+
 test("three-team trade HTTP flow", async (t) => {
   await require("../helpers/threeTeamTradeFlow").runThreeTeamTradeFlow(t, {
     createRuntime, IDS, NOW_MS, authenticated, sourceState,

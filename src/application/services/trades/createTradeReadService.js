@@ -33,13 +33,15 @@ function createTradeReadService({ leagueAuthorization, repository } = {}) {
   function read({ leagueId, tradeId, authenticated } = {}) {
     const canonicalLeagueId = stableId(leagueId);
     const canonicalTradeId = stableId(tradeId);
-    leagueAuthorization.requireActiveMembership(
+    const authority = leagueAuthorization.requireActiveMembership(
       authenticated,
       canonicalLeagueId
     );
     const proposal = repository.readDetail({
       leagueId: canonicalLeagueId,
       tradeId: canonicalTradeId,
+      viewerUserId: authority.actorUserId,
+      viewerMembershipId: authority.membershipId,
     });
     if (!proposal) throw new TradeReadError("TRADE_NOT_FOUND");
     return Object.freeze({ code: "TRADE_PROPOSAL_FOUND", proposal });

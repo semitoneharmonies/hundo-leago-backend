@@ -1,3 +1,4 @@
+const { createSqliteTradeVisibility } = require('./SqliteTradeVisibility');
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
@@ -49,6 +50,7 @@ function safeCategory(value) {
 }
 
 function createSqliteLeagueActivityRepository({ database } = {}) {
+  const tradeVisibility = createSqliteTradeVisibility(database);
   let listFirstStatement;
   let listAfterStatement;
   try {
@@ -126,7 +128,7 @@ function createSqliteLeagueActivityRepository({ database } = {}) {
   }
 
   return Object.freeze({
-    listPage({ leagueId, limit, cursor, category = "all" } = {}) {
+    listPage({ leagueId, limit, cursor, category = "all", viewerUserId, viewerMembershipId } = {}) {
       const parameters = {
         leagueId: stableId(leagueId),
         fetchLimit: safeLimit(limit) + 1,
@@ -155,7 +157,7 @@ function createSqliteLeagueActivityRepository({ database } = {}) {
         return Object.freeze({
           hasMore: rows.length > limit,
           rows: Object.freeze(
-            rows.slice(0, limit).map((row) => Object.freeze({ ...row }))
+            rows.slice(0, limit).map((row) => Object.freeze(tradeVisibility.projectActivity(row, { viewerUserId, viewerMembershipId })))
           ),
         });
       } catch (error) {

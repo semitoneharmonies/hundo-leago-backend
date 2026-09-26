@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
 const { createSqliteTradeParticipants } = require("./SqliteTradeParticipants");
+const { createSqliteTradeVisibility } = require("./SqliteTradeVisibility");
 
 const {
   TRADE_ASSET_CODES,
@@ -244,6 +245,7 @@ function createSqliteTradeProposalRepository({
     );
   }
   const participants = createSqliteTradeParticipants(database);
+  const tradeVisibility = createSqliteTradeVisibility(database);
   let notificationsRepository;
   let publicationWriter;
   let cancellationWriter;
@@ -3869,7 +3871,7 @@ function createSqliteTradeProposalRepository({
               viewerUserId: stableId(viewerUserId),
               viewerMembershipId: stableId(viewerMembershipId),
             })
-            .map(row => ({ ...projectTradeProposalRow(row), ...participants.projection({ leagueId: row.league_id, tradeId: row.trade_id }) }))
+            .map(row => tradeVisibility.project({ ...projectTradeProposalRow(row), ...participants.projection({ leagueId: row.league_id, tradeId: row.trade_id }) }, { viewerUserId, viewerMembershipId }))
         );
       } catch (error) {
         throw mapRepositoryError(error, {
@@ -3878,7 +3880,7 @@ function createSqliteTradeProposalRepository({
         });
       }
     },
-    readDetail({ leagueId, tradeId } = {}) {
+    readDetail({ leagueId, tradeId, viewerUserId, viewerMembershipId } = {}) {
       try {
         const input = {
           leagueId: stableId(leagueId),
@@ -3890,9 +3892,10 @@ function createSqliteTradeProposalRepository({
           "A visible trade detail row was not unique."
         );
         if (!row) return null;
+        const summary = tradeVisibility.project({ ...projectTradeProposalRow(row), ...participants.projection(input) }, { viewerUserId, viewerMembershipId });
+        if (!summary.detailsVisible) return Object.freeze({ ...summary, assets: Object.freeze([]), history: Object.freeze([]) });
         return Object.freeze({
-          ...projectTradeProposalRow(row),
-          ...participants.projection(input),
+          ...summary,
           assets: Object.freeze(
             listTradeAssetsStatement.all(input).map((asset) =>
               Object.freeze({
