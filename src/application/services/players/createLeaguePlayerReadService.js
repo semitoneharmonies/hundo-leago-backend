@@ -54,7 +54,22 @@ function normalizeNhlTeam(value) {
 
 function normalizeOwnership(value) {
   if (value === undefined || value === "all") return "all";
-  if (value === "free" || value === "prospects") return value;
+  if (["free", "prospects", "signed"].includes(value)) return value;
+  failInput();
+}
+
+function normalizeContractNumber(value, maximum = Number.MAX_SAFE_INTEGER) {
+  if (value === undefined) return null;
+  const text = typeof value === "number" ? String(value) : value;
+  if (typeof text !== "string" || !/^(0|[1-9]\d*)$/.test(text)) failInput();
+  const number = Number(text);
+  if (!Number.isSafeInteger(number) || number > maximum) failInput();
+  return number;
+}
+
+function normalizeContractType(value) {
+  if (value === undefined) return "all";
+  if (["all", "normal", "fantasy_elc"].includes(value)) return value;
   failInput();
 }
 
@@ -160,6 +175,10 @@ function createLeaguePlayerReadService({
     nhlTeam,
     ownership,
     minimumGames,
+    minimumAavCents,
+    maximumAavCents,
+    remainingYears,
+    contractType,
   } = {}) {
     const authority = authorize(authenticated, leagueId);
     const canonicalQuery = normalizeQuery(query);
@@ -170,6 +189,18 @@ function createLeaguePlayerReadService({
     const canonicalNhlTeam = normalizeNhlTeam(nhlTeam);
     const canonicalOwnership = normalizeOwnership(ownership);
     const canonicalMinimumGames = normalizeMinimumGames(minimumGames);
+    const contractFilters = {
+      minimumAavCents: normalizeContractNumber(minimumAavCents),
+      maximumAavCents: normalizeContractNumber(maximumAavCents),
+      remainingYears: normalizeContractNumber(remainingYears, 3),
+      contractType: normalizeContractType(contractType),
+    };
+    if (
+      contractFilters.remainingYears === 0 ||
+      (contractFilters.minimumAavCents !== null &&
+        contractFilters.maximumAavCents !== null &&
+        contractFilters.minimumAavCents > contractFilters.maximumAavCents)
+    ) failInput();
     if (canonicalTeamId !== null && canonicalOwnership !== "all") {
       failInput();
     }
@@ -195,16 +226,14 @@ function createLeaguePlayerReadService({
         canonicalSort === "fantasyPoints" && cursorRow
           ? cursorRow.sort_fantasy_points_hundredths
           : null,
-      leagueId:
-        canonicalTeamId === null && canonicalOwnership === "all"
-          ? null
-          : authority.leagueId,
+      leagueId: authority.leagueId,
       ownershipTeamId: canonicalTeamId,
       providerPosition: canonicalPosition,
       providerActive: true,
       nhlTeam: canonicalNhlTeam,
       ownershipFilter: canonicalOwnership,
       minimumGames: canonicalMinimumGames,
+      ...contractFilters,
       auctionEligible: false,
       sort: canonicalSort,
     });

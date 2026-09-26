@@ -146,6 +146,10 @@ function createPlayerRouter({
             nhlTeam: request.query.nhlTeam,
             ownership: request.query.ownership,
             minimumGames: request.query.minimumGames,
+            minimumAavCents: request.query.minimumAavCents,
+            maximumAavCents: request.query.maximumAavCents,
+            remainingYears: request.query.remainingYears,
+            contractType: request.query.contractType,
           });
           return response.status(200).json({
             data: result.players,

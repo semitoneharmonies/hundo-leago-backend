@@ -31,6 +31,38 @@ const PLAYER_COLUMNS = Object.freeze([
 ]);
 const PLAYER_STATUSES = new Set(["active", "historical", "all"]);
 const PLAYER_PAGE_SORTS = new Set(["name", "fantasyPoints"]);
+const DEFAULT_CONTRACT_FILTERS = Object.freeze({
+  minimumAavCents: null,
+  maximumAavCents: null,
+  remainingYears: null,
+  contractType: "all",
+});
+const CONTRACT_FILTER_SQL = `
+  AND ((@ownershipFilter != 'signed' AND @minimumAavCents IS NULL
+    AND @maximumAavCents IS NULL AND @remainingYears IS NULL
+    AND @contractType = 'all') OR EXISTS (
+    SELECT 1 FROM leagues AS contract_league
+    JOIN player_ownerships AS signed_ownership
+      ON signed_ownership.league_id = contract_league.id
+      AND signed_ownership.season_id = contract_league.current_season_id
+      AND signed_ownership.player_id = players.id
+    JOIN contracts AS signed_contract
+      ON signed_contract.league_id = contract_league.id
+      AND signed_contract.player_id = players.id
+      AND signed_contract.current_team_id = signed_ownership.team_id
+      AND signed_contract.status = 'active'
+    WHERE contract_league.id = @leagueId
+      AND (@minimumAavCents IS NULL OR signed_contract.aav_cents >= @minimumAavCents)
+      AND (@maximumAavCents IS NULL OR signed_contract.aav_cents <= @maximumAavCents)
+      AND (@contractType = 'all' OR signed_contract.contract_type = @contractType)
+      AND (@remainingYears IS NULL OR @remainingYears = (
+        SELECT COUNT(*) FROM contract_years AS signed_year
+        WHERE signed_year.league_id = signed_contract.league_id
+          AND signed_year.contract_id = signed_contract.id
+          AND signed_year.status IN ('current', 'future')
+      ))
+  ))
+`;
 const SPORTSDATAIO_PROVIDER = "sportsdataio-discovery-lab";
 const RELEASE_QA_FIXTURE_PROVIDER = "release_qa_fixture";
 const PLAYER_READ_COLUMNS = Object.freeze([
@@ -194,7 +226,8 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         "AND team_ownership.player_id = players.id " +
         "AND team_ownership.team_id = @ownershipTeamId" +
         ")) " +
-        "AND (@ownershipFilter = 'all' OR " +
+        CONTRACT_FILTER_SQL +
+        "AND (@ownershipFilter IN ('all', 'signed') OR " +
         "(@ownershipFilter = 'free' AND NOT EXISTS (" +
         "SELECT 1 FROM leagues AS free_league " +
         "JOIN player_ownerships AS free_ownership " +
@@ -281,7 +314,8 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         "AND team_ownership.player_id = players.id " +
         "AND team_ownership.team_id = @ownershipTeamId" +
         ")) " +
-        "AND (@ownershipFilter = 'all' OR " +
+        CONTRACT_FILTER_SQL +
+        "AND (@ownershipFilter IN ('all', 'signed') OR " +
         "(@ownershipFilter = 'free' AND NOT EXISTS (" +
         "SELECT 1 FROM leagues AS free_league " +
         "JOIN player_ownerships AS free_ownership " +
@@ -463,6 +497,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
       }
     },
     listPage(options) {
+      if (isPlainObject(options)) options = { ...DEFAULT_CONTRACT_FILTERS, ...options };
       assertExactObject(
         options,
         [
@@ -479,6 +514,10 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
           "nhlTeam",
           "ownershipFilter",
           "minimumGames",
+          "minimumAavCents",
+          "maximumAavCents",
+          "remainingYears",
+          "contractType",
           "auctionEligible",
           "sort",
         ],
@@ -502,7 +541,14 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
           (typeof options.nhlTeam === "string" &&
             /^[A-Z]{2,4}$/.test(options.nhlTeam))
         ) ||
-        !["all", "free", "prospects"].includes(options.ownershipFilter) ||
+        !["all", "free", "prospects", "signed"].includes(options.ownershipFilter) ||
+        !["all", "normal", "fantasy_elc"].includes(options.contractType) ||
+        [options.minimumAavCents, options.maximumAavCents].some(
+          (value) => value !== null && (!Number.isSafeInteger(value) || value < 0)
+        ) ||
+        !(options.remainingYears === null || [1, 2, 3].includes(options.remainingYears)) ||
+        (options.minimumAavCents !== null && options.maximumAavCents !== null &&
+          options.minimumAavCents > options.maximumAavCents) ||
         !Number.isSafeInteger(options.minimumGames) ||
         options.minimumGames < 0 ||
         options.minimumGames > 200 ||
@@ -533,7 +579,9 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
             options.auctionEligible === false &&
             options.leagueId === null &&
             options.ownershipTeamId === null &&
-            options.ownershipFilter === "all"
+            options.ownershipFilter === "all" &&
+            options.minimumAavCents === null && options.maximumAavCents === null &&
+            options.remainingYears === null && options.contractType === "all"
           ) ||
           (
             options.auctionEligible === false &&
@@ -548,7 +596,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
             typeof options.leagueId === "string" &&
             CANONICAL_UUID_PATTERN.test(options.leagueId) &&
             options.ownershipTeamId === null &&
-            ["free", "prospects"].includes(options.ownershipFilter)
+            ["all", "free", "prospects", "signed"].includes(options.ownershipFilter)
           ) ||
           (
             options.auctionEligible === true &&
@@ -589,6 +637,10 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
             nhlTeam: options.nhlTeam,
             ownershipFilter: options.ownershipFilter,
             minimumGames: options.minimumGames,
+            minimumAavCents: options.minimumAavCents,
+            maximumAavCents: options.maximumAavCents,
+            remainingYears: options.remainingYears,
+            contractType: options.contractType,
             auctionEligible: options.auctionEligible ? 1 : 0,
           })
         );

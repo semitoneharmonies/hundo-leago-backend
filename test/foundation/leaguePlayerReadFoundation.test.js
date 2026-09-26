@@ -208,6 +208,8 @@ function insertPlayer(playerRepository, id, name, externalIdValue) {
 }
 
 function insertLeaguePlayerState(repositories, {
+  playerId = PLAYER_ONE_ID,
+  contractType = "normal",
   leagueId,
   teamId,
   seasons,
@@ -225,7 +227,7 @@ function insertLeaguePlayerState(repositories, {
     id: ownershipId,
     league_id: leagueId,
     season_id: seasons.currentSeasonId,
-    player_id: PLAYER_ONE_ID,
+    player_id: playerId,
     team_id: teamId,
     ownership_kind: ownershipKind,
     roster_category: category,
@@ -240,9 +242,9 @@ function insertLeaguePlayerState(repositories, {
   repositories.contracts.insert({
     id: contractId,
     league_id: leagueId,
-    player_id: PLAYER_ONE_ID,
+    player_id: playerId,
     current_team_id: teamId,
-    contract_type: "normal",
+    contract_type: contractType,
     original_total_value_cents: totalValueCents,
     original_term_years: termYears,
     aav_cents: aavCents,
@@ -531,6 +533,75 @@ describe("league-scoped player read repository", () => {
 });
 
 describe("league-scoped player read service", () => {
+  test("filters signed contracts, inclusive AAV and remaining years before both cursor orders without writes", (t) => {
+    const runtime = createRuntime(t);
+    const repositories = createSqliteRepositoryContext({ database: runtime.database }).repositories;
+    const seasons = { priorSeasonId: uuid(1001), currentSeasonId: uuid(1002), futureSeasonId: uuid(1003) };
+    insertLeaguePlayerState(repositories, {
+      playerId: PLAYER_TWO_ID, leagueId: LEAGUE_A_ID, teamId: TEAM_A_ID, seasons,
+      ownershipId: uuid(900), contractId: uuid(901), contractYearBaseId: 910,
+      category: "Bench", ownershipKind: "Rostered", totalValueCents: 1800,
+      termYears: 3, aavCents: 600, yearStatuses: ["completed", "current", "future"],
+    });
+    // Matching players must still be found after more than one unfiltered page.
+    const playerRepository = createSqlitePlayerRepository({ database: runtime.database });
+    for (let index = 0; index < 105; index += 1) {
+      insertPlayer(playerRepository, uuid(10000 + index), `Aaa Free${index}`, String(10000 + index));
+    }
+    const before = runtime.database.serialize();
+    const filters = {
+      authenticated: authenticated(USER_A_ID), leagueId: LEAGUE_A_ID,
+      ownership: "signed", minimumAavCents: "300", maximumAavCents: "600",
+      remainingYears: "2", contractType: "normal", limit: 1,
+    };
+    for (const sort of ["name", "fantasyPoints"]) {
+      const first = runtime.service.list({ ...filters, sort });
+      assert.deepEqual(first.players.map(({ id }) => id), [PLAYER_ONE_ID]);
+      assert.equal(first.page.hasMore, true);
+      const second = runtime.service.list({ ...filters, sort, cursor: first.page.nextCursor });
+      assert.deepEqual(second.players.map(({ id }) => id), [PLAYER_TWO_ID]);
+      assert.equal(second.page.hasMore, false);
+      assert.equal(runtime.service.list({ ...filters, sort, minimumAavCents: 301 }).players[0].id, PLAYER_TWO_ID);
+      assert.equal(runtime.service.list({ ...filters, sort, maximumAavCents: 599 }).page.hasMore, false);
+    }
+    assert.equal(runtime.service.list({ ...filters, remainingYears: 3 }).players.length, 0);
+    assert.equal(runtime.service.list({ ...filters, ownership: "all", teamId: TEAM_A_ID, position: "D" }).players[0].id, PLAYER_TWO_ID);
+    const beta = { ...filters, authenticated: authenticated(USER_B_ID), leagueId: LEAGUE_B_ID, remainingYears: 1 };
+    assert.equal(runtime.service.list(beta).players[0].league.activeContract.aavCents, 400);
+    assert.equal(runtime.service.list({ ...beta, maximumAavCents: 300 }).players.length, 0);
+    assert.equal(runtime.service.list({ ...filters, ownership: "free" }).players.length, 0);
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
+  test("distinguishes ELC contracts, signed prospects and unsigned owned prospect rights", (t) => {
+    const runtime = createRuntime(t);
+    const repositories = createSqliteRepositoryContext({ database: runtime.database }).repositories;
+    insertLeaguePlayerState(repositories, {
+      playerId: PLAYER_TWO_ID, contractType: "fantasy_elc",
+      leagueId: LEAGUE_A_ID, teamId: TEAM_A_ID,
+      seasons: { priorSeasonId: uuid(1001), currentSeasonId: uuid(1002), futureSeasonId: uuid(1003) },
+      ownershipId: uuid(900), contractId: uuid(901), contractYearBaseId: 910,
+      category: "Prospect", ownershipKind: "Rostered", totalValueCents: 300,
+      termYears: 3, aavCents: 100, yearStatuses: ["completed", "current", "future"],
+    });
+    const rightId = uuid(999);
+    insertPlayer(createSqlitePlayerRepository({ database: runtime.database }), rightId, "Casey Rights", "999");
+    repositories.player_ownerships.insert({
+      ...runtime.database.prepare("SELECT * FROM player_ownerships WHERE id = ?").get(uuid(900)),
+      id: uuid(998), player_id: rightId, ownership_kind: "Prospect Right",
+    });
+    const before = runtime.database.serialize();
+    const filters = { authenticated: authenticated(USER_A_ID), leagueId: LEAGUE_A_ID };
+    const ids = (extra) => runtime.service.list({ ...filters, ...extra }).players.map(({ id }) => id);
+    assert.deepEqual(ids({ ownership: "signed" }), [PLAYER_ONE_ID, PLAYER_TWO_ID]);
+    assert.deepEqual(ids({ contractType: "fantasy_elc" }), [PLAYER_TWO_ID]);
+    assert.deepEqual(ids({ contractType: "normal" }), [PLAYER_ONE_ID]);
+    assert.deepEqual(ids({ ownership: "prospects" }), [PLAYER_TWO_ID, rightId]);
+    assert.deepEqual(ids({ ownership: "prospects", remainingYears: 2 }), [PLAYER_TWO_ID]);
+    assert.deepEqual(ids({ ownership: "prospects", minimumAavCents: 0, maximumAavCents: 0 }), []);
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
   test("reuses global identity/statistics while isolating league state and remaining years", (t) => {
     const runtime = createRuntime(t);
     const before = runtime.database.serialize();
@@ -722,6 +793,30 @@ describe("league-scoped player read service", () => {
 });
 
 describe("league-scoped player HTTP routes", () => {
+  test("accepts combined contract filters and rejects invalid bounds without writing", async (t) => {
+    const runtime = createRuntime(t);
+    const api = await startApi(t, runtime);
+    const before = runtime.database.serialize();
+    const read = (query) => fetch(`${api.baseUrl}/api/v1/leagues/${LEAGUE_A_ID}/players?${query}`, { headers: headers(api, SESSION_A) });
+    const found = await read("ownership=signed&minimumAavCents=200&maximumAavCents=600&remainingYears=2&contractType=normal");
+    assert.equal(found.status, 200);
+    assert.deepEqual((await found.json()).data.map(({ id }) => id), [PLAYER_ONE_ID]);
+    for (const query of [
+      "minimumAavCents=-1", "maximumAavCents=1.5", "minimumAavCents=NaN",
+      "maximumAavCents=9007199254740992", "minimumAavCents=600&maximumAavCents=200",
+      "remainingYears=0", "remainingYears=4", "remainingYears=1&remainingYears=2",
+      "contractType=unknown", "minimumAavCents=", "ownership=unknown",
+    ]) {
+      const response = await read(query);
+      assert.equal(response.status, 400, query);
+      assert.equal((await response.json()).error.code, "PLAYER_READ_INPUT_INVALID");
+    }
+    const empty = await read("remainingYears=1");
+    assert.equal(empty.status, 200);
+    assert.deepEqual((await empty.json()).data, []);
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
   test("requires a session and current membership without cross-league disclosure or writes", async (t) => {
     const runtime = createRuntime(t);
     const before = runtime.database.serialize();
