@@ -579,6 +579,7 @@ function createSqliteFreeAgentDraftCompletionWriter({
   let outbox;
   let candidateStatement;
   let rootStatement;
+  let approvedHandoffStatement;
   let jobStatement;
   let cardsStatement;
   let allocationsStatement;
@@ -697,6 +698,16 @@ function createSqliteFreeAgentDraftCompletionWriter({
         job.id
       LIMIT @scanLimit
     `);
+    // Deploying schema 63 grants no exception: an audited operator receipt
+    // must also match the exact unstarted week and its original baseline.
+    approvedHandoffStatement = database.prepare(
+      "SELECT 1 FROM sqlite_schema WHERE type='view' AND name='free_agent_draft_approved_week_one_handoffs'"
+    ).get() ? database.prepare(`
+      SELECT approval_id, starts_at_ms, baseline_at_ms
+      FROM free_agent_draft_approved_week_one_handoffs
+      WHERE league_id=@leagueId AND season_id=@seasonId AND fad_id=@fadId
+        AND matchup_week_id=@matchupWeekId
+    `) : null;
     rootStatement = database.prepare(`
       SELECT
         draft.*,
@@ -3002,7 +3013,20 @@ function createSqliteFreeAgentDraftCompletionWriter({
           }
         );
       }
-      const planned = assertSynchronous(
+      const handoff = approvedHandoffStatement?.get({
+        leagueId: command.leagueId,
+        seasonId: command.seasonId,
+        fadId: command.fadId,
+        matchupWeekId: root.current_competition_first_matchup_week_id,
+      });
+      const withinApprovedHandoff = handoff !== undefined &&
+        command.completedAtMs >= handoff.starts_at_ms &&
+        command.completedAtMs < handoff.baseline_at_ms;
+      const planned = withinApprovedHandoff ? Object.freeze({
+        action: "no_op",
+        reasonCode: "approved_week_one_handoff",
+        approvalId: handoff.approval_id,
+      }) : assertSynchronous(
         scheduleRecoveryService.planRecovery(
           scheduleContext(command, root)
         ),
@@ -3016,7 +3040,7 @@ function createSqliteFreeAgentDraftCompletionWriter({
         (
           planned.action === "no_op"
             ? command.completedAtMs >=
-              root.week_one_starts_at_ms
+              (withinApprovedHandoff ? handoff.baseline_at_ms : root.week_one_starts_at_ms)
             : command.completedAtMs <
               root.week_one_starts_at_ms
         )

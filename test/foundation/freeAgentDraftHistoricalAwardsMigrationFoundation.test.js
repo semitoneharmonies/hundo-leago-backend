@@ -9,6 +9,7 @@ const { applyMigrations, discoverMigrations } = require("../../src/infrastructur
 let schema;
 let tableDefinitions;
 let resourceGuard;
+let publicationGuard;
 let accountedStateGuard;
 function predicate(trigger, message) {
   const messageOffset = trigger.indexOf(message);
@@ -27,11 +28,14 @@ before(() => {
   // rows as well as valid history. Other migration suites verify write guards.
   const trigger = schema.prepare("SELECT sql FROM sqlite_schema WHERE name = 'free_agent_drafts_automatic_award_resources_barrier'").get().sql;
   resourceGuard = predicate(trigger, "FAD milestone requires durable automatic-award resources");
+  publicationGuard = predicate(trigger, "FAD milestone requires automatic-award activity and scoped outbox evidence");
   accountedStateGuard = predicate(schema.prepare("SELECT sql FROM sqlite_schema WHERE name = 'free_agent_drafts_allocation_completion_barrier'").get().sql, "FAD rapid phase requires an approved accounted allocation state");
   tableDefinitions = schema.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(({ name }) => {
     const columns = schema.pragma(`table_info("${name}")`).map(({ name: column, type }) => `"${column}" ${type}`);
     return `CREATE TABLE "${name}" (${columns.join(",")});`;
   }).join("\n");
+  tableDefinitions += "\n" + schema.prepare("SELECT sql FROM sqlite_schema WHERE type='view' AND name='free_agent_draft_confirmed_corrected_awards'").get().sql + ";";
+  tableDefinitions += "\n" + schema.prepare("SELECT sql FROM sqlite_schema WHERE type='view' AND name='free_agent_draft_confirmed_correction_publications'").get().sql + ";";
 });
 after(() => schema?.close());
 
@@ -49,8 +53,90 @@ function fixture(t) {
   put("contract_years", { id: "year", league_id: "league", contract_id: "contract", season_id: "season", year_number: 1, aav_cents: 1000, status: "current", created_at_ms: 1000 });
   put("ownership_events", { ...scope, id: "acquired", team_id: "team", ownership_id: "ownership", event_type: "fad_allocation_player_acquired", source_type: "free_agent_draft_allocation", source_id: "allocation", actor_user_id: null, occurred_at_ms: 1000, before_metadata_json: null, after_metadata_json: JSON.stringify({ ownershipKind: "Rostered", rosterCategory: "Bench", positionGroup: "D", slotNumber: 1 }) });
   put("contract_events", { id: "created", league_id: "league", player_id: "player", team_id: "team", contract_id: "contract", event_type: "contract_created", source_type: "free_agent_draft_allocation", source_id: "allocation", actor_user_id: null, occurred_at_ms: 1000, metadata_json: JSON.stringify({ contractType: "normal", startSeasonId: "season", originalTotalValueCents: 1000, originalTermYears: 1, aavCents: 1000 }) });
-  return { database, put, scope, blocked: () => database.prepare(resourceGuard).get({ league: "league", season: "season", fad: "fad" }).blocked };
+  return { database, put, scope, blocked: () => database.prepare(resourceGuard).get({ league: "league", season: "season", fad: "fad" }).blocked, publicationBlocked: () => database.prepare(publicationGuard).get({ league: "league", season: "season", fad: "fad" }).blocked };
 }
+
+function correctedFixture(t, authority = "commissioner") {
+  const state = fixture(t);
+  const { database, put, scope } = state;
+  database.exec("UPDATE free_agent_draft_player_allocations SET version=3,decision_code='corrected'; UPDATE ownership_events SET actor_user_id='corrector'; UPDATE contract_events SET actor_user_id='corrector'");
+  put("free_agent_draft_allocation_correction_command_results", { ...scope, id: "receipt", fad_id: "fad", allocation_id: "allocation", commissioner_correction_id: "award-correction", activity_id: "correction-activity", actor_user_id: "corrector", actor_membership_id: "corrector-membership", actor_authority: authority, accepted_from_allocation_version: 2, resulting_allocation_version: 3, completed_at_ms: 1000, response_http_status: 200 });
+  put("commissioner_corrections", { id: "award-correction", league_id: "league", season_id: "season", feature: "free_agent_draft_allocation", feature_record_id: "allocation", actor_user_id: "corrector", corrected_at_ms: 1000, before_snapshot_json: JSON.stringify({fadVersion:4}), after_snapshot_json: JSON.stringify({ status: "automatic_award", decisionCode: "corrected", version: 3, fadVersion:4, accountedAtMs: 1000, contractId: "contract", ownershipId: "ownership", winningTeamId: "team", winningSnapshotEntryId: "offer" }) });
+  put("free_agent_draft_allocation_events", { ...scope, id: "corrected-event", fad_id: "fad", allocation_id: "allocation", allocation_version: 3, correction_id: "award-correction", event_kind: "correction_applied", decision_code: "corrected", resulting_allocation_status: "automatic_award", contract_id: "contract", ownership_id: "ownership", actor_user_id: "corrector", actor_membership_id: "corrector-membership", actor_authority: authority, occurred_at_ms: 1000 });
+  put("league_activity", { ...scope, id: "correction-activity", event_type: "free_agent_draft_corrected", related_type: "free_agent_draft_allocation", related_id: "allocation", actor_user_id: "corrector", actor_authority: authority, occurred_at_ms: 1000 });
+  database.exec("UPDATE player_ownerships SET roster_category='Active',slot_number=5,version=2");
+  put("ownership_events", { ...scope, id: "moved", team_id: "team", ownership_id: "ownership", event_type: "roster_category_moved", source_type: "roster_move", source_id: "move-activity", actor_user_id: "manager", occurred_at_ms: 2000, before_metadata_json: JSON.stringify({ version: 1 }), after_metadata_json: JSON.stringify({ rosterCategory: "Active", positionGroup: "D", slotNumber: 5, version: 2 }) });
+  put("league_activity", { id: "move-activity", league_id: "league", season_id: "season", actor_user_id: "manager", team_id: "team", event_type: "roster_moved" });
+  for (const [id, type, aggregate, resource, version] of [["fad-notice", "free_agent_draft.changed", "free_agent_draft", "fad", 4], ["activity-notice", "activity.created", "league_activity", "correction-activity", 1]]) {
+    const payload={eventId:id,type,leagueId:"league",resourceId:resource,version,reasonCode:"correction_applied",occurredAt:1000,related:{fadId:"fad",teamId:"team",cardId:null,allocationId:"allocation",auctionId:null,recoveryId:null,nominationQueueId:null,scheduleRecoveryOperationId:null}};
+    put("outbox_events", {id,league_id:"league",event_type:type,aggregate_type:aggregate,aggregate_id:resource,created_at_ms:1000,payload_json:JSON.stringify(payload)});
+    put("outbox_event_audiences", {id:id+"-audience",league_id:"league",outbox_event_id:id,audience_kind:"league",team_id:null,user_id:null,created_at_ms:1000});
+  }
+  return state;
+}
+
+for (const authority of ["commissioner", "platform_administrator_as_commissioner"]) {
+  test(`a moved corrected award retains its ${authority} attribution and permits completion`, (t) => {
+    const { database, blocked, publicationBlocked } = correctedFixture(t, authority);
+    assert.equal(blocked(), 0);
+    assert.equal(publicationBlocked(), 0);
+    assert.equal(database.prepare("SELECT actor_user_id FROM ownership_events WHERE id='acquired'").get().actor_user_id, "corrector");
+  });
+}
+
+for (const [name, damage] of [
+  ["missing draft notice", "DELETE FROM outbox_events WHERE id='fad-notice'"],
+  ["missing activity notice", "DELETE FROM outbox_events WHERE id='activity-notice'"],
+  ["wrong audience", "UPDATE outbox_event_audiences SET audience_kind='team',team_id='team'"],
+  ["wrong notice version", "UPDATE outbox_events SET payload_json=json_set(payload_json,'$.version',99)"],
+  ["wrong related allocation", "UPDATE outbox_events SET payload_json=json_set(payload_json,'$.related.allocationId','other')"],
+  ["extra private payload field", "UPDATE outbox_events SET payload_json=json_set(payload_json,'$.bidAmount',100)"],
+  ["wrong correction receipt actor", "UPDATE free_agent_draft_allocation_correction_command_results SET actor_user_id='other'"],
+]) {
+  test(`corrected award publication with ${name} blocks completion`, (t) => {
+    const {database,publicationBlocked}=correctedFixture(t);
+    assert.equal(publicationBlocked(),0);
+    database.exec(damage);
+    assert.equal(publicationBlocked(),1);
+  });
+}
+
+for (const [name, damage] of [
+  ["missing receipt", "DELETE FROM free_agent_draft_allocation_correction_command_results"],
+  ["cross-league receipt", "UPDATE free_agent_draft_allocation_correction_command_results SET league_id='other'"],
+  ["cross-draft receipt", "UPDATE free_agent_draft_allocation_correction_command_results SET fad_id='other'"],
+  ["wrong receipt actor", "UPDATE free_agent_draft_allocation_correction_command_results SET actor_user_id='other'"],
+  ["unapproved actor authority", "UPDATE free_agent_draft_allocation_correction_command_results SET actor_authority='manager'"],
+  ["stale correction version", "UPDATE free_agent_draft_allocation_correction_command_results SET resulting_allocation_version=2"],
+  ["wrong correction time", "UPDATE free_agent_draft_allocation_correction_command_results SET completed_at_ms=999"],
+  ["wrong correction ownership", "UPDATE commissioner_corrections SET after_snapshot_json=json_set(after_snapshot_json,'$.ownershipId','other')"],
+  ["wrong corrected winner", "UPDATE commissioner_corrections SET after_snapshot_json=json_set(after_snapshot_json,'$.winningTeamId','other')"],
+  ["missing correction event", "DELETE FROM free_agent_draft_allocation_events"],
+  ["wrong correction event actor", "UPDATE free_agent_draft_allocation_events SET actor_user_id='other'"],
+  ["missing correction activity", "DELETE FROM league_activity WHERE id='correction-activity'"],
+  ["wrong original contract actor", "UPDATE contract_events SET actor_user_id='other' WHERE id='created'"],
+  ["wrong original contract price", "UPDATE contract_events SET metadata_json=json_set(metadata_json,'$.aavCents',900) WHERE id='created'"],
+  ["wrong original acquisition slot", "UPDATE ownership_events SET after_metadata_json=json_set(after_metadata_json,'$.slotNumber',2) WHERE id='acquired'"],
+  ["missing later move", "DELETE FROM ownership_events WHERE id='moved'"],
+]) {
+  test(`a corrected award with ${name} still blocks completion`, (t) => {
+    const { database, blocked } = correctedFixture(t);
+    assert.equal(blocked(), 0);
+    database.exec(damage);
+    assert.equal(blocked(), 1);
+  });
+}
+
+test("a corrected award later released by an audited commissioner removal remains accounted", (t) => {
+  const { database, put, scope, blocked } = correctedFixture(t);
+  database.exec("DELETE FROM player_ownerships; UPDATE contracts SET status='cancelled'");
+  put("ownership_events", { ...scope, id: "released", team_id: "team", ownership_id: "ownership", event_type: "commissioner_player_removed", source_type: "commissioner_correction", source_id: "removal", actor_user_id: "commissioner", occurred_at_ms: 3000, before_metadata_json: JSON.stringify({ ownership: { id: "ownership" }, contract: { id: "contract" } }), after_metadata_json: JSON.stringify({ ownership: null }) });
+  put("commissioner_corrections", { id: "removal", league_id: "league", season_id: "season", actor_user_id: "commissioner", corrected_at_ms: 3000, feature: "roster_remove" });
+  put("contract_events", { id: "cancelled", league_id: "league", player_id: "player", contract_id: "contract", event_type: "commissioner_contract_cancelled", source_type: "commissioner_correction", source_id: "removal", actor_user_id: "commissioner", occurred_at_ms: 3000, metadata_json: JSON.stringify({ after: { id: "contract", status: "cancelled" } }) });
+  assert.equal(blocked(), 0);
+  database.exec("DELETE FROM free_agent_draft_allocation_correction_command_results");
+  assert.equal(blocked(), 1);
+});
 
 test("a recorded roster move permits completion; unexplained movement, missing acquisition, and wrong scope still block", (t) => {
   const { database, put, scope, blocked } = fixture(t);
@@ -61,12 +147,37 @@ test("a recorded roster move permits completion; unexplained movement, missing a
   assert.equal(blocked(), 1);
   put("league_activity", { id: "activity", league_id: "league", season_id: "season", actor_user_id: "manager", team_id: "team", event_type: "roster_moved" });
   assert.equal(blocked(), 0);
-  database.exec("UPDATE player_ownerships SET version=3");
+  database.exec("UPDATE player_ownerships SET version=1");
   assert.equal(blocked(), 1);
   database.exec("UPDATE player_ownerships SET version=2; UPDATE league_activity SET league_id='other'");
   assert.equal(blocked(), 1);
   database.exec("UPDATE league_activity SET league_id='league'; DELETE FROM ownership_events WHERE id='acquired'");
   assert.equal(blocked(), 1);
+});
+
+for (const [name, change] of [
+  ["an unplaced destination", "UPDATE ownership_events SET after_metadata_json=json_set(after_metadata_json,'$.slotNumber',NULL) WHERE id='moved'; UPDATE player_ownerships SET slot_number=NULL"],
+  ["a subsequently filled slot", "UPDATE ownership_events SET after_metadata_json=json_set(after_metadata_json,'$.slotNumber',NULL) WHERE id='moved'; UPDATE player_ownerships SET slot_number=4,version=3"],
+  ["a later trade-block toggle", "UPDATE player_ownerships SET trade_blocked=1,version=3"],
+]) {
+  test(`a recorded award and latest roster move remain valid after ${name}`, (t) => {
+    const {database,blocked}=correctedFixture(t);
+    assert.equal(blocked(),0);
+    database.exec(change);
+    assert.equal(blocked(),0);
+    database.exec("UPDATE player_ownerships SET position_group='F'");
+    assert.equal(blocked(),1);
+    database.exec("UPDATE player_ownerships SET position_group='D'; DELETE FROM ownership_events WHERE id='acquired'");
+    assert.equal(blocked(),1);
+  });
+}
+
+test("an older matching move cannot hide a newer conflicting category move", (t) => {
+  const {database,put,scope,blocked}=correctedFixture(t);
+  database.exec("UPDATE player_ownerships SET version=3");
+  assert.equal(blocked(),0);
+  put("ownership_events",{...scope,id:"later",team_id:"team",ownership_id:"ownership",event_type:"roster_category_moved",source_type:"roster_move",source_id:"later-activity",actor_user_id:"manager",occurred_at_ms:3000,before_metadata_json:JSON.stringify({version:2}),after_metadata_json:JSON.stringify({rosterCategory:"Bench",positionGroup:"D",slotNumber:null,version:3})});
+  assert.equal(blocked(),1);
 });
 
 test("commissioner removal requires the original award, correction, and paired contract cancellation", (t) => {
