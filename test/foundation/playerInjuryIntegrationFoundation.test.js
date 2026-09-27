@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const crypto = require('node:crypto');
 const express = require('express');
 const { createReleaseQaFixture } = require('../../src/operations/release/createReleaseQaFixture');
@@ -21,7 +22,7 @@ const { createTargetRequestSecurity } = require('../../src/transport/http/create
 const { createSessionCookie } = require('../../src/transport/http/sessionCookie');
 
 test('global admin decisions, HTTP security, cross-league IR legality and preservation', async t => {
-  const root = fs.mkdtempSync(path.resolve(__dirname, '../../.test-temp/injuries-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hundo-injuries-'));
   const databasePath = path.join(root, 'injury-release-qa.sqlite3');
   await createReleaseQaFixture({ databasePath, environment: 'test', migrationsDirectory: path.resolve(__dirname, '../../database/migrations'), password: 'hundo', temporaryRoot: root });
   const { database: db } = openDatabase({ databasePath, environment: 'test' });

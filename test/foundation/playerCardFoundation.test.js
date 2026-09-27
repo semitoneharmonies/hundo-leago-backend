@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { createReleaseQaFixture } = require('../../src/operations/release/createReleaseQaFixture');
 const { fixtureId } = require('../../src/operations/release/releaseQaFixtureContract');
 const { openDatabase } = require('../../src/infrastructure/database/connection');
@@ -38,7 +39,7 @@ test('player value handles retention, missing games and unsigned players without
 });
 
 test('saved history is league-scoped, read-only, public after execution, and preserves full trade assets', async t => {
-  const root = fs.mkdtempSync(path.resolve(__dirname, '../../.test-temp/player-card-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hundo-player-card-'));
   const databasePath = path.join(root, 'card-release-qa.sqlite3');
   await createReleaseQaFixture({ databasePath, environment: 'test', migrationsDirectory: path.resolve(__dirname, '../../database/migrations'), password: 'hundo', temporaryRoot: root });
   const { database } = openDatabase({ databasePath, environment: 'test' });
