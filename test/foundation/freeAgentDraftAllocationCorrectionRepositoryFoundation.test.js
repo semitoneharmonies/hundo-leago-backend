@@ -1105,7 +1105,7 @@ before(() => {
     connection.database.pragma("user_version", {
       simple: true,
     }),
-    62
+    63
   );
   connection.database.pragma("wal_checkpoint(TRUNCATE)");
   connection.database.close();

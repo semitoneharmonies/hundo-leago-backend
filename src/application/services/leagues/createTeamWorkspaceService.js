@@ -1,3 +1,4 @@
+const { canUseInjuredReserve } = require('../../../domain/players/injuryStatusPolicy');
 const {
   CANONICAL_UUID_PATTERN,
 } = require("../../../domain/players/playerIdentityPolicy");
@@ -74,19 +75,6 @@ function statistics(row) {
       });
 }
 
-function injuredReserveEligible(sourcePayloadJson) {
-  if (typeof sourcePayloadJson !== "string") return false;
-  try {
-    const payload = JSON.parse(sourcePayloadJson);
-    const status = String(payload?.Status || payload?.status || "")
-      .trim()
-      .toLowerCase();
-    return status === "injured reserve";
-  } catch {
-    return false;
-  }
-}
-
 function player(row, nowMs) {
   return Object.freeze({
     ownershipId: row.ownership_id,
@@ -104,7 +92,8 @@ function player(row, nowMs) {
       row.nhl_team_abbreviation.length > 0
         ? row.nhl_team_abbreviation
         : null,
-    injuredReserveEligible: injuredReserveEligible(row.source_payload_json),
+    injury: row.injury,
+    injuredReserveEligible: canUseInjuredReserve(row),
     age: age(row.birth_date, nowMs),
     contract:
       row.contract_id === null
@@ -167,6 +156,11 @@ function evaluateTeamRosterLegality(record, categoryOverride = null) {
     }
   }
   const reasons = [...structural.reasons];
+  for (const row of players) {
+    if (row.roster_category === 'Injured Reserve' && row.injury?.status === 'healthy') {
+      reasons.push({ code: 'HEALTHY_PLAYER_ON_IR', playerId: row.player_id });
+    }
+  }
   if (!record.cap.complete) {
     reasons.push({ code: "SALARY_CAP_CALCULATION_INCOMPLETE" });
   }
@@ -233,6 +227,7 @@ function safeWorkspace(record, nowMs, canManage) {
       version: scope.team_version,
     }),
     players,
+    capOutlook: record.capOutlook || null,
     cap: Object.freeze({
       limitCents: cap.capLimitCents,
       usageCents: cap.capUsageCents,

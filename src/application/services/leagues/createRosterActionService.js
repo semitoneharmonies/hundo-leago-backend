@@ -1,3 +1,4 @@
+const { canUseInjuredReserve } = require('../../../domain/players/injuryStatusPolicy');
 const {
   CANONICAL_UUID_PATTERN,
 } = require("../../../domain/players/playerIdentityPolicy");
@@ -306,18 +307,6 @@ function createRosterActionService({
     );
   }
 
-  function sourceStatus(player) {
-    if (typeof player.source_payload_json !== "string") return "";
-    try {
-      const source = JSON.parse(player.source_payload_json);
-      return String(source?.Status || source?.status || "")
-        .trim()
-        .toLowerCase();
-    } catch {
-      return "";
-    }
-  }
-
   function signingSeasonIds(leagueId, currentSeasonId) {
     assertMethod(seasonRepository, "listByLeague", "a season repository");
     const seasons = seasonRepository
@@ -421,7 +410,7 @@ function createRosterActionService({
     }
     if (
       submitted.destinationCategory === "Injured Reserve" &&
-      sourceStatus(player) !== "injured reserve"
+        !canUseInjuredReserve(player)
     ) {
       throw new RosterActionConflictError("PLAYER_NOT_IR_ELIGIBLE");
     }
@@ -526,7 +515,7 @@ function createRosterActionService({
     }
     if (
       submitted.destinationCategory === "Injured Reserve" &&
-      sourceStatus(player) !== "injured reserve"
+          !canUseInjuredReserve(player)
     ) {
       throw new RosterActionConflictError("PLAYER_NOT_IR_ELIGIBLE");
     }

@@ -277,6 +277,12 @@ function createMatchupIntegrationService({
   }
 
   function scheduleProjection(schedule) {
+    // Format on the scheduling server: a browser may have older timezone rules.
+    const lockFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: schedule.season.timezone,
+      weekday: "long", year: "numeric", month: "long", day: "numeric",
+      hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "long",
+    });
     const matchupsByWeek = new Map();
     const byesByWeek = new Map();
     for (const matchup of schedule.matchups) {
@@ -291,11 +297,11 @@ function createMatchupIntegrationService({
     }
     return Object.freeze(
       schedule.weeks.map((week) =>
-        projectWeek(
+        Object.freeze({ ...projectWeek(
           week,
           matchupsByWeek.get(week.id) || [],
           byesByWeek.get(week.id) || []
-        )
+        ), locksAtDisplay: lockFormatter.format(week.locks_at_ms) })
       )
     );
   }

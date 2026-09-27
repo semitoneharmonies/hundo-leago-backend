@@ -1,3 +1,6 @@
+const { createSqlitePlayerInjuryRepository } = require('../infrastructure/persistence/sqlite/SqlitePlayerInjuryRepository');
+const { createPlayerInjuryService } = require('../application/services/players/createPlayerInjuryService');
+const { createPlayerInjuryRouter } = require('../transport/http/createPlayerInjuryRouter');
 const express = require("express");
 const { createFirstAdministratorSetupPolicy } = require("../application/services/accounts/createFirstAdministratorSetupPolicy");
 const { assertRecoveryRuntimeAllowed } = require("../infrastructure/database/recoveryHold");
@@ -192,6 +195,8 @@ const {
 const {
   createLeaguePlayerReadService,
 } = require("../application/services/players/createLeaguePlayerReadService");
+const { createPlayerCardService } = require('../application/services/players/createPlayerCardService');
+const { createSqlitePlayerCardRepository } = require('../infrastructure/persistence/sqlite/SqlitePlayerCardRepository');
 const {
   createLiveStatisticsService,
 } = require("../application/services/statistics/createLiveStatisticsService");
@@ -350,6 +355,7 @@ const {
   createSportsDataIoLiveNhlAdapter,
 } = require("../infrastructure/sportsdataio/SportsDataIoLiveNhlAdapter");
 const { createNhlCompletedGameAdapter, PROVIDER_NAME: NHL_COMPLETED_PROVIDER, PLAYER_IDENTITY_PROVIDER: NHL_IDENTITY_PROVIDER } = require("../infrastructure/nhl/NhlCompletedGameAdapter");
+const { createNhlPlayerAppearanceAdapter } = require("../infrastructure/nhl/NhlPlayerAppearanceAdapter");
 const { createSqliteStatisticsScheduleRepository } = require("../infrastructure/persistence/sqlite/SqliteStatisticsScheduleRepository");
 const { createRunCompletedGameStatisticsJob } = require("../jobs/definitions/runCompletedGameStatistics");
 const {
@@ -765,10 +771,13 @@ const TARGET_ENDPOINTS = Object.freeze([
   ["GET", "/api/v1/players/:playerId", "player"],
   ["GET", "/api/v1/leagues/:leagueId/players", "player"],
   ["GET", "/api/v1/leagues/:leagueId/players/:playerId", "player"],
+  ["GET", "/api/v1/leagues/:leagueId/players/:playerId/card", "player"],
   ["POST", "/api/v1/admin/leagues", "platformAdministration"],
   ["GET", "/api/v1/admin/leagues/:leagueId/deletion-preview", "platformAdministration"],
   ["DELETE", "/api/v1/admin/leagues/:leagueId", "platformAdministration"],
   ["GET", "/api/v1/admin/users", "platformAdministration"],
+  ["GET", "/api/v1/admin/injuries", "playerInjury"],
+  ["POST", "/api/v1/admin/injuries/decide", "playerInjury"],
   [
     "POST",
     "/api/v1/admin/leagues/:leagueId/commissioner-assignments",
@@ -1804,6 +1813,7 @@ function createTargetRepositories({
     notificationWriter,
     outbox: createSqliteOutboxEventRepository({ database }),
     leaguePlayers: createSqliteLeaguePlayerReadRepository({ database }),
+    playerCards: createSqlitePlayerCardRepository({ database }),
     leaguePlayerOwnership: createSqliteLeaguePlayerOwnershipRepository({
       database,
       candidateCardSummerSynchronizer,
@@ -1849,6 +1859,8 @@ function createTargetRepositories({
     teamProfiles: createSqliteTeamProfileRepository({ database }),
     teamRead: createSqliteTeamReadRepository({ database }),
     teamWorkspace: createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled }),
+    playerInjuries: database.pragma('user_version', { simple: true }) >= 63
+      ? createSqlitePlayerInjuryRepository({ database }) : null,
     tradeProposals: createSqliteTradeProposalRepository({
       database,
       leagueOutboxWriter,
@@ -2989,11 +3001,16 @@ function createTargetServices({
 
   return Object.freeze({
     account,
+    playerInjuries: createPlayerInjuryService({ repository: repositories.playerInjuries, platformAuthorization }),
     accountEmail,
     actionTokenService,
     auditPrivacyDigest,
     league,
     leaguePlayers,
+    playerCards: createPlayerCardService({
+      leaguePlayerReadService: leaguePlayers, repository: repositories.playerCards, tradeRepository: repositories.tradeProposals,
+      appearanceAdapter: createNhlPlayerAppearanceAdapter({ fetchImpl: nhlFetchImplementation, nowMs: () => clock.nowMs() }),
+    }),
     players,
     rateLimiter,
     sessionService,
@@ -3150,12 +3167,14 @@ function createTargetRouters({
       requestSecurity,
       playerReadService: services.players,
       leaguePlayerReadService: services.leaguePlayers,
+      playerCardService: services.playerCards,
     }),
     platformAdministration: createPlatformAdministrationRouter({
       ...sharedAudit,
       leagueCreationService: services.league.creation,
       leagueDeletionService: services.league.deletion,
     }),
+    playerInjury: createPlayerInjuryRouter({ requestSecurity, service: services.playerInjuries }),
     publicRoster: createPublicRosterRouter({
       requestSecurity,
       publicRosterService: services.league.publicRoster,

@@ -1,3 +1,5 @@
+const { createInjuryReader } = require('./SqlitePlayerInjuryRepository');
+const { injuryProjection } = require('../../../domain/players/injuryStatusPolicy');
 const {
   CANONICAL_UUID_PATTERN,
   assertStablePlayerId,
@@ -120,6 +122,8 @@ function escapeLike(value) {
 
 function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = null, expandedScoringEnabled = false } = {}) {
   if (currentNhlStatisticsSeason !== null && !/^\d{8}$/.test(currentNhlStatisticsSeason)) throw new TypeError("Current NHL statistics require an exact season key.");
+  const readInjury = createInjuryReader(database);
+  const withInjury = row => row ? { ...row, injury: injuryProjection(readInjury(row.id)) } : row;
   const players = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("players"),
@@ -445,7 +449,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
       const canonicalPlayerId = assertStablePlayerId(playerId);
       try {
         return freezeRow(
-          findDetailByIdStatement.get({ playerId: canonicalPlayerId })
+          withInjury(findDetailByIdStatement.get({ playerId: canonicalPlayerId }))
         );
       } catch (error) {
         throw mapRepositoryError(error, {
@@ -642,7 +646,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
             remainingYears: options.remainingYears,
             contractType: options.contractType,
             auctionEligible: options.auctionEligible ? 1 : 0,
-          })
+          }).map(withInjury)
         );
       } catch (error) {
         throw mapRepositoryError(error, {

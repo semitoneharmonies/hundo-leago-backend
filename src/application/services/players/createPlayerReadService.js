@@ -143,6 +143,7 @@ function safePlayer(row) {
     firstName: row.first_name,
     lastName: row.last_name,
     fullName: row.full_name,
+    ...(row.injury ? { injury: row.injury } : {}),
     birthDate: row.birth_date ?? null,
     status: row.status,
     provider: safeProvider(row),

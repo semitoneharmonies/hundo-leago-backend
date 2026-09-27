@@ -1886,6 +1886,7 @@ describe("FAD-05 generation-safe matchup-lock effects", () => {
     const database = runtime.database;
     const transactionEvents = [];
     const instrumentedDatabase = {
+      pragma: database.pragma.bind(database),
       prepare(sql) {
         const statement = database.prepare(sql);
         const record = (operation) => {

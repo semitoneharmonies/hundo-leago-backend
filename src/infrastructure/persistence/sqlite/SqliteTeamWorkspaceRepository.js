@@ -1,6 +1,9 @@
+const { createInjuryReader } = require('./SqlitePlayerInjuryRepository');
+const { injuryProjection } = require('../../../domain/players/injuryStatusPolicy');
 const {
   createSqliteCapReadRepository,
 } = require("./SqliteCapReadRepository");
+const { createSqliteCapOutlookReader } = require("./SqliteCapOutlookReader");
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
@@ -30,7 +33,9 @@ function freezeRows(rows) {
 }
 
 function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled = false } = {}) {
+  const readInjury = createInjuryReader(database);
   const capRepository = createSqliteCapReadRepository({ database });
+  const readCapOutlook = createSqliteCapOutlookReader({ database });
   const expandedSchema = database.pragma("user_version", { simple: true }) >= 57;
   let scopeStatement;
   let playersStatement;
@@ -477,14 +482,14 @@ function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled 
             "A roster display-order set is not unique."
           );
         }
-        return Object.freeze({
+        const record = {
           scope: freezeRow(scope),
           cap: capRepository.calculate({
             leagueId: scoped.leagueId,
             seasonId: scoped.seasonId,
             teamId: scoped.teamId,
           }),
-          players: freezeRows(playersStatement.all(scoped)),
+          players: freezeRows(playersStatement.all(scoped).map(row => ({ ...row, injury: injuryProjection(readInjury(row.player_id)) }))),
           draftPicks: freezeRows(draftPicksStatement.all(scoped)),
           retentions: freezeRows(retentionsStatement.all(scoped)),
           buyouts: freezeRows(buyoutsStatement.all(scoped)),
@@ -492,7 +497,8 @@ function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled 
             futureConsiderationsStatement.all(scoped)
           ),
           orderVersion: orderRows[0]?.version || 0,
-        });
+        };
+        return Object.freeze({ ...record, capOutlook: readCapOutlook(record) });
       } catch (error) {
         throw mapRepositoryError(error, {
           operation: "readTeamWorkspace",

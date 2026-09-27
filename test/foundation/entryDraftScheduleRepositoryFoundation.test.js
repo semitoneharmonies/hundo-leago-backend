@@ -2741,7 +2741,7 @@ describe(
           database.pragma("user_version", {
             simple: true,
           }),
-          62
+          63
         );
         assert.equal(
           database
@@ -2752,7 +2752,7 @@ describe(
                 'data_model_version'
             `)
             .get().metadata_value,
-          "62"
+          "63"
         );
         assert.deepEqual(
           repository

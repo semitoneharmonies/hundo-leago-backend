@@ -381,29 +381,29 @@ test("repository inspection hashes exact inputs and reports status without expos
   assert.equal(calls.length, 3);
 });
 
-test("backend release-source inspection reports schema 62 while the historical approval remains pinned to 54", () => {
+test("backend release-source inspection reports schema 63 while the historical approval remains pinned to 54", () => {
   const facts = inspectBackendReleaseFacts({
     directory: path.resolve(__dirname, "..", ".."),
   });
   assert.deepEqual(facts.migrationSource, {
     baseSchemaVersion: EXPECTED_BASE_SCHEMA_VERSION,
-    targetSchemaVersion: 62,
-    migrationCount: 62,
-    postBaseMigrationCount: 40,
+    targetSchemaVersion: 63,
+    migrationCount: 63,
+    postBaseMigrationCount: 41,
     contiguous: true,
     checksumSetSha256:
-      "8a2b763e513462d1b3c6927509098b1346fe3a24264b96912cb900f2902a568d",
+      "49edd43107397ed5494bc8288fc2b41c004a684741d31b135edc4c8080ecb7f7",
   });
   assert.equal(EXPECTED_SCHEMA_VERSION, 54);
   assert.deepEqual(facts.repositorySource, {
     repositoryCatalogCount:
-      137,
+      141,
     repositoryCatalogSha256:
-      "f42da8d18733577f8e7ebee305306a566ca841ac43f0fb041cecd8f95b19157a",
+      "bf5f86a416ee30e492625f26f0a57fe093bf02de1888a57bc0ee188f3ae0c75a",
     postResetRequireEmptyCount:
-      55,
+      59,
     postResetPolicySha256:
-      "71bfdb496bd3c683459f52b5586b12c17a97b456c27ea8252b4912ce128346ec",
+      "74634dabcbe7af496af16495032a05cea019f00ae03f0e13f1ff7dea6ed46ce5",
     resetPolicyCoverageValid: true,
   });
   assert.equal(facts.renderProbe.safe, true);

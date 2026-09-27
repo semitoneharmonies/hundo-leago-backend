@@ -98,6 +98,7 @@ function workspace() {
 }
 
 function createService({
+  readWorkspace = workspace,
   coordinateCommittedRoster,
   move,
   buyOut = () => {
@@ -115,7 +116,7 @@ function createService({
         return { actorUserId: IDS.actor, authority: "manager" };
       },
     },
-    workspaceRepository: { read: workspace },
+    workspaceRepository: { read: readWorkspace },
     rosterMovementRepository: { move },
     buyoutRepository: { buyOut },
     lateLockCoordinator: { coordinateCommittedRoster },
@@ -388,4 +389,18 @@ describe("roster-action late-lock HTTP boundary", () => {
     });
     assert.equal(JSON.stringify(body).includes("private"), false);
   });
+});
+
+for (const status of ['injured', 'healthy']) test('global '+status+' status controls actual Move to IR endpoint', async t => {
+  let writes = 0;
+  const service = createService({
+    readWorkspace() { const record = workspace(); record.players[0].injury = { status }; record.players[0].source_payload_json = status === 'healthy' ? JSON.stringify({ Status: 'Injured Reserve' }) : '{}'; return record; },
+    move(command) { writes++; return committedMovement(command); },
+    coordinateCommittedRoster: async () => ({ status: 'not_applicable' }),
+  });
+  const baseUrl = await startApi(t, service);
+  const response = await post(moveUrl(baseUrl, 'move-to-ir'), { expectedVersion: 3 });
+  assert.equal(response.status, status === 'injured' ? 200 : 409);
+  assert.equal(writes, status === 'injured' ? 1 : 0);
+  if (status === 'healthy') assert.equal((await response.json()).error.code, 'PLAYER_NOT_IR_ELIGIBLE');
 });

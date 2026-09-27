@@ -18,6 +18,7 @@ function createPlayerRouter({
   requestSecurity,
   playerReadService,
   leaguePlayerReadService,
+  playerCardService,
 } = {}) {
   for (const method of [
     "assignRequestId",
@@ -181,6 +182,20 @@ function createPlayerRouter({
     );
   }
 
+  if (playerCardService) {
+    router.get('/api/v1/leagues/:leagueId/players/:playerId/card',
+      requestSecurity.authenticateBootstrap, async (request, response) => {
+        try {
+          return response.status(200).json({
+            data: await playerCardService.read({
+              authenticated: requestSecurity.getSessionBootstrap(request),
+              leagueId: request.params.leagueId, playerId: request.params.playerId,
+            }),
+            meta: { requestId: requestId(request) },
+          });
+        } catch (error) { return mapError(request, response, error); }
+      });
+  }
   return router;
 }
 

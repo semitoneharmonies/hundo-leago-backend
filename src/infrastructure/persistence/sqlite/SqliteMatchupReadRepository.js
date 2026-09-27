@@ -28,7 +28,8 @@ function createSqliteMatchupReadRepository({ database } = {}) {
 
   const seasonStatement = database.prepare(
     "SELECT seasons.id, seasons.league_id, seasons.status, seasons.version, " +
-      "seasons.nhl_season_key FROM seasons WHERE seasons.league_id = @leagueId " +
+      "seasons.nhl_season_key, leagues.timezone FROM seasons " +
+      "JOIN leagues ON leagues.id = seasons.league_id WHERE seasons.league_id = @leagueId " +
       "AND seasons.id = @seasonId LIMIT 2"
   );
   const weeksStatement = database.prepare(

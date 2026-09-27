@@ -313,6 +313,11 @@ const RESET_NEVER_IMPORT_POLICY = deepFreeze([
 // migrate before importing. Shared environments apply migrations 0023 and
 // later only after the approved reset has completed.
 const RESET_V1_POST_RESET_TABLE_POLICY = deepFreeze([
+  // Injury records are never covered by the historical reset authorization.
+  { tableName: "player_injury_status", introducedByMigrationId: 63, treatment: "require_empty" },
+  { tableName: "player_injury_feed", introducedByMigrationId: 63, treatment: "require_empty" },
+  { tableName: "player_injury_events", introducedByMigrationId: 63, treatment: "require_empty" },
+  { tableName: "player_injury_sync", introducedByMigrationId: 63, treatment: "require_empty" },
   { tableName: "trade_participants", introducedByMigrationId: 62, treatment: "require_empty" },
   { tableName: "expanded_stat_refreshes", introducedByMigrationId: 57, treatment: "require_empty" },
   { tableName: "expanded_stat_totals", introducedByMigrationId: 57, treatment: "require_empty" },
