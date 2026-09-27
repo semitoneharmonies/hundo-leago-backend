@@ -33,6 +33,13 @@ const PLAYER_COLUMNS = Object.freeze([
 ]);
 const PLAYER_STATUSES = new Set(["active", "historical", "all"]);
 const PLAYER_PAGE_SORTS = new Set(["name", "fantasyPoints"]);
+// The NHL and SportsDataIO use different abbreviations for these same teams.
+const NHL_TEAM_ALIASES = Object.freeze({
+  LAK: "LA", LA: "LAK", MTL: "MON", MON: "MTL",
+  NJD: "NJ", NJ: "NJD", NSH: "NAS", NAS: "NSH",
+  SJS: "SJ", SJ: "SJS", TBL: "TB", TB: "TBL",
+  VGK: "VEG", VEG: "VGK", WSH: "WAS", WAS: "WSH",
+});
 const DEFAULT_CONTRACT_FILTERS = Object.freeze({
   minimumAavCents: null,
   maximumAavCents: null,
@@ -219,7 +226,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
         "AND (@providerActive IS NULL OR source.active IS NULL OR source.active = 1) " +
         "AND (@providerPosition IS NULL OR source.normalized_position = @providerPosition) " +
-        "AND (@nhlTeam IS NULL OR source.nhl_team_abbreviation = @nhlTeam) " +
+        "AND (@nhlTeam IS NULL OR source.nhl_team_abbreviation IN (@nhlTeam, @nhlTeamAlias)) " +
         "AND COALESCE(statistics.games_played, 0) >= @minimumGames " +
         "AND (@ownershipTeamId IS NULL OR EXISTS (" +
         "SELECT 1 FROM leagues AS ownership_league " +
@@ -307,7 +314,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
         "AND (@providerActive IS NULL OR source.active IS NULL OR source.active = 1) " +
         "AND (@providerPosition IS NULL OR source.normalized_position = @providerPosition) " +
-        "AND (@nhlTeam IS NULL OR source.nhl_team_abbreviation = @nhlTeam) " +
+        "AND (@nhlTeam IS NULL OR source.nhl_team_abbreviation IN (@nhlTeam, @nhlTeamAlias)) " +
         "AND COALESCE(statistics.games_played, 0) >= @minimumGames " +
         "AND (@ownershipTeamId IS NULL OR EXISTS (" +
         "SELECT 1 FROM leagues AS ownership_league " +
@@ -639,6 +646,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
             providerPosition: options.providerPosition,
             providerActive: options.providerActive === true ? 1 : null,
             nhlTeam: options.nhlTeam,
+            nhlTeamAlias: NHL_TEAM_ALIASES[options.nhlTeam] ?? options.nhlTeam,
             ownershipFilter: options.ownershipFilter,
             minimumGames: options.minimumGames,
             minimumAavCents: options.minimumAavCents,
