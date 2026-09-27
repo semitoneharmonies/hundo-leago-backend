@@ -1283,12 +1283,12 @@ function installedTargetEndpoints(routers) {
 }
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 126 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 126);
+  test("declares 131 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 131);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      126
+      131
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -1308,6 +1308,7 @@ describe("M3-19 exact target endpoint dispatch", () => {
       "matchup",
       "platformAdministration",
       "player",
+      "playerInjury",
       "publicRoster",
       "rosterAction",
       "standingsFinalization",
@@ -1575,7 +1576,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const options = runtimeOptions(database);
     const runtime = createTargetRuntime(options);
     assert.equal(runtime.migrationState.status, "exact");
-    assert.equal(runtime.migrationState.userVersion, 57);
+    assert.equal(runtime.migrationState.userVersion, 65);
     assert.equal(
       typeof runtime.services.league.auctionResolution.resolveDue,
       "function"
@@ -2510,7 +2511,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 126);
+    assert.equal(TARGET_ENDPOINTS.length, 131);
   });
 
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {
@@ -5963,7 +5964,19 @@ describe("M3-19 composed target HTTP boundary", () => {
       },
     });
 
-    const globalDetail = await fetch(
+      const cardPath = `/api/v1/leagues/${leagueId}/players/${playerId}/card`;
+      const cardResponse = await fetch(new URL(cardPath, baseUrl), { headers });
+      const cardBody = await cardResponse.json();
+      assert.equal(cardResponse.status, 200);
+      assert.equal(cardResponse.headers.get('cache-control').includes('no-store'), true);
+      assert.equal(cardBody.data.leagueId, leagueId);
+      assert.equal(cardBody.data.playerId, playerId);
+      assert.equal(cardBody.data.contract.netAavCents, 250);
+      assert.ok(Array.isArray(cardBody.data.history.signings));
+      assert.equal((await fetch(new URL(cardPath, baseUrl), { headers: browserHeaders() })).status, 401);
+      assert.equal((await fetch(new URL(cardPath.replace(leagueId, hiddenLeagueId), baseUrl), { headers })).status, 404);
+
+      const globalDetail = await fetch(
       new URL(`/api/v1/players/${playerId}`, baseUrl),
       { headers }
     );

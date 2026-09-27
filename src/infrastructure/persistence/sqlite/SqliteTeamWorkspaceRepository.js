@@ -1,3 +1,5 @@
+const { createInjuryReader } = require('./SqlitePlayerInjuryRepository');
+const { injuryProjection } = require('../../../domain/players/injuryStatusPolicy');
 const {
   createSqliteCapReadRepository,
 } = require("./SqliteCapReadRepository");
@@ -31,6 +33,7 @@ function freezeRows(rows) {
 }
 
 function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled = false } = {}) {
+  const readInjury = createInjuryReader(database);
   const capRepository = createSqliteCapReadRepository({ database });
   const readCapOutlook = createSqliteCapOutlookReader({ database });
   const expandedSchema = database.pragma("user_version", { simple: true }) >= 57;
@@ -486,7 +489,7 @@ function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled 
             seasonId: scoped.seasonId,
             teamId: scoped.teamId,
           }),
-          players: freezeRows(playersStatement.all(scoped)),
+          players: freezeRows(playersStatement.all(scoped).map(row => ({ ...row, injury: injuryProjection(readInjury(row.player_id)) }))),
           draftPicks: freezeRows(draftPicksStatement.all(scoped)),
           retentions: freezeRows(retentionsStatement.all(scoped)),
           buyouts: freezeRows(buyoutsStatement.all(scoped)),

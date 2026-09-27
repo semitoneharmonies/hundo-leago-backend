@@ -20,6 +20,7 @@ function evaluateMatchupLineupLegality(activePlayers) {
     throw error;
   }
   const reasons = [];
+  if (activePlayers.some(player => player.healthy_ir_count > 0)) reasons.push('HEALTHY_PLAYER_ON_IR');
   if (!exactSlots(activePlayers, "F", 12)) {
     reasons.push(MATCHUP_LEGALITY_CODES.forwardSlotsIncomplete);
   }

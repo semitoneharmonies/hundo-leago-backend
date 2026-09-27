@@ -14,7 +14,7 @@ const {
   discoverMigrations,
 } = require("../../src/infrastructure/database/migrate");
 const {
-  REPOSITORY_CATALOG,
+  SCHEMA_54_REPOSITORY_CATALOG,
 } = require(
   "../../src/infrastructure/persistence/sqlite/repositoryCatalog"
 );
@@ -367,9 +367,7 @@ test(
       assert.deepEqual(
         applicationTableNames(runtime.database),
         // This rehearsal intentionally ends at schema 54; expanded scoring arrives in 57.
-        REPOSITORY_CATALOG.filter(({ tableName }) => ![
-          "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats",
-        ].includes(tableName)).map(({ tableName }) => tableName).sort()
+        SCHEMA_54_REPOSITORY_CATALOG.map(({ tableName }) => tableName).sort()
       );
     }
 

@@ -178,6 +178,7 @@ function createSqliteMatchupLockRepository({
   );
   const playersStatement = database.prepare(
     "SELECT id AS ownership_id, player_id, position_group, slot_number, version " +
+      (database.pragma('user_version', { simple: true }) >= 65 ? ", (SELECT COUNT(*) FROM player_ownerships ir JOIN player_injury_status injury ON injury.id=ir.player_id WHERE ir.league_id=@leagueId AND ir.season_id=@seasonId AND ir.team_id=@teamId AND ir.roster_category='Injured Reserve' AND injury.status='healthy') AS healthy_ir_count " : '') +
       "FROM player_ownerships WHERE league_id = @leagueId AND season_id = @seasonId " +
       "AND team_id = @teamId AND ownership_kind = 'Rostered' AND roster_category = 'Active' " +
       "ORDER BY position_group, slot_number, player_id"

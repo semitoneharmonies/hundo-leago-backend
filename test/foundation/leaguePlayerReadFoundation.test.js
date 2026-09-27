@@ -533,6 +533,52 @@ describe("league-scoped player read repository", () => {
 });
 
 describe("league-scoped player read service", () => {
+  test("matches all 32 NHL teams and provider aliases before both cursor orders without writes", (t) => {
+    const runtime = createRuntime(t);
+    const repository = createSqlitePlayerRepository({ database: runtime.database });
+    const teams = [
+      ["ANA"], ["BOS"], ["BUF"], ["CAR"], ["CBJ"], ["CGY"], ["CHI"], ["COL"],
+      ["DAL"], ["DET"], ["EDM"], ["FLA"], ["LAK", "LA"], ["MIN"], ["MTL", "MON"],
+      ["NJD", "NJ"], ["NSH", "NAS"], ["NYI"], ["NYR"], ["OTT"], ["PHI"], ["PIT"],
+      ["SEA"], ["SJS", "SJ"], ["STL"], ["TBL", "TB"], ["TOR"], ["UTA"], ["VAN"],
+      ["VGK", "VEG"], ["WPG"], ["WSH", "WAS"],
+    ];
+    const source = runtime.database.prepare(`INSERT INTO player_source_state (
+      id, player_id, provider, source_position, normalized_position,
+      nhl_team_abbreviation, active, source_version, source_payload_json,
+      effective_at_ms, ended_at_ms, created_at_ms
+    ) VALUES (?, ?, 'sportsdataio-discovery-lab', 'C', 'F', ?, 1,
+      'team-filter-fixture', NULL, ?, NULL, ?)`);
+    const ids = teams.map(([canonical, alternate = canonical], index) =>
+      [canonical, alternate].map((code, variant) => {
+        const value = 70000 + index * 2 + variant;
+        const id = uuid(value);
+        insertPlayer(repository, id, `Team filter ${canonical} ${variant}`, String(value));
+        source.run(uuid(value + 1000), id, code, NOW_MS, NOW_MS);
+        return id;
+      })
+    );
+    const before = runtime.database.serialize();
+    for (const [leagueId, userId] of [[LEAGUE_A_ID, USER_A_ID], [LEAGUE_B_ID, USER_B_ID]]) {
+      teams.forEach((codes, index) => {
+        for (const nhlTeam of codes) {
+          for (const sort of ["name", "fantasyPoints"]) {
+            const options = { authenticated: authenticated(userId), leagueId,
+              query: "Team filter", nhlTeam, sort, limit: 1 };
+            const first = runtime.service.list(options);
+            assert.equal(first.page.hasMore, true, `${nhlTeam}/${sort} must include both spellings`);
+            const second = runtime.service.list({ ...options, cursor: first.page.nextCursor });
+            assert.equal(second.page.hasMore, false);
+            assert.deepEqual([...first.players, ...second.players].map(player => player.id).sort(), ids[index]);
+          }
+        }
+      });
+    }
+    assert.equal(runtime.service.list({ authenticated: authenticated(USER_A_ID),
+      leagueId: LEAGUE_A_ID, nhlTeam: "ZZZ" }).players.length, 0);
+    assert.equal(before.equals(runtime.database.serialize()), true);
+  });
+
   test("filters signed contracts, inclusive AAV and remaining years before both cursor orders without writes", (t) => {
     const runtime = createRuntime(t);
     const repositories = createSqliteRepositoryContext({ database: runtime.database }).repositories;

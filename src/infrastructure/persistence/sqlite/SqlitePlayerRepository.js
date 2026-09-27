@@ -1,3 +1,5 @@
+const { createInjuryReader } = require('./SqlitePlayerInjuryRepository');
+const { injuryProjection } = require('../../../domain/players/injuryStatusPolicy');
 const {
   CANONICAL_UUID_PATTERN,
   assertStablePlayerId,
@@ -31,6 +33,13 @@ const PLAYER_COLUMNS = Object.freeze([
 ]);
 const PLAYER_STATUSES = new Set(["active", "historical", "all"]);
 const PLAYER_PAGE_SORTS = new Set(["name", "fantasyPoints"]);
+// The NHL and SportsDataIO use different abbreviations for these same teams.
+const NHL_TEAM_ALIASES = Object.freeze({
+  LAK: "LA", LA: "LAK", MTL: "MON", MON: "MTL",
+  NJD: "NJ", NJ: "NJD", NSH: "NAS", NAS: "NSH",
+  SJS: "SJ", SJ: "SJS", TBL: "TB", TB: "TBL",
+  VGK: "VEG", VEG: "VGK", WSH: "WAS", WAS: "WSH",
+});
 const DEFAULT_CONTRACT_FILTERS = Object.freeze({
   minimumAavCents: null,
   maximumAavCents: null,
@@ -120,6 +129,8 @@ function escapeLike(value) {
 
 function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = null, expandedScoringEnabled = false } = {}) {
   if (currentNhlStatisticsSeason !== null && !/^\d{8}$/.test(currentNhlStatisticsSeason)) throw new TypeError("Current NHL statistics require an exact season key.");
+  const readInjury = createInjuryReader(database);
+  const withInjury = row => row ? { ...row, injury: injuryProjection(readInjury(row.id)) } : row;
   const players = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("players"),
@@ -215,7 +226,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
         "AND (@providerActive IS NULL OR source.active IS NULL OR source.active = 1) " +
         "AND (@providerPosition IS NULL OR source.normalized_position = @providerPosition) " +
-        "AND (@nhlTeam IS NULL OR source.nhl_team_abbreviation = @nhlTeam) " +
+        "AND (@nhlTeam IS NULL OR source.nhl_team_abbreviation IN (@nhlTeam, @nhlTeamAlias)) " +
         "AND COALESCE(statistics.games_played, 0) >= @minimumGames " +
         "AND (@ownershipTeamId IS NULL OR EXISTS (" +
         "SELECT 1 FROM leagues AS ownership_league " +
@@ -303,7 +314,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
         "AND (@providerActive IS NULL OR source.active IS NULL OR source.active = 1) " +
         "AND (@providerPosition IS NULL OR source.normalized_position = @providerPosition) " +
-        "AND (@nhlTeam IS NULL OR source.nhl_team_abbreviation = @nhlTeam) " +
+        "AND (@nhlTeam IS NULL OR source.nhl_team_abbreviation IN (@nhlTeam, @nhlTeamAlias)) " +
         "AND COALESCE(statistics.games_played, 0) >= @minimumGames " +
         "AND (@ownershipTeamId IS NULL OR EXISTS (" +
         "SELECT 1 FROM leagues AS ownership_league " +
@@ -445,7 +456,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
       const canonicalPlayerId = assertStablePlayerId(playerId);
       try {
         return freezeRow(
-          findDetailByIdStatement.get({ playerId: canonicalPlayerId })
+          withInjury(findDetailByIdStatement.get({ playerId: canonicalPlayerId }))
         );
       } catch (error) {
         throw mapRepositoryError(error, {
@@ -635,6 +646,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
             providerPosition: options.providerPosition,
             providerActive: options.providerActive === true ? 1 : null,
             nhlTeam: options.nhlTeam,
+            nhlTeamAlias: NHL_TEAM_ALIASES[options.nhlTeam] ?? options.nhlTeam,
             ownershipFilter: options.ownershipFilter,
             minimumGames: options.minimumGames,
             minimumAavCents: options.minimumAavCents,
@@ -642,7 +654,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
             remainingYears: options.remainingYears,
             contractType: options.contractType,
             auctionEligible: options.auctionEligible ? 1 : 0,
-          })
+          }).map(withInjury)
         );
       } catch (error) {
         throw mapRepositoryError(error, {
