@@ -40,6 +40,10 @@ function createPlayerCardService({ leaguePlayerReadService, repository, tradeRep
         totalValueCents: original.originalTotalValueCents ?? null,
       };
     });
+    const buyouts = saved.buyouts.map(row => ({
+      id: row.id, atMs: row.created_at_ms, status: row.status,
+      team: { id: row.originating_team_id, name: row.originating_team_name },
+    }));
     const trades = saved.tradeIds.map(tradeId => {
       const trade = tradeRepository.readDetail({ leagueId, tradeId });
       if (!trade?.detailsVisible || !Number.isSafeInteger(trade.completedAtMs)) {
@@ -89,7 +93,7 @@ function createPlayerCardService({ leaguePlayerReadService, repository, tradeRep
       value: { fantasyPointsPerGame,
         perCapDollar: fantasyPointsPerGame !== null && contract?.netAavCents > 0
           ? fantasyPointsPerGame / (contract.netAavCents / 100) : null },
-      history: { signings, trades },
+      history: { signings, trades, buyouts },
     };
   }
   return Object.freeze({ read });
