@@ -23,6 +23,14 @@ function createSqlitePlayerCardRepository({ database }) {
     LEFT JOIN auction_contexts ac ON ac.league_id = ar.league_id AND ac.auction_id = ar.auction_id
     WHERE c.league_id = @leagueId AND c.player_id = @playerId
     ORDER BY COALESCE(e.occurred_at_ms, c.created_at_ms) DESC, c.id`);
+  // Original team/date survive penalty transfers and completion. Read one row
+  // per obligation rather than duplicating its contract and ownership events.
+  const buyouts = database.prepare(`SELECT b.id, b.status, b.created_at_ms,
+      t.id AS originating_team_id, t.name AS originating_team_name
+    FROM buyout_obligations b
+    JOIN teams t ON t.league_id = b.league_id AND t.id = b.originating_team_id
+    WHERE b.league_id = @leagueId AND b.player_id = @playerId
+    ORDER BY b.created_at_ms DESC, b.id`);
   const cap = database.prepare(`SELECT c.contract_type,
       COALESCE((SELECT SUM(y.retained_aav_cents) FROM retention_obligations r
         JOIN retention_years y ON y.league_id = r.league_id AND y.retention_obligation_id = r.id
@@ -49,7 +57,7 @@ function createSqlitePlayerCardRepository({ database }) {
       }
       try {
         const input = { leagueId, playerId };
-        return { signings: signings.all(input), cap: cap.get(input) || null, tradeIds: trades.all(input).map(row => row.id), teams: teams.all(leagueId), seasons: seasons.all(leagueId) };
+        return { signings: signings.all(input), buyouts: buyouts.all(input), cap: cap.get(input) || null, tradeIds: trades.all(input).map(row => row.id), teams: teams.all(leagueId), seasons: seasons.all(leagueId) };
       } catch (error) {
         throw mapRepositoryError(error, { operation: 'readPlayerCard', tableName: 'contracts' });
       }

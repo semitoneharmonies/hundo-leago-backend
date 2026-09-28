@@ -29,7 +29,7 @@ test('player value handles retention, missing games and unsigned players without
   let stats = { gamesPlayed: 10, fantasyPointsHundredths: 3000 };
   let active = { aavCents: 1000 };
   const service = createPlayerCardService({ leaguePlayerReadService: { read: () => ({ statistics: stats, league: { activeContract: active } }) },
-    repository: { read: () => ({ cap: { retained_aav_cents: 250 }, signings: [], tradeIds: [] }) } });
+    repository: { read: () => ({ cap: { retained_aav_cents: 250 }, signings: [], buyouts: [], tradeIds: [] }) } });
   const read = () => service.read({ leagueId: 'test', playerId: 'test' });
   assert.equal((await read()).value.fantasyPointsPerGame, 3);
   assert.equal((await read()).value.perCapDollar, 0.4);
@@ -58,6 +58,10 @@ test('saved history is league-scoped, read-only, public after execution, and pre
   const completed = database.prepare(`SELECT t.id, a.player_id FROM trades t JOIN trade_assets a ON a.league_id=t.league_id AND a.trade_id=t.id
     WHERE t.league_id=? AND t.completed_at_ms IS NOT NULL AND a.player_id IS NOT NULL LIMIT 1`).get(leagueId);
   assert.ok(completed, 'release fixture supplies an executed player trade');
+  const boughtOut = database.prepare(`SELECT b.*, t.name AS original_team_name FROM buyout_obligations b
+    JOIN teams t ON t.league_id=b.league_id AND t.id=b.originating_team_id
+    WHERE b.league_id=? LIMIT 1`).get(leagueId);
+  assert.ok(boughtOut, 'release fixture supplies a recorded buyout');
   const before = database.serialize();
   const card = await service.read({ authenticated, leagueId, playerId: completed.player_id });
   assert.equal(card.leagueId, leagueId);
@@ -93,13 +97,34 @@ test('saved history is league-scoped, read-only, public after execution, and pre
     leagueId: fixtureId('league:leagueB'), playerId: completed.player_id });
   assert.ok(otherCard.history.signings.every(signing => !card.history.signings.some(original => original.id === signing.id)));
   assert.ok(otherCard.history.trades.every(trade => !card.history.trades.some(original => original.id === trade.id)));
+  const buyoutCard = await service.read({ authenticated, leagueId, playerId: boughtOut.player_id });
+  assert.deepEqual(buyoutCard.history.buyouts, [{ id: boughtOut.id, atMs: boughtOut.created_at_ms,
+    status: boughtOut.status, team: { id: boughtOut.originating_team_id, name: boughtOut.original_team_name } }]);
+  const otherBuyoutCard = await service.read({ authenticated: { valid: true, user: { id: otherUser }, session: { userId: otherUser } },
+    leagueId: fixtureId('league:leagueB'), playerId: boughtOut.player_id });
+  assert.ok(otherBuyoutCard.history.buyouts.every(entry => entry.id !== boughtOut.id), 'buyouts never cross leagues');
+  assert.equal(JSON.stringify(buyoutCard.history.buyouts).includes('actor_user_id'), false, 'private audit fields are omitted');
   assert.deepEqual(database.serialize(), before);
+});
+
+test('buyout history keeps original team and date after re-signing or the penalty ending', async () => {
+  for (const status of ['active', 'completed', 'cancelled']) {
+    const service = createPlayerCardService({
+      leaguePlayerReadService: { read: () => ({ league: { ownership: { team: { name: 'New signing team' } }, activeContract: { aavCents: 500 } } }) },
+      repository: { read: () => ({ cap: { retained_aav_cents: 0 }, signings: [], tradeIds: [], buyouts: [{
+        id: 'buyout', created_at_ms: 1000, status, originating_team_id: 'original', originating_team_name: 'Buyout team',
+      }] }) },
+    });
+    const card = await service.read({ leagueId: 'league', playerId: 'player' });
+    assert.deepEqual(card.history.buyouts, [{ id: 'buyout', atMs: 1000, status, team: { id: 'original', name: 'Buyout team' } }]);
+    assert.equal(card.ownership.team.name, 'New signing team');
+  }
 });
 
 test('signing history uses the original signing event, not the current owner or corrected contract price', async () => {
   const service = createPlayerCardService({
     leaguePlayerReadService: { read: () => ({ fullName: 'Player', league: { ownership: { team: { name: 'New owner' } }, activeContract: null } }) },
-    repository: { read: () => ({ tradeIds: [], signings: [{ id: 'saved', status: 'expired', source_type: 'free_agent_draft_allocation',
+    repository: { read: () => ({ tradeIds: [], buyouts: [], signings: [{ id: 'saved', status: 'expired', source_type: 'free_agent_draft_allocation',
       occurred_at_ms: 1000, created_at_ms: 900, signing_team_id: 'original', signing_team_name: 'Signing team',
       metadata_json: JSON.stringify({ aavCents: 500, originalTermYears: 3, originalTotalValueCents: 1500 }) }] }) },
   });
