@@ -1,3 +1,5 @@
+const { createSqliteGoonDraftSettingsRepository } = require("../infrastructure/persistence/sqlite/SqliteGoonDraftSettingsRepository");
+const { createGoonDraftSettingsService } = require("../application/services/freeAgentDraft/createGoonDraftSettingsService");
 const { createSqlitePlayerInjuryRepository } = require('../infrastructure/persistence/sqlite/SqlitePlayerInjuryRepository');
 const { createPlayerInjuryService } = require('../application/services/players/createPlayerInjuryService');
 const { createPlayerInjuryRouter } = require('../transport/http/createPlayerInjuryRouter');
@@ -805,6 +807,8 @@ const TARGET_ENDPOINTS = Object.freeze([
     "leagueMembership",
   ],
   ["GET", "/api/v1/leagues/:leagueId/seasons", "leagueRead"],
+  ["GET", "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/timing-settings", "freeAgentDraft"],
+  ["PUT", "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/timing-settings", "freeAgentDraft"],
   [
     "POST",
     "/api/v1/leagues/:leagueId/entry-drafts/:draftId/schedule",
@@ -1690,6 +1694,7 @@ function createTargetRepositories({
       candidateCardSummerSynchronizer,
     }),
     candidateAllocations,
+    goonDraftSettings: createSqliteGoonDraftSettingsRepository({ database }),
     candidateCards,
     candidateCardSummerSynchronizer,
     candidateEligibilityRevalidationWriter,
@@ -2703,6 +2708,7 @@ function createTargetServices({
     freeAgentDraftReadiness,
     freeAgentDraftReadinessJob,
     freeAgentDraftRead,
+    goonDraftSettings: createGoonDraftSettingsService({ repository: repositories.goonDraftSettings, leagueAuthorization, clock }),
     freeAgentDraftRecoveryRead,
     freeAgentDraftRecoveryAction,
     freeAgentDraftCorrectionPreview,
@@ -3105,6 +3111,7 @@ function createTargetRouters({
     }),
     freeAgentDraft: createFreeAgentDraftRouter({
       requestSecurity,
+      goonDraftSettingsService: services.league.goonDraftSettings,
       freeAgentDraftReadService:
         services.league.freeAgentDraftRead,
       freeAgentDraftReadinessRetryService:

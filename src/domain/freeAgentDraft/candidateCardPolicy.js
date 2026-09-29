@@ -1421,21 +1421,21 @@ function evaluateCandidateCardHelpAuthority(
     input.helpOpensAtMs,
     "help_opens_at_ms_invalid"
   );
-  const candidateDeadlineAtMs =
+  const candidateDeadlineAtMs = input.candidateDeadlineAtMs === null ? null :
     safeTimestamp(
       input.candidateDeadlineAtMs,
       "candidate_deadline_at_ms_invalid"
     );
   if (
-    helpOpensAtMs >=
+    candidateDeadlineAtMs !== null && helpOpensAtMs >=
     candidateDeadlineAtMs
   ) {
     failInput("help_window_invalid");
   }
   const beforeDeadline =
-    nowMs < candidateDeadlineAtMs;
+    candidateDeadlineAtMs === null || nowMs < candidateDeadlineAtMs;
   const helpWindowOpen =
-    nowMs >= helpOpensAtMs &&
+    candidateDeadlineAtMs !== null && nowMs >= helpOpensAtMs &&
     beforeDeadline;
   const managerReadAccess =
     actorAuthority === "manager" &&

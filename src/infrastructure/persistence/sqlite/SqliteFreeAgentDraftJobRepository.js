@@ -1,3 +1,4 @@
+const { readGoonDraftTiming } = require("./goonDraftTiming");
 const { freeAgentDraftSchedulerScopeSql } = require("./SqliteFreeAgentDraftSchedulerScope");
 
 const { requireFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
@@ -2180,7 +2181,7 @@ function createSqliteFreeAgentDraftJobRepository({
           rollover.opens_at_ms !== (rollover.sequence === 1 ? root.candidate_deadline_at_ms : times[rollover.sequence - 2])
         : rollover.opens_at_ms !== rollover.rolls_over_at_ms - FAD_DAY_MS) ||
       rollover.creation_cutoff_at_ms !==
-        Math.max(rollover.opens_at_ms, rollover.rolls_over_at_ms - 3_600_000) ||
+        Math.max(rollover.opens_at_ms, rollover.rolls_over_at_ms - readGoonDraftTiming(database, scope.leagueId).cutoffMs) ||
       (
         rollover.sequence === 1 &&
         rollover.predecessor_rollover_id !==

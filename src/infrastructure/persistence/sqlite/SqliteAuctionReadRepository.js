@@ -1,5 +1,7 @@
 "use strict";
 
+const { readGoonDraftTiming } = require("./goonDraftTiming");
+
 const { resolveTeamDisplayColours } = require("../../../domain/leagues/teamDisplayPolicy");
 
 const { readFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
@@ -499,7 +501,7 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
       !UUID_PATTERN.test(context.fad_rollover_id || "") ||
       context.target_rollover_at_ms !== head.resolves_at_ms ||
       context.creation_cutoff_at_ms !==
-        Math.max(context.rollover_opens_at_ms, context.target_rollover_at_ms - 3_600_000)
+        Math.max(context.rollover_opens_at_ms, context.target_rollover_at_ms - readGoonDraftTiming(database, head.league_id).cutoffMs)
     ) {
       incompatible("The FAD auction rollover context is inconsistent.");
     }

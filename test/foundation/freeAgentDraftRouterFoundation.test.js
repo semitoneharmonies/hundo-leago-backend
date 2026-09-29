@@ -184,6 +184,7 @@ function authenticatedSession(id) {
 }
 
 function boundary({
+  goonDraftSettingsService,
   requestSecurityOverrides = {},
   authenticated = AUTHENTICATED,
   limiterResult = allowedRateResult,
@@ -348,6 +349,7 @@ function boundary({
     },
   };
   const router = createFreeAgentDraftRouter({
+    goonDraftSettingsService,
     requestSecurity,
     freeAgentDraftReadService,
     freeAgentDraftReadinessRetryService,
@@ -386,6 +388,24 @@ async function start(t, router) {
   );
   return `http://127.0.0.1:${server.address().port}`;
 }
+
+test("Goon timing reads stay private and PUT requires a version through the authenticated boundary", async (t) => {
+  const calls = [];
+  const fixture = boundary({ goonDraftSettingsService: {
+    read(input) { calls.push(["read", input]); return { editable: true }; },
+    update(input) { calls.push(["update", input]); return { version: input.expectedVersion + 1 }; },
+  } });
+  const url = await start(t, fixture.router);
+  const path = `${url}/api/v1/leagues/48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03/free-agent-drafts/${FAD_ID}/timing-settings`;
+  const read = await getJson(path); assert.equal(read.status, 200); assert.equal(read.cacheControl, "private, no-store");
+  const body = JSON.stringify({ rolloverIntervalMinutes: 15, auctionCreationCutoffMinutes: 0 });
+  const missing = await getJson(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body });
+  assert.equal(missing.status, 400); assert.equal(calls.length, 1);
+  const write = await getJson(path, { method: "PUT", headers: { "Content-Type": "application/json", "If-Match": '"6"' }, body });
+  assert.equal(write.status, 200); assert.equal(calls[1][1].expectedVersion, 6);
+  assert.deepEqual(calls[1][1].authenticated, AUTHENTICATED);
+  assert(fixture.securityCalls.includes("authenticateUnsafe"));
+});
 
 async function getJson(url, options) {
   const response = await fetch(url, options);

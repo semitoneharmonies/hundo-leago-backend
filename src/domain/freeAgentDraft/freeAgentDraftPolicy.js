@@ -551,6 +551,11 @@ function deriveFreeAgentDraftViewerPhase(
   const status = validateFreeAgentDraftStatus(
     input.status
   );
+  if (input.candidateDeadlineAtMs === null && status === "cards_open") {
+    const opened = safeTimestamp(input.cardsOpenedAtMs, "cards_opened_at_ms_invalid");
+    if (input.helpOpensAtMs !== opened || nowMs < opened) failClock("unscheduled_clock_invalid");
+    return "cards_open";
+  }
   const { opened, help, deadline } =
     validateViewerClock(input);
   if (nowMs < opened) {
@@ -586,6 +591,7 @@ function validateNominationWindow(input) {
     "opensAtMs",
     "creationCutoffAtMs",
     "rollsOverAtMs",
+    ...(Object.hasOwn(input, "creationCutoffLeadMs") ? ["creationCutoffLeadMs"] : []),
     ...(Object.hasOwn(input, "followingRolloverAtMs") ? ["followingRolloverAtMs"] : []),
   ]);
   const acceptedAtMs = safeTimestamp(
@@ -610,7 +616,7 @@ function validateNominationWindow(input) {
     (followingRolloverAtMs === undefined
       ? rollsOverAtMs - opensAtMs !== FREE_AGENT_DRAFT_DAY_MS
       : rollsOverAtMs <= opensAtMs || followingRolloverAtMs <= rollsOverAtMs) ||
-    creationCutoffAtMs !== Math.max(opensAtMs, rollsOverAtMs - FREE_AGENT_DRAFT_CREATION_CUTOFF_MS)
+    creationCutoffAtMs !== Math.max(opensAtMs, rollsOverAtMs - (input.creationCutoffLeadMs === undefined ? FREE_AGENT_DRAFT_CREATION_CUTOFF_MS : safeTimestamp(input.creationCutoffLeadMs, "cutoff_lead_invalid")))
   ) {
     failClock("nomination_rollover_clock_invalid");
   }
@@ -677,7 +683,8 @@ function validateRolloverRow(
   index,
   candidateDeadlineAtMs,
   previousRow,
-  initialRolloverTimesAtMs
+  initialRolloverTimesAtMs,
+  creationCutoffLeadMs = FREE_AGENT_DRAFT_CREATION_CUTOFF_MS
 ) {
   requireExactObject(
     row,
@@ -752,7 +759,7 @@ function validateRolloverRow(
     rollsOverAtMs !==
       expectedRollsOverAtMs ||
     creationCutoffAtMs !==
-      Math.max(opensAtMs, rollsOverAtMs - FREE_AGENT_DRAFT_CREATION_CUTOFF_MS)
+      Math.max(opensAtMs, rollsOverAtMs - creationCutoffLeadMs)
   ) {
     failRollover(
       "rollover_clock_not_contiguous"
@@ -861,6 +868,7 @@ function validateFreeAgentDraftRolloverSequence(
     "candidateDeadlineAtMs",
     "rollovers",
     ...(customTiming ? ["initialRolloverTimesAtMs"] : []),
+    ...(Object.hasOwn(input, "creationCutoffLeadMs") ? ["creationCutoffLeadMs"] : []),
   ]);
   const candidateDeadlineAtMs = safeTimestamp(
     input.candidateDeadlineAtMs,
@@ -900,7 +908,8 @@ function validateFreeAgentDraftRolloverSequence(
       index,
       candidateDeadlineAtMs,
       previousRow,
-      initialRolloverTimesAtMs
+      initialRolloverTimesAtMs,
+      input.creationCutoffLeadMs === undefined ? FREE_AGENT_DRAFT_CREATION_CUTOFF_MS : safeTimestamp(input.creationCutoffLeadMs, "cutoff_lead_invalid")
     );
     if (ids.has(row.id)) {
       failRollover("rollover_id_duplicate");
@@ -960,6 +969,7 @@ function planNextFreeAgentDraftExtensionRollover(
     "rollovers",
     "requirement",
     ...(customTiming ? ["initialRolloverTimesAtMs"] : []),
+    ...(Object.hasOwn(input, "creationCutoffLeadMs") ? ["creationCutoffLeadMs"] : []),
   ]);
   const rollovers =
     validateFreeAgentDraftRolloverSequence({
@@ -967,6 +977,7 @@ function planNextFreeAgentDraftExtensionRollover(
         input.candidateDeadlineAtMs,
       rollovers: input.rollovers,
       ...(customTiming ? { initialRolloverTimesAtMs: input.initialRolloverTimesAtMs } : {}),
+      ...(input.creationCutoffLeadMs === undefined ? {} : { creationCutoffLeadMs: input.creationCutoffLeadMs }),
     });
   const requirement =
     validateExtensionRequirement(
@@ -1025,8 +1036,7 @@ function planNextFreeAgentDraftExtensionRollover(
       extensionSourceId: requirement.sourceId,
       opensAtMs,
       creationCutoffAtMs:
-        rollsOverAtMs -
-        FREE_AGENT_DRAFT_CREATION_CUTOFF_MS,
+        Math.max(opensAtMs, rollsOverAtMs - (input.creationCutoffLeadMs ?? FREE_AGENT_DRAFT_CREATION_CUTOFF_MS)),
       rollsOverAtMs,
       status: "scheduled",
     },
@@ -1071,6 +1081,7 @@ function evaluateFreeAgentDraftCompletionEligibility(
     "unaccountedPathCount",
     "quarantinedPlayerCount",
     ...(customTiming ? ["initialRolloverTimesAtMs"] : []),
+    ...(Object.hasOwn(input, "creationCutoffLeadMs") ? ["creationCutoffLeadMs"] : []),
   ]);
   const status = validateFreeAgentDraftStatus(
     input.status
@@ -1088,6 +1099,7 @@ function evaluateFreeAgentDraftCompletionEligibility(
       candidateDeadlineAtMs,
       rollovers: input.rollovers,
       ...(customTiming ? { initialRolloverTimesAtMs: input.initialRolloverTimesAtMs } : {}),
+      ...(input.creationCutoffLeadMs === undefined ? {} : { creationCutoffLeadMs: input.creationCutoffLeadMs }),
     });
   const cardStatuses = validateStatusArray({
     value: input.cardStatuses,

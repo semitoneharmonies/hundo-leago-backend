@@ -650,7 +650,7 @@ function validateAuctionContext(value) {
       reason
     );
     if (
-      cutoff !== target - AUCTION_CREATION_CUTOFF_LEAD_MS
+      (value.leagueId === "48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03" ? cutoff > target : cutoff !== target - AUCTION_CREATION_CUTOFF_LEAD_MS)
     ) {
       fail(reason);
     }
@@ -1106,8 +1106,8 @@ function validateAuctionStartTeamsProjection(value) {
           reason
         );
         if (
-          cutoff !==
-            target - AUCTION_CREATION_CUTOFF_LEAD_MS
+          (value.leagueId === "48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03" ? cutoff > target : cutoff !==
+            target - AUCTION_CREATION_CUTOFF_LEAD_MS)
         ) {
           fail(reason);
         }

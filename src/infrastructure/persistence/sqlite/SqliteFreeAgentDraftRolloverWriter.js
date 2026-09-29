@@ -1,11 +1,12 @@
 "use strict";
 
+const { readGoonDraftTiming } = require("./goonDraftTiming");
+
 const { freeAgentDraftSchedulerScopeSql } = require("./SqliteFreeAgentDraftSchedulerScope");
 
 const { randomUUID } = require("node:crypto");
 
 const {
-  FREE_AGENT_DRAFT_CREATION_CUTOFF_MS,
   FREE_AGENT_DRAFT_DAY_MS,
   UUID_PATTERN,
   buildFreeAgentDraftRolloverOccurrenceKey,
@@ -1131,7 +1132,7 @@ function createSqliteFreeAgentDraftRolloverWriter({
         ? successor.rolls_over_at_ms !== scope.rolloverAtMs + FREE_AGENT_DRAFT_DAY_MS
         : successor.rolls_over_at_ms <= scope.rolloverAtMs) ||
       successor.creation_cutoff_at_ms !==
-        Math.max(successor.opens_at_ms, successor.rolls_over_at_ms - FREE_AGENT_DRAFT_CREATION_CUTOFF_MS)
+        Math.max(successor.opens_at_ms, successor.rolls_over_at_ms - readGoonDraftTiming(database, scope.leagueId).cutoffMs)
     ) {
       incompatible(
         "The rollover successor is not a contiguous canonical window.",
@@ -1697,7 +1698,7 @@ function createSqliteFreeAgentDraftRolloverWriter({
         extensionRolloverAtMs,
         extensionCreationCutoffAtMs:
           extensionRolloverAtMs -
-          FREE_AGENT_DRAFT_CREATION_CUTOFF_MS,
+          readGoonDraftTiming(database, command.leagueId).cutoffMs,
         occurrenceKey: buildFreeAgentDraftRolloverOccurrenceKey({
           fadId: command.fadId,
           sequence: command.sequence + 1,

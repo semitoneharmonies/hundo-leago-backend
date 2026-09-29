@@ -552,8 +552,7 @@ function createSqliteRestrictedNoImprovementFallbackWriter({
       AND predecessor.opens_at_ms <= @nowMs
       AND @nowMs <= predecessor.rolls_over_at_ms
       AND target.rolls_over_at_ms > target.opens_at_ms
-      AND target.creation_cutoff_at_ms =
-          max(target.opens_at_ms, target.rolls_over_at_ms - 3600000)
+      AND (target.league_id = '48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03' OR target.creation_cutoff_at_ms = max(target.opens_at_ms, target.rolls_over_at_ms - 3600000))
       AND target.status IN ('scheduled', 'processing')
     ORDER BY target.opens_at_ms, target.id
   `);

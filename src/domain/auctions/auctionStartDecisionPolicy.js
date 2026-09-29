@@ -252,6 +252,7 @@ function canonicalRapidContext(value, nowMs) {
   let timing;
   try {
     timing = classifyFreeAgentDraftNominationTiming({
+      ...(rollover.leagueId === "48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03" ? { creationCutoffLeadMs: rollover.rollsOverAtMs - rollover.creationCutoffAtMs } : {}),
       ...(rollover.followingRolloverAtMs === undefined ? {} : { followingRolloverAtMs: rollover.followingRolloverAtMs }),
       acceptedAtMs: nowMs,
       opensAtMs: rollover.opensAtMs,

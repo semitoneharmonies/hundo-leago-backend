@@ -1019,6 +1019,9 @@ function createSqliteFreeAgentDraftReadRepository({
   }
 
   function readCompetitionWeek(input, fad) {
+    if (fad.league_id === "48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03" &&
+        fad.status === "cards_open" && fad.candidate_deadline_at_ms === null &&
+        fad.current_competition_first_matchup_week_id === null) return null;
     const week = unique(
       competitionWeekOneStatement,
       {
@@ -3641,8 +3644,8 @@ function createSqliteFreeAgentDraftReadRepository({
         showMainNavigation:
           Boolean(fad) &&
           fad.status !== "completed" &&
-          scope.nowMs <
-            competitionWeek.starts_at_ms,
+          (competitionWeek === null || scope.nowMs <
+            competitionWeek.starts_at_ms),
         candidateDeadlineAtMs:
           fad?.candidate_deadline_at_ms ?? null,
         nextRolloverAtMs:
@@ -3911,7 +3914,7 @@ function createSqliteFreeAgentDraftReadRepository({
         timeZone: authority.timezone,
         openedAtMs: fad.opened_at_ms,
         reminderAtMs:
-          fad.candidate_deadline_at_ms -
+          fad.candidate_deadline_at_ms === null ? null : fad.candidate_deadline_at_ms -
           FREE_AGENT_DRAFT_REMINDER_LEAD_MS,
         helpOpensAtMs: fad.help_opens_at_ms,
         candidateDeadlineAtMs:
@@ -3925,7 +3928,7 @@ function createSqliteFreeAgentDraftReadRepository({
         frozenFadFirstMatchupStartsAtMs:
           fad.first_matchup_starts_at_ms,
         competitionFirstMatchupStartsAtMs:
-          competitionWeek.starts_at_ms,
+          competitionWeek?.starts_at_ms ?? null,
         scheduleRecoveryOperationId:
           scheduleRecovery?.matchup_operation_id ?? null,
         completedAtMs: fad.completed_at_ms,

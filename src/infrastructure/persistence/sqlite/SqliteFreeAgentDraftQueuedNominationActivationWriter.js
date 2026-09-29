@@ -1,5 +1,7 @@
 "use strict";
 
+const { readGoonDraftTiming } = require("./goonDraftTiming");
+
 const {
   createHash,
   randomBytes,
@@ -45,7 +47,6 @@ const OPERATION =
   "free_agent_draft_queued_nomination_activation";
 const PLAYER_UNAVAILABLE = "PLAYER_UNAVAILABLE";
 const DAY_MS = 86_400_000;
-const HOUR_MS = 3_600_000;
 const MAX_TIMESTAMP_MS = 8_640_000_000_000_000;
 const CONTROL_PATTERN =
   /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
@@ -1629,7 +1630,7 @@ function createSqliteFreeAgentDraftQueuedNominationActivationWriter({
       !["initial", "extension"].includes(row.opening_window_kind) ||
       row.opening_opens_at_ms >= row.opening_rolls_over_at_ms ||
       row.creation_cutoff_at_ms !==
-        Math.max(row.opening_opens_at_ms, row.opening_rolls_over_at_ms - HOUR_MS) ||
+        Math.max(row.opening_opens_at_ms, row.opening_rolls_over_at_ms - readGoonDraftTiming(database, scope.leagueId).cutoffMs) ||
       !Number.isSafeInteger(row.queue_version) ||
       row.queue_version < 1 ||
       !Number.isSafeInteger(row.candidate_card_version_observed) ||
@@ -1895,7 +1896,7 @@ function createSqliteFreeAgentDraftQueuedNominationActivationWriter({
       successor.sequence !== row.opening_sequence + 1 ||
       successor.opens_at_ms !== row.opening_rolls_over_at_ms ||
       successor.creation_cutoff_at_ms !==
-        Math.max(successor.opens_at_ms, successor.rolls_over_at_ms - HOUR_MS) ||
+        Math.max(successor.opens_at_ms, successor.rolls_over_at_ms - readGoonDraftTiming(database, row.league_id).cutoffMs) ||
       successor.rolls_over_at_ms !== (row.initial_rollover_times_json == null
         ? row.opening_rolls_over_at_ms + DAY_MS
         : JSON.parse(row.initial_rollover_times_json)[row.opening_sequence] ?? row.opening_rolls_over_at_ms + DAY_MS) ||
@@ -2452,7 +2453,7 @@ function createSqliteFreeAgentDraftQueuedNominationActivationWriter({
           resolutionRolloverId: extensionRolloverId,
           resolutionSequence: row.opening_sequence + 1,
           resolutionCreationCutoffAtMs:
-            command.openingAtMs + DAY_MS - HOUR_MS,
+            command.openingAtMs + DAY_MS - readGoonDraftTiming(database, command.leagueId).cutoffMs,
           resolvesAtMs: command.openingAtMs + DAY_MS,
         };
         insertExtensionStatement.run(rolloverWrite);

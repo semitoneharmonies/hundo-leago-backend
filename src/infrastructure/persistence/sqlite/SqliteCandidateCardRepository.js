@@ -1788,7 +1788,7 @@ function createSqliteCandidateCardRepository({
         AND status = 'open'
         AND version = @expectedCardVersion
         AND @nowMs < (
-          SELECT candidate_deadline_at_ms
+          SELECT coalesce(candidate_deadline_at_ms, 8640000000000000)
           FROM free_agent_drafts
           WHERE league_id = @leagueId
             AND season_id = @seasonId
@@ -3572,7 +3572,7 @@ function createSqliteCandidateCardRepository({
   }) {
     if (
       nowMs >=
-      context.candidate_deadline_at_ms
+      (context.candidate_deadline_at_ms ?? Infinity)
     ) {
       return "DEADLINE_PASSED";
     }
@@ -4063,7 +4063,7 @@ function createSqliteCandidateCardRepository({
     }
     if (
       command.nowMs >=
-      context.candidate_deadline_at_ms
+      (context.candidate_deadline_at_ms ?? Infinity)
     ) {
       conflict(
         "The Candidate Card deadline has passed.",
@@ -6138,7 +6138,7 @@ function createSqliteCandidateCardRepository({
       }
       if (
         options.nowMs >=
-        context.candidate_deadline_at_ms
+        (context.candidate_deadline_at_ms ?? Infinity)
       ) {
         conflict(
           "The Candidate Card deadline has passed.",
@@ -6428,7 +6428,7 @@ function createSqliteCandidateCardRepository({
       }
       if (
         options.nowMs >=
-        context.candidate_deadline_at_ms
+        (context.candidate_deadline_at_ms ?? Infinity)
       ) {
         conflict(
           "The Candidate Card deadline has passed.",
@@ -6611,7 +6611,7 @@ function createSqliteCandidateCardRepository({
         context.fad_status !==
           "cards_open" ||
         options.nowMs >=
-          context.candidate_deadline_at_ms
+          (context.candidate_deadline_at_ms ?? Infinity)
       ) {
         return null;
       }
@@ -7228,7 +7228,7 @@ function createSqliteCandidateCardRepository({
       command.nowMs <
         context.help_opens_at_ms ||
       command.nowMs >=
-        context.candidate_deadline_at_ms
+        (context.candidate_deadline_at_ms ?? Infinity)
     ) {
       conflict(
         "The Candidate Card help window is closed.",

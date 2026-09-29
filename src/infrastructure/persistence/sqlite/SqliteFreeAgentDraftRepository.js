@@ -1,3 +1,4 @@
+const { readGoonDraftTiming } = require("./goonDraftTiming");
 const crypto = require("node:crypto");
 const {
   isDeepStrictEqual,
@@ -5330,6 +5331,7 @@ function createSqliteFreeAgentDraftRepository({
       .map(rolloverRecord);
     try {
       validateFreeAgentDraftRolloverSequence({
+        ...(scope.leagueId === "48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03" ? { creationCutoffLeadMs: readGoonDraftTiming(database, scope.leagueId).cutoffMs } : {}),
         ...(draft.initialRolloverTimesAtMs ? { initialRolloverTimesAtMs: draft.initialRolloverTimesAtMs } : {}),
         candidateDeadlineAtMs:
           draft.candidateDeadlineAtMs,
