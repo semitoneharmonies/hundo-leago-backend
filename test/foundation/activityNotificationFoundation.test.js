@@ -395,6 +395,42 @@ describe("M5-09 authenticated League Activity", () => {
     assert.deepEqual(runtime.database.serialize(), before);
   });
 
+  test("classifies saved contract buyouts before pagination without writes or league leakage", (t) => {
+    const runtime = createRuntime(t);
+    for (const [id, leagueId, eventType] of [
+      [230, LEAGUE_A, "contract_bought_out"],
+      [231, LEAGUE_A, "contract_bought_out"],
+      [232, LEAGUE_A, "player_released_by_buyout"],
+      [233, LEAGUE_B, "contract_bought_out"],
+      [234, LEAGUE_A, "unclassified_event"],
+    ]) {
+      runtime.context.repositories.league_activity.insert({
+        id: uuid(id), league_id: leagueId, season_id: null,
+        event_type: eventType, actor_user_id: null, actor_authority: "system",
+        team_id: null, player_id: null, related_type: null, related_id: null,
+        display_summary: "Saved history.", reason: null, metadata_json: "{}",
+        occurred_at_ms: NOW_MS + id,
+      });
+    }
+    const before = runtime.database.serialize();
+    const changes = runtime.database.prepare("SELECT total_changes() AS n").get().n;
+    for (const category of ["all", "buyout", "other"]) {
+      const ids = [];
+      let cursor = null;
+      do {
+        const page = runtime.activity.list({ leagueId: LEAGUE_A,
+          query: { category, limit: 1, ...(cursor ? { cursor } : {}) },
+          authenticated: authenticated(USER_A) });
+        ids.push(...page.activity.map(item => item.id));
+        cursor = page.page.nextCursor;
+      } while (cursor);
+      assert.deepEqual(ids.filter(id => [230, 231, 232, 233, 234].some(n => uuid(n) === id)),
+        (category === "all" ? [234, 232, 231, 230] : category === "buyout" ? [232, 231, 230] : [234]).map(uuid));
+    }
+    assert.equal(runtime.database.prepare("SELECT total_changes() AS n").get().n, changes);
+    assert.deepEqual(runtime.database.serialize(), before);
+  });
+
   test("is league-scoped, cursor-paginated, and byte-for-byte read-only", (t) => {
     const runtime = createRuntime(t);
     const before = runtime.database.prepare("SELECT total_changes() AS n").get().n;
