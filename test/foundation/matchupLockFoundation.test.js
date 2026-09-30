@@ -238,6 +238,32 @@ function lockInput(lockId = uuid(400)) {
 }
 
 describe("M6-04 immutable matchup-lock policy", () => {
+  test("assigns snapshot positions to unnumbered players without changing their roster", () => {
+    const activePlayers = [
+      { player_id: uuid(101), position_group: "D", slot_number: null },
+      ...Array.from({ length: 5 }, (_, index) => ({ player_id: uuid(102 + index), position_group: "D", slot_number: index + 1 })),
+      { player_id: uuid(120), position_group: "F", slot_number: 12 },
+    ];
+    const before = structuredClone(activePlayers);
+    const a = buildLockedPlayerBaselines({ activePlayers, totals: [] });
+    const b = buildLockedPlayerBaselines({ activePlayers: [...activePlayers].reverse(), totals: [] });
+    assert.deepEqual(a, b);
+    assert.deepEqual(activePlayers, before);
+    assert.equal(a.find(row => row.playerId === uuid(101)).slotNumber, 6);
+    assert.equal(a.find(row => row.playerId === uuid(120)).slotNumber, 12);
+    assert.equal(a.length, activePlayers.length);
+  });
+
+  test("derives unique snapshot positions independently of broken display metadata", () => {
+    const activePlayers = [null, 1, 1, 99, undefined].map((slot_number, index) => ({ player_id: uuid(100 + index), position_group: "D", slot_number }));
+    const rows = buildLockedPlayerBaselines({ activePlayers, totals: [] });
+    assert.deepEqual(rows.map(row => row.slotNumber), [1, 2, 3, 4, 5]);
+    assert.deepEqual(rows, buildLockedPlayerBaselines({ activePlayers: [...activePlayers].reverse(), totals: [] }));
+    assert.deepEqual(buildLockedPlayerBaselines({ activePlayers: [], totals: [] }), []);
+    assert.throws(() => buildLockedPlayerBaselines({ activePlayers: [...activePlayers, activePlayers[0]], totals: [] }), { code: MATCHUP_LOCK_CODES.lineupInvalid });
+    assert.throws(() => buildLockedPlayerBaselines({ activePlayers: Array.from({ length: 7 }, (_, index) => ({ player_id: uuid(200 + index), position_group: "D", slot_number: null })), totals: [] }), { code: MATCHUP_LOCK_CODES.lineupInvalid });
+  });
+
   test("accepts the exact six-hour freshness boundary and rejects stale or future sources", () => {
     assert.deepEqual(
       assertFreshBaselineSource({
@@ -280,6 +306,16 @@ describe("M6-04 immutable matchup-lock policy", () => {
 });
 
 describe("M6-04 atomic immutable matchup locks", () => {
+  test("persists an unnumbered active player in the normal snapshot without mutating ownerships", t => {
+    const { database, service } = createRuntime(t);
+    database.prepare("UPDATE player_ownerships SET slot_number=NULL WHERE id=?").run(IDS.ownershipD);
+    const before = database.prepare("SELECT * FROM player_ownerships ORDER BY id").all();
+    const result = service.lock(lockInput());
+    assert.equal(result.playerCount, 2);
+    assert.deepEqual(database.prepare("SELECT * FROM player_ownerships ORDER BY id").all(), before);
+    assert.equal(database.prepare("SELECT slot_number FROM matchup_roster_players WHERE player_id=?").get(IDS.defence).slot_number, 1);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  });
   test("freezes the 4 PM active lineup against the 1 AM baseline and replays exactly", (t) => {
     const { database, service } = createRuntime(t);
     const result = service.lock(lockInput());

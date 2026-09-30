@@ -175,7 +175,7 @@ function createMatchupLegalityService({
       }
       return normalLockService.lock(input);
     }
-    const decision = evaluateMatchupLineupLegality(context.activePlayers);
+    const decision = evaluateMatchupLineupLegality(context.activePlayers, context.cap ?? null);
     if (decision.legal) return normalLockService.lock(input);
     return repository.persistIllegalLock({
       leagueId: context.week.league_id,
@@ -186,6 +186,7 @@ function createMatchupLegalityService({
       lockId: input.lockId,
       expectedWeekVersion: context.week.version,
       activePlayerFingerprint: JSON.stringify(context.activePlayers),
+      capFingerprint: JSON.stringify(context.cap ?? null),
       locksAtMs: context.week.locks_at_ms,
       reasonCode: decision.primaryReasonCode,
       nowMs: input.nowMs,
@@ -207,7 +208,7 @@ function createMatchupLegalityService({
       fail(MATCHUP_LEGALITY_SERVICE_CODES.normalLockMissing, "The team's illegal normal lock is missing.");
     }
     const existing = context.existingLocks[0];
-    const decision = evaluateMatchupLineupLegality(context.activePlayers);
+    const decision = evaluateMatchupLineupLegality(context.activePlayers, context.cap ?? null);
     if (!decision.legal) {
       fail(MATCHUP_LEGALITY_SERVICE_CODES.stillIllegal, "The team roster is still illegal.");
     }
@@ -545,6 +546,7 @@ function createMatchupLegalityService({
       expectedLockVersion: existing.version,
       expectedWeekVersion: context.week.version,
       activePlayerFingerprint: JSON.stringify(context.activePlayers),
+      capFingerprint: JSON.stringify(context.cap ?? null),
       expectedPlayerGameSetId: context.playerGameSet.id,
       expectedPlayerGameCoverageSha256:
         context.playerGameSet.coverage_sha256,

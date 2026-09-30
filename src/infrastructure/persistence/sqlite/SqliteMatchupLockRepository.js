@@ -145,6 +145,7 @@ function createSqliteMatchupLockRepository({
   database,
   beforeCommit,
   occurrenceExecutionGuard,
+  enforceCapLegality = false,
 } = {}) {
   if (!database || typeof database.prepare !== "function") {
     throw new TypeError("createSqliteMatchupLockRepository requires a database");
@@ -152,6 +153,10 @@ function createSqliteMatchupLockRepository({
   if (beforeCommit !== undefined && typeof beforeCommit !== "function") {
     throw new TypeError("matchup-lock beforeCommit must be a function");
   }
+  if (typeof enforceCapLegality !== "boolean") throw new TypeError("Matchup cap enforcement must be explicit.");
+  const capReader = enforceCapLegality
+    ? require("./SqliteCapReadRepository").createSqliteCapReadRepository({ database })
+    : null;
   if (
     occurrenceExecutionGuard !== undefined &&
     (
@@ -688,6 +693,7 @@ function createSqliteMatchupLockRepository({
       }
       return Object.freeze({
         week: Object.freeze({ ...week }),
+        cap: capReader ? capReader.calculate({ leagueId: keys.leagueId, seasonId: keys.seasonId, teamId: keys.teamId }) : null,
         activePlayers: freezeRows(playersStatement.all(keys)),
         refresh: refresh ? Object.freeze({ ...refresh }) : null,
         totals: refresh ? freezeRows(totalsStatement.all({ refreshId: refresh.id })) : Object.freeze([]),
@@ -728,7 +734,8 @@ function createSqliteMatchupLockRepository({
       current.week.version !== command.expectedWeekVersion ||
       current.week.status !== "live" ||
       current.refresh?.id !== command.refreshId ||
-      currentFingerprint !== command.activePlayerFingerprint
+      currentFingerprint !== command.activePlayerFingerprint ||
+      (enforceCapLegality && json(current.cap) !== command.capFingerprint)
     ) {
       throw repositoryError(REPOSITORY_ERROR_CODES.versionConflict, "The matchup lock sources changed.");
     }
@@ -793,7 +800,8 @@ function createSqliteMatchupLockRepository({
     if (
       current.week.version !== command.expectedWeekVersion ||
       current.week.status !== "live" ||
-      JSON.stringify(current.activePlayers) !== command.activePlayerFingerprint
+      JSON.stringify(current.activePlayers) !== command.activePlayerFingerprint ||
+      (enforceCapLegality && json(current.cap) !== command.capFingerprint)
     ) {
       throw repositoryError(REPOSITORY_ERROR_CODES.versionConflict, "The illegal-lock sources changed.");
     }
@@ -889,7 +897,8 @@ function createSqliteMatchupLockRepository({
       json(current.playerGameObservations) ===
         command.playerGameFingerprint &&
       json(current.activePlayers) ===
-        command.activePlayerFingerprint;
+        command.activePlayerFingerprint &&
+      (!enforceCapLegality || json(current.cap) === command.capFingerprint);
     if (!sourcesMatch) {
       throw repositoryError(
         REPOSITORY_ERROR_CODES.versionConflict,

@@ -41,6 +41,34 @@ function buildLockedPlayerBaselines({ activePlayers, totals } = {}) {
   if (!Array.isArray(activePlayers) || !Array.isArray(totals)) {
     fail(MATCHUP_LOCK_CODES.inputInvalid, "Active players and statistics totals are required.");
   }
+  // Preserve valid existing display positions, assigning remaining positions
+  // deterministically in the new snapshot only. Ownership rows remain untouched.
+  const players = activePlayers.map(player => ({ ...player }));
+  const uniquePlayers = new Set();
+  for (const player of players) {
+    if (typeof player.player_id !== "string" || player.player_id.length === 0 ||
+        uniquePlayers.has(player.player_id) || !["F", "D"].includes(player.position_group)) {
+      fail(MATCHUP_LOCK_CODES.lineupInvalid, "The active lineup contains an invalid player.");
+    }
+    uniquePlayers.add(player.player_id);
+  }
+  for (const [position, maximum] of [["F", 12], ["D", 6]]) {
+    const group = players.filter(player => player.position_group === position)
+      .sort((left, right) => left.player_id.localeCompare(right.player_id));
+    if (group.length > maximum) fail(MATCHUP_LOCK_CODES.lineupInvalid, "The active lineup exceeds its position limit.");
+    const used = new Set(), unplaced = [];
+    for (const player of group) {
+      if (Number.isSafeInteger(player.slot_number) && player.slot_number >= 1 &&
+          player.slot_number <= maximum && !used.has(player.slot_number)) used.add(player.slot_number);
+      else unplaced.push(player);
+    }
+    for (const player of unplaced) {
+      let slot = 1;
+      while (used.has(slot)) slot++;
+      player.slot_number = slot;
+      used.add(slot);
+    }
+  }
   const totalByPlayer = new Map();
   for (const total of totals) {
     if (!total || typeof total.player_id !== "string" || totalByPlayer.has(total.player_id)) {
@@ -53,7 +81,7 @@ function buildLockedPlayerBaselines({ activePlayers, totals } = {}) {
   }
   const playerIds = new Set();
   const slots = new Set();
-  const result = activePlayers.map((player) => {
+  const result = players.map((player) => {
     if (
       !player ||
       typeof player.player_id !== "string" ||

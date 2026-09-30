@@ -1777,6 +1777,7 @@ function createTargetRepositories({
     matchupJobs: createSqliteMatchupJobRepository({ database, executionScope: { leagueIds: matchupProcessingLeagueIds, nhlSeasonKey: currentNhlStatisticsSeason } }),
     matchupLocks: createSqliteMatchupLockRepository({
       database,
+      enforceCapLegality: true,
       occurrenceExecutionGuard:
         matchupOccurrenceExecutionGuard,
     }),

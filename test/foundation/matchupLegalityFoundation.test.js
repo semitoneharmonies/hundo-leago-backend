@@ -130,10 +130,12 @@ function seed(
     const missingForward = player.position_group === "F" && player.slot_number === 12;
     insertOwnership.run(
       uuid(300 + index), IDS.league, IDS.season, player.player_id, IDS.home,
-      missingForward ? "Bench" : "Active", player.position_group,
+      missingForward ? "Injured Reserve" : "Active", player.position_group,
       missingForward ? 1 : player.slot_number
     );
   });
+  // The late-lock fixture needs a genuine violation; an empty active slot is legal.
+  database.prepare("INSERT INTO player_injury_status (id,status,source,evidence_at_ms,observed_at_ms,updated_at_ms,version) VALUES (?,'healthy','admin',1,1,1,1)").run(uuid(112));
   database.prepare(
     "INSERT INTO stat_sources (id, provider, status, created_at_ms, updated_at_ms, version) " +
       "VALUES (?, 'nhl', 'active', 1, 1, 1)"
@@ -579,6 +581,7 @@ function createRuntime(
     playerGameDisposition = "expected_game",
     omitCoveragePlayerId = null,
     guardOccurrence = false,
+    enforceCapLegality = false,
     gameStateProvider = {
       async fetchGameStates({ requestedAtMs, games }) {
         return {
@@ -631,6 +634,7 @@ function createRuntime(
     : undefined;
   const repository = createSqliteMatchupLockRepository({
     database: connection.database,
+    enforceCapLegality,
     occurrenceExecutionGuard,
     beforeCommit() {
       if (failure()) throw new Error("late legality failure");
@@ -676,6 +680,15 @@ function makeLegal(database) {
     "UPDATE player_ownerships SET roster_category = 'Active', slot_number = 12, " +
       "updated_at_ms = 2, version = version + 1 WHERE player_id = ?"
   ).run(uuid(112));
+}
+
+function seedSalaryCap(database, limit = 1800) {
+  database.prepare(`INSERT INTO league_settings (league_id,salary_cap_cents,maximum_teams,scoring_rule_version,standings_rule_version,created_at_ms,updated_at_ms)
+    VALUES (?,?,12,1,1,1,1)`).run(IDS.league, limit);
+  const insert = database.prepare(`INSERT INTO contracts (id,league_id,player_id,current_team_id,contract_type,original_total_value_cents,
+    original_term_years,aav_cents,start_season_id,status,acquisition_source_type,created_at_ms,updated_at_ms)
+    VALUES (?,?,?,?,'normal',100,1,100,?,'active','test',1,1)`);
+  lineup().forEach((player, index) => insert.run(uuid(6000 + index), IDS.league, player.player_id, IDS.home, IDS.season));
 }
 
 function insertTotalsOnlyRefresh(
@@ -807,13 +820,95 @@ function supersedeGeneration(database) {
 }
 
 describe("M6-05 matchup lineup legality", () => {
-  test("requires every exact forward and defence slot", () => {
-    assert.equal(evaluateMatchupLineupLegality(lineup()).legal, true);
-    const missingForward = evaluateMatchupLineupLegality(lineup(11, 6));
-    assert.equal(missingForward.legal, false);
-    assert.equal(missingForward.primaryReasonCode, MATCHUP_LEGALITY_CODES.forwardSlotsIncomplete);
-    const missingDefence = evaluateMatchupLineupLegality(lineup(12, 5));
-    assert.deepEqual(missingDefence.reasonCodes, [MATCHUP_LEGALITY_CODES.defenceSlotsIncomplete]);
+  test("permits every active lineup within the forward and defence limits", () => {
+    for (let forwards = 0; forwards <= 12; forwards++) {
+      for (let defence = 0; defence <= 6; defence++) {
+        assert.equal(evaluateMatchupLineupLegality(lineup(forwards, defence)).legal, true);
+      }
+    }
+  });
+  test("internal position numbers do not determine player eligibility", () => {
+    for (const slot_number of [null, undefined, 0, 99, 1]) {
+      assert.equal(evaluateMatchupLineupLegality(lineup().map(player => ({ ...player, slot_number }))).legal, true);
+    }
+  });
+  test("still rejects over-capacity lineups, unsupported positions and duplicate players", () => {
+    assert.deepEqual(evaluateMatchupLineupLegality(lineup(13, 6)).reasonCodes, [MATCHUP_LEGALITY_CODES.forwardLimitExceeded]);
+    assert.deepEqual(evaluateMatchupLineupLegality(lineup(12, 7)).reasonCodes, [MATCHUP_LEGALITY_CODES.defenceLimitExceeded]);
+    assert.equal(evaluateMatchupLineupLegality([{ player_id: uuid(100), position_group: "G" }]).legal, false);
+    assert.equal(evaluateMatchupLineupLegality([lineup()[0], lineup()[0]]).legal, false);
+  });
+  test("retains the healthy-player-on-IR restriction", () => {
+    assert.deepEqual(evaluateMatchupLineupLegality([{ ...lineup()[0], healthy_ir_count: 1 }]).reasonCodes, ["HEALTHY_PLAYER_ON_IR"]);
+  });
+  test("allows equality at the cap and rejects excess or incomplete cap evidence", () => {
+    const cap = { complete: true, capUsageCents: 10000, capLimitCents: 10000 };
+    assert.equal(evaluateMatchupLineupLegality(lineup(11, 5), cap).legal, true);
+    assert.deepEqual(evaluateMatchupLineupLegality(lineup(11, 5), { ...cap, capUsageCents: 10001 }).reasonCodes, ["SALARY_CAP_EXCEEDED"]);
+    assert.deepEqual(evaluateMatchupLineupLegality(lineup(), { ...cap, complete: false }).reasonCodes, ["SALARY_CAP_CALCULATION_INCOMPLETE"]);
+  });
+});
+
+describe("normal lock follows player limits and authoritative salary cap", () => {
+  for (const shape of ["11 forwards", "5 defence", "unnumbered defence"]) {
+    test(`locks ${shape} at the cap without changing the current roster`, t => {
+      const { database, service } = createRuntime(t, { enforceCapLegality: true, refreshCompletedAtMs: BASELINE_MS });
+      if (shape === "11 forwards") database.prepare("UPDATE player_ownerships SET roster_category='Bench' WHERE player_id=?").run(uuid(112));
+      else {
+        makeLegal(database);
+        if (shape === "5 defence") database.prepare("UPDATE player_ownerships SET roster_category='Bench',slot_number=1 WHERE player_id=?").run(uuid(206));
+        else database.prepare("UPDATE player_ownerships SET slot_number=NULL WHERE player_id=?").run(uuid(206));
+      }
+      seedSalaryCap(database, shape === "unnumbered defence" ? 1800 : 1700);
+      const rosterBefore = database.prepare("SELECT * FROM player_ownerships ORDER BY id").all();
+      const result = service.lockAtBoundary(input());
+      assert.equal(result.lock.legal, 1);
+      assert.equal(result.playerCount, shape === "unnumbered defence" ? 18 : 17);
+      assert.deepEqual(database.prepare("SELECT * FROM player_ownerships ORDER BY id").all(), rosterBefore);
+      assert.equal(database.prepare("SELECT locked_at_ms FROM matchup_roster_locks WHERE id=?").get(IDS.homeLock).locked_at_ms, LOCK_MS);
+      const beforeReplay = database.prepare("SELECT total_changes() n").get().n;
+      assert.equal(service.lockAtBoundary(input()).replayed, true);
+      assert.equal(database.prepare("SELECT total_changes() n").get().n, beforeReplay);
+      assert.deepEqual(database.pragma("foreign_key_check"), []);
+    });
+  }
+  test("rejects an over-cap team and an incomplete active contract calculation", t => {
+    const { database, service, repository } = createRuntime(t, { enforceCapLegality: true, refreshCompletedAtMs: BASELINE_MS });
+    makeLegal(database); seedSalaryCap(database, 1799);
+    const result = service.lockAtBoundary(input());
+    assert.equal(result.lock.legal, 0);
+    assert.equal(result.lock.legality_reason_code, "SALARY_CAP_EXCEEDED");
+    database.prepare("UPDATE contracts SET status='cancelled' WHERE player_id=?").run(uuid(101));
+    const context = repository.readContext(input());
+    assert.equal(context.cap.complete, false);
+    assert.deepEqual(evaluateMatchupLineupLegality(context.activePlayers, context.cap).reasonCodes, ["SALARY_CAP_CALCULATION_INCOMPLETE"]);
+  });
+  test("a cap change before normal publication rejects without creating snapshot records", t => {
+    const { database, repository } = createRuntime(t, { enforceCapLegality: true, refreshCompletedAtMs: BASELINE_MS });
+    makeLegal(database); seedSalaryCap(database);
+    const before = lockEffectState(database);
+    const guarded = { ...repository, persistNormalLock(command) {
+      database.prepare("UPDATE league_settings SET salary_cap_cents=1799 WHERE league_id=?").run(IDS.league);
+      return repository.persistNormalLock(command);
+    } };
+    const service = createMatchupLockService({ repository: guarded });
+    assert.throws(() => service.lock(input()), { code: REPOSITORY_ERROR_CODES.versionConflict });
+    assert.deepEqual(lockEffectState(database), before);
+  });
+  test("a cap change during late game lookup preserves the existing illegal lock", async t => {
+    let database;
+    const runtime = createRuntime(t, { enforceCapLegality: true, gameStateProvider: {
+      async fetchGameStates({ requestedAtMs, games }) {
+        database.prepare("UPDATE league_settings SET salary_cap_cents=1799 WHERE league_id=?").run(IDS.league);
+        return { provider: "nhl", sourceVersion: "cap-race", observedAtMs: requestedAtMs,
+          games: games.map(row => ({ ...row, observedGameState: "in_progress" })) };
+      },
+    } });
+    database = runtime.database; seedSalaryCap(database);
+    runtime.service.lockAtBoundary(input()); makeLegal(database);
+    const before = lockEffectState(database);
+    await assert.rejects(runtime.service.lockLate(input(LATE_MS)), { code: REPOSITORY_ERROR_CODES.versionConflict });
+    assert.deepEqual(lockEffectState(database), before);
   });
 });
 
@@ -1279,7 +1374,7 @@ describe("M6-05 illegal-at-lock and late legality", () => {
     assert.equal(illegal.playerCount, 0);
     const illegalRow = database.prepare("SELECT * FROM matchup_roster_locks WHERE id = ?").get(IDS.homeLock);
     assert.equal(illegalRow.baseline_snapshot_id, null);
-    assert.equal(illegalRow.legality_reason_code, MATCHUP_LEGALITY_CODES.forwardSlotsIncomplete);
+    assert.equal(illegalRow.legality_reason_code, "HEALTHY_PLAYER_ON_IR");
     assert.equal(
       database.prepare("SELECT COUNT(*) AS count FROM matchup_roster_players WHERE matchup_roster_lock_id = ?").get(IDS.homeLock).count,
       0

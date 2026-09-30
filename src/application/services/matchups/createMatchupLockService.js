@@ -1,4 +1,5 @@
 const { randomUUID } = require("node:crypto");
+const { evaluateMatchupLineupLegality } = require("../../../domain/matchups/matchupLegalityPolicy");
 
 const {
   assertFreshBaselineSource,
@@ -13,6 +14,7 @@ const MATCHUP_LOCK_SERVICE_CODES = Object.freeze({
   statisticsMissing: "MATCHUP_LOCK_STATISTICS_MISSING",
   alreadyLocked: "MATCHUP_LOCK_ALREADY_EXISTS",
   providerInvalid: "MATCHUP_LOCK_PROVIDER_INVALID",
+  rosterIllegal: "MATCHUP_LOCK_ROSTER_ILLEGAL",
 });
 
 class MatchupLockServiceError extends Error {
@@ -80,6 +82,9 @@ function createMatchupLockService({ repository, createId = randomUUID } = {}) {
       baselineAtMs: context.week.baseline_at_ms,
       refreshCompletedAtMs: context.refresh.completed_at_ms,
     });
+    if (!evaluateMatchupLineupLegality(context.activePlayers, context.cap ?? null).legal) {
+      fail(MATCHUP_LOCK_SERVICE_CODES.rosterIllegal, "The active roster or salary cap is illegal.");
+    }
     const baselines = buildLockedPlayerBaselines({
       activePlayers: context.activePlayers,
       totals: context.totals,
@@ -101,6 +106,7 @@ function createMatchupLockService({ repository, createId = randomUUID } = {}) {
       refreshId: context.refresh.id,
       expectedWeekVersion: context.week.version,
       activePlayerFingerprint: JSON.stringify(context.activePlayers),
+      capFingerprint: JSON.stringify(context.cap ?? null),
       baselineAtMs: context.week.baseline_at_ms,
       locksAtMs: context.week.locks_at_ms,
       nowMs: input.nowMs,
