@@ -1,5 +1,7 @@
 const { digest, clientKey } = require("../../../domain/leagues/leagueCommunicationPolicy");
-const { deadlineControlError: fail } = require("../../../infrastructure/persistence/sqlite/SqliteFadDeadlineControlRepository");
+function fail(code = "FAD_DEADLINE_CONTROL_CONFLICT") {
+  const error = new Error(code); error.code = code; throw error;
+}
 
 function createFadDeadlineControlService({ repository, leagueAuthorization, clock }) {
   function readState(leagueId, fadId) {

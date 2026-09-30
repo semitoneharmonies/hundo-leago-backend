@@ -1,6 +1,6 @@
 const {randomUUID}=require('node:crypto');
 const {digest,clientKey}=require('../../../domain/leagues/leagueCommunicationPolicy');
-const {fail}=require('../../../infrastructure/persistence/sqlite/SqliteCorrectionReversalRepository');
+const fail=(message,code='CORRECTION_REVERSAL_CONFLICT')=>{throw Object.assign(new Error(message),{code});};
 const ID=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 function createCorrectionReversalService({repository,corrections,leagueAuthorization,clock,lateLockCoordinator}){
  function authorize(auth,leagueId){const a=leagueAuthorization.requireCommissioner(auth,leagueId);if(!repository)fail('Correction reversal is unavailable.','CORRECTION_REVERSAL_UNAVAILABLE');return a;}

@@ -1,4 +1,4 @@
-const crypto = require("node:crypto");
+const { sha256Hex } = require("../shared/sha256");
 
 function fail(code = "COMMUNICATION_INVALID") {
   const error = new Error(code);
@@ -31,7 +31,7 @@ function validateMessage(value) {
 }
 
 function digest(value) {
-  return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return sha256Hex(JSON.stringify(value));
 }
 
 function clientKey(value) {

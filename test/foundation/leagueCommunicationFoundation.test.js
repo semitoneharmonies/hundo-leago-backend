@@ -17,6 +17,15 @@ const auth = n => ({ valid: true, user: { id: id(n), status: "active" }, session
 const announcement = { kind: "announcement", title: "Draft update", body: "Please review the revised schedule.",
   audience: "members", pinned: true, expiresAtMs: NOW + 60_000, notify: true };
 
+test("communication digests retain existing preview and retry hashes", () => {
+  const { digest } = require("../../src/domain/leagues/leagueCommunicationPolicy");
+  const { createHash } = require("node:crypto");
+  for (const value of [announcement, null, { reason: "Révision 🏒", values: [0, false, "\ud800"] },
+    { cards: Array.from({ length: 1000 }, (_, i) => ({ id: id(i), version: i + 1 })) }]) {
+    assert.equal(digest(value), createHash("sha256").update(JSON.stringify(value)).digest("hex"));
+  }
+});
+
 function snapshot(db, excluded = []) {
   const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
   return Object.fromEntries(tables.filter(row => !excluded.includes(row.name)).map(({ name }) =>
