@@ -313,6 +313,13 @@ const RESET_NEVER_IMPORT_POLICY = deepFreeze([
 // migrate before importing. Shared environments apply migrations 0023 and
 // later only after the approved reset has completed.
 const RESET_V1_POST_RESET_TABLE_POLICY = deepFreeze([
+  { tableName: "compact_stat_refreshes", introducedByMigrationId: 70, treatment: "require_empty" },
+  { tableName: "shared_stat_total_changes", introducedByMigrationId: 70, treatment: "require_empty" },
+  { tableName: "shared_empty_coverage_sets", introducedByMigrationId: 70, treatment: "require_empty" },
+  { tableName: "shared_game_evidence_captures", introducedByMigrationId: 69, treatment: "require_empty" },
+  { tableName: "shared_game_evidence_changes", introducedByMigrationId: 69, treatment: "require_empty" },
+  { tableName: "nhl_completed_game_cache", introducedByMigrationId: 67, treatment: "require_empty" },
+  { tableName: "stat_refresh_payload_retirements", introducedByMigrationId: 68, treatment: "require_empty" },
   // Injury records are never covered by the historical reset authorization.
   { tableName: "player_injury_status", introducedByMigrationId: 65, treatment: "require_empty" },
   { tableName: "player_injury_feed", introducedByMigrationId: 65, treatment: "require_empty" },

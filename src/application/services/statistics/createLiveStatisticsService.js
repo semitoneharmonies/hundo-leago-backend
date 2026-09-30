@@ -135,6 +135,9 @@ function createLiveStatisticsService({
     requireMethod(repository, method, "a complete live statistics repository");
   }
   requireMethod(provider, "fetchLiveSnapshot", "a live statistics provider");
+  if (repository.prepareLiveRefresh !== undefined) {
+    requireMethod(repository, "prepareLiveRefresh", "a callable capture preparation method");
+  }
   const seasonKey = assertNhlSeasonKey(nhlSeasonKey);
   const sourceProviderName = canonicalProviderName(
     providerName,
@@ -322,6 +325,34 @@ function createLiveStatisticsService({
       throw error;
     }
 
+    const completionCommand = {
+      refreshId,
+      statSourceId: source.id,
+      provider: sourceProviderName,
+      playerIdentityProvider: identityProviderName,
+      nhlSeasonKey: seasonKey,
+      sourceVersion,
+      completedAtMs: capturedAtMs,
+      rows: normalizedTotals,
+      playerGameRows: normalizedPlayerGames,
+      ...(expandedScoring === undefined ? {} : { expandedScoring }),
+      requiredPlayers,
+      requiredPlayerGames,
+      requirementsSha256: requirementSnapshot.requirementsSha256,
+      playerGameCoverage: normalizedCoverage.coverage,
+      ...(occurrenceExecution === undefined ? {} : { occurrenceExecution }),
+    };
+    let preparation;
+    if (repository.prepareLiveRefresh) {
+      try {
+        preparation = await repository.prepareLiveRefresh(completionCommand);
+      } catch (error) {
+        repository.rejectRefresh({ refreshId, status: "rejected", errorCode: LIVE_STATISTICS_CODES.persistenceFailed, completedAtMs: nowMs() });
+        throw new LiveStatisticsError(LIVE_STATISTICS_CODES.persistenceFailed, "The live statistics snapshot could not be prepared.", { cause: error, refreshId });
+      }
+    }
+
+    // Preparation may yield. Recheck authorization/lease immediately before writing.
     if (authorizePersist) {
       try {
         await authorizePersist();
@@ -337,26 +368,9 @@ function createLiveStatisticsService({
     }
 
     try {
-      const result = repository.completeLiveRefresh({
-        refreshId,
-        statSourceId: source.id,
-        provider: sourceProviderName,
-        playerIdentityProvider: identityProviderName,
-        nhlSeasonKey: seasonKey,
-        sourceVersion,
-        completedAtMs: capturedAtMs,
-        rows: normalizedTotals,
-        playerGameRows: normalizedPlayerGames,
-        ...(expandedScoring === undefined ? {} : { expandedScoring }),
-        requiredPlayers,
-        requiredPlayerGames,
-        requirementsSha256:
-          requirementSnapshot.requirementsSha256,
-        playerGameCoverage: normalizedCoverage.coverage,
-        ...(occurrenceExecution === undefined
-          ? {}
-          : { occurrenceExecution }),
-      });
+      const result = preparation === undefined
+        ? repository.completeLiveRefresh(completionCommand)
+        : repository.completeLiveRefresh(completionCommand, preparation);
       return Object.freeze({
         refreshId: result.refresh.id,
         status: result.refresh.status,

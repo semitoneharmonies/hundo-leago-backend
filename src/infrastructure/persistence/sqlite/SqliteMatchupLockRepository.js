@@ -472,10 +472,11 @@ function createSqliteMatchupLockRepository({
       refreshId: playerGameSet.refresh_id,
       playerGameSetId: playerGameSet.id,
     };
-    const coverageRows = playerGameCoverageStatement.all(
+    const compact = readCompactStatistics(database, baselineSnapshot.source_refresh_id);
+    const coverageRows = compact?.coverage ?? playerGameCoverageStatement.all(
       evidenceParameters
     );
-    const observationRows = playerGameObservationsStatement.all(
+    const observationRows = compact?.observations ?? playerGameObservationsStatement.all(
       evidenceParameters
     );
     verifyPlayerGameRows(
@@ -678,11 +679,12 @@ function createSqliteMatchupLockRepository({
             playerGameSetId: playerGameSet.id,
           }
         : null;
+      const compact = refresh ? readCompactStatistics(database, refresh.id) : null;
       const coverageRows = evidenceParameters
-        ? playerGameCoverageStatement.all(evidenceParameters)
+        ? (compact?.coverage ?? playerGameCoverageStatement.all(evidenceParameters))
         : [];
       const observationRows = evidenceParameters
-        ? playerGameObservationsStatement.all(evidenceParameters)
+        ? (compact?.observations ?? playerGameObservationsStatement.all(evidenceParameters))
         : [];
       if (playerGameSet) {
         verifyPlayerGameRows(
@@ -696,7 +698,7 @@ function createSqliteMatchupLockRepository({
         cap: capReader ? capReader.calculate({ leagueId: keys.leagueId, seasonId: keys.seasonId, teamId: keys.teamId }) : null,
         activePlayers: freezeRows(playersStatement.all(keys)),
         refresh: refresh ? Object.freeze({ ...refresh }) : null,
-        totals: refresh ? freezeRows(totalsStatement.all({ refreshId: refresh.id })) : Object.freeze([]),
+        totals: refresh ? freezeRows(compact?.totals ?? totalsStatement.all({ refreshId: refresh.id })) : Object.freeze([]),
         playerGameSet: playerGameSet
           ? Object.freeze({ ...playerGameSet })
           : null,
@@ -957,6 +959,7 @@ function createSqliteMatchupLockRepository({
     for (const player of command.players) {
       insertLockPlayer.run({ ...command, ...player });
     }
+    materializeCompactExclusions(database, command.refreshId, command.exclusions.map(row => row.baselinePlayerGameStatObservationId));
     for (const row of command.exclusions) {
       insertGameExclusion.run({ ...command, ...row });
     }
@@ -1030,3 +1033,4 @@ function createSqliteMatchupLockRepository({
 }
 
 module.exports = { createSqliteMatchupLockRepository };
+const { readCompactStatistics, materializeCompactExclusions } = require("./compactStatisticsEvidence");

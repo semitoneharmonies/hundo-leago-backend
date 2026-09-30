@@ -69,3 +69,17 @@ test("negative scores determine winners and signed standings totals without rela
   assert.equal(rows[0].fantasyPointsAgainstHundredths, -50);
   assert.equal(rows[0].fantasyPointsDifferentialHundredths, 30);
 });
+
+for (const days of [7, 9, 14]) test(`expanded scoring respects the actual ${days}-day matchup boundaries`, () => {
+  const { input, game } = fixture();
+  const start = Date.parse("2026-10-12T07:00:00Z");
+  input.weekStartsAtMs = start; input.weekEndsAtMs = start + days * 86_400_000;
+  input.lock.locked_at_ms = start;
+  game("before", start - 1, { evenStrengthGoals: 9 });
+  game("first", start, { evenStrengthGoals: 1 });
+  game("last", input.weekEndsAtMs - 1, { evenStrengthGoals: 2 });
+  game("after", input.weekEndsAtMs, { evenStrengthGoals: 9 });
+  const score = calculateExpandedTeamScore(input);
+  assert.equal(score.scoreHundredths, 900);
+  assert.equal(score.players[0].gamesPlayedDelta, 2);
+});

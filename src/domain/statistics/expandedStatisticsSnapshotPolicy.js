@@ -1,4 +1,4 @@
-const { hashCanonicalJsonV1 } = require("../leagues/seasonRolloverEvidencePolicy");
+const { hashCanonicalJsonV1 } = require("./statisticsEvidenceHash");
 const { EXPANDED_SCORING_VERSION, usesExpandedScoring, normalizeScoringStats } = require("./expandedScoringPolicy");
 
 function normalizeExpandedSnapshot(value, { nhlSeasonKey, totals, observations }) {

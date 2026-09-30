@@ -9,6 +9,23 @@ const PLAYER = "20000000-0000-4000-8000-000000000001";
 const expandedFixtures = require("../fixtures/nhlExpandedScoringGames.json");
 const { normalizeExpandedSnapshot } = require("../../src/domain/statistics/expandedStatisticsSnapshotPolicy");
 
+test("game refresh windows cover early games, midnight and prolonged live games with bounded schedule requests", async () => {
+  let now = Date.parse("2026-10-10T07:00:00Z"), calls = 0;
+  const games = [
+    { id: 2026020001, season: 20262027, gameType: 2, startTimeUTC: "2026-10-10T02:00:00Z", gameState: "OFF" },
+    { id: 2026020002, season: 20262027, gameType: 2, startTimeUTC: "2026-10-10T12:00:00Z", gameState: "FUT" },
+  ];
+  const adapter = createNhlCompletedGameAdapter({ nowMs: () => now, readCatalogPlayers: () => [], retryDelay: async () => {},
+    fetchImpl: async url => { calls++; assert.match(url, /\/v1\/schedule\/2026-10-09$/);
+      return { ok: true, json: async () => ({ gameWeek: [{ date: "2026-10-09", games: [] }, { date: "2026-10-10", games }] }) }; } });
+  const check = () => adapter.isGameRefreshWindow({ nhlSeasonKey: "20262027", scheduledForMs: now });
+  assert.equal(await check(), true); assert.equal(await check(), true); assert.equal(calls, 1);
+  now = Date.parse("2026-10-10T10:00:00Z"); assert.equal(await check(), false);
+  now = Date.parse("2026-10-10T11:30:00Z"); assert.equal(await check(), true);
+  now = Date.parse("2026-10-10T22:00:00Z"); games[1].gameState = "LIVE"; assert.equal(await check(), true);
+  games[1].gameState = "OFF"; now += 10 * 60_000; assert.equal(await check(), false);
+});
+
 test("enabled NHL collector carries all categories and the real penalty-shot exception through a sealed snapshot", async () => {
   // Move captured reports into the target season to exercise its explicit switch.
   const captured = structuredClone(expandedFixtures.games.find(game => game.gameId === 2025020477));
@@ -20,10 +37,14 @@ test("enabled NHL collector carries all categories and the real penalty-shot exc
   landing.id = gameId; landing.season = 20262027;
   const calls = [];
   const now = Date.parse("2026-12-20T12:00:00Z");
+  const cacheEntries = new Map();
+  let useCache = false;
   const chosen = captured.summary.find(row => row.playerId === 8480797);
   const teamId = chosen.homeRoad === "H" ? 13 : 16;
   let incomplete = false;
   const adapter = createNhlCompletedGameAdapter({ expandedScoringEnabled: true, nowMs: () => now, retryDelay: async () => {},
+    completedGameCache: { read: () => useCache ? structuredClone(cacheEntries) : new Map(),
+      save: entries => { for (const entry of entries) cacheEntries.set(entry.gameId, structuredClone(entry)); } },
     readCatalogPlayers: () => captured.summary.map(row => ({ providerPlayerId: String(row.playerId) })),
     fetchImpl: async uri => {
       const url = new URL(uri); calls.push(url.pathname);
@@ -53,6 +74,11 @@ test("enabled NHL collector carries all categories and the real penalty-shot exc
   assert.equal(scored.scoringStats.shortHandedGoals, 0);
   assert.equal(Object.keys(scored.scoringStats).length, 13);
   assert.ok(calls.some(path => path.endsWith("/penaltyShots")));
+  const initialCalls = calls.length;
+  useCache = true;
+  assert.deepEqual(await adapter.fetchLiveSnapshot(input), snapshot);
+  assert.equal(calls.slice(initialCalls).some(path => path.includes("/skater/")), false);
+  useCache = false;
   incomplete = true;
   await assert.rejects(adapter.fetchLiveSnapshot(input), { code: "NHL_EXPANDED_REPORT_INCOMPLETE" });
 });
@@ -132,7 +158,7 @@ function fixture(overrides = {}) {
     if (overrides.response) return overrides.response(u, data);
     return { ok: true, json: async () => structuredClone(data) };
   };
-  const adapter = createNhlCompletedGameAdapter({ fetchImpl, nowMs: () => now, readCatalogPlayers: () => catalog, retryDelay: overrides.retryDelay || (async () => {}) });
+  const adapter = createNhlCompletedGameAdapter({ fetchImpl, nowMs: () => now, readCatalogPlayers: () => catalog, completedGameCache: overrides.completedGameCache || null, retryDelay: overrides.retryDelay || (async () => {}) });
   return { adapter, calls, state, setNow: (value) => { now = value; }, input: { nhlSeasonKey: "20252026", requiredPlayers, requiredPlayerGames: [] } };
 }
 
@@ -242,4 +268,36 @@ test("NHL player and boxscore requests are paced without slowing the statistics 
 test("NHL completed-game adapter respects Eastern daylight saving time", () => {
   assert.equal(easternStart("2025-10-07T17:00:00"), Date.parse("2025-10-07T21:00:00Z"));
   assert.equal(easternStart("2025-12-07T17:00:00"), Date.parse("2025-12-07T22:00:00Z"));
+});
+
+test("incremental collector reuses old games, rechecks recent games and weekly corrections, and preserves totals", async () => {
+  const entries = new Map();
+  const cache = { read: () => structuredClone(entries), save: rows => { for (const row of rows) entries.set(row.gameId, structuredClone(row)); } };
+  const f = fixture({ completedGameCache: cache });
+  const historicNow = NOW + 20 * 86_400_000;
+  f.setNow(historicNow);
+  const first = await f.adapter.fetchLiveSnapshot(f.input);
+  const initialCalls = f.calls.length;
+  const second = await f.adapter.fetchLiveSnapshot(f.input);
+  assert.deepEqual(second, first);
+  assert.equal(f.calls.slice(initialCalls).some(url => url.includes("/summary")), false);
+  f.state.rows[0].goals = 3; f.state.rows[0].points = 4;
+  f.setNow(historicNow + 7 * 86_400_000);
+  const corrected = await f.adapter.fetchLiveSnapshot(f.input);
+  assert.equal(corrected.totalsRows[0].goals, 3);
+  assert.equal(entries.size, 1);
+  const beforeRecent = f.calls.filter(url => url.includes("/summary")).length;
+  entries.clear(); f.setNow(NOW);
+  f.state.rows[0].goals = 2; f.state.rows[0].points = 3;
+  await f.adapter.fetchLiveSnapshot(f.input);
+  await f.adapter.fetchLiveSnapshot(f.input);
+  assert.equal(f.calls.filter(url => url.includes("/summary")).length, beforeRecent + 2);
+});
+
+test("failed snapshot does not publish cache updates", async () => {
+  let saves = 0;
+  const f = fixture({ completedGameCache: { read: () => new Map(), save: () => { saves += 1; } },
+    change: ({ boxes }) => { boxes.get("2025020001").season = 20242025; } });
+  await assert.rejects(f.adapter.fetchLiveSnapshot(f.input));
+  assert.equal(saves, 0);
 });

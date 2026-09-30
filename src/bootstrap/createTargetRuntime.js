@@ -357,6 +357,9 @@ const {
 const { createNhlCompletedGameAdapter, PROVIDER_NAME: NHL_COMPLETED_PROVIDER, PLAYER_IDENTITY_PROVIDER: NHL_IDENTITY_PROVIDER } = require("../infrastructure/nhl/NhlCompletedGameAdapter");
 const { createNhlPlayerAppearanceAdapter } = require("../infrastructure/nhl/NhlPlayerAppearanceAdapter");
 const { createSqliteStatisticsScheduleRepository } = require("../infrastructure/persistence/sqlite/SqliteStatisticsScheduleRepository");
+const { createSqliteCompletedGameCacheRepository } = require("../infrastructure/persistence/sqlite/SqliteCompletedGameCacheRepository");
+const { createSqliteStatisticsRetentionRepository } = require("../infrastructure/persistence/sqlite/SqliteStatisticsRetentionRepository");
+const { createSqliteSharedStatisticsRepository } = require("../infrastructure/persistence/sqlite/SqliteSharedStatisticsRepository");
 const { createRunCompletedGameStatisticsJob } = require("../jobs/definitions/runCompletedGameStatistics");
 const {
   PROVIDER_NAME: SPORTSDATAIO_PLAYER_IDENTITY_PROVIDER_NAME,
@@ -1430,6 +1433,7 @@ function createTargetRepositories({
   currentNhlStatisticsSeason = null,
   expandedScoringEnabled = false,
   matchupProcessingLeagueIds = null,
+  nhlStatisticsEfficiencyEnabled = false,
 } = {}) {
   const context = createSqliteRepositoryContext({ database });
   const matchupOccurrenceExecutionGuard =
@@ -1844,12 +1848,15 @@ function createTargetRepositories({
         database,
       }),
     sessions: createSqliteSessionRepository({ database, onSessionChanged }),
-    statistics: createSqliteStatisticsRepository({
-      database,
+    statistics: (nhlStatisticsEfficiencyEnabled ? createSqliteSharedStatisticsRepository : createSqliteStatisticsRepository)({
+        database,
+        compact: nhlStatisticsEfficiencyEnabled,
       occurrenceExecutionGuard:
         matchupOccurrenceExecutionGuard,
     }),
     statisticsSchedule: createSqliteStatisticsScheduleRepository({ database }),
+    completedGameCache: createSqliteCompletedGameCacheRepository({ database }),
+    statisticsRetention: createSqliteStatisticsRetentionRepository({ database }),
     teamAuthority: createSqliteTeamAuthorityRepository({ database }),
     teamCreation: createSqliteTeamCreationRepository({ database }),
     teamManagerAssignments: createSqliteTeamManagerAssignmentRepository({
@@ -1898,6 +1905,8 @@ function createTargetServices({
   createSportsDataIoLiveNhlAdapterFunction =
     createSportsDataIoLiveNhlAdapter,
   nhlCompletedStatisticsEnabled = false,
+  nhlStatisticsEfficiencyEnabled = false,
+  nhlStatisticsRetentionEnabled = false,
   expandedScoringEnabled = false,
   matchupProcessingEnabled = false,
   nhlFetchImplementation,
@@ -1910,6 +1919,10 @@ function createTargetServices({
     requireVerifiedSportsDataIoLiveDescriptor(sportsDataIoLiveNhl);
   if (
     typeof nhlCompletedStatisticsEnabled !== "boolean" ||
+    typeof nhlStatisticsEfficiencyEnabled !== "boolean" ||
+    typeof nhlStatisticsRetentionEnabled !== "boolean" ||
+    ((nhlStatisticsEfficiencyEnabled || nhlStatisticsRetentionEnabled) && !nhlCompletedStatisticsEnabled) ||
+    (nhlStatisticsEfficiencyEnabled && !expandedScoringEnabled) ||
     typeof expandedScoringEnabled !== "boolean" ||
     (expandedScoringEnabled && !nhlCompletedStatisticsEnabled) ||
     typeof matchupProcessingEnabled !== "boolean" ||
@@ -2071,6 +2084,7 @@ function createTargetServices({
   const completedNhlAdapter = nhlCompletedStatisticsEnabled
     ? createNhlCompletedGameAdapter({
         expandedScoringEnabled,
+        completedGameCache: nhlStatisticsEfficiencyEnabled ? repositories.completedGameCache : null,
         fetchImpl: nhlFetchImplementation,
         nowMs: () => clock.nowMs(),
         readCatalogPlayers: () => repositories.statistics.readNhlCatalogPlayers(),
@@ -2157,6 +2171,12 @@ function createTargetServices({
         clock,
         logger,
         afterRefresh: retryLateLocksAfterRefresh,
+          frequentRefreshEnabled: nhlStatisticsEfficiencyEnabled,
+          isGameRefreshWindow: completedNhlAdapter.isGameRefreshWindow,
+          afterMaintenance: (nhlStatisticsEfficiencyEnabled || nhlStatisticsRetentionEnabled) ? () => ({
+            compactProjectionsPruned: nhlStatisticsEfficiencyEnabled ? repositories.statisticsRetention.pruneCompactTotals() : 0,
+            ...(nhlStatisticsRetentionEnabled ? repositories.statisticsRetention.retire(clock.nowMs()) : {}),
+          }) : undefined,
       })
     : null;
   const lifecycleTransition =
@@ -3231,6 +3251,8 @@ function createTargetRuntime({
   sportsDataIoFetchImplementation,
   createSportsDataIoLiveNhlAdapterFunction,
   nhlCompletedStatisticsEnabled = false,
+  nhlStatisticsEfficiencyEnabled = false,
+  nhlStatisticsRetentionEnabled = false,
   expandedScoringEnabled = false,
   matchupProcessingEnabled = false,
   nhlFetchImplementation,
@@ -3256,6 +3278,7 @@ function createTargetRuntime({
     secureRandom: securityFoundations?.secureRandom,
     stagingDailyAuctionsEnabled,
     currentNhlStatisticsSeason: nhlCompletedStatisticsEnabled ? currentSeason.nhlSeasonKey : null,
+    nhlStatisticsEfficiencyEnabled,
     expandedScoringEnabled,
     matchupProcessingLeagueIds,
   });
@@ -3281,6 +3304,8 @@ function createTargetRuntime({
     sportsDataIoFetchImplementation,
     createSportsDataIoLiveNhlAdapterFunction,
     nhlCompletedStatisticsEnabled,
+    nhlStatisticsEfficiencyEnabled,
+    nhlStatisticsRetentionEnabled,
     expandedScoringEnabled,
     matchupProcessingEnabled,
     nhlFetchImplementation,

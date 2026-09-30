@@ -1569,6 +1569,15 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.throws(() => createTargetRuntime({ ...options, matchupProcessingLeagueIds: [] }), /canonical league IDs/);
     assert.ok(createTargetRuntime({ ...options, matchupProcessingEnabled: true, matchupProcessingLeagueIds: [uuid(1)] }).services.league.scheduledJobs.some(({ name }) => name === "matchup_occurrences"));
     assert.throws(() => createTargetRuntime({ ...options, sportsDataIoLiveNhl: verifiedSportsDataIoLiveNhl() }), /one explicit NHL source/);
+    const optimized = createTargetRuntime({ ...options, expandedScoringEnabled: true, nhlStatisticsEfficiencyEnabled: true, nhlStatisticsRetentionEnabled: true });
+    const scheduled = await optimized.services.league.scheduledJobs.find(job => job.name === "nhl_completed_statistics").runner.run();
+    assert.equal(scheduled.status, "succeeded", scheduled.error?.stack ?? JSON.stringify(scheduled));
+    assert.equal(scheduled.maintenance.retiredRefreshCount, 0);
+    // This fixture deliberately has no schedule endpoint; retain the established fallback.
+    const { latestEveningOccurrence } = require("../../src/jobs/definitions/runCompletedGameStatistics");
+    assert.equal(scheduled.scheduledForMs, latestEveningOccurrence(options.securityFoundations.clock.nowMs()));
+    assert.equal(scheduled.maintenance.compactProjectionsPruned, 0);
+    assert.equal(database.prepare("SELECT count(*) n FROM compact_stat_refreshes").get().n, 1);
   });
   test("constructs every repository, service, router, and socket boundary without writes or listening", (t) => {
     const database = createDatabase(t);
@@ -1576,7 +1585,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const options = runtimeOptions(database);
     const runtime = createTargetRuntime(options);
     assert.equal(runtime.migrationState.status, "exact");
-    assert.equal(runtime.migrationState.userVersion, 66);
+    assert.equal(runtime.migrationState.userVersion, 70);
     assert.equal(
       typeof runtime.services.league.auctionResolution.resolveDue,
       "function"

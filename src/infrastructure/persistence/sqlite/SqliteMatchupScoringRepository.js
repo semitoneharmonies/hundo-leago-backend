@@ -1,4 +1,5 @@
 const { readExpandedStatistics } = require("./expandedStatisticsPersistence");
+const { readCompactStatistics } = require("./compactStatisticsEvidence");
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
@@ -313,6 +314,7 @@ function createSqliteMatchupScoringRepository({ database } = {}) {
         }
         refresh = refreshRows[0] || null;
       }
+      const compact = refresh ? readCompactStatistics(database, refresh.id) : null;
       let playerGameSet = null;
       let playerGameCoverage = Object.freeze([]);
       let playerGameObservations = Object.freeze([]);
@@ -332,10 +334,10 @@ function createSqliteMatchupScoringRepository({ database } = {}) {
             setId: playerGameSet.id,
           };
           playerGameCoverage = freezeRows(
-            playerGameCoverageStatement.all(playerGameScope)
+            compact?.coverage ?? playerGameCoverageStatement.all(playerGameScope)
           );
           playerGameObservations = freezeRows(
-            playerGameObservationsStatement.all(playerGameScope)
+            compact?.observations ?? playerGameObservationsStatement.all(playerGameScope)
           );
         }
       }
@@ -356,6 +358,7 @@ function createSqliteMatchupScoringRepository({ database } = {}) {
             refreshId: row.refresh_id,
             setId: row.id,
           };
+          const baselineCompact = readCompactStatistics(database, row.refresh_id);
           return Object.freeze({
             exclusionSetId: row.exclusion_set_id,
             baselineSnapshotId: row.baseline_snapshot_id,
@@ -380,10 +383,10 @@ function createSqliteMatchupScoringRepository({ database } = {}) {
               version: row.version,
             }),
             coverage: freezeRows(
-              playerGameCoverageStatement.all(playerGameScope)
+              baselineCompact?.coverage ?? playerGameCoverageStatement.all(playerGameScope)
             ),
             observations: freezeRows(
-              playerGameObservationsStatement.all(playerGameScope)
+              baselineCompact?.observations ?? playerGameObservationsStatement.all(playerGameScope)
             ),
           });
         }
@@ -407,11 +410,11 @@ function createSqliteMatchupScoringRepository({ database } = {}) {
         locks: freezeRows(locksStatement.all(teams)),
         lockedPlayers: freezeRows(playersStatement.all(teams)),
         refresh: refresh ? Object.freeze({ ...refresh }) : null,
-        totals: refresh ? freezeRows(totalsStatement.all({ refreshId: refresh.id })) : Object.freeze([]),
+        totals: refresh ? freezeRows(compact?.totals ?? totalsStatement.all({ refreshId: refresh.id })) : Object.freeze([]),
         playerGameSet,
         playerGameCoverage,
         playerGameObservations,
-        expandedScoring: refresh ? readExpandedStatistics(database, refresh.id) : null,
+        expandedScoring: compact?.expandedScoring ?? (refresh ? readExpandedStatistics(database, refresh.id) : null),
         baselinePlayerGameEvidence:
           Object.freeze(baselinePlayerGameEvidence),
         exclusionSets,

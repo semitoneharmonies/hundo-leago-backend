@@ -439,6 +439,8 @@ function openDeployedTargetRuntime({
       sportsDataIoLiveNhl,
       sportsDataIoFetchImplementation,
       nhlCompletedStatisticsEnabled: config.nhlCompletedStatisticsEnabled === true,
+      nhlStatisticsEfficiencyEnabled: config.nhlStatisticsEfficiencyEnabled === true,
+      nhlStatisticsRetentionEnabled: config.nhlStatisticsRetentionEnabled === true,
       expandedScoringEnabled: config.expandedScoringEnabled === true,
       matchupProcessingEnabled: config.matchupProcessingEnabled === true,
       matchupProcessingLeagueIds: config.matchupProcessingLeagueIds,

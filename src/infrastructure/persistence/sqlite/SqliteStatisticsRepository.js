@@ -291,6 +291,7 @@ function createSqliteStatisticsRepository({
   database,
   createId = randomUUID,
   occurrenceExecutionGuard,
+  liveEvidenceStorage = null,
 } = {}) {
   if (!database || typeof database.prepare !== "function") {
     throw new TypeError("createSqliteStatisticsRepository requires a database");
@@ -540,6 +541,13 @@ function createSqliteStatisticsRepository({
       "@nhlGameScheduledStartsAtMs, @observedGameState, @goals, @assists, @nhlPoints, " +
       "@fantasyPointsHundredths, @sourceUpdatedAtMs, @createdAtMs, 1)"
   );
+  const upsertCompactTotal = liveEvidenceStorage ? database.prepare(`INSERT INTO player_stat_totals
+    (id,stat_source_id,refresh_id,nhl_season_key,player_id,games_played,goals,assists,nhl_points,fantasy_points_hundredths,source_updated_at_ms,created_at_ms)
+    VALUES (@id,@statSourceId,@refreshId,@nhlSeasonKey,@playerId,@gamesPlayed,@goals,@assists,@nhlPoints,@fantasyPointsHundredths,@sourceUpdatedAtMs,@createdAtMs)
+    ON CONFLICT(id) DO UPDATE SET refresh_id=excluded.refresh_id,games_played=excluded.games_played,goals=excluded.goals,assists=excluded.assists,
+      nhl_points=excluded.nhl_points,fantasy_points_hundredths=excluded.fantasy_points_hundredths,source_updated_at_ms=excluded.source_updated_at_ms,created_at_ms=excluded.created_at_ms
+    WHERE player_stat_totals.stat_source_id=excluded.stat_source_id AND player_stat_totals.nhl_season_key=excluded.nhl_season_key
+      AND player_stat_totals.player_id=excluded.player_id AND EXISTS (SELECT 1 FROM compact_stat_refreshes WHERE refresh_id=player_stat_totals.refresh_id)`) : null;
   const insertPlayerGameCoverage = database.prepare(
     "INSERT INTO stat_refresh_player_game_coverage_entries " +
       "(id, stat_source_id, refresh_id, observation_set_id, nhl_season_key, " +
@@ -791,6 +799,12 @@ function createSqliteStatisticsRepository({
   });
 
   const completeLiveTransaction = database.transaction((command) => {
+    const preparedEvidence = liveEvidenceStorage?.evidence(command);
+    const mappedPlayers = new Map();
+    const resolveLivePlayer = input => {
+      if (!mappedPlayers.has(input.externalPlayerId)) mappedPlayers.set(input.externalPlayerId, resolveMappedPlayerId(input));
+      return mappedPlayers.get(input.externalPlayerId);
+    };
     if (command.occurrenceExecution !== undefined) {
       if (!occurrenceExecutionGuard) {
         throw repositoryError(
@@ -905,13 +919,13 @@ function createSqliteStatisticsRepository({
     }
 
     for (const row of command.rows) {
-      const playerId = resolveMappedPlayerId({
+      const playerId = resolveLivePlayer({
         playerIdentityProvider: command.playerIdentityProvider,
         externalPlayerId: row.externalPlayerId,
         description: "A live statistics player mapping is missing.",
       });
-      insertTotal.run({
-        id: stableId(createId()),
+      const savedTotal = (upsertCompactTotal ?? insertTotal).run({
+        id: liveEvidenceStorage ? liveEvidenceStorage.totalProjectionId(command.statSourceId, command.nhlSeasonKey, playerId) : stableId(createId()),
         statSourceId: command.statSourceId,
         refreshId: command.refreshId,
         nhlSeasonKey: command.nhlSeasonKey,
@@ -924,12 +938,13 @@ function createSqliteStatisticsRepository({
         sourceUpdatedAtMs: row.sourceUpdatedAtMs,
         createdAtMs: command.completedAtMs,
       });
+      if (savedTotal.changes !== 1) throw new Error("The current statistics projection was not stored.");
     }
 
-    const observationSetId = stableId(createId());
-    const coverage = command.playerGameCoverage.map((entry) => {
+    const observationSetId = liveEvidenceStorage ? liveEvidenceStorage.createRowId(command.refreshId, "set") : stableId(createId());
+    const coverage = preparedEvidence?.coverageEvidence.preimage.coverage ?? command.playerGameCoverage.map((entry) => {
       const required = requiredByPlayerId.get(entry.playerId);
-      const mappedPlayerId = resolveMappedPlayerId({
+      const mappedPlayerId = resolveLivePlayer({
         playerIdentityProvider: command.playerIdentityProvider,
         externalPlayerId: entry.providerPlayerId,
         description: "A player-game coverage mapping is missing.",
@@ -945,7 +960,7 @@ function createSqliteStatisticsRepository({
         );
       }
       return {
-        coverageEntryId: stableId(createId()),
+        coverageEntryId: liveEvidenceStorage ? liveEvidenceStorage.createRowId(command.refreshId, "coverage", `${entry.playerId}\u0000${entry.nhlGameId ?? entry.disposition}`) : stableId(createId()),
         playerId: entry.playerId,
         providerPlayerId: entry.providerPlayerId,
         providerTeamId: entry.providerTeamId,
@@ -955,7 +970,7 @@ function createSqliteStatisticsRepository({
           entry.nhlGameScheduledStartsAtMs,
       };
     });
-    const coverageEvidence = createPlayerGameCoverageSetEvidence({
+    const coverageEvidence = preparedEvidence?.coverageEvidence ?? createPlayerGameCoverageSetEvidence({
       setId: observationSetId,
       statSourceId: command.statSourceId,
       refreshId: command.refreshId,
@@ -967,8 +982,8 @@ function createSqliteStatisticsRepository({
       coverage,
     });
 
-    const observations = command.playerGameRows.map((row) => {
-      const playerId = resolveMappedPlayerId({
+    const observations = preparedEvidence?.observationEvidence.preimage.observations ?? command.playerGameRows.map((row) => {
+      const playerId = resolveLivePlayer({
         playerIdentityProvider: command.playerIdentityProvider,
         externalPlayerId: row.externalPlayerId,
         description:
@@ -984,7 +999,7 @@ function createSqliteStatisticsRepository({
         );
       }
       return {
-        observationId: stableId(createId()),
+        observationId: liveEvidenceStorage ? liveEvidenceStorage.createRowId(command.refreshId, "game", `${playerId}\u0000${row.nhlGameId}`) : stableId(createId()),
         playerId,
         nhlGameId: row.nhlGameId,
         nhlGameScheduledStartsAtMs: row.nhlGameScheduledStartsAtMs,
@@ -1017,7 +1032,7 @@ function createSqliteStatisticsRepository({
       );
     }
     const observationEvidence =
-      createPlayerGameObservationSetEvidence({
+      preparedEvidence?.observationEvidence ?? createPlayerGameObservationSetEvidence({
         setId: observationSetId,
         statSourceId: command.statSourceId,
         refreshId: command.refreshId,
@@ -1028,7 +1043,7 @@ function createSqliteStatisticsRepository({
         observations,
       });
 
-    for (const row of coverageEvidence.preimage.coverage) {
+    for (const row of liveEvidenceStorage ? [] : coverageEvidence.preimage.coverage) {
       insertPlayerGameCoverage.run({
         ...row,
         observationSetId,
@@ -1038,7 +1053,7 @@ function createSqliteStatisticsRepository({
         createdAtMs: command.completedAtMs,
       });
     }
-    for (const row of observationEvidence.preimage.observations) {
+    for (const row of liveEvidenceStorage ? [] : observationEvidence.preimage.observations) {
       insertPlayerGameObservation.run({
         ...row,
         observationSetId,
@@ -1060,7 +1075,8 @@ function createSqliteStatisticsRepository({
         "The live statistics refresh completion conflicted."
       );
     }
-    insertPlayerGameSet.run({
+    if (liveEvidenceStorage) liveEvidenceStorage.persist(command, { coverageEvidence, observationEvidence });
+    const insertedSet = insertPlayerGameSet.run({
       id: observationSetId,
       statSourceId: command.statSourceId,
       refreshId: command.refreshId,
@@ -1078,7 +1094,8 @@ function createSqliteStatisticsRepository({
       observationCount: observationEvidence.observationCount,
       evidenceSha256: observationEvidence.evidenceSha256,
     });
-    persistExpandedStatistics(database, command);
+    if (insertedSet.changes !== 1) throw new Error("The statistics evidence root was not inserted.");
+    persistExpandedStatistics(database, command, { skipPlayerGames: Boolean(liveEvidenceStorage), prepared: preparedEvidence });
     return {
       refresh: findRefresh.get({ refreshId: command.refreshId }),
       playerGameSet: findPlayerGameSet.get({

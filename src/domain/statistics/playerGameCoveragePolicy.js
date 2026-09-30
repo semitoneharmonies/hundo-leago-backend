@@ -1,7 +1,7 @@
 const {
   compareUnicodeScalarStrings,
-  hashCanonicalJsonV1,
 } = require("../leagues/seasonRolloverEvidencePolicy");
+const { hashCanonicalJsonV1 } = require("./statisticsEvidenceHash");
 const {
   OBSERVED_GAME_STATES,
 } = require("./playerGameStatisticsPolicy");

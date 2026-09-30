@@ -50,3 +50,49 @@ test("failed scheduled refresh is durably retried after fifteen minutes", async 
   assert.equal((await job.run()).status, "succeeded");
   assert.equal(calls, 2);
 });
+
+test("morning corrections remain at eight Pacific across DST", () => {
+  for (const [now, expected] of [
+    ["2026-09-30T15:01:00Z", "2026-09-30T15:00:00Z"],
+    ["2026-11-01T16:01:00Z", "2026-11-01T16:00:00Z"],
+    ["2027-03-14T15:01:00Z", "2027-03-14T15:00:00Z"],
+  ]) assert.equal(latestEveningOccurrence(Date.parse(now), [8 * 60]), Date.parse(expected));
+});
+
+test("retention failure cannot change a successful refresh into a failed or replayed capture", async t => {
+  const { database, repository: store } = repository(t);
+  let calls = 0;
+  const job = createRunCompletedGameStatisticsJob({ repository: store,
+    statisticsService: { async refresh() { calls += 1; return { refreshId: "fresh" }; } },
+    nhlSeasonKey: "20262027", clock: { nowMs: () => Date.parse("2026-10-12T01:01:00Z") },
+    frequentRefreshEnabled: true, isGameRefreshWindow: async () => true, afterMaintenance: () => { throw new Error("blocked deletion"); }, logger: { error() {} } });
+  const result = await job.run();
+  assert.equal(result.status, "succeeded"); assert.equal(result.maintenance.status, "failed");
+  assert.equal(database.prepare("SELECT status FROM job_runs").get().status, "succeeded");
+  assert.equal((await job.run()).status, "skipped"); assert.equal(calls, 1);
+});
+
+test("game-aware scheduling uses half-hour slots, one morning correction and the evening outage fallback", async t => {
+  const { repository: store } = repository(t);
+  let now = Date.parse("2026-11-02T02:10:00Z"), inWindow = true, failed = false, calls = 0;
+  const job = createRunCompletedGameStatisticsJob({ repository: store,
+    statisticsService: { async refresh() { calls++; return { refreshId: `capture-${calls}` }; } }, nhlSeasonKey: "20262027",
+    clock: { nowMs: () => now }, frequentRefreshEnabled: true,
+    isGameRefreshWindow: async () => { if (failed) throw new Error("schedule unavailable"); return inWindow; }, logger: { error() {}, warn() {} } });
+  assert.equal((await job.run()).scheduledForMs, Date.parse("2026-11-02T02:00:00Z"));
+  assert.equal((await job.run()).status, "skipped");
+  now += 30 * 60_000;
+  assert.equal((await job.run()).scheduledForMs, Date.parse("2026-11-02T02:30:00Z"));
+  inWindow = false; now = Date.parse("2026-11-02T17:30:00Z");
+  assert.equal((await job.run()).scheduledForMs, Date.parse("2026-11-02T16:00:00Z"));
+  now += 30 * 60_000; assert.equal((await job.run()).status, "skipped");
+  failed = true; now = Date.parse("2026-11-03T02:01:00Z");
+  assert.equal((await job.run()).scheduledForMs, Date.parse("2026-11-03T02:00:00Z"));
+  assert.equal(calls, 4);
+});
+
+test("a running refresh prevents another occurrence from claiming the same source", t => {
+  const { repository: store } = repository(t), now = Date.parse("2026-10-12T01:30:00Z");
+  assert.ok(store.claim({ occurrenceKey: `20262027:${now-1800000}`, scheduledForMs: now-1800000, nowMs: now-1, owner: "worker-a" }));
+  assert.equal(store.claim({ occurrenceKey: `20262027:${now}`, scheduledForMs: now, nowMs: now, owner: "worker-b" }), null);
+});

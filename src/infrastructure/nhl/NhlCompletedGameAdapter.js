@@ -2,6 +2,7 @@ const { createHash } = require("node:crypto");
 const { assertNhlSeasonKey } = require("../../domain/statistics/statisticsPolicy");
 const { EXPANDED_SCORING_VERSION, usesExpandedScoring, emptyScoringStats, addScoringStats } = require("../../domain/statistics/expandedScoringPolicy");
 const { normalizeExpandedReports } = require("./normalizeExpandedReports");
+const { canReuseCompletedGame, completedGameEntry } = require("../../domain/statistics/completedGameCachePolicy");
 
 const PROVIDER_NAME = "nhl-completed-games";
 const PLAYER_IDENTITY_PROVIDER = "nhl";
@@ -36,10 +37,12 @@ function easternStart(value) {
   fail("An NHL game start is ambiguous.");
 }
 
-function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, readCatalogPlayers, expandedScoringEnabled = false, timeoutMs = 20_000, retryDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, readCatalogPlayers, completedGameCache = null, expandedScoringEnabled = false, timeoutMs = 20_000, retryDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   if (typeof fetchImpl !== "function" || typeof nowMs !== "function" || typeof readCatalogPlayers !== "function" || typeof retryDelay !== "function") throw new TypeError("NHL completed-game statistics require fetch, clock and catalog readers.");
   integer(timeoutMs, "request timeout", 1);
+  if (completedGameCache !== null && (typeof completedGameCache.read !== "function" || typeof completedGameCache.save !== "function")) throw new TypeError("A completed-game cache requires read and save methods.");
   let gameStateSnapshot = null;
+  let refreshWindowSchedule = null;
   let webRequestGate = Promise.resolve();
   let lastWebRequestAtMs = null;
 
@@ -159,19 +162,29 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
       games.set(id, { id, startsAtMs: easternStart(row.easternStartTime), homeTeamId: identity(row.homeTeamId), awayTeamId: identity(row.visitingTeamId), final: row.gameStateId === 7 });
     }
     const completed = [...games.values()].filter((game) => game.final);
+    const cachedGames = completedGameCache?.read({ season, expanded }) || new Map();
+    const cacheUpdates = [];
     const appearancesByPlayer = new Map();
     if (completed.some((game) => game.startsAtMs > startedAtMs)) fail("A completed NHL game starts in the future.");
     // Restrict rows to explicitly completed games and verify each game, including zero scorers.
     for (let offset = 0; offset < completed.length; offset += 200) {
       const batch = completed.slice(offset, offset + 200);
-      const expression = `gameId in (${batch.map(({ id }) => id).join(",")})`;
+      const reusable = batch.filter(game => canReuseCompletedGame({ entry: cachedGames.get(game.id), game, season, expanded, nowMs: startedAtMs }));
+      const reusableIds = new Set(reusable.map(game => game.id));
+      const fetchBatch = batch.filter(game => !reusableIds.has(game.id));
+      const expression = `gameId in (${fetchBatch.map(({ id }) => id).join(",")})`;
       // NHL reports cap responses at 100 rows even when a larger limit is requested.
       const pageOptions = { pageSize: 100 };
-      const rows = await pages("skater/summary", expression, pageOptions);
+      const freshRows = fetchBatch.length ? await pages("skater/summary", expression, pageOptions) : [];
+      const rows = [...freshRows, ...reusable.flatMap(game => cachedGames.get(game.id).data.rows)]
+        .sort((a, b) => a.playerId - b.playerId || a.gameId - b.gameId);
       if (rows.length === 0) fail("Completed NHL games have no statistics.");
-      if (expanded) {
-        // Each full refresh rereads every completed game, including historical
-        // corrections. Bulk reports avoid thousands of individual game calls.
+      for (const game of reusable) {
+        for (const [key, value] of cachedGames.get(game.id).data.categories) expandedGames.set(key, value);
+      }
+      if (expanded && fetchBatch.length) {
+        // Recent games are reread on every capture; cached historical games are
+        // periodically reconciled for corrections without duplicating API work.
         const realtime = await pages("skater/realtime", expression, pageOptions);
         const scoring = await pages("skater/scoringpergame", expression, pageOptions);
         const penalties = await pages("skater/penalties", expression, pageOptions);
@@ -182,7 +195,7 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
           if (String(landing.id) !== gameId || String(landing.season) !== season || landing.gameType !== 2) fail("NHL penalty-shot evidence has a mismatched game.");
           penaltyShotLandings.push(landing);
         }
-        const categories = normalizeExpandedReports({ summary: rows, realtime, scoring, penalties, penaltyShots, penaltyShotLandings });
+        const categories = normalizeExpandedReports({ summary: freshRows, realtime, scoring, penalties, penaltyShots, penaltyShotLandings });
         for (const [key, value] of categories) expandedGames.set(key, value);
       }
       const seen = new Set();
@@ -208,6 +221,14 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
         appearancesByPlayer.set(id, playerAppearances);
       }
       if ([...appearances.values()].some((count) => count < 30 || count > 40)) fail("Completed NHL game coverage is incomplete.");
+      for (const game of completedGameCache ? fetchBatch : []) {
+        const gameRows = freshRows.filter(row => String(row.gameId) === game.id);
+        cacheUpdates.push({ gameId: game.id, ...completedGameEntry({ game, season, expanded, checkedAtMs: startedAtMs,
+          data: { rows: gameRows, categories: expanded ? gameRows.map(row => {
+            const key = `${game.id}:${row.playerId}`;
+            return [key, expandedGames.get(key)];
+          }) : [] } }) });
+      }
     }
     const boxscores = new Map();
     const getBox = async (game) => {
@@ -267,6 +288,7 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
         scoringStats: expandedGames.get(`${row.nhlGameId}:${row.playerId}`) || emptyScoringStats() })),
     } : undefined;
     const sourceVersion = `nhl-completed-v1:${createHash("sha256").update(JSON.stringify({ season, completed: completed.map(({ id }) => id), totals: [...totals.values()], coverage, playerGameRows, ...(expanded ? { expandedScoring } : {}) })).digest("hex")}`;
+    if (completedGameCache && cacheUpdates.length) completedGameCache.save(cacheUpdates);
     gameStateSnapshot = { season, observedAtMs: startedAtMs, sourceVersion, games: new Map([...boxscores].map(([id, box]) => [id, { nhlGameId: id, nhlGameScheduledStartsAtMs: box.game.startsAtMs, observedGameState: box.state }])) };
     return { provider: PROVIDER_NAME, sourceVersion, capturedAtMs, totalsSourceUpdatedAtMs: startedAtMs, totalsRows: [...totals.values()], playerGameRows, playerGameCoverage: { schemaVersion: 1, throughAtMs: capturedAtMs, players: coverage }, ...(expanded ? { expandedScoring } : {}) };
   }
@@ -281,7 +303,32 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
     });
     return { provider: PROVIDER_NAME, sourceVersion: gameStateSnapshot.sourceVersion, observedAtMs: gameStateSnapshot.observedAtMs, games: result };
   }
-  return Object.freeze({ fetchLiveSnapshot, fetchGameStates });
+  async function isGameRefreshWindow({ nhlSeasonKey, scheduledForMs }) {
+    const season = assertNhlSeasonKey(nhlSeasonKey), observedAtMs = integer(nowMs(), "schedule observation time");
+    integer(scheduledForMs, "refresh slot");
+    if (scheduledForMs > observedAtMs) fail("A refresh slot cannot be in the future.");
+    const startDate = new Date(observedAtMs - DAY_MS).toISOString().slice(0, 10);
+    if (!refreshWindowSchedule || refreshWindowSchedule.season !== season || refreshWindowSchedule.startDate !== startDate ||
+        observedAtMs < refreshWindowSchedule.observedAtMs || observedAtMs - refreshWindowSchedule.observedAtMs >= 10 * 60_000) {
+      const schedule = await json(`${WEB_ORIGIN}/v1/schedule/${startDate}`);
+      const today = new Date(observedAtMs).toISOString().slice(0, 10);
+      if (!Array.isArray(schedule?.gameWeek) || !schedule.gameWeek.some(day => day.date === startDate) || !schedule.gameWeek.some(day => day.date === today)) fail("The NHL refresh schedule is incomplete.");
+      const seen = new Set(), games = [];
+      for (const day of schedule.gameWeek) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(day.date) || !Array.isArray(day.games)) fail("The NHL refresh schedule is malformed.");
+        for (const game of day.games) {
+          if (String(game.season) !== season || game.gameType !== 2) continue;
+          const id = identity(game.id), startsAtMs = Date.parse(game.startTimeUTC);
+          if (seen.has(id) || !Number.isSafeInteger(startsAtMs) || typeof game.gameState !== "string") fail("The NHL refresh schedule has invalid game identities.");
+          seen.add(id); games.push({ startsAtMs, state: game.gameState });
+        }
+      }
+      refreshWindowSchedule = { season, startDate, observedAtMs, games };
+    }
+    return refreshWindowSchedule.games.some(game => ["LIVE", "CRIT"].includes(game.state) ||
+      (scheduledForMs >= game.startsAtMs - 30 * 60_000 && scheduledForMs <= game.startsAtMs + 6 * 60 * 60_000));
+  }
+  return Object.freeze({ fetchLiveSnapshot, fetchGameStates, isGameRefreshWindow });
 }
 
 module.exports = { PROVIDER_NAME, PLAYER_IDENTITY_PROVIDER, createNhlCompletedGameAdapter, easternStart };

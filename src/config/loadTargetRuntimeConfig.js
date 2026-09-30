@@ -442,6 +442,8 @@ function loadTargetRuntimeConfig({
     "FREE_AGENT_DRAFT_ROUTES_ENABLED"
   );
   const nhlCompletedStatisticsEnabled = optionalExactBoolean(env, "NHL_COMPLETED_STATISTICS_ENABLED") === true;
+  const nhlStatisticsEfficiencyEnabled = optionalExactBoolean(env, "NHL_STATISTICS_EFFICIENCY_ENABLED") === true;
+  const nhlStatisticsRetentionEnabled = optionalExactBoolean(env, "NHL_STATISTICS_RETENTION_ENABLED") === true;
   const expandedScoringEnabled = optionalExactBoolean(env, "EXPANDED_SCORING_ENABLED") === true;
   const matchupProcessingEnabled = optionalExactBoolean(env, "MATCHUP_PROCESSING_ENABLED") === true;
   let matchupProcessingLeagueIds = null;
@@ -463,8 +465,16 @@ function loadTargetRuntimeConfig({
   if (expandedScoringEnabled && !nhlCompletedStatisticsEnabled) {
     fail("EXPANDED_SCORING_ENABLED", "the completed-game NHL source must be enabled first");
   }
+    if ((nhlStatisticsEfficiencyEnabled || nhlStatisticsRetentionEnabled) && !nhlCompletedStatisticsEnabled) {
+      fail("NHL_STATISTICS_EFFICIENCY_ENABLED", "statistics optimization requires the completed-game NHL source");
+    }
+    if (nhlStatisticsEfficiencyEnabled && !expandedScoringEnabled) {
+      fail("NHL_STATISTICS_EFFICIENCY_ENABLED", "compact statistics require expanded scoring");
+    }
   const runtimeConfig = {
     nhlCompletedStatisticsEnabled,
+    nhlStatisticsEfficiencyEnabled,
+    nhlStatisticsRetentionEnabled,
     expandedScoringEnabled,
     matchupProcessingEnabled,
     matchupProcessingLeagueIds,

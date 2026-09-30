@@ -193,6 +193,13 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
     assert.deepEqual(
       RESET_V1_POST_RESET_TABLE_POLICY,
       [
+        { tableName: "compact_stat_refreshes", introducedByMigrationId: 70, treatment: "require_empty" },
+        { tableName: "shared_stat_total_changes", introducedByMigrationId: 70, treatment: "require_empty" },
+        { tableName: "shared_empty_coverage_sets", introducedByMigrationId: 70, treatment: "require_empty" },
+        { tableName: "shared_game_evidence_captures", introducedByMigrationId: 69, treatment: "require_empty" },
+        { tableName: "shared_game_evidence_changes", introducedByMigrationId: 69, treatment: "require_empty" },
+        { tableName: "nhl_completed_game_cache", introducedByMigrationId: 67, treatment: "require_empty" },
+        { tableName: "stat_refresh_payload_retirements", introducedByMigrationId: 68, treatment: "require_empty" },
         { tableName: "player_injury_status", introducedByMigrationId: 65, treatment: "require_empty" },
         { tableName: "player_injury_feed", introducedByMigrationId: 65, treatment: "require_empty" },
         { tableName: "player_injury_events", introducedByMigrationId: 65, treatment: "require_empty" },
@@ -487,9 +494,9 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
         },
       ]
     );
-    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 59);
-    assert.equal(classifiedTables.length, 141);
-    assert.equal(new Set(classifiedTables).size, 141);
+    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 66);
+    assert.equal(classifiedTables.length, 148);
+    assert.equal(new Set(classifiedTables).size, 148);
     assert.deepEqual(
       [...classifiedTables].sort(),
       [...catalogTables].sort()

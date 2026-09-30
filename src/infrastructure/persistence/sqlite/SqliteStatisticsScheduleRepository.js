@@ -8,8 +8,10 @@ function createSqliteStatisticsScheduleRepository({ database, createId = randomU
   const insert = database.prepare(`INSERT INTO job_runs (id, job_type, occurrence_key, scheduled_for_ms, status, attempt_count, lease_owner, lease_expires_at_ms, started_at_ms, created_at_ms, updated_at_ms, version) VALUES (?, ?, ?, ?, 'running', 1, ?, ?, ?, ?, ?, 1)`);
   const retry = database.prepare(`UPDATE job_runs SET status = 'running', attempt_count = attempt_count + 1, lease_owner = ?, lease_expires_at_ms = ?, started_at_ms = ?, completed_at_ms = NULL, updated_at_ms = ?, version = version + 1 WHERE id = ? AND version = ?`);
   const finish = database.prepare(`UPDATE job_runs SET status = ?, completed_at_ms = ?, updated_at_ms = ?, result_json = ?, last_error_code = ?, lease_owner = NULL, lease_expires_at_ms = NULL, version = version + 1 WHERE id = ? AND version = ? AND lease_owner = ? AND lease_expires_at_ms > ? AND status = 'running'`);
+  const active = database.prepare("SELECT 1 FROM job_runs WHERE league_id IS NULL AND job_type=? AND status='running' AND lease_expires_at_ms>? LIMIT 1");
   const claim = database.transaction(({ occurrenceKey, scheduledForMs, nowMs, owner }) => {
     if (typeof occurrenceKey !== "string" || !/^\d{8}:\d+$/.test(occurrenceKey) || !Number.isSafeInteger(scheduledForMs) || !Number.isSafeInteger(nowMs) || scheduledForMs > nowMs || typeof owner !== "string" || !owner) throw new TypeError("A canonical statistics schedule claim is required.");
+    if (active.get(JOB_TYPE, nowMs)) return null;
     const previous = read.get(JOB_TYPE, occurrenceKey);
     if (previous?.status === "succeeded" || (previous?.lease_expires_at_ms > nowMs) || (previous?.status === "failed" && previous.completed_at_ms + RETRY_MS > nowMs)) return null;
     if (previous) retry.run(owner, nowMs + LEASE_MS, nowMs, nowMs, previous.id, previous.version);

@@ -15,7 +15,7 @@ const {
   createMatchupScoringService,
 } = require("../../src/application/services/matchups/createMatchupScoringService");
 const { openDatabase } = require("../../src/infrastructure/database/connection");
-const { migrateDatabase } = require("../../src/infrastructure/database/migrate");
+const { migrateDatabase, discoverMigrations, applyMigrations } = require("../../src/infrastructure/database/migrate");
 const {
   createSqliteMatchupScoringRepository,
 } = require("../../src/infrastructure/persistence/sqlite/SqliteMatchupScoringRepository");
@@ -35,6 +35,9 @@ const HOUR_MS = 60 * 60 * 1000;
 const { emptyScoringStats, EXPANDED_SCORING_VERSION } = require("../../src/domain/statistics/expandedScoringPolicy");
 const { persistExpandedStatistics } = require("../../src/infrastructure/persistence/sqlite/expandedStatisticsPersistence");
 const { createSqliteStatisticsRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteStatisticsRepository");
+const { createSqliteSharedStatisticsRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteSharedStatisticsRepository");
+const { createSqliteSharedGameEvidenceRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteSharedGameEvidenceRepository");
+const { createSqliteStatisticsRetentionRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteStatisticsRetentionRepository");
 const { createSqliteProviderResultCorrectionRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteProviderResultCorrectionRepository");
 const { createProviderResultCorrectionService } = require("../../src/application/services/matchups/createProviderResultCorrectionService");
 const { normalizeStatisticsRows } = require("../../src/domain/statistics/statisticsPolicy");
@@ -60,13 +63,17 @@ function uuid(value) {
   return `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 }
 
-test("expanded NHL refresh corrects a finalized matchup using its original locked lineup and keeps audit history", t => {
-  const { database, service } = createRuntime(t, { provider: "nhl-completed-games" });
-  database.prepare("INSERT INTO player_external_ids (id, player_id, provider, external_value, created_at_ms) VALUES (?, ?, 'nhl-catalog', '8', 1)").run(uuid(100), IDS.player);
+for (const useSharedWriter of [false, true, "compact"]) {
+test(`${useSharedWriter === "compact" ? "compact" : useSharedWriter ? "shared" : "legacy"} expanded NHL refresh corrects a finalized matchup using its original locked lineup and keeps audit history`, async t => {
+  const playerIdentityProvider = useSharedWriter ? "nhl" : "nhl-catalog";
+  const providerTeamId = useSharedWriter ? "22" : "team-1";
+  const { database, service } = createRuntime(t, { provider: "nhl-completed-games",
+    baselineProviderTeamId: providerTeamId, currentProviderTeamId: providerTeamId });
+  database.prepare("INSERT INTO player_external_ids (id, player_id, provider, external_value, created_at_ms) VALUES (?, ?, ?, '8', 1)").run(uuid(100), IDS.player, playerIdentityProvider);
   database.prepare("UPDATE leagues SET current_season_id = ? WHERE id = ?").run(IDS.season, IDS.league);
   database.prepare("UPDATE seasons SET fantasy_playoffs_start_at_ms = ?, fantasy_playoffs_end_at_ms = ? WHERE id = ?").run(NOW_MS + 10 * HOUR_MS, NOW_MS + 20 * HOUR_MS, IDS.season);
   const initialStats = { ...emptyScoringStats(), evenStrengthGoals: 1, primaryAssists: 1 };
-  persistExpandedStatistics(database, { refreshId: IDS.liveRefresh, nhlSeasonKey: "20262027", playerIdentityProvider: "nhl-catalog",
+  persistExpandedStatistics(database, { refreshId: IDS.liveRefresh, nhlSeasonKey: "20262027", playerIdentityProvider,
     rows: [{ externalPlayerId: "8", gamesPlayed: 12, goals: 2, assists: 3 }],
     playerGameRows: [{ externalPlayerId: "8", nhlGameId: "2026020001", observedGameState: "final", goals: 1, assists: 1 }],
     expandedScoring: { scoringRuleVersion: EXPANDED_SCORING_VERSION,
@@ -78,23 +85,24 @@ test("expanded NHL refresh corrects a finalized matchup using its original locke
   const locksBefore = database.prepare("SELECT * FROM matchup_roster_players ORDER BY id").all();
   const historyBefore = database.prepare("SELECT * FROM matchup_result_versions ORDER BY id").all();
   let nextId = 1000;
-  const statistics = createSqliteStatisticsRepository({ database, createId: () => uuid(nextId++) });
+  const statistics = (useSharedWriter ? createSqliteSharedStatisticsRepository : createSqliteStatisticsRepository)({ database, createId: () => uuid(nextId++), compact: useSharedWriter === "compact" });
   const completedAtMs = NOW_MS + 5 * HOUR_MS;
   const refreshId = uuid(101);
   statistics.startRefresh({ id: refreshId, statSourceId: IDS.source, nhlSeasonKey: "20262027", startedAtMs: completedAtMs - 1 });
-  const requirements = statistics.readPlayerGameCoverageRequirements({ nhlSeasonKey: "20262027", playerIdentityProvider: "nhl-catalog" });
+  const requirements = statistics.readPlayerGameCoverageRequirements({ nhlSeasonKey: "20262027", playerIdentityProvider });
   const correctedStats = { ...initialStats, evenStrengthGoals: 0, primaryAssists: 0, giveaways: 6 };
-  statistics.completeLiveRefresh({ refreshId, statSourceId: IDS.source, provider: "nhl-completed-games", playerIdentityProvider: "nhl-catalog",
+  const completion = { refreshId, statSourceId: IDS.source, provider: "nhl-completed-games", playerIdentityProvider,
     nhlSeasonKey: "20262027", sourceVersion: "corrected-expanded", completedAtMs,
     rows: normalizeStatisticsRows({ rows: [{ playerId: "8", gamesPlayed: 12, goals: 1, assists: 2 }], minimumPlayerCount: 1, sourceUpdatedAtMs: completedAtMs }),
     playerGameRows: [{ externalPlayerId: "8", nhlGameId: "2026020001", nhlGameScheduledStartsAtMs: NOW_MS - 5 * HOUR_MS,
       observedGameState: "final", goals: 0, assists: 0, nhlPoints: 0, fantasyPointsHundredths: 0, sourceUpdatedAtMs: completedAtMs }],
     ...requirements,
-    playerGameCoverage: [{ playerId: IDS.player, providerPlayerId: "8", providerTeamId: "team-1", disposition: "expected_game",
+    playerGameCoverage: [{ playerId: IDS.player, providerPlayerId: "8", providerTeamId, disposition: "expected_game",
       nhlGameId: "2026020001", nhlGameScheduledStartsAtMs: NOW_MS - 5 * HOUR_MS, observedGameState: "final" }],
     expandedScoring: { scoringRuleVersion: EXPANDED_SCORING_VERSION,
       totalsRows: [{ playerId: "8", scoringStats: { ...correctedStats, evenStrengthGoals: 1, primaryAssists: 2 } }],
-      playerGameRows: [{ playerId: "8", nhlGameId: "2026020001", gamesPlayed: 1, scoringStats: correctedStats }] } });
+      playerGameRows: [{ playerId: "8", nhlGameId: "2026020001", gamesPlayed: 1, scoringStats: correctedStats }] } };
+  statistics.completeLiveRefresh(completion, useSharedWriter ? await statistics.prepareLiveRefresh(completion) : undefined);
   const errors = [];
   const corrections = createProviderResultCorrectionService({ repository: createSqliteProviderResultCorrectionRepository({ database }),
     scoringService: service, clock: { nowMs: () => completedAtMs + 1 }, createId: () => uuid(nextId++), logger: { warn: (...args) => errors.push(args) } });
@@ -112,8 +120,111 @@ test("expanded NHL refresh corrects a finalized matchup using its original locke
   assert.equal(corrections.reconcile().unchanged, 1);
   assert.equal(database.prepare("SELECT total_changes() AS count").get().count, writesBefore);
   assert.deepEqual(errors, []);
+  const protectedFinalTables = ["matchup_roster_locks", "matchup_roster_players", "stat_snapshots", "stat_snapshot_players", "matchup_results", "matchup_result_versions"];
+  const beforeRetention = readProtectedTables(database, protectedFinalTables);
+  assert.equal(createSqliteStatisticsRetentionRepository({ database }).retire(completedAtMs + 40 * 24 * HOUR_MS).retiredRefreshCount, 0);
+  assert.deepEqual(readProtectedTables(database, protectedFinalTables), beforeRetention);
+  assert.deepEqual(service.readAtRefresh({ ...scope, nowMs: completedAtMs + 1, refreshId }), final);
   assert.deepEqual(database.pragma("foreign_key_check"), []);
 });
+}
+
+function readProtectedTables(database, tables) {
+  return Object.fromEntries(tables.map(name => [name, database.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()]));
+}
+
+for (const useSharedWriter of [false, true, "compact"]) {
+for (const durationDays of [7, 9, 14]) {
+  for (const withExclusion of [false, true]) {
+    test(`${useSharedWriter === "compact" ? "compact" : useSharedWriter ? "shared" : "legacy"} active ${durationDays}-day ${withExclusion ? "late" : "normal"} lock keeps earned points through migration and retention`, async t => {
+      const playerIdentityProvider = useSharedWriter ? "nhl" : "nhl-catalog";
+      const providerTeamId = useSharedWriter ? "22" : "team-1";
+      const { database, service } = createRuntime(t, { provider: "nhl-completed-games", withExclusion, schemaVersion: 66,
+        baselineProviderTeamId: providerTeamId, currentProviderTeamId: providerTeamId });
+      const week = database.prepare("SELECT starts_at_ms FROM matchup_weeks WHERE id=?").get(IDS.week);
+      const endAtMs = week.starts_at_ms + durationDays * 24 * HOUR_MS;
+      database.prepare("UPDATE matchup_weeks SET ends_at_ms=?, rolls_over_at_ms=? WHERE id=?").run(endAtMs, endAtMs, IDS.week);
+      database.prepare("INSERT INTO player_external_ids (id,player_id,provider,external_value,created_at_ms) VALUES (?,?,?,'8',1)").run(uuid(100), IDS.player, playerIdentityProvider);
+      database.prepare("UPDATE leagues SET current_season_id=? WHERE id=?").run(IDS.season, IDS.league);
+      const initialStats = { ...emptyScoringStats(), evenStrengthGoals: 1, primaryAssists: 1 };
+      persistExpandedStatistics(database, {
+        refreshId: IDS.liveRefresh, nhlSeasonKey: "20262027", playerIdentityProvider,
+        rows: [{ externalPlayerId: "8", gamesPlayed: 12, goals: 2, assists: 3 }],
+        playerGameRows: [{ externalPlayerId: "8", nhlGameId: "2026020001", observedGameState: "final", goals: 1, assists: 1 }],
+        expandedScoring: { scoringRuleVersion: EXPANDED_SCORING_VERSION,
+          totalsRows: [{ playerId: "8", scoringStats: { ...initialStats, evenStrengthGoals: 2, primaryAssists: 3 } }],
+          playerGameRows: [{ playerId: "8", nhlGameId: "2026020001", gamesPlayed: 1, scoringStats: initialStats }] },
+      });
+      const scope = input(NOW_MS, "nhl-completed-games");
+      const initialScore = service.readLive(scope);
+      assert.equal(initialScore.home.scoreHundredths, withExclusion ? 0 : 525);
+      const preexistingTables = database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('application_metadata','schema_migrations') ORDER BY name").all().map(row => row.name);
+      const beforeMigration = readProtectedTables(database, preexistingTables);
+      migrateDatabase({ database, migrationsDirectory: MIGRATIONS_DIRECTORY, applicationBuildId: "active-scoring-migration-test", now: () => NOW_MS });
+      assert.equal(database.pragma("user_version", { simple: true }), 70);
+      assert.deepEqual(readProtectedTables(database, preexistingTables), beforeMigration);
+      assert.deepEqual(service.readLive(scope), initialScore);
+
+      // A later capture includes the old game and a game played after the late lock.
+      const completedAtMs = endAtMs - HOUR_MS;
+      let serial = 1000;
+      const statistics = (useSharedWriter ? createSqliteSharedStatisticsRepository : createSqliteStatisticsRepository)({ database, createId: () => uuid(serial++), compact: useSharedWriter === "compact" });
+      const refreshId = uuid(101);
+      statistics.startRefresh({ id: refreshId, statSourceId: IDS.source, nhlSeasonKey: "20262027", startedAtMs: completedAtMs - 1 });
+      const requirements = statistics.readPlayerGameCoverageRequirements({ nhlSeasonKey: "20262027", playerIdentityProvider });
+      const games = [
+        { id: "2026020001", startsAtMs: NOW_MS - 5 * HOUR_MS, goals: 1, assists: 1, stats: initialStats },
+        { id: "2026020002", startsAtMs: NOW_MS - 2 * HOUR_MS, goals: 0, assists: 0, stats: { ...emptyScoringStats(), shotsOnGoal: 3 } },
+      ];
+      const completion = { refreshId, statSourceId: IDS.source, provider: "nhl-completed-games", playerIdentityProvider,
+        nhlSeasonKey: "20262027", sourceVersion: "post-lock-refresh", completedAtMs,
+        rows: normalizeStatisticsRows({ rows: [{ playerId: "8", gamesPlayed: 13, goals: 2, assists: 3 }], minimumPlayerCount: 1, sourceUpdatedAtMs: completedAtMs }),
+        playerGameRows: games.map(g => ({ externalPlayerId: "8", nhlGameId: g.id, nhlGameScheduledStartsAtMs: g.startsAtMs,
+          observedGameState: "final", goals: g.goals, assists: g.assists, nhlPoints: g.goals + g.assists,
+          fantasyPointsHundredths: g.goals * 125 + g.assists * 100, sourceUpdatedAtMs: completedAtMs })),
+        ...requirements,
+        playerGameCoverage: games.map(g => ({ playerId: IDS.player, providerPlayerId: "8", providerTeamId, disposition: "expected_game",
+          nhlGameId: g.id, nhlGameScheduledStartsAtMs: g.startsAtMs, observedGameState: "final" })),
+        expandedScoring: { scoringRuleVersion: EXPANDED_SCORING_VERSION,
+          totalsRows: [{ playerId: "8", scoringStats: { ...initialStats, evenStrengthGoals: 2, primaryAssists: 3, shotsOnGoal: 3 } }],
+          playerGameRows: games.map(g => ({ playerId: "8", nhlGameId: g.id, gamesPlayed: 1, scoringStats: g.stats })) },
+      };
+      const preparation = useSharedWriter ? await statistics.prepareLiveRefresh(completion) : undefined;
+      statistics.completeLiveRefresh(completion, preparation);
+      const shared = useSharedWriter ? createSqliteSharedGameEvidenceRepository({ database }) : null;
+      const sharedCapture = shared?.read({ refreshId });
+      if (sharedCapture) {
+        assert.equal(sharedCapture.records.length, 2);
+        assert.deepEqual(sharedCapture.records.map(record => record.scoringStats), games.map(game => game.stats));
+      }
+      const lateScope = input(completedAtMs, "nhl-completed-games");
+      const earned = service.readLive(lateScope);
+      assert.equal(earned.home.scoreHundredths, withExclusion ? 60 : 585);
+      assert.equal(earned.away.scoreHundredths, 0);
+      const protectedTables = ["matchup_weeks", "matchups", "matchup_roster_locks", "matchup_roster_players", "stat_snapshots", "stat_snapshot_players",
+        "matchup_roster_game_exclusion_sets", "matchup_roster_game_exclusions", "nhl_game_state_observation_snapshots", "nhl_game_state_observations"];
+      const beforeRetention = readProtectedTables(database, protectedTables);
+      const retention = createSqliteStatisticsRetentionRepository({ database });
+      assert.equal(retention.retire(completedAtMs).retiredRefreshCount, 1);
+      assert.deepEqual(database.prepare("SELECT refresh_id FROM stat_refresh_payload_retirements").all(), [{ refresh_id: IDS.liveRefresh }]);
+      assert.equal(database.prepare("SELECT count(*) count FROM player_game_stat_observations WHERE refresh_id=?").get(IDS.liveRefresh).count, 0);
+      assert.equal(database.prepare("SELECT count(*) count FROM player_game_stat_observations WHERE id=?").get(IDS.baselineGameObservation).count, 1);
+      assert.deepEqual(readProtectedTables(database, protectedTables), beforeRetention);
+      const writesBeforeReads = database.prepare("SELECT total_changes() count").get().count;
+      assert.deepEqual(service.readLive(lateScope), earned);
+      const reopenedService = createMatchupScoringService({ repository: createSqliteMatchupScoringRepository({ database }), expandedScoringEnabled: true });
+      assert.deepEqual(reopenedService.readLive(lateScope), earned);
+      assert.equal(database.prepare("SELECT total_changes() count").get().count, writesBeforeReads);
+      // Even after a prolonged provider outage, retain the newest usable capture.
+      assert.equal(retention.retire(completedAtMs + 14 * 24 * HOUR_MS).retiredRefreshCount, 0);
+      assert.deepEqual(service.readLive(lateScope), earned);
+      if (shared) assert.deepEqual(shared.read({ refreshId }), sharedCapture);
+      assert.deepEqual(database.pragma("foreign_key_check"), []);
+      assert.equal(database.pragma("quick_check", { simple: true }), "ok");
+    });
+  }
+}
+}
 
 function createPlayerGameEvidence({
   provider = "sportsdataio-live",
@@ -216,6 +327,7 @@ function seed(
     currentSourceUpdatedAtMs = NOW_MS - HOUR_MS,
     currentGameGoals = 1,
     currentGameAssists = 1,
+    baselineProviderTeamId = "team-1",
     currentProviderTeamId = "team-1",
     currentGamesPlayed = 12,
     currentTotalGoals = 2,
@@ -328,6 +440,7 @@ function seed(
       sourceUpdatedAtMs: NOW_MS - 19 * HOUR_MS,
       goals: 0,
       assists: 0,
+      providerTeamId: baselineProviderTeamId,
       coverageSha256: baselineCoverageSha256,
       evidenceSha256: baselineEvidenceSha256,
     });
@@ -520,13 +633,14 @@ function seed(
         "INSERT INTO nhl_game_state_observation_snapshots (id, league_id, season_id, matchup_week_id, " +
           "team_id, provider, source_version, observed_at_ms, freshness_status, observation_count, " +
           "evidence_schema_version, observation_sha256, created_at_ms, version) " +
-          "VALUES (?, ?, ?, ?, ?, 'sportsdataio-live', 'games-live', ?, 'fresh', 1, 1, ?, ?, 1)"
+          "VALUES (?, ?, ?, ?, ?, ?, 'games-live', ?, 'fresh', 1, 1, ?, ?, 1)"
       ).run(
         IDS.gameStateSnapshot,
         IDS.league,
         IDS.season,
         IDS.week,
         IDS.home,
+        provider,
         lateSnapshotAtMs,
         sealedGameStateSha256,
         lateSnapshotAtMs
@@ -592,9 +706,9 @@ function createRuntime(t, options) {
     databasePath: path.join(root, "scoring.sqlite3"),
     environment: "test",
   });
-  migrateDatabase({
+  applyMigrations({
     database: connection.database,
-    migrationsDirectory: MIGRATIONS_DIRECTORY,
+    migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }).filter(m => m.id <= (options?.schemaVersion ?? Infinity)),
     applicationBuildId: "m6-06-test",
     now: () => 1,
   });
@@ -603,6 +717,7 @@ function createRuntime(t, options) {
   const service = createMatchupScoringService({ repository, expandedScoringEnabled: options?.provider === "nhl-completed-games" });
   t.after(() => {
     if (connection.database.open) connection.database.close();
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
     fs.rmSync(root, { recursive: true, force: true });
   });
   return { database: connection.database, service };

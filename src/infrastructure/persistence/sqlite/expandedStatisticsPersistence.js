@@ -1,26 +1,32 @@
 const { EXPANDED_SCORING_VERSION, calculateExpandedScore, normalizeScoringStats } = require("../../../domain/statistics/expandedScoringPolicy");
 const { normalizeExpandedSnapshot, expandedSnapshotHash } = require("../../../domain/statistics/expandedStatisticsSnapshotPolicy");
+const { readCompactStatistics } = require("./compactStatisticsEvidence");
 
-function persistExpandedStatistics(database, command) {
+function persistExpandedStatistics(database, command, { skipPlayerGames = false, prepared = null } = {}) {
   if (!command.expandedScoring) return;
-  const expanded = normalizeExpandedSnapshot(command.expandedScoring, { nhlSeasonKey: command.nhlSeasonKey, totals: command.rows, observations: command.playerGameRows });
-  database.prepare("INSERT INTO expanded_stat_refreshes (refresh_id, scoring_rule_version, evidence_sha256, total_count, observation_count) VALUES (?, ?, ?, ?, ?)")
-    .run(command.refreshId, EXPANDED_SCORING_VERSION, expandedSnapshotHash(expanded), expanded.totalsRows.length, expanded.playerGameRows.length);
+  const expanded = prepared?.expanded ?? normalizeExpandedSnapshot(command.expandedScoring, { nhlSeasonKey: command.nhlSeasonKey, totals: command.rows, observations: command.playerGameRows });
+  const insertedRoot = database.prepare("INSERT INTO expanded_stat_refreshes (refresh_id, scoring_rule_version, evidence_sha256, total_count, observation_count) VALUES (?, ?, ?, ?, ?)")
+    .run(command.refreshId, EXPANDED_SCORING_VERSION, prepared?.expandedHash ?? expandedSnapshotHash(expanded), expanded.totalsRows.length, expanded.playerGameRows.length);
+  if (insertedRoot.changes !== 1) throw new Error("Expanded statistics root was not inserted.");
   for (const [rows, child, parent, idColumn, game] of [
     [expanded.totalsRows, "expanded_stat_totals", "player_stat_totals", "total_id", false],
     [expanded.playerGameRows, "expanded_player_game_stats", "player_game_stat_observations", "observation_id", true],
   ]) {
+    if (game && skipPlayerGames) continue;
     const source = database.prepare(`SELECT parent.id FROM ${parent} AS parent JOIN player_external_ids AS identity ON identity.player_id = parent.player_id WHERE parent.refresh_id = @refreshId AND identity.provider = @provider AND identity.external_value = @playerId ${game ? "AND parent.nhl_game_id = @nhlGameId" : ""} LIMIT 2`);
-    const insert = database.prepare(`INSERT INTO ${child} (${idColumn}, refresh_id, provider_player_id, stats_json, forward_fp_hundredths, defence_fp_hundredths${game ? ", games_played" : ""}) VALUES (?, ?, ?, ?, ?, ?${game ? ", ?" : ""})`);
+    const insert = database.prepare(`INSERT INTO ${child} (${idColumn}, refresh_id, provider_player_id, stats_json, forward_fp_hundredths, defence_fp_hundredths${game ? ", games_played" : ""}) VALUES (?, ?, ?, ?, ?, ?${game ? ", ?" : ""})` +
+      (prepared && !game ? " ON CONFLICT(total_id) DO UPDATE SET refresh_id=excluded.refresh_id,stats_json=excluded.stats_json,forward_fp_hundredths=excluded.forward_fp_hundredths,defence_fp_hundredths=excluded.defence_fp_hundredths" : ""));
     for (const row of rows) {
-      const sources = source.all({ refreshId: command.refreshId, provider: command.playerIdentityProvider, playerId: row.playerId, ...(game ? { nhlGameId: row.nhlGameId } : {}) });
+      const sources = prepared && !game ? [{ id: prepared.totalIds.get(row.playerId) }] : source.all({ refreshId: command.refreshId, provider: command.playerIdentityProvider, playerId: row.playerId, ...(game ? { nhlGameId: row.nhlGameId } : {}) });
       if (sources.length !== 1) throw new TypeError("Expanded statistics have no unique source row.");
-      insert.run(sources[0].id, command.refreshId, row.playerId, JSON.stringify(row.scoringStats), calculateExpandedScore(row.scoringStats, "F").fantasyPointsHundredths, calculateExpandedScore(row.scoringStats, "D").fantasyPointsHundredths, ...(game ? [row.gamesPlayed] : []));
+      if (insert.run(sources[0].id, command.refreshId, row.playerId, JSON.stringify(row.scoringStats), calculateExpandedScore(row.scoringStats, "F").fantasyPointsHundredths, calculateExpandedScore(row.scoringStats, "D").fantasyPointsHundredths, ...(game ? [row.gamesPlayed] : [])).changes !== 1) throw new Error("Expanded statistics row was not inserted.");
     }
   }
 }
 
 function readExpandedStatistics(database, refreshId) {
+  const compact = readCompactStatistics(database, refreshId);
+  if (compact) return compact.expandedScoring;
   if (database.pragma("user_version", { simple: true }) < 57) return null;
   const root = database.prepare("SELECT * FROM expanded_stat_refreshes WHERE refresh_id = ?").get(refreshId);
   if (!root) return null;
