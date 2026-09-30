@@ -89,6 +89,9 @@ test("NHL readiness reports scoped source conflicts before any roster lock and r
 
 test("NHL completed-game source carries an accelerated week through locks, late exclusions, failure recovery and official standings", async (t) => {
   const { database,catalog }=setup(t);
+  // Underfilled rosters are legal. Use seven active defensemen to exercise a
+  // genuinely illegal boundary roster, then correct its position for late lock.
+  database.prepare("UPDATE player_ownerships SET roster_category='Active',position_group='D',slot_number=NULL WHERE id=?").run(uuid(318));
   let now=START,offline=false,calls=0;
   const games=[
     { id:2026020001,easternStartTime:"2026-10-11T19:00:00",goals:1,assists:0 },
@@ -132,7 +135,7 @@ test("NHL completed-game source carries an accelerated week through locks, late 
   legality.lockAtBoundary({...input(),teamId:uuid(31),lockId:uuid(401)});
   assert.equal(database.prepare("SELECT legal FROM matchup_roster_locks WHERE id=?").get(uuid(401)).legal,0);
   now=START+17*HOUR;
-  database.prepare("UPDATE player_ownerships SET roster_category='Active',slot_number=1,updated_at_ms=?,version=version+1 WHERE id=?").run(now,uuid(318));
+  database.prepare("UPDATE player_ownerships SET position_group='F',slot_number=1,updated_at_ms=?,version=version+1 WHERE id=?").run(now,uuid(318));
   const before=calls;
   await assert.rejects(legality.lockLate({...input(),teamId:uuid(31),lockId:uuid(401)}));
   assert.equal(calls,before);

@@ -177,6 +177,44 @@ test("NHL completed-game totals exclude live goals, include zero-game catalog pl
   assert.equal(summaryRequest.searchParams.get("cayenneExp"), "gameId in (2025020001)");
 });
 
+test("NHL FINAL games awaiting official reports do not block confirmed scores or publish provisional points", async () => {
+  const cached = [];
+  const f = fixture({ completedGameCache: { read: () => new Map(), save: entries => cached.push(...entries) },
+    change: ({ games, boxes }) => { games[1].gameStateId = 6; boxes.get(String(games[1].id)).gameState = "FINAL"; } });
+  const first = await f.adapter.fetchLiveSnapshot(f.input);
+  assert.deepEqual(first.totalsRows[0], { playerId: "8478000", gamesPlayed: 1, goals: 2, assists: 1 });
+  const pending = first.playerGameRows.find(row => row.nhlGameId === "2025020002");
+  assert.equal(pending.observedGameState, "in_progress");
+  assert.equal(pending.goals, 0); assert.equal(pending.assists, 0);
+  assert.deepEqual(cached.map(entry => entry.gameId), ["2025020001"]);
+  assert.equal(new URL(f.calls.find(url => url.includes("/summary"))).searchParams.get("cayenneExp"), "gameId in (2025020001)");
+  const observations = normalizePlayerGameStatisticsRows({ rows: first.playerGameRows, capturedAtMs: first.capturedAtMs });
+  normalizePlayerGameCoverageResponse({ requiredPlayers: f.input.requiredPlayers, requiredPlayerGames: [], response: first.playerGameCoverage, observationRows: observations, capturedAtMs: first.capturedAtMs });
+  const gameStates = await f.adapter.fetchGameStates({ nhlSeasonKey: "20252026", requestedAtMs: NOW,
+    games: [{ nhlGameId: pending.nhlGameId, nhlGameScheduledStartsAtMs: pending.nhlGameScheduledStartsAtMs }] });
+  assert.equal(gameStates.games[0].observedGameState, "in_progress");
+  // Once official reports arrive, the next capture includes that game exactly
+  // once; repeated captures overwrite cumulative totals without doubling it.
+  f.state.games[1].gameStateId = 7;
+  f.state.boxes.get("2025020002").gameState = "OFF";
+  f.state.rows.push(...f.state.rows.map(row => ({ ...row, gameId: 2025020002 })));
+  const finalized = await f.adapter.fetchLiveSnapshot(f.input);
+  assert.deepEqual(finalized.totalsRows[0], { playerId: "8478000", gamesPlayed: 2, goals: 4, assists: 2 });
+  assert.equal(finalized.playerGameRows.find(row => row.nhlGameId === "2025020002").observedGameState, "final");
+  assert.deepEqual((await f.adapter.fetchLiveSnapshot(f.input)).totalsRows, finalized.totalsRows);
+});
+
+test("NHL official games retain FINAL support and reject genuinely contradictory states", async () => {
+  const official = fixture({ change: ({ boxes }) => { boxes.get("2025020001").gameState = "FINAL"; } });
+  assert.equal((await official.adapter.fetchLiveSnapshot(official.input)).playerGameRows[0].observedGameState, "final");
+  for (const [scheduleState, boxState] of [[7, "LIVE"], [6, "OFF"], [3, "FINAL"]]) {
+    const f = fixture({ change: ({ games, boxes }) => {
+      games[1].gameStateId = scheduleState; boxes.get("2025020002").gameState = boxState;
+    } });
+    await assert.rejects(f.adapter.fetchLiveSnapshot(f.input));
+  }
+});
+
 test("NHL cached game-state lookup makes no external calls and rejects stale evidence", async () => {
   const f = fixture();
   const result = await f.adapter.fetchLiveSnapshot(f.input);

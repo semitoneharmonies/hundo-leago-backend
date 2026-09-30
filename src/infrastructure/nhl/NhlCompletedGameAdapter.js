@@ -115,7 +115,12 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
   async function boxscore(game, season) {
     const box = await json(`${WEB_ORIGIN}/v1/gamecenter/${game.id}/boxscore`);
     if (identity(box?.id) !== game.id || String(box.season) !== season || box.gameType !== 2 || Date.parse(box.startTimeUTC) !== game.startsAtMs || identity(box.homeTeam?.id) !== game.homeTeamId || identity(box.awayTeam?.id) !== game.awayTeamId) fail("The NHL boxscore does not match its season and scheduled game.");
-    const state = box.gameScheduleState === "PPD" ? "postponed" : STATES[box.gameState];
+    // FINAL / schedule state 6 precedes official completion (OFF / state 7).
+    // Detailed reports can still be absent in that interval. Keep the existing
+    // state-7 totals cutoff and represent its scoring as pending, with zero
+    // provisional observations, rather than rejecting every confirmed game.
+    const state = box.gameScheduleState === "PPD" ? "postponed"
+      : game.awaitingOfficialStatistics && box.gameState === "FINAL" ? "in_progress" : STATES[box.gameState];
     if (!state) fail("The NHL game state is unsupported.");
     const players = new Map();
     if (state === "final") {
@@ -159,7 +164,7 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
     for (const row of rawGames) {
       const id = identity(row.id);
       if (String(row.season) !== season || row.gameType !== 2 || games.has(id)) fail("NHL schedule identities are inconsistent.");
-      games.set(id, { id, startsAtMs: easternStart(row.easternStartTime), homeTeamId: identity(row.homeTeamId), awayTeamId: identity(row.visitingTeamId), final: row.gameStateId === 7 });
+      games.set(id, { id, startsAtMs: easternStart(row.easternStartTime), homeTeamId: identity(row.homeTeamId), awayTeamId: identity(row.visitingTeamId), final: row.gameStateId === 7, awaitingOfficialStatistics: row.gameStateId === 6 });
     }
     const completed = [...games.values()].filter((game) => game.final);
     const cachedGames = completedGameCache?.read({ season, expanded }) || new Map();
