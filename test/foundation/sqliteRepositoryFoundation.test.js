@@ -273,7 +273,7 @@ describe("M2-05 SQLite repository foundation", () => {
       ({ tableName }) => tableName
     ).sort();
 
-    assert.equal(REPOSITORY_CATALOG.length, 141);
+    assert.equal(REPOSITORY_CATALOG.length, 159);
     assert.equal(Object.isFrozen(REPOSITORY_CATALOG), true);
     assert.equal(
       REPOSITORY_CATALOG.every(Object.isFrozen),
@@ -281,7 +281,7 @@ describe("M2-05 SQLite repository foundation", () => {
     );
     assert.deepEqual(catalogTables, actualTables);
     assert.deepEqual(context.schemaTables, actualTables);
-    assert.equal(Object.keys(context.repositories).length, 141);
+    assert.equal(Object.keys(context.repositories).length, 159);
     assert.equal(Object.isFrozen(context.repositories), true);
     assert.equal(Object.isFrozen(context), true);
 
@@ -414,7 +414,7 @@ describe("M2-05 SQLite repository foundation", () => {
       repositories.application_metadata.findByKey({
         key: "data_model_version",
       });
-    assert.equal(metadata.metadata_value, "65");
+    assert.equal(metadata.metadata_value, "84");
     assert.equal(
       typeof repositories.application_metadata.listAll,
       "function"

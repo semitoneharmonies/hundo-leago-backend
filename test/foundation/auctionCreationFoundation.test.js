@@ -629,6 +629,49 @@ describe("M5-01 auction persistence foundation", () => {
     assert.equal(connection.database.pragma("user_version", { simple: true }), 9);
   });
 
+  test('league schedule changes affect new auctions and manager capabilities while preserving accepted clocks and receipts',t=>{
+    const runtime=createRuntime(t),db=runtime.database;
+    const original=runtime.repository.startAuction(command());
+    const {createSqliteLeagueAuctionScheduleRepository}=require('../../src/infrastructure/persistence/sqlite/SqliteLeagueAuctionScheduleRepository');
+    const {createLeagueAuctionScheduleService}=require('../../src/application/services/leagues/createLeagueAuctionScheduleService');
+    const {createSqliteAuctionReadRepository}=require('../../src/infrastructure/persistence/sqlite/SqliteAuctionReadRepository');
+    const repository=createSqliteLeagueAuctionScheduleRepository({database:db});
+    let now=NOW_MS;
+    const service=createLeagueAuctionScheduleService({repository,clock:{nowMs:()=>now},leagueAuthorization:{
+      requireCommissioner:(_auth,leagueId)=>{assert.equal(leagueId,IDS.leagueA);return{actorUserId:IDS.commissioner,authority:'commissioner'};},
+    }});
+    const reader=createSqliteAuctionReadRepository({database:db});
+    const list=()=>reader.listAuctions({leagueId:IDS.leagueA,viewerUserId:IDS.manager,viewerMembershipId:IDS.managerMembership,
+      sourceKind:null,fadId:null,statuses:['active'],q:null,limit:51,order:'resolves_asc',cursor:null,nowMs:now});
+    const scope={leagueId:IDS.leagueA,authenticated:{}},input={closeWeekday:2,closeMinuteOfDay:1125,creationCutoffMinutes:90,reason:'Managers chose Wednesday auctions'};
+    const protectedTables=['auctions','auction_contexts','auction_bids','auction_events','idempotency_requests','player_ownerships','contracts','trades'];
+    const rows=()=>Object.fromEntries(protectedTables.map(name=>[name,db.prepare('SELECT * FROM '+name+' ORDER BY rowid').all()]));
+    const protectedBefore=rows(),bytes=db.serialize();
+    const state=service.read(scope),preview=service.preview({...scope,input});assert.equal(state.schedule,null);
+    assert.deepEqual(db.serialize(),bytes);
+    const body={...input,confirmed:true,previewHash:preview.previewHash};
+    const changed=service.apply({...scope,input:body,idempotencyKey:'weekly-schedule-fixture'});
+    assert.equal(changed.replayed,false);assert.deepEqual(rows(),protectedBefore);
+    assert.equal(repository.state(IDS.leagueB).current,null,'Other league keeps its default');
+    const saved=db.serialize();assert.equal(service.apply({...scope,input:body,idempotencyKey:'weekly-schedule-fixture'}).replayed,true);assert.deepEqual(db.serialize(),saved);
+    const close=Date.parse('2026-07-23T01:45:00Z'),cutoff=close-90*60000;
+    assert.equal(list().startTeams[0].nextRolloverAtMs,close);assert.equal(list().startTeams[0].startAuction.allowed,true);
+    const second=runtime.repository.startAuction(command({playerId:IDS.player2,auctionId:uuid(980),bidId:uuid(981),eventId:uuid(982),idempotencyRequestId:uuid(983),idempotencyKey:'new-weekly-clock'}));
+    assert.equal(second.auction.bidClosesAtMs,close);
+    assert.equal(db.prepare('SELECT resolves_at_ms FROM auctions WHERE id=?').get(IDS.auction).resolves_at_ms,original.auction.bidClosesAtMs);
+    now=cutoff;
+    assert.equal(list().startTeams[0].startAuction.allowed,false);
+    const boundary=db.serialize();
+    assertPolicyError(()=>runtime.repository.startAuction(command({playerId:IDS.player3,auctionId:uuid(984),bidId:uuid(985),eventId:uuid(986),idempotencyRequestId:uuid(987),
+      idempotencyKey:'at-weekly-cutoff',occurredAtMs:now,idempotencyExpiresAtMs:now+86400000})),AUCTION_CREATION_CODES.windowClosed);
+    assert.deepEqual(db.serialize(),boundary);
+    const replay=runtime.repository.startAuction(command({occurredAtMs:now,idempotencyExpiresAtMs:now+86400000}));
+    assert.equal(replay.replayed,true);assert.equal(replay.auction.bidClosesAtMs,original.auction.bidClosesAtMs);
+    assert.throws(()=>db.prepare('UPDATE league_auction_schedule_changes SET creation_cutoff_minutes=0 WHERE id=?').run(changed.id));
+    assert.throws(()=>db.prepare('DELETE FROM league_auction_schedule_changes WHERE id=?').run(changed.id));
+    assert.equal(db.pragma('integrity_check',{simple:true}),'ok');
+  });
+
   test("creates one ordinary auction context, opening bid, event, and completed idempotency atomically", (t) => {
     const runtime = createRuntime(t);
     const result = runtime.repository.startAuction(command());

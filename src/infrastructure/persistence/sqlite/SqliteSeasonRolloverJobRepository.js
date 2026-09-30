@@ -118,7 +118,8 @@ function createSqliteSeasonRolloverJobRepository({
      AND run.job_type = ?
      AND run.occurrence_key =
        occurrence.occurrence_key
-    WHERE occurrence.status IN (
+    WHERE NOT EXISTS (SELECT 1 FROM league_freezes pause WHERE pause.league_id=occurrence.league_id AND pause.status='active')
+      AND occurrence.status IN (
       'scheduled',
       'blocked',
       'succeeded'
@@ -168,7 +169,8 @@ function createSqliteSeasonRolloverJobRepository({
      AND binding.current_scheduled_job_run_id =
        run.id
      AND binding.status = occurrence.status
-    WHERE run.league_id = @leagueId
+    WHERE NOT EXISTS (SELECT 1 FROM league_freezes pause WHERE pause.league_id=run.league_id AND pause.status='active')
+      AND run.league_id = @leagueId
       AND run.job_type = @jobType
       AND run.occurrence_key = @occurrenceKey
       AND occurrence.status IN (

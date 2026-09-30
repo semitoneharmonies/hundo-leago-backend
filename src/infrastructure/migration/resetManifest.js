@@ -313,6 +313,25 @@ const RESET_NEVER_IMPORT_POLICY = deepFreeze([
 // migrate before importing. Shared environments apply migrations 0023 and
 // later only after the approved reset has completed.
 const RESET_V1_POST_RESET_TABLE_POLICY = deepFreeze([
+  { tableName: "fad_deadline_controls", introducedByMigrationId: 68, treatment: "require_empty" },
+  { tableName: "fad_deadline_commands", introducedByMigrationId: 68, treatment: "require_empty" },
+  { tableName: "fad_timing_changes", introducedByMigrationId: 69, treatment: "require_empty" },
+  { tableName: 'fad_auction_cutoff_settings', introducedByMigrationId: 70, treatment: 'require_empty' },
+  { tableName: 'fad_auction_cutoff_changes', introducedByMigrationId: 70, treatment: 'require_empty' },
+  { tableName: 'league_trade_deadline_changes', introducedByMigrationId: 71, treatment: 'require_empty' },
+  { tableName: 'auction_timing_changes', introducedByMigrationId: 72, treatment: 'require_empty' },
+  { tableName: 'fad_auction_clock_changes', introducedByMigrationId: 74, treatment: 'require_empty' },
+  { tableName: 'league_private_reveals', introducedByMigrationId: 75, treatment: 'require_empty' },
+  { tableName: 'league_calendar_changes', introducedByMigrationId: 76, treatment: 'require_empty' },
+  { tableName: 'league_auction_schedule_changes', introducedByMigrationId: 77, treatment: 'require_empty' },
+  { tableName: 'league_scoring_rules', introducedByMigrationId: 78, treatment: 'require_empty' },
+  { tableName: 'league_help_requests', introducedByMigrationId: 81, treatment: 'require_empty' },
+  { tableName: 'league_help_events', introducedByMigrationId: 81, treatment: 'require_empty' },
+  { tableName: 'league_reset_archives', introducedByMigrationId: 83, treatment: 'require_empty' },
+  { tableName: 'league_reset_actions', introducedByMigrationId: 83, treatment: 'require_empty' },
+  { tableName: 'league_management_actions', introducedByMigrationId: 79, treatment: 'require_empty' },
+  // The historical reset must refuse to run over saved league messages.
+  { tableName: "league_communications", introducedByMigrationId: 67, treatment: "require_empty" },
   // Injury records are never covered by the historical reset authorization.
   { tableName: "player_injury_status", introducedByMigrationId: 65, treatment: "require_empty" },
   { tableName: "player_injury_feed", introducedByMigrationId: 65, treatment: "require_empty" },

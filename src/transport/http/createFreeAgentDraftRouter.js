@@ -354,6 +354,7 @@ function correctionData(result) {
 
 function createFreeAgentDraftRouter({
   requestSecurity,
+  goonDraftSettingsService,
   freeAgentDraftReadService,
   freeAgentDraftReadinessRetryService,
   freeAgentDraftRecoveryReadService,
@@ -989,6 +990,28 @@ function createFreeAgentDraftRouter({
   router.use(
     requestSecurity.requireCompatibleFetchMetadata
   );
+
+  if (goonDraftSettingsService) {
+    const route = "/api/v1/leagues/:leagueId/free-agent-drafts/:fadId/timing-settings";
+    router.get(route, requestSecurity.authenticateBootstrap, (request, response) => {
+      try {
+        exactQuery(request.query, []);
+        return success(request, response, 200, goonDraftSettingsService.read({
+          leagueId: request.params.leagueId, fadId: request.params.fadId, authenticated: bootstrap(request),
+        }));
+      } catch (error) { return mapError(request, response, error); }
+    });
+    router.put(route, requestSecurity.authenticateUnsafe, requestSecurity.requireJson,
+      express.json({ limit: "2kb", strict: true }), (request, response) => {
+        try {
+          exactQuery(request.query, []);
+          return success(request, response, 200, goonDraftSettingsService.update({
+            leagueId: request.params.leagueId, fadId: request.params.fadId, input: request.body,
+            expectedVersion: parseIfMatch(request), authenticated: unsafeSession(request),
+          }));
+        } catch (error) { return mapError(request, response, error); }
+      });
+  }
 
   router.get(
     "/api/v1/leagues/:leagueId/free-agent-drafts/navigation",

@@ -511,15 +511,28 @@ function createMatchupIntegrationService({
   }
 
   function transitionWeek(input) {
+    if (input.input?.action === "preview_shift_week_one") {
+      const body = exactObject(input.input, ["action", "firstWeekStartsAtMs"]);
+      commissioner(input);
+      return scheduleService.previewShiftWeekOne({
+        leagueId: input.leagueId, seasonId: input.seasonId, weekId: input.weekId,
+        input: { action: "shift_week_one", firstWeekStartsAtMs: body.firstWeekStartsAtMs, confirmation: "CHANGE WEEK 1 START" },
+        authenticated: input.authenticated,
+      });
+    }
     if (
       input.input?.action ===
       "shift_week_one"
     ) {
+      const body = { ...input.input };
+      const previewHash = body.previewHash;
+      delete body.previewHash;
       return scheduleService.shiftWeekOne({
         leagueId: input.leagueId,
         seasonId: input.seasonId,
         weekId: input.weekId,
-        input: input.input,
+        input: body,
+        previewHash,
         expectedWeekVersion:
           input.expectedVersion,
         idempotencyKey:
@@ -656,22 +669,18 @@ function createMatchupIntegrationService({
       authorizedAsPlatformAdministrator:
         authority.authority === "platform_administrator",
     };
-    const preview = recoveryService.previewStandings(command);
     if (!confirmed) {
       if (Object.keys(body).length !== 1) {
         fail(MATCHUP_INTEGRATION_CODES.inputInvalid, "A rebuild preview accepts confirmation only.");
       }
-      return Object.freeze({ code: "MATCHUP_STANDINGS_REBUILD_PREVIEWED", preview });
-    }
-    if (expectedVersion(input.expectedVersion) !== preview.expectedVersion) {
-      fail(MATCHUP_INTEGRATION_CODES.versionConflict, "The standings preview is stale.");
+      return Object.freeze({ code: "MATCHUP_STANDINGS_REBUILD_PREVIEWED", preview: recoveryService.previewStandings(command) });
     }
     return Object.freeze({
       code: "MATCHUP_STANDINGS_REBUILT",
       result: recoveryService.rebuildStandings({
         ...command,
         operationId: operationId(input.idempotencyKey, createId),
-        expectedVersion: input.expectedVersion,
+        expectedVersion: expectedVersion(input.expectedVersion),
         expectedCurrentSnapshotId: body.expectedCurrentSnapshotId ?? null,
         reason: body.reason,
         confirmed: true,

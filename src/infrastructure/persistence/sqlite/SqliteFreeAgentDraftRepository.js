@@ -1,3 +1,4 @@
+const { readGoonDraftTiming } = require("./goonDraftTiming");
 const crypto = require("node:crypto");
 const {
   isDeepStrictEqual,
@@ -5330,6 +5331,7 @@ function createSqliteFreeAgentDraftRepository({
       .map(rolloverRecord);
     try {
       validateFreeAgentDraftRolloverSequence({
+        ...(scope.leagueId === "48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03" ? { creationCutoffLeadMs: readGoonDraftTiming(database, scope.leagueId).cutoffMs } : {}),
         ...(draft.initialRolloverTimesAtMs ? { initialRolloverTimesAtMs: draft.initialRolloverTimesAtMs } : {}),
         candidateDeadlineAtMs:
           draft.candidateDeadlineAtMs,
@@ -5764,6 +5766,10 @@ function createSqliteFreeAgentDraftRepository({
         scheduleRecoveryId = sealed.recoveryId;
       }
 
+      if (command.schedule.draftTiming?.auctionCreationCutoffMinutes !== undefined) {
+        database.prepare('INSERT INTO fad_auction_cutoff_settings(id,league_id,season_id,gap_ms,updated_at_ms,version) VALUES(?,?,?,?,?,1)')
+          .run(command.evidence.fadId,command.leagueId,command.seasonId,command.schedule.draftTiming.auctionCreationCutoffMinutes*60_000,command.openedAtMs);
+      }
       const activeByTeam = new Map(
         activeRows.map((row) => [
           row.team_id,
@@ -6271,6 +6277,7 @@ function createSqliteFreeAgentDraftRepository({
       if ((!supportsDraftTiming || !supportsScheduleTiming) && command.schedule.draftTiming !== undefined) {
         throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible, "Configured draft timing requires the current SQLite schema.");
       }
+      if (command.schedule.draftTiming?.auctionCreationCutoffMinutes !== undefined && database.pragma("user_version",{simple:true})<84) throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible,"Configured auction cutoffs require the current schema.");
       return openingTransaction.immediate(
         command
       );

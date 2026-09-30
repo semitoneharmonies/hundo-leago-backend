@@ -61,6 +61,7 @@ function createOperationsHealthRouter({
     "/api/v1/operations/health",
     requestSecurity.authenticateBootstrap,
     (request, response) => {
+      response.set('Cache-Control','private, no-store');
       try {
         platformAuthorization.requireAdministrator(
           requestSecurity.getSessionBootstrap(request)

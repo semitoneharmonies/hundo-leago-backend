@@ -1386,10 +1386,12 @@ function evaluateCandidateCardHelpAuthority(
     "currentTeamManager",
     "currentCommissionerAuthority",
     "activeHelpRequest",
+    ...(input != null && Object.hasOwn(input, "softDeadline") ? ["softDeadline"] : []),
     "nowMs",
     "helpOpensAtMs",
     "candidateDeadlineAtMs",
   ]);
+  if (Object.hasOwn(input, "softDeadline")) safeBoolean(input.softDeadline, "soft_deadline_invalid");
   const actorAuthority = enumValue(
     input.actorAuthority,
     CANDIDATE_CARD_EDITOR_AUTHORITIES,
@@ -1421,28 +1423,28 @@ function evaluateCandidateCardHelpAuthority(
     input.helpOpensAtMs,
     "help_opens_at_ms_invalid"
   );
-  const candidateDeadlineAtMs =
+  const candidateDeadlineAtMs = input.candidateDeadlineAtMs === null ? null :
     safeTimestamp(
       input.candidateDeadlineAtMs,
       "candidate_deadline_at_ms_invalid"
     );
   if (
-    helpOpensAtMs >=
+    candidateDeadlineAtMs !== null && helpOpensAtMs >=
     candidateDeadlineAtMs
   ) {
     failInput("help_window_invalid");
   }
   const beforeDeadline =
-    nowMs < candidateDeadlineAtMs;
+    candidateDeadlineAtMs === null || nowMs < candidateDeadlineAtMs;
   const helpWindowOpen =
-    nowMs >= helpOpensAtMs &&
+    candidateDeadlineAtMs !== null && nowMs >= helpOpensAtMs &&
     beforeDeadline;
   const managerReadAccess =
     actorAuthority === "manager" &&
     activeLeagueMembership &&
     currentTeamManager;
   const managerEditAccess =
-    managerReadAccess && beforeDeadline;
+    managerReadAccess && (beforeDeadline || input.softDeadline === true);
   const commissionerAuthoritySelected =
     actorAuthority === "commissioner" ||
     actorAuthority ===

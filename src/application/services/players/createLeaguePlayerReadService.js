@@ -207,7 +207,7 @@ function createLeaguePlayerReadService({
     const pageSize = normalizeLimit(limit);
     const cursorId = normalizeCursor(cursor);
     const cursorRow =
-      cursorId === null ? null : playerRepository.findPageCursor(cursorId);
+      cursorId === null ? null : playerRepository.findPageCursor(cursorId, {leagueId});
     if (!cursorRow) {
       if (cursorId !== null) failInput();
     } else if (
@@ -276,7 +276,7 @@ function createLeaguePlayerReadService({
     ) {
       failInput();
     }
-    const row = playerRepository.findDetailById(playerId);
+    const row = playerRepository.findDetailById(playerId, {leagueId});
     if (!row) throw new PlayerNotFoundError();
     const leagueRow = leaguePlayerRepository.findByPlayerId({
       leagueId: authority.leagueId,

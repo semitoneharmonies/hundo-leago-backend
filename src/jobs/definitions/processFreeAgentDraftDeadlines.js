@@ -164,7 +164,7 @@ function requireTerminal(result, claimed) {
     !result ||
     typeof result !== "object" ||
     Array.isArray(result) ||
-    result.outcome !== "succeeded" ||
+    !["succeeded", "held"].includes(result.outcome) ||
     result.runId !== claimed.runId
   ) {
     throw new TypeError(
@@ -300,7 +300,7 @@ function createProcessFreeAgentDraftDeadlinesJob({
             occurrence,
             leaseExpiresAtMs
           );
-          requireTerminal(
+          const result = requireTerminal(
             await deadlineService.executeClaimedDeadline({
               leagueId: claimed.leagueId,
               seasonId: claimed.seasonId,
@@ -322,7 +322,8 @@ function createProcessFreeAgentDraftDeadlinesJob({
             }),
             claimed
           );
-          summary.succeeded += 1;
+          if (result.outcome === "held") summary.held = (summary.held || 0) + 1;
+          else summary.succeeded += 1;
         } catch {
           summary.failed += 1;
           summary.status = "failed";

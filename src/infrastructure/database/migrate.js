@@ -114,6 +114,15 @@ function discoverMigrations({ migrationsDirectory } = {}) {
   }
 
   migrations.sort((left, right) => left.id - right.id);
+  // The existing staging database applied trades/injuries before the two
+  // production FAD corrections. Keep its historical files and checksums intact.
+  if (path.basename(resolvedDirectory) === "staging-migrations") {
+    if (migrations.map(({ id }) => id).join(",") !== "62,63,64,65") {
+      throw migrationError("MIGRATION_STAGING_LINEAGE_INVALID", "The staging lineage requires exactly migrations 62 through 65.");
+    }
+    const canonical = discoverMigrations({ migrationsDirectory: path.join(resolvedDirectory, "..", "migrations") });
+    return [...canonical.filter(({ id }) => id < 62), ...migrations, ...canonical.filter(({ id }) => id > 65)];
+  }
   return migrations;
 }
 

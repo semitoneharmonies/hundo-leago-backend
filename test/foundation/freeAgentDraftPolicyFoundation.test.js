@@ -62,6 +62,16 @@ const ALLOCATION_ID = uuid(7);
 const QUEUE_ID = uuid(8);
 const EXTENSION_SOURCE_ID = uuid(9);
 
+test("soft targets retain the open phase while actual locked phases stay locked", () => {
+  const input = { status: "cards_open", nowMs: CANDIDATE_DEADLINE_AT_MS + 1,
+    candidateDeadlineAtMs: CANDIDATE_DEADLINE_AT_MS, cardsOpenedAtMs: EARLY_CARDS_OPENED_AT_MS,
+    helpOpensAtMs: CANDIDATE_DEADLINE_AT_MS - FREE_AGENT_DRAFT_HELP_WINDOW_MS };
+  assert.equal(deriveFreeAgentDraftViewerPhase(input), "deadline_processing");
+  assert.equal(deriveFreeAgentDraftViewerPhase({ ...input, softDeadline: true }), "cards_open");
+  assert.equal(deriveFreeAgentDraftViewerPhase({ ...input, status: "deadline_locked", softDeadline: true }), "allocating");
+  assert.throws(() => deriveFreeAgentDraftViewerPhase({ ...input, softDeadline: "true" }));
+});
+
 test("player occurrences round-trip imported UUIDv5 IDs while scope IDs remain UUIDv4", () => {
   const playerId = PLAYER_ID.replace("-4000-", "-5000-");
   const allocation = buildFreeAgentDraftAllocationOccurrenceKey({ fadId: FAD_ID, playerId });

@@ -680,13 +680,13 @@ test("auction context matrix rejects ordinary leakage and invalid FAD origin, el
     ["uppercase commitment", fadActive, (value) => {
       value.drawCommitment = "A".repeat(64);
     }],
-    ["cutoff one millisecond late", fadActive, (value) => {
+    ["cutoff after its round closes", fadActive, (value) => {
       value.creationCutoffAtMs =
-        FAD_CREATION_CUTOFF_AT_MS + 1;
+        FAD_ROLLOVER_AT_MS + 1;
     }],
-    ["cutoff one millisecond early", fadActive, (value) => {
+    ["negative cutoff", fadActive, (value) => {
       value.creationCutoffAtMs =
-        FAD_CREATION_CUTOFF_AT_MS - 1;
+        -1;
     }],
     ["duplicate eligible team", () => fadActive("fad_restricted"), (value) => {
       value.eligibleTeams.push(team(IDS.teamOne));
@@ -914,17 +914,17 @@ test("start-team collection actions reject leaks, duplicates, team mismatches, r
     })], (value) => {
       value[0].creationCutoffAtMs = null;
     }],
-    ["cutoff one millisecond late", [startTeam({
+    ["cutoff after its round closes", [startTeam({
       sourceKind: "fad_open_rapid",
     })], (value) => {
       value[0].creationCutoffAtMs =
-        FAD_CREATION_CUTOFF_AT_MS + 1;
+        FAD_ROLLOVER_AT_MS + 1;
     }],
-    ["cutoff one millisecond early", [startTeam({
+    ["negative cutoff", [startTeam({
       sourceKind: "fad_open_rapid",
     })], (value) => {
       value[0].creationCutoffAtMs =
-        FAD_CREATION_CUTOFF_AT_MS - 1;
+        -1;
     }],
     ["competing value leak", [startTeam()], (value) => {
       value[0].totalValueCents = 600;

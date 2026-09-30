@@ -904,9 +904,10 @@ function validateMinimumContract(value) {
 function validateAuctionTerminalResult(value, status) {
   const reason =
     AUCTION_ADMINISTRATION_REASON_CODES.dataInvalid;
-  if (
-    !hasExactDataFields(value, AUCTION_RESULT_FIELDS)
-  ) {
+  // Historical immutable receipts predate awarded terms being distinct from
+  // submitted terms. Accept that exact shape as well as the current projection.
+  const hasAwardedTerm = isPlainObject(value) && Object.hasOwn(value, 'finalTermYears');
+  if (!hasExactDataFields(value, hasAwardedTerm ? [...AUCTION_RESULT_FIELDS, 'finalTermYears'].sort() : AUCTION_RESULT_FIELDS)) {
     failResult(reason);
   }
   const outcomeByStatus = Object.freeze({
@@ -937,6 +938,9 @@ function validateAuctionTerminalResult(value, status) {
   ]) {
     validateNullablePositiveInteger(value[field], reason);
   }
+  if (hasAwardedTerm && (status === 'resolved'
+    ? !Number.isSafeInteger(value.finalTermYears) || value.finalTermYears < 1 || value.finalTermYears > 3
+    : value.finalTermYears !== null)) failResult(reason);
   if (value.winningTeam !== null) {
     validateTeam(value.winningTeam);
   }

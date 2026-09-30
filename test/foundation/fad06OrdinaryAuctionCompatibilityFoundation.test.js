@@ -29,6 +29,8 @@ const {
 );
 const {
   migrateDatabase,
+  applyMigrations,
+  discoverMigrations,
 } = require(
   "../../src/infrastructure/database/migrate"
 );
@@ -221,7 +223,7 @@ function insertAssignment(
   });
 }
 
-function createPersistenceRuntime(t) {
+function createPersistenceRuntime(t, { schemaVersion } = {}) {
   const temporaryRoot = fs.mkdtempSync(
     path.join(
       os.tmpdir(),
@@ -244,7 +246,12 @@ function createPersistenceRuntime(t) {
       force: true,
     });
   });
-  migrateDatabase({
+  if (schemaVersion) applyMigrations({
+    database: connection.database,
+    migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }).filter(m => m.id <= schemaVersion),
+    applicationBuildId: 'auction-timing-old-schema', now: () => OPEN_MS,
+  });
+  else migrateDatabase({
     database: connection.database,
     migrationsDirectory: MIGRATIONS_DIRECTORY,
     applicationBuildId:
@@ -512,11 +519,96 @@ function createPersistenceRuntime(t) {
   };
 }
 
+test('auction timing edits preserve sealed bids through migration, rollback, extension, shortening and actual resolution', async t => {
+  const { database } = createPersistenceRuntime(t, { schemaVersion: 70 });
+  const tables = database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r => r.name);
+  const snapshot = names => Object.fromEntries(names.map(name => [name, database.prepare('SELECT * FROM "' + name + '" ORDER BY rowid').all()]));
+  const oldRows = snapshot(tables.filter(name => !['schema_migrations','application_metadata'].includes(name)));
+  const objects = database.prepare("SELECT type,name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY type,name").all();
+  applyMigrations({ database, migrations: discoverMigrations({migrationsDirectory:MIGRATIONS_DIRECTORY}).filter(m=>m.id<=72), applicationBuildId: 'auction-timing-migration', now: () => OPEN_MS });
+  assert.deepEqual(snapshot(Object.keys(oldRows)), oldRows);
+  for (const object of objects) assert.deepEqual(database.prepare('SELECT type,name,sql FROM sqlite_schema WHERE type=? AND name=?').get(object.type,object.name), object);
+  migrateDatabase({ database, migrationsDirectory: MIGRATIONS_DIRECTORY, applicationBuildId: 'auction-timing-current', now: () => OPEN_MS });
+  const { createSqliteAuctionTimingRepository } = require('../../src/infrastructure/persistence/sqlite/SqliteAuctionTimingRepository');
+  const { createAuctionTimingService } = require('../../src/application/services/auctions/createAuctionTimingService');
+  let now = OPEN_MS + 3_600_000;
+  const repository = createSqliteAuctionTimingRepository({ database });
+  const service = createAuctionTimingService({ repository, clock: { nowMs: () => now },
+    leagueAuthorization: { requireCommissioner() { return { actorUserId: IDS.commissioner, authority: 'commissioner' }; } } });
+  const args = { leagueId: IDS.league, auctionId: IDS.auction, authenticated: {} };
+  const protectedTables = tables.filter(name => !['auctions','league_activity','notifications','outbox_events','outbox_event_audiences'].includes(name));
+  const protectedRows = snapshot(protectedTables);
+  const beforeRead = database.serialize();
+  const status = service.read(args);
+  assert.equal(status.canEdit, true);
+  assert.deepEqual(Object.keys(status).sort(), ['leagueId','auctionId','timeZone','closesAtMs','playoffsAtMs','seasonEndsAtMs','serverNowMs','canEdit','blockedReason','history'].sort());
+  const proposed = { closesAtMs: DUE_MS + 3_600_000, reason: 'Give managers another hour' };
+  const preview = service.preview({ ...args, input: proposed });
+  assert.deepEqual(database.serialize(), beforeRead);
+  const command = { ...args, input: { ...proposed, confirmed: true, previewHash: preview.previewHash }, idempotencyKey: 'auction-timing-extension' };
+  database.exec("CREATE TEMP TRIGGER fail_timing_notification BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT,'timing injected failure'); END");
+  const beforeFailure = database.serialize();
+  assert.throws(() => service.apply(command));
+  assert.deepEqual(database.serialize(), beforeFailure);
+  database.exec('DROP TRIGGER fail_timing_notification');
+  const applied = service.apply(command);
+  assert.equal(applied.accepted, true);
+  const afterApply = database.serialize();
+  assert.equal(service.apply(command).replayed, true);
+  assert.deepEqual(database.serialize(), afterApply);
+  assert.deepEqual(snapshot(protectedTables), protectedRows);
+  assert.throws(() => database.prepare('UPDATE auction_timing_changes SET reason=? WHERE id=?').run('replacement',applied.id));
+  assert.throws(() => database.prepare('DELETE FROM auction_timing_changes WHERE id=?').run(applied.id));
+  const notices = database.prepare("SELECT message_data_json FROM notifications WHERE event_type='league_auction_timing_changed'").all();
+  assert.equal(notices.length, 3);
+  for (const notice of notices) assert.deepEqual(Object.keys(JSON.parse(notice.message_data_json)).sort(), ['auctionId','closesAtMs','leagueId','message']);
+  // A manager may edit after the original deadline, with the original first-bid timestamp intact.
+  now = DUE_MS + 1;
+  const { createSqliteAuctionBidRepository } = require('../../src/infrastructure/persistence/sqlite/SqliteAuctionBidRepository');
+  const bids = createSqliteAuctionBidRepository({ database });
+  const bidCommand = { auctionId: IDS.auction, bidId: IDS.bidB, eventId: uuid(99001), idempotencyRequestId: uuid(99002),
+    leagueId: IDS.league, teamId: IDS.teamB, actorUserId: IDS.managerB, actorMembershipId: IDS.membershipB, actorAuthority: 'manager',
+    aavCents: 275, termYears: 2, expectedBidVersion: 1, idempotencyKey: 'bid-after-old-closing',
+    occurredAtMs: now, idempotencyExpiresAtMs: now + 86400000 };
+  bids.putBid(bidCommand);
+  assert.equal(database.prepare('SELECT first_submitted_at_ms FROM auction_bids WHERE id=?').get(IDS.bidB).first_submitted_at_ms, OPEN_MS + 1);
+  const resolutionRepository = createSqliteAuctionResolutionRepository({ database, candidateCardSummerSynchronizer: { synchronize() {} } });
+  const resolutionService = createAuctionResolutionService({ repository: resolutionRepository,
+    lateLockCoordinator: { async coordinateCommittedRoster() { return { status: 'not_applicable' }; } }, secureRandom: { id: () => require('node:crypto').randomUUID() } });
+  const worker = createResolveTargetAuctionsJob({ repository: resolutionRepository, resolutionService, clock: { nowMs: () => now },
+    secureRandom: { id: () => require('node:crypto').randomUUID() }, leaseOwner: 'timing-test', logger: { error() {} } });
+  assert.equal((await worker.run()).due, 0);
+  const shorter = { closesAtMs: DUE_MS + 1_800_000, reason: 'Use the agreed revised time' };
+  const revised = service.preview({ ...args, input: shorter });
+  service.apply({ ...args, input: { ...shorter, confirmed: true, previewHash: revised.previewHash }, idempotencyKey: 'auction-timing-shortening' });
+  assert.equal(service.read(args).history.length, 2);
+  const beforeBidReplay = database.serialize();
+  const repeatedBid = bids.putBid(bidCommand);
+  assert.equal(repeatedBid.replayed, true);
+  assert.equal(repeatedBid.auction.bidClosesAtMs, shorter.closesAtMs);
+  assert.deepEqual(database.serialize(), beforeBidReplay);
+  now = shorter.closesAtMs - 1; assert.equal((await worker.run()).due, 0);
+  now++;
+  assert.equal(service.read(args).canEdit, false);
+  assert.throws(() => bids.putBid({ ...bidCommand, eventId:uuid(99003), idempotencyRequestId:uuid(99004), idempotencyKey:'bid-at-new-deadline',
+    aavCents:300, expectedBidVersion:2, occurredAtMs:now, idempotencyExpiresAtMs:now+86400000 }), { reasonCode: 'AUCTION_BID_WINDOW_CLOSED' });
+  const result = await worker.run(); assert.equal(result.completed, 1, JSON.stringify(result));
+  const final = database.prepare('SELECT status,resolves_at_ms FROM auctions WHERE id=?').get(IDS.auction);
+  assert.equal(final.status, 'resolved'); assert.equal(final.resolves_at_ms, shorter.closesAtMs);
+  assert.equal(database.prepare('SELECT COUNT(*) n FROM auction_resolutions').get().n, 1);
+  const beforeDenied = database.serialize();
+  assert.throws(() => service.preview({ ...args, input: proposed }));
+  assert.equal(service.apply(command).replayed, true);
+  assert.deepEqual(database.serialize(), beforeDenied);
+  assert.deepEqual(database.pragma('foreign_key_check'), []);
+  assert.equal(database.pragma('integrity_check',{simple:true}), 'ok');
+});
+
 describe(
   "FAD-06 ordinary auction compatibility characterization",
   () => {
     test(
-      "ranks total value, AAV, original time, then stable ID and preserves exact due pricing",
+      "ranks AAV, term, original time, then stable ID and preserves lowest actual winning offer pricing",
       () => {
         const highAav = policyBid(2, {
           totalValueCents: 1_500,
@@ -608,6 +700,9 @@ describe(
         assert.equal(exactDue.dueAtMs, DUE_MS);
         assert.equal(exactDue.outcome, "winner");
         assert.deepEqual(exactDue.winner, {
+          pricingRule: 'lowest_actual_winning_offer_v1',
+          pricedOffer: {totalValueCents:1000,termYears:3,aavCents:333,occurredAtMs:pricingBids[0].firstSubmittedAtMs},
+          finalTermYears:3,
           bidId: pricingBids[0].id,
           teamId: pricingBids[0].teamId,
           submittedTotalValueCents: 1_000,
@@ -617,10 +712,10 @@ describe(
           lowestOfferedTotalValueCents: 300,
           highestCompetingAavCents: 250,
           highestCompetingTotalValueCents: 500,
-          requiredWinningTotalValueCents: 500,
-          requiredWinningAavCents: 175,
-          finalTotalValueCents: 525,
-          finalAavCents: 175,
+          requiredWinningTotalValueCents: 1000,
+          requiredWinningAavCents: 333,
+          finalTotalValueCents: 1000,
+          finalAavCents: 333,
         });
       }
     );

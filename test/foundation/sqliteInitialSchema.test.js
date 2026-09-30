@@ -198,6 +198,7 @@ const EXPECTED_TABLES = [
   "auction_contexts",
   "auction_events",
   "auction_resolutions",
+  "auction_timing_changes",
   "auctions",
   "authentication_rate_limits",
   "backup_catalog",
@@ -232,6 +233,12 @@ const EXPECTED_TABLES = [
   "expanded_player_game_stats",
   "expanded_stat_refreshes",
   "expanded_stat_totals",
+  "fad_auction_clock_changes",
+  "fad_auction_cutoff_changes",
+  "fad_auction_cutoff_settings",
+  "fad_deadline_commands",
+  "fad_deadline_controls",
+  "fad_timing_changes",
   "free_agent_draft_allocation_correction_command_results",
   "free_agent_draft_allocation_events",
   "free_agent_draft_auction_participants",
@@ -257,11 +264,22 @@ const EXPECTED_TABLES = [
   "idempotency_requests",
   "job_runs",
   "league_activity",
+  "league_auction_schedule_changes",
+  "league_calendar_changes",
+  "league_communications",
   "league_freezes",
+  "league_help_events",
+  "league_help_requests",
   "league_invitations",
+  "league_management_actions",
   "league_memberships",
   "league_player_positions",
+  "league_private_reveals",
+  "league_reset_actions",
+  "league_reset_archives",
+  "league_scoring_rules",
   "league_settings",
+  "league_trade_deadline_changes",
   "leagues",
   "matchup_byes",
   "matchup_operations",
@@ -735,7 +753,7 @@ describe("M2-04 initial relational schema", () => {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     });
 
-    assert.equal(migrations.length, 65);
+    assert.equal(migrations.length, 84);
     assert.equal(migrations[0].id, 1);
     assert.equal(migrations[0].fileName, "0001_initial.sql");
     assert.equal(migrations[1].id, 2);
@@ -1198,12 +1216,12 @@ describe("M2-04 initial relational schema", () => {
       assert.equal(migration.checksum, expected.sha256);
     }
     assert.equal(migrationResult.status, "exact");
-    assert.equal(database.pragma("user_version", { simple: true }), 65);
+    assert.equal(database.pragma("user_version", { simple: true }), 84);
 
     const ledgerBefore = database
       .prepare("SELECT * FROM schema_migrations")
       .all();
-    assert.equal(ledgerBefore.length, 65);
+    assert.equal(ledgerBefore.length, 84);
     assert.equal(ledgerBefore[0].checksum, migrations[0].checksum);
     assert.equal(ledgerBefore[1].checksum, migrations[1].checksum);
     assert.equal(ledgerBefore[2].checksum, migrations[2].checksum);
@@ -1398,13 +1416,13 @@ describe("M2-04 initial relational schema", () => {
       )
       .all("table", "sqlite_%")
       .map(({ name }) => name);
-    assert.equal(EXPECTED_TABLES.length, 142);
+    assert.equal(EXPECTED_TABLES.length, 160);
     assert.equal(
       EXPECTED_TABLES.filter(
         (tableName) =>
           tableName !== "schema_migrations"
       ).length,
-      141
+      159
     );
     assert.deepEqual(tables, EXPECTED_TABLES);
 
@@ -1417,7 +1435,7 @@ describe("M2-04 initial relational schema", () => {
         ORDER BY name
       `)
       .all();
-    assert.equal(immutableDeleteGuards.length, 80);
+    assert.equal(immutableDeleteGuards.length, 96);
     assert.ok(
       immutableDeleteGuards.some(
         ({ name }) =>
@@ -1487,7 +1505,7 @@ describe("M2-04 initial relational schema", () => {
         },
       {
         metadata_key: "data_model_version",
-        metadata_value: "65",
+        metadata_value: "84",
       },
       ]
     );

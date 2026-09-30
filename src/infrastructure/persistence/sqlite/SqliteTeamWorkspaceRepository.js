@@ -1,3 +1,4 @@
+const {createLeagueScoringRuleReader,withLeagueScoring} = require('./leagueScoringRules');
 const { createInjuryReader } = require('./SqlitePlayerInjuryRepository');
 const { injuryProjection } = require('../../../domain/players/injuryStatusPolicy');
 const {
@@ -32,7 +33,7 @@ function freezeRows(rows) {
   return Object.freeze(rows.map(freezeRow));
 }
 
-function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled = false } = {}) {
+function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled = false, nowMs = Date.now } = {}) {
   const readInjury = createInjuryReader(database);
   const capRepository = createSqliteCapReadRepository({ database });
   const readCapOutlook = createSqliteCapOutlookReader({ database });
@@ -482,6 +483,7 @@ function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled 
             "A roster display-order set is not unique."
           );
         }
+        const scoringRule = createLeagueScoringRuleReader(database, nowMs)(leagueId);
         const record = {
           scope: freezeRow(scope),
           cap: capRepository.calculate({
@@ -489,7 +491,7 @@ function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled 
             seasonId: scoped.seasonId,
             teamId: scoped.teamId,
           }),
-          players: freezeRows(playersStatement.all(scoped).map(row => ({ ...row, injury: injuryProjection(readInjury(row.player_id)) }))),
+          players: freezeRows(playersStatement.all(scoped).map(row => ({ ...withLeagueScoring(row, scoringRule), injury: injuryProjection(readInjury(row.player_id)) }))),
           draftPicks: freezeRows(draftPicksStatement.all(scoped)),
           retentions: freezeRows(retentionsStatement.all(scoped)),
           buyouts: freezeRows(buyoutsStatement.all(scoped)),

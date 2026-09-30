@@ -463,6 +463,10 @@ function loadTargetRuntimeConfig({
   if (expandedScoringEnabled && !nhlCompletedStatisticsEnabled) {
     fail("EXPANDED_SCORING_ENABLED", "the completed-game NHL source must be enabled first");
   }
+  const stagingMigrationLineage = optionalExactBoolean(env, "STAGING_MIGRATION_LINEAGE") === true;
+  if (stagingMigrationLineage && security.appEnv !== "staging") {
+    fail("STAGING_MIGRATION_LINEAGE", "the alternate migration lineage is restricted to staging");
+  }
   const runtimeConfig = {
     nhlCompletedStatisticsEnabled,
     expandedScoringEnabled,
@@ -490,7 +494,7 @@ function loadTargetRuntimeConfig({
     migrationsDirectory: path.join(
       path.resolve(backendRoot),
       "database",
-      "migrations"
+      stagingMigrationLineage ? "staging-migrations" : "migrations"
     ),
     persistentRoot,
     port: parsePort(env),

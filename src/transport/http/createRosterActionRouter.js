@@ -87,6 +87,9 @@ function createRosterActionRouter({ requestSecurity, rosterActionService } = {})
   }
 
   function mapError(request, response, error) {
+    if (error?.code === 'LEAGUE_COMPETITION_PAUSED') {
+      return response.status(409).json({error:{code:error.code,message:'League competition is paused. Resume before changing roster assignments or contracts.',requestId:requestSecurity.getRequestId(request)}});
+    }
     const conflictCode =
       error?.reasonCode === "BUYOUT_LOCK_ACTIVE"
         ? "BUYOUT_LOCK_ACTIVE"

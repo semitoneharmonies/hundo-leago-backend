@@ -107,6 +107,7 @@ function createMatchupResultService({ repository, scoringService, createId = ran
       resultVersionId: createId(),
       snapshotId: createId(),
       refreshId: score.source.refreshId,
+      scoringRuleVersion: score.home.scoringRuleVersion,
       homeTeamId: context.matchup.home_team_id,
       awayTeamId: context.matchup.away_team_id,
       homeScoreHundredths: score.home.scoreHundredths,

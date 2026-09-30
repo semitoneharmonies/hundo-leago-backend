@@ -226,6 +226,13 @@ function createRuntimeHealthService({
       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
     FROM outbox_events
   `);
+  const emailQueueQuery=database.prepare(`SELECT
+    SUM(status='pending') AS pending,SUM(status='publishing') AS publishing,SUM(status='failed') AS failed,
+    MAX(CASE WHEN status='published' THEN published_at_ms END) AS lastDeliveredAtMs
+    FROM outbox_events WHERE league_id IS NULL AND event_type LIKE 'account.%'`);
+  const jobHealthQuery=database.prepare(`SELECT
+    SUM(status='pending') AS pending,SUM(status IN ('leased','running')) AS running,SUM(status='failed') AS failed,
+    SUM(status IN ('leased','running') AND lease_expires_at_ms<@now) AS interrupted FROM job_runs`);
 
   function isDatabaseReady() {
     if (!database.open) return false;
@@ -302,6 +309,7 @@ function createRuntimeHealthService({
       throw new Error("runtime health clock returned an invalid timestamp");
     }
     const outbox = outboxQuery.get();
+    const emailQueue=emailQueueQuery.get(),jobs=jobHealthQuery.get({now});
     return Object.freeze({
       environment: runtimeConfig.appEnv,
       environmentId: runtimeConfig.environmentId,
@@ -317,7 +325,10 @@ function createRuntimeHealthService({
       }),
       accountEmailDelivery: Object.freeze({
         enabled: runtimeConfig.accountEmailDeliveryEnabled,
+        pending:emailQueue?.pending||0,publishing:emailQueue?.publishing||0,failed:emailQueue?.failed||0,
+        lastDeliveredAtMs:emailQueue?.lastDeliveredAtMs??null,
       }),
+      jobs:Object.freeze({pending:jobs?.pending||0,running:jobs?.running||0,failed:jobs?.failed||0,interrupted:jobs?.interrupted||0}),
       freeAgentDraftRoutes: Object.freeze({
         enabled: runtimeConfig.freeAgentDraftRoutesEnabled,
       }),

@@ -10,12 +10,13 @@ function freeAgentDraftSchedulerScopeSql({ database, configuredSeasonsOnly = fal
   if (!/^[a-z_]+$/.test(alias)) {
     throw new TypeError("FAD scheduler scope requires a SQL alias");
   }
-  if (!configuredSeasonsOnly) return "1";
+  const unpaused = `NOT EXISTS (SELECT 1 FROM league_freezes pause WHERE pause.league_id=${alias}.league_id AND pause.status='active')`;
+  if (!configuredSeasonsOnly) return unpaused;
   const supportsTiming = database.prepare(
     "SELECT name FROM pragma_table_info('season_matchup_schedule_generations') WHERE name = 'fad_timing_json'"
   ).get();
   if (!supportsTiming) return "0";
-  return `EXISTS (
+  return `${unpaused} AND EXISTS (
     SELECT 1 FROM season_matchup_schedule_generations AS enrolled_schedule
     WHERE enrolled_schedule.league_id = ${alias}.league_id
       AND enrolled_schedule.season_id = ${alias}.season_id

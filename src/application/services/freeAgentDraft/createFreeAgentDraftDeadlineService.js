@@ -361,6 +361,8 @@ function createFreeAgentDraftDeadlineService({
       ) {
         failState("writer_must_be_synchronous");
       }
+      if (result?.outcome === "held" && result.runId === execution.jobExecution.runId &&
+          result.fadId === execution.fadId && Object.keys(result).length === 3) return Object.freeze(result);
       return requireTerminal(result, execution);
     },
   });

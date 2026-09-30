@@ -35,6 +35,7 @@ const {
 );
 
 const { validateFreeAgentDraftTiming } = require("../../../domain/freeAgentDraft/freeAgentDraftPolicy");
+const { digest } = require("../../../domain/leagues/leagueCommunicationPolicy");
 
 const MATCHUP_SCHEDULE_SERVICE_CODES = Object.freeze({
   contextMissing: "MATCHUP_SCHEDULE_CONTEXT_MISSING",
@@ -1016,7 +1017,26 @@ function inspectShiftContext({
       "The active team set changed after schedule creation."
     );
   }
+  const canonicalShift = planExplicitMatchupSchedule({
+    teamIds: schedulePlan.teamIds, nhlSeasonKey: context.nhlSeasonKey,
+    nhlRegularSeasonStartsAtMs: context.nhlRegularSeasonStartsAtMs,
+    nhlRegularSeasonEndsAtMs: context.nhlRegularSeasonEndsAtMs,
+    fantasyPlayoffsStartAtMs: context.fantasyPlayoffsStartAtMs,
+    fantasyPlayoffsEndAtMs: context.fantasyPlayoffsEndAtMs,
+    firstWeekStartsAtMs: schedulePlan.firstWeekStartsAtMs, timeZone: context.timeZone, nowMs,
+  });
+  if (canonicalShift.weeks.length !== schedulePlan.weeks.length || schedulePlan.weeks.some((week, i) =>
+      ['startsAtMs','baselineAtMs','locksAtMs','endsAtMs','rollsOverAtMs'].some(field => week[field] !== canonicalShift.weeks[i][field]))) {
+    fail(MATCHUP_SCHEDULE_SERVICE_CODES.weekInvalid, "The shift must preserve matchup count and the complete calendar through playoffs.");
+  }
   const draftTiming = requireFutureCandidateDeadline(schedulePlan.firstWeekStartsAtMs, nowMs, generation.draftTiming);
+  // Apply the same clock validation the readiness worker will use, before any
+  // schedule mutation. Legacy timetables have stricter opening-day rules.
+  require('../../../domain/freeAgentDraft/freeAgentDraftScheduleRecoveryPolicy').planFreeAgentDraftPreOpenScheduleRecovery({
+    readinessAtMs: nowMs, firstWeekStartsAtMs: schedulePlan.firstWeekStartsAtMs,
+    fantasyPlayoffsStartAtMs: context.fantasyPlayoffsStartAtMs, timeZone: context.timeZone,
+    ...(draftTiming ? { draftTiming } : {}),
+  });
   const oldJobs = inspectShiftJobs({
     context,
     generation,
@@ -1605,6 +1625,26 @@ function createMatchupScheduleService({
     }
   }
 
+  function previewShiftWeekOne({ leagueId, seasonId, weekId, input, authenticated }) {
+    validateMatchupScheduleCommandLeagueId(leagueId);
+    validateMatchupScheduleCommandSeasonId(seasonId);
+    validateMatchupScheduleShiftWeekOneWeekId(weekId);
+    const canonicalInput = validateMatchupScheduleShiftWeekOneInput(input);
+    const authority = safeAuthority(leagueAuthorization.requireCommissioner(authenticated, leagueId), leagueId);
+    const context = repository.readShiftContext({ leagueId, seasonId, weekId });
+    const inspected = inspectShiftContext({ context, leagueId, seasonId, weekId, input: canonicalInput, nowMs: safeNow(clock) });
+    return Object.freeze({
+      code: "MATCHUP_WEEK_ONE_SHIFT_PREVIEWED", leagueId, seasonId, weekId,
+      expectedWeekVersion: inspected.targetWeek.version,
+      previousFirstWeekStartsAtMs: inspected.schedulePlan.previousFirstWeekStartsAtMs,
+      firstWeekStartsAtMs: inspected.schedulePlan.firstWeekStartsAtMs,
+      shiftedWeekCount: inspected.schedulePlan.shiftedWeekCount,
+      lastWeekEndsAtMs: inspected.schedulePlan.lastWeekEndsAtMs,
+      weeks: inspected.schedulePlan.weeks.map(({ sequence, startsAtMs, endsAtMs }) => ({ sequence, startsAtMs, endsAtMs })),
+      previewHash: digest({ context, input: canonicalInput, actorUserId: authority.actorUserId }),
+    });
+  }
+
   function shiftWeekOne({
     leagueId,
     seasonId,
@@ -1613,6 +1653,7 @@ function createMatchupScheduleService({
     expectedWeekVersion,
     idempotencyKey,
     authenticated,
+    previewHash,
   } = {}) {
     const canonicalLeagueId =
       validateMatchupScheduleCommandLeagueId(
@@ -1699,12 +1740,17 @@ function createMatchupScheduleService({
         }
 
         const nowMs = safeNow(clock);
-        const inspected = inspectShiftContext({
-          context: repository.readShiftContext({
+        const shiftContext = repository.readShiftContext({
             leagueId: canonicalLeagueId,
             seasonId: canonicalSeasonId,
             weekId: canonicalWeekId,
-          }),
+          });
+        if (previewHash !== undefined && (!/^[a-f0-9]{64}$/.test(previewHash) ||
+            previewHash !== digest({ context: shiftContext, input: canonicalInput, actorUserId: authority.actorUserId }))) {
+          fail(MATCHUP_SCHEDULE_SERVICE_CODES.preconditionFailed, "The schedule changed. Review the Week 1 shift again.");
+        }
+        const inspected = inspectShiftContext({
+          context: shiftContext,
           leagueId: canonicalLeagueId,
           seasonId: canonicalSeasonId,
           weekId: canonicalWeekId,
@@ -1926,6 +1972,7 @@ function createMatchupScheduleService({
     preview,
     generate,
     shiftWeekOne,
+    previewShiftWeekOne,
   });
 }
 

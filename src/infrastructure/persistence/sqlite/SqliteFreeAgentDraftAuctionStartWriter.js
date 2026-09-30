@@ -517,6 +517,8 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
         AND created_at_ms = @occurredAtMs
         AND json_valid(payload_json) = 1
         AND json_extract(payload_json, @relatedPath) = @relatedId
+        AND event_type = @eventType
+        AND json_extract(payload_json, '$.version') = @version
     `);
     findIdempotency = database.prepare(`
       SELECT *
@@ -906,7 +908,7 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
       SELECT
         request.league_id AS league_id,
         context.fad_id AS fad_id,
-        bid.team_id AS team_id
+        event.team_id AS team_id
       FROM idempotency_requests AS request
       JOIN auctions AS auction
         ON auction.league_id = request.league_id
@@ -918,11 +920,13 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
        AND context.source_kind = '${SOURCE_KIND}'
        AND context.fad_origin = 'manager_nomination'
        AND context.fad_allocation_id IS NULL
-      JOIN auction_bids AS bid
-        ON bid.league_id = auction.league_id
-       AND bid.season_id = auction.season_id
-       AND bid.auction_id = auction.id
-       AND bid.idempotency_request_id = request.id
+      JOIN auction_events AS event
+        ON event.league_id = auction.league_id
+       AND event.season_id = auction.season_id
+       AND event.auction_id = auction.id
+       AND event.event_type = 'auction_started'
+       AND event.actor_user_id = request.actor_user_id
+       AND event.occurred_at_ms = request.created_at_ms
       WHERE request.league_id = @leagueId
         AND request.id = @idempotencyRequestId
         AND request.actor_user_id = @actorUserId
@@ -959,6 +963,9 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
         auction.player_id AS player_id,
         auction.opened_at_ms AS auction_opened_at_ms,
         auction.resolves_at_ms AS auction_resolves_at_ms,
+        ${database.pragma('user_version', { simple: true }) >= 74
+          ? "COALESCE((SELECT clock.previous_closes_at_ms FROM fad_auction_clock_changes clock WHERE clock.league_id=auction.league_id AND clock.auction_id=auction.id ORDER BY clock.previous_auction_version LIMIT 1),auction.resolves_at_ms)"
+          : "auction.resolves_at_ms"} AS original_resolves_at_ms,
         context.fad_id AS fad_id,
         context.fad_rollover_id AS rollover_id,
         context.created_at_ms AS context_created_at_ms,
@@ -987,7 +994,6 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
         ON bid.league_id = auction.league_id
        AND bid.season_id = auction.season_id
        AND bid.auction_id = auction.id
-       AND bid.idempotency_request_id = request.id
       JOIN auction_events AS event
         ON event.league_id = bid.league_id
        AND event.season_id = bid.season_id
@@ -995,6 +1001,8 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
        AND event.bid_id = bid.id
        AND event.team_id = bid.team_id
        AND event.event_type = 'auction_started'
+       AND event.actor_user_id = request.actor_user_id
+       AND event.occurred_at_ms = request.created_at_ms
       JOIN free_agent_draft_draws AS draw
         ON draw.league_id = context.league_id
        AND draw.season_id = context.season_id
@@ -1332,6 +1340,8 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
           occurredAtMs,
           relatedPath,
           relatedId,
+          eventType,
+          version,
         }).count !== 1
       ) {
         incompatible(
@@ -1469,7 +1479,7 @@ function createSqliteFreeAgentDraftAuctionStartWriter({
         metadata.fadId !== row.fad_id ||
         metadata.fadRolloverId !== row.rollover_id ||
         metadata.openingTeamId !== row.bid_team_id ||
-        metadata.bidClosesAtMs !== row.auction_resolves_at_ms ||
+        metadata.bidClosesAtMs !== row.original_resolves_at_ms ||
         row.auction_opened_at_ms !== row.accepted_at_ms ||
         row.context_created_at_ms !== row.accepted_at_ms ||
         row.event_occurred_at_ms !== row.accepted_at_ms ||

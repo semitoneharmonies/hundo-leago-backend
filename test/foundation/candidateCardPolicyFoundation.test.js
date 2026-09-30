@@ -1789,6 +1789,18 @@ describe(
       }
     );
 
+    test("soft deadlines retain only the current manager's editing authority", () => {
+      const atTarget = helpInput({ nowMs: DEADLINE_AT_MS, softDeadline: true });
+      assert.equal(evaluateCandidateCardHelpAuthority(atTarget).canEditCandidateEntries, true);
+      assert.equal(evaluateCandidateCardHelpAuthority({ ...atTarget, activeLeagueMembership: false }).canEditCandidateEntries, false);
+      assert.equal(evaluateCandidateCardHelpAuthority({ ...atTarget, currentTeamManager: false }).canEditCandidateEntries, false);
+      const helper = evaluateCandidateCardHelpAuthority({ ...atTarget, actorAuthority: "commissioner",
+        currentTeamManager: false, currentCommissionerAuthority: true, activeHelpRequest: true });
+      assert.equal(helper.canReadPrivateCard, false);
+      assert.equal(helper.canEditCandidateEntries, false);
+      assert.throws(() => evaluateCandidateCardHelpAuthority({ ...atTarget, softDeadline: "true" }));
+    });
+
     test(
       "rejects malformed help authority material with stable safe errors",
       () => {

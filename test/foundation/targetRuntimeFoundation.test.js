@@ -30,6 +30,8 @@ const {
   openDatabase,
 } = require("../../src/infrastructure/database/connection");
 const {
+  applyMigrations,
+  discoverMigrations,
   migrateDatabase,
 } = require("../../src/infrastructure/database/migrate");
 const {
@@ -939,12 +941,11 @@ function seedCommissionerInvitationScenario(runtime) {
 
 function seedComposedLeagueStartScenario(
   runtime,
-  { teamCount = 4, unselectedTeamColours = false } = {}
+  { teamCount = 4, unselectedTeamColours = false, leagueId = uuid(91_003) } = {}
 ) {
   const repositories = runtime.repositories.context.repositories;
   const commissionerUserId = uuid(91_001);
   const commissionerMembershipId = uuid(91_002);
-  const leagueId = uuid(91_003);
   const seasonId = uuid(91_004);
   const managerUserIds = Array.from(
     { length: teamCount },
@@ -1283,12 +1284,12 @@ function installedTargetEndpoints(routers) {
 }
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 131 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 131);
+  test("declares 193 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 193);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      131
+      193
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -1296,18 +1297,32 @@ describe("M3-19 exact target endpoint dispatch", () => {
       "accountSession",
       "activityNotification",
       "auction",
+      "auctionReveal",
+      "auctionTiming",
       "candidateCard",
       "commissionerAssignment",
       "commissionerCorrection",
+      "correctionReversal",
       "entryDraft",
+      "fadDeadlineControl",
       "freeAgentDraft",
+      "guidedLeagueReset",
+      "leagueAuctionSchedule",
+      "leagueCalendar",
+      "leagueCommunication",
+      "leagueHelp",
       "leagueInvitation",
       "leagueLifecycle",
+      "leagueManagement",
       "leagueMembership",
+      "leaguePause",
+      "leaguePickRepair",
       "leagueRead",
+      "leagueScoring",
       "matchup",
       "platformAdministration",
       "player",
+      "playerCatalogue",
       "playerInjury",
       "publicRoster",
       "rosterAction",
@@ -1317,6 +1332,7 @@ describe("M3-19 exact target endpoint dispatch", () => {
       "teamManagerAssignment",
       "teamProfile",
       "trade",
+      "tradeDeadlineChange",
       "tradeRecovery",
     ]);
   });
@@ -1407,14 +1423,14 @@ describe("M3-19 exact target endpoint dispatch", () => {
     );
   });
 
-  test("fails closed for all 20 dedicated FAD routes and preflights while preserving shared auction routes", async (t) => {
+  test("fails closed for all 31 dedicated FAD routes and preflights while preserving shared auction routes", async (t) => {
     const fadEndpoints = TARGET_ENDPOINTS.filter(({ routerKey }) =>
-      ["candidateCard", "freeAgentDraft"].includes(routerKey)
+      ["candidateCard", "freeAgentDraft", "fadDeadlineControl"].includes(routerKey)
     );
     const auctionEndpoints = TARGET_ENDPOINTS.filter(
       ({ routerKey }) => routerKey === "auction"
     );
-    assert.equal(fadEndpoints.length, 20);
+    assert.equal(fadEndpoints.length, 31);
     assert.equal(auctionEndpoints.length > 0, true);
 
     const writeGatePaths = [];
@@ -1576,7 +1592,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const options = runtimeOptions(database);
     const runtime = createTargetRuntime(options);
     assert.equal(runtime.migrationState.status, "exact");
-    assert.equal(runtime.migrationState.userVersion, 65);
+    assert.equal(runtime.migrationState.userVersion, 84);
     assert.equal(
       typeof runtime.services.league.auctionResolution.resolveDue,
       "function"
@@ -2511,7 +2527,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 131);
+    assert.equal(TARGET_ENDPOINTS.length, 191);
   });
 
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {
@@ -2573,6 +2589,16 @@ describe("M3-19 exact-schema target dependency composition", () => {
       firstWeekStartsAtMs
     );
 
+    const pauseService=runtime.services.league.leaguePause;
+    const pauseInput={action:'pause',reason:'Inspect readiness before opening cards'};
+    const pausePreview=pauseService.preview({leagueId:scenario.leagueId,authenticated,input:pauseInput});
+    pauseService.apply({leagueId:scenario.leagueId,authenticated,input:{...pauseInput,confirmed:true,previewHash:pausePreview.previewHash},idempotencyKey:'pause-fad-readiness'});
+    const pausedBytes=database.serialize();
+    const pausedRun=await runtime.services.league.freeAgentDraftReadinessJob.run();
+    assert.equal(pausedRun.due,0);assert.deepEqual(database.serialize(),pausedBytes);
+    const resumeInput={action:'resume',reason:'Readiness checked; open the cards'};
+    const resumePreview=pauseService.preview({leagueId:scenario.leagueId,authenticated,input:resumeInput});
+    pauseService.apply({leagueId:scenario.leagueId,authenticated,input:{...resumeInput,confirmed:true,previewHash:resumePreview.previewHash},idempotencyKey:'resume-fad-readiness'});
     const summary = await runtime.services.league
       .freeAgentDraftReadinessJob.run();
     assert.equal(summary.status, "succeeded");
@@ -2582,6 +2608,32 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(summary.blocked, 0);
     assert.equal(summary.failed, 0);
     assert.equal(summary.skipped, 0);
+
+    const beforeProgress = database.serialize();
+    const progress = runtime.services.league.communications.readiness({
+      leagueId: scenario.leagueId, authenticated,
+    });
+    assert.equal(progress.total, 4);
+    assert.equal(progress.empty, 4);
+    assert.equal(progress.complete, 0);
+    const management=runtime.services.league.leagueManagement.readiness({leagueId:scenario.leagueId,authenticated});
+    assert.equal(management.summary.unfinishedCards,4);
+    assert.equal(management.summary.missingManagers,0);
+    assert.equal(management.teams.every(team=>team.cardStatus==='empty'),true);
+    assert.equal(management.teams.every(team=>team.roster.requiredNow===false),true);
+    assert.deepEqual(progress.cards.map(card => card.teamId).sort(), [...scenario.teamIds].sort());
+    for (const card of progress.cards) {
+      assert.deepEqual(Object.keys(card).sort(), ["displayName", "status", "teamId", "teamName", "userId"]);
+      assert.equal(typeof card.displayName, "string");
+      assert.equal(card.status, "empty");
+    }
+    const reminder = runtime.services.league.communications.preview({
+      leagueId: scenario.leagueId, authenticated,
+      input: { kind: "reminder", title: "Finish your card", body: "Please save a complete card.",
+        audience: "unfinished_cards", pinned: false, expiresAtMs: null, notify: true },
+    });
+    assert.equal(reminder.recipientCount, 4);
+    assert.deepEqual(database.serialize(), beforeProgress);
 
     const readiness = database.prepare(`
       SELECT status, attempt_count, created_fad_id,
@@ -2947,7 +2999,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     ]);
   });
 
-  test("runs the composed reminder and zero-candidate deadline publication at their exact clocks", async (t) => {
+  for (const delayedWorker of [false, true]) test("holds unfinished cards at the target and fences commissioner processing (delayed worker: " + delayedWorker + ")", async (t) => {
     const database = createDatabase(t);
     let currentTimeMs = NOW_MS;
     const runtime = createTargetRuntime(
@@ -3071,6 +3123,48 @@ describe("M3-19 exact-schema target dependency composition", () => {
     );
 
     currentTimeMs = draft.candidate_deadline_at_ms;
+    const cardsBeforeHold = database.prepare("SELECT * FROM candidate_cards WHERE fad_id=? ORDER BY id").all(draft.id);
+    const held = await runtime.services.league.freeAgentDraftDeadlineJob.run();
+    assert.equal(held.failed, 0);
+    assert.equal(held.held, 1);
+    assert.equal(held.succeeded, 0);
+    assert.deepEqual(database.prepare("SELECT * FROM candidate_cards WHERE fad_id=? ORDER BY id").all(draft.id), cardsBeforeHold);
+    assert.equal(database.prepare("SELECT status FROM free_agent_drafts WHERE id=?").get(draft.id).status, "cards_open");
+    assert.equal(database.prepare("SELECT COUNT(*) n FROM candidate_card_snapshots WHERE fad_id=?").get(draft.id).n, 0);
+    const afterHold = database.serialize();
+    assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).due, 0);
+    assert.deepEqual(database.serialize(), afterHold);
+    const controlService = runtime.services.league.fadDeadlineControl;
+    const controlScope = { leagueId: scenario.leagueId, fadId: draft.id, authenticated };
+    const state = controlService.read(controlScope);
+    assert.equal(state.held, true);
+    assert.equal(state.total, 4);
+    assert.equal(state.complete, 0);
+    assert.equal(state.canProceed, true);
+    assert.equal(state.unfinishedTeams.length, 4);
+    const futureDue = runtime.repositories.freeAgentDraftJobs.listDue({
+      nowMs: draft.candidate_deadline_at_ms + 10 * 86_400_000, limit: 100,
+    });
+    assert.equal(futureDue.some(job => ["fad_deadline", "fad_rollover", "fad_completion"].includes(job.jobType)), false);
+    const review = controlService.preview({ ...controlScope, input: { reason: "Proceed with the league's agreement" } });
+    assert.deepEqual(database.serialize(), afterHold);
+    const confirmation = { ...controlScope, input: { reason: review.reason, previewHash: review.previewHash, confirmed: true },
+      idempotencyKey: "target-fad-manual-proceed-01" };
+    assert.equal(controlService.proceed(confirmation).replayed, false);
+    const afterConfirmation = database.serialize();
+    assert.equal(controlService.proceed(confirmation).replayed, true);
+    assert.deepEqual(database.serialize(), afterConfirmation);
+    if (delayedWorker) {
+      currentTimeMs = database.prepare("SELECT MIN(rolls_over_at_ms) n FROM free_agent_draft_rollovers WHERE fad_id=?").get(draft.id).n - 3_600_000;
+      const lateAttempt = await runtime.services.league.freeAgentDraftDeadlineJob.run();
+      assert.equal(lateAttempt.held, 1);
+      assert.equal(lateAttempt.failed, 0);
+      assert.equal(controlService.read(controlScope).held, true);
+      assert.equal(controlService.read(controlScope).canProceed, false);
+      assert.deepEqual(database.prepare("SELECT * FROM candidate_cards WHERE fad_id=? ORDER BY id").all(draft.id), cardsBeforeHold);
+      assert.equal(database.prepare("SELECT COUNT(*) n FROM candidate_card_snapshots WHERE fad_id=?").get(draft.id).n, 0);
+      return;
+    }
     const deadline = await runtime.services.league
       .freeAgentDraftDeadlineJob.run();
     assert.deepEqual(
@@ -3255,6 +3349,1149 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.deepEqual(database.pragma("integrity_check"), [
       { integrity_check: "ok" },
     ]);
+  });
+
+  test('auction timing HTTP controls enforce private commissioner and admin review with safe retries', async t => {
+    const database = createDatabase(t), runtime = createTargetRuntime(runtimeOptions(database));
+    const scenario = seedComposedLeagueStartScenario(runtime), repositories = runtime.repositories.context.repositories;
+    const commissioner = runtime.services.sessionService.issueForUser({ userId: scenario.commissionerUserId });
+    const authenticated = runtime.services.sessionService.resolveWithoutActivity(commissioner.rawSessionToken);
+    runtime.services.league.start.start({ leagueId:scenario.leagueId,input:{},expectedLeagueVersion:scenario.expectedLeagueVersion,
+      idempotencyKey:'auction-timing-league-start',authenticated });
+    const playerId=uuid(995001),auctionId=uuid(995002),oldClose=NOW_MS+86400000;
+    repositories.players.insert({id:playerId,first_name:'Clock',last_name:'Fixture',full_name:'Clock Fixture',birth_date:null,status:'active',
+      created_at_ms:NOW_MS,updated_at_ms:NOW_MS,version:1});
+    repositories.auctions.insert({id:auctionId,league_id:scenario.leagueId,season_id:scenario.seasonId,player_id:playerId,status:'open',
+      opened_at_ms:NOW_MS,resolves_at_ms:oldClose,opened_by_user_id:scenario.commissionerUserId,created_at_ms:NOW_MS,updated_at_ms:NOW_MS,version:1});
+    repositories.auction_contexts.insert({id:auctionId,league_id:scenario.leagueId,season_id:scenario.seasonId,auction_id:auctionId,source_kind:'ordinary_weekly',
+      fad_id:null,fad_rollover_id:null,fad_allocation_id:null,created_at_ms:NOW_MS});
+    const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+    const manager=runtime.services.sessionService.issueForUser({userId:managerId}),origin=await startRuntimeApp(t,runtime);
+    const url=origin+'/api/v1/leagues/'+scenario.leagueId+'/auctions/'+auctionId+'/timing';
+    const headersFor=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken});
+    const headers=headersFor(commissioner),proposed={closesAtMs:oldClose+3600000,reason:'Managers requested more time'};
+    const before=database.serialize();
+    assert.equal((await fetch(url,{headers:browserHeaders()})).status,401);
+    assert.equal((await fetch(url,{headers:headersFor(manager)})).status,403);
+    assert.equal((await fetch(url+'/preview',{method:'POST',headers:{...headers,'X-CSRF-Token':'bad'},body:JSON.stringify(proposed)})).status,403);
+    assert.equal((await fetch(url.replace(auctionId,uuid(995003)),{headers})).status,404);
+    const read=await fetch(url,{headers}); assert.equal(read.status,200); assert.match(read.headers.get('cache-control'),/no-store/);
+    const status=(await read.json()).data; assert.equal(status.canEdit,true);
+    assert.deepEqual(Object.keys(status).sort(),['leagueId','auctionId','timeZone','closesAtMs','playoffsAtMs','seasonEndsAtMs','serverNowMs','canEdit','blockedReason','history'].sort());
+    const previewResponse=await fetch(url+'/preview',{method:'POST',headers,body:JSON.stringify(proposed)});
+    assert.equal(previewResponse.status,200,JSON.stringify(await previewResponse.clone().json()));
+    const preview=(await previewResponse.json()).data;
+    assert.deepEqual(database.serialize(),before);
+    const body={...proposed,confirmed:true,previewHash:preview.previewHash},applyHeaders={...headers,'Idempotency-Key':'auction-timing-http'};
+    const applied=await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)});
+    assert.equal(applied.status,200,JSON.stringify(await applied.json()));
+    const after=database.serialize();
+    assert.equal((await (await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)})).json()).data.replayed,true);
+    assert.deepEqual(database.serialize(),after);
+    assert.equal((await fetch(url+'/apply',{method:'POST',headers:{...applyHeaders,'Idempotency-Key':'stale-timing-http'},body:JSON.stringify({...body,closesAtMs:body.closesAtMs+1})})).status,409);
+    repositories.platform_roles.insert({id:uuid(995004),user_id:managerId,role:'platform_administrator',status:'active',granted_by_user_id:null,
+      granted_at_ms:NOW_MS,ended_at_ms:null,version:1});
+    const adminHeaders=headersFor(manager),shorter={closesAtMs:oldClose+1800000,reason:'Administrator confirms revised time'};
+    const adminPreview=await fetch(url+'/preview',{method:'POST',headers:adminHeaders,body:JSON.stringify(shorter)});
+    const adminReview=(await adminPreview.json()).data; assert.equal(adminPreview.status,200); assert.equal(adminReview.shortened,true);
+    const adminApply=await fetch(url+'/apply',{method:'POST',headers:{...adminHeaders,'Idempotency-Key':'admin-auction-time'},body:JSON.stringify({...shorter,confirmed:true,previewHash:adminReview.previewHash})});
+    assert.equal(adminApply.status,200,JSON.stringify(await adminApply.json()));
+    assert.equal(database.prepare("SELECT COUNT(*) n FROM auction_timing_changes WHERE actor_authority='platform_administrator'").get().n,1);
+    assert.equal((await (await fetch(url,{headers})).json()).data.history.length,2);
+    assert.deepEqual(database.pragma('foreign_key_check'),[]); assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+  });
+
+  test('league pause and resume preserve records and clocks, reject stale work and require current HTTP authority',async t=>{
+    const database=createDatabase(t);let time=NOW_MS;
+    const runtime=createTargetRuntime(runtimeOptions(database,{securityFoundations:createSecurityFoundations({env:securityEnv(),now:()=>time,loggerSink(){}})}));
+    const scenario=seedComposedLeagueStartScenario(runtime),jobId=uuid(985001),other=uuid(985002);
+    const repos=runtime.repositories.context.repositories;
+    repos.leagues.insert({id:other,name:'Unpaused league',name_normalized:'unpaused league',status:'setup',timezone:'America/Vancouver',commissioner_membership_id:null,current_season_id:null,created_at_ms:NOW_MS,updated_at_ms:NOW_MS,version:1});
+    const insertJob=database.prepare(`INSERT INTO job_runs(id,league_id,season_id,job_type,occurrence_key,scheduled_for_ms,status,attempt_count,created_at_ms,updated_at_ms,version)
+      VALUES(?,?,?,'fixture:pause',?,?,'pending',0,?,?,1)`);
+    insertJob.run(jobId,scenario.leagueId,scenario.seasonId,'pause-main',NOW_MS+500,NOW_MS,NOW_MS);
+    insertJob.run(uuid(985003),other,null,'pause-other',NOW_MS,NOW_MS,NOW_MS);
+    const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+    const commissioner=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId}),manager=runtime.services.sessionService.issueForUser({userId:managerId});
+    const origin=await startRuntimeApp(t,runtime),url=origin+'/api/v1/leagues/'+scenario.leagueId+'/management/pause';
+    const headersFor=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken}),headers=headersFor(commissioner);
+    const post=(suffix,body,h=headers)=>fetch(url+suffix,{method:'POST',headers:h,body:JSON.stringify(body)});
+    const proposed={action:'pause',reason:'Review a timing issue before competition continues'},before=database.serialize();
+    assert.equal((await fetch(url,{headers:browserHeaders()})).status,401);assert.equal((await fetch(url,{headers:headersFor(manager)})).status,403);
+    assert.equal((await fetch(url+'/status',{headers:headersFor(manager)})).status,200);
+    assert.equal((await fetch(url.replace(scenario.leagueId,other),{headers})).status,404);
+    assert.equal((await post('/preview',proposed,{...headers,'X-CSRF-Token':'bad'})).status,403);
+    assert.equal((await post('/preview',proposed,headersFor(manager))).status,403);
+    const previewResponse=await post('/preview',proposed);assert.equal(previewResponse.status,200,JSON.stringify(await previewResponse.clone().json()));
+    const preview=(await previewResponse.json()).data;assert.equal(preview.impacts.pendingJobs,1);assert.equal(preview.overdue,false);assert.deepEqual(database.serialize(),before);
+    const body={...proposed,confirmed:true,previewHash:preview.previewHash},applyHeaders={...headers,'Idempotency-Key':'league-pause-http'};
+    database.prepare("UPDATE job_runs SET status='running',lease_owner='fixture',lease_expires_at_ms=?,attempt_count=1,version=version+1 WHERE id=?").run(NOW_MS+1000,jobId);
+    assert.equal((await post('/apply',body,applyHeaders)).status,409);
+    database.prepare("UPDATE job_runs SET status='pending',lease_owner=NULL,lease_expires_at_ms=NULL,attempt_count=0,version=1 WHERE id=?").run(jobId);
+    database.exec("CREATE TRIGGER test_pause_failure BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT,'synthetic notice failure'); END");
+    const failBefore=database.serialize();assert.equal((await post('/apply',body,applyHeaders)).status,500);assert.deepEqual(database.serialize(),failBefore);database.exec('DROP TRIGGER test_pause_failure');
+    const tables=database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r=>r.name);
+    const rows=()=>Object.fromEntries(tables.map(name=>[name,database.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()])),protectedBefore=rows();
+    const applied=await post('/apply',body,applyHeaders);assert.equal(applied.status,200,JSON.stringify(await applied.clone().json()));
+    const changed=new Set(['leagues','league_freezes','league_management_actions','league_activity','notifications','outbox_events','outbox_event_audiences']);
+    const after=rows();for(const table of tables)if(!changed.has(table))assert.deepEqual(after[table],protectedBefore[table],table);
+    assert.equal(database.prepare('SELECT status FROM leagues WHERE id=?').get(scenario.leagueId).status,'frozen');
+    const bytes=database.serialize();assert.equal((await(await post('/apply',body,applyHeaders)).json()).data.replayed,true);assert.deepEqual(database.serialize(),bytes);
+    assert.throws(()=>database.prepare("UPDATE job_runs SET status='running' WHERE id=?").run(jobId),/paused/);
+    assert.throws(()=>database.prepare(`INSERT INTO job_runs(id,league_id,season_id,job_type,occurrence_key,scheduled_for_ms,status,created_at_ms,updated_at_ms)
+      VALUES(?,?,?,'fixture:paused','must-not-claim',?,'running',?,?)`).run(uuid(985004),scenario.leagueId,scenario.seasonId,NOW_MS,NOW_MS,NOW_MS),/paused/);
+    database.prepare("UPDATE job_runs SET status='running' WHERE id=?").run(uuid(985003));
+    const rosterResponse=await fetch(origin+'/api/v1/leagues/'+scenario.leagueId+'/teams/'+scenario.teamIds[0]+'/roster/'+uuid(985005)+'/move',{
+      method:'POST',headers,body:JSON.stringify({destinationCategory:'Bench',expectedVersion:1,confirmedIllegal:true})});
+    assert.equal(rosterResponse.status,409);assert.equal((await rosterResponse.json()).error.code,'LEAGUE_COMPETITION_PAUSED');
+    const resumeInput={action:'resume',reason:'Timing reviewed; continue using saved deadlines'};
+    const oldPreview=(await(await post('/preview',resumeInput)).json()).data;time=NOW_MS+1000;
+    assert.equal((await post('/apply',{...resumeInput,confirmed:true,previewHash:oldPreview.previewHash},{...headers,'Idempotency-Key':'league-resume-stale'})).status,409);
+    const resumePreview=(await(await post('/preview',resumeInput)).json()).data;assert.equal(resumePreview.impacts.dueJobs,1);assert.equal(resumePreview.overdue,true);
+    const resumeBody={...resumeInput,confirmed:true,previewHash:resumePreview.previewHash},resumeHeaders={...headers,'Idempotency-Key':'league-resume-http'};
+    const resume=await post('/apply',resumeBody,resumeHeaders);assert.equal(resume.status,200,JSON.stringify(await resume.clone().json()));
+    assert.equal(database.prepare('SELECT status FROM leagues WHERE id=?').get(scenario.leagueId).status,'setup');
+    assert.equal(database.prepare('SELECT scheduled_for_ms FROM job_runs WHERE id=?').get(jobId).scheduled_for_ms,NOW_MS+500);
+    assert.equal(database.prepare('SELECT status FROM league_freezes WHERE league_id=?').get(scenario.leagueId).status,'ended');
+    assert.equal((await(await post('/apply',resumeBody,resumeHeaders)).json()).data.replayed,true);
+    database.prepare("UPDATE job_runs SET status='running' WHERE id=?").run(jobId);assert.deepEqual(database.pragma('foreign_key_check'),[]);
+    database.prepare("INSERT INTO platform_roles(id,user_id,role,status,granted_by_user_id,granted_at_ms,ended_at_ms,version) VALUES(?,?,'platform_administrator','active',?,?,NULL,1)").run(uuid(985006),managerId,scenario.commissionerUserId,NOW_MS);
+    assert.equal((await fetch(url,{headers:headersFor(manager)})).status,200);
+    database.prepare("UPDATE platform_roles SET status='ended',ended_at_ms=?,version=version+1 WHERE id=?").run(time,uuid(985006));assert.equal((await fetch(url,{headers:headersFor(manager)})).status,403);
+  });
+
+  test('missing pick repair migrates populated records, previews owners and commits atomically through authenticated HTTP',async t=>{
+    const database=createDatabase(t,{migrated:false}),migrations=discoverMigrations({migrationsDirectory:MIGRATIONS_DIRECTORY});
+    const migrate=list=>applyMigrations({database,migrations:list,applicationBuildId:'pick-repair-test',now:()=>NOW_MS});
+    migrate(migrations.filter(m=>m.id<=78));
+    const oldDir=path.join(path.dirname(database.name),'pick-repair-schema78');fs.mkdirSync(oldDir);
+    for(const m of migrations.filter(m=>m.id<=78))fs.copyFileSync(path.join(MIGRATIONS_DIRECTORY,m.fileName),path.join(oldDir,m.fileName));
+    let runtime=createTargetRuntime(runtimeOptions(database,{migrationsDirectory:oldDir}));
+    const scenario=seedComposedLeagueStartScenario(runtime),draftId=uuid(986002),otherLeague=uuid(986003);
+    const repos=runtime.repositories.context.repositories;
+    repos.leagues.insert({id:otherLeague,name:'Other repair league',name_normalized:'other repair league',status:'setup',timezone:'America/Vancouver',commissioner_membership_id:null,current_season_id:null,created_at_ms:NOW_MS,updated_at_ms:NOW_MS,version:1});
+    repos.entry_drafts.insert({id:draftId,league_id:scenario.leagueId,season_id:scenario.seasonId,status:'setup',rounds:4,pick_clock_seconds:300,starts_at_ms:null,completed_at_ms:null,created_by_user_id:scenario.commissionerUserId,created_at_ms:NOW_MS,updated_at_ms:NOW_MS,version:1});
+    for(let round=1;round<=4;round++)for(let team=0;team<4;team++){
+      if(round===4&&team===3)continue;
+      repos.draft_picks.insert({id:uuid(986010+round*10+team),league_id:scenario.leagueId,draft_id:draftId,target_season_id:scenario.seasonId,round_number:round,position_number:team+1,
+        original_team_id:scenario.teamIds[team],current_owner_team_id:scenario.teamIds[1],status:'unused',selection_id:null,created_at_ms:NOW_MS,updated_at_ms:NOW_MS,version:1});
+    }
+    const tables=database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations','application_metadata') ORDER BY name").all().map(r=>r.name);
+    const rows=()=>Object.fromEntries(tables.map(name=>[name,database.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()]));
+    const original=rows(),objects=database.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY name").all();
+    migrate(migrations.filter(m=>m.id<=79));assert.deepEqual(rows(),original);
+    for(const row of objects)assert.equal(database.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(row.name).sql,row.sql);
+    migrate(migrations);
+    runtime=createTargetRuntime(runtimeOptions(database));
+    const commissioner=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId});
+    const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+    const manager=runtime.services.sessionService.issueForUser({userId:managerId}),origin=await startRuntimeApp(t,runtime);
+    const url=origin+'/api/v1/leagues/'+scenario.leagueId+'/management/picks',headersFor=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken});
+    const headers=headersFor(commissioner),before=database.serialize();
+    assert.equal((await fetch(url,{headers:browserHeaders()})).status,401);assert.equal((await fetch(url,{headers:headersFor(manager)})).status,403);
+    assert.equal((await fetch(url.replace(scenario.leagueId,otherLeague),{headers})).status,404);
+    const get=await fetch(url,{headers});assert.equal(get.status,200,JSON.stringify(await get.clone().json()));
+    const read=(await get.json()).data;assert.equal(read.drafts[0].missing.length,1);assert.equal(read.drafts[0].missing[0].round,4);
+    const proposed={draftId,owners:[{teamId:scenario.teamIds[3],round:4,ownerTeamId:scenario.teamIds[1]}],reason:'Restore the omitted fourth-round pick to its agreed owner'};
+    const post=(suffix,body,h=headers)=>fetch(url+suffix,{method:'POST',headers:h,body:JSON.stringify(body)});
+    assert.equal((await post('/preview',proposed,{...headers,'X-CSRF-Token':'bad'})).status,403);
+    assert.equal((await post('/preview',proposed,headersFor(manager))).status,403);
+    assert.equal((await post('/preview',{...proposed,owners:[]})).status,409);
+    const response=await post('/preview',proposed);assert.equal(response.status,200,JSON.stringify(await response.clone().json()));
+    const preview=(await response.json()).data;assert.equal(preview.preservedCount,15);assert.equal(preview.additions[0].ownerTeamId,scenario.teamIds[1]);assert.deepEqual(database.serialize(),before);
+    const body={...proposed,confirmed:true,previewHash:preview.previewHash},writeHeaders={...headers,'Idempotency-Key':'pick-repair-http'};
+    database.exec("CREATE TRIGGER test_pick_failure BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT,'synthetic notice failure'); END");
+    const failureBefore=database.serialize();assert.equal((await post('/apply',body,writeHeaders)).status,500);assert.deepEqual(database.serialize(),failureBefore);database.exec('DROP TRIGGER test_pick_failure');
+    const protectedBefore=rows(),applied=await post('/apply',body,writeHeaders);assert.equal(applied.status,200,JSON.stringify(await applied.clone().json()));
+    const changed=new Set(['draft_picks','draft_pick_ownership_events','entry_drafts','leagues','league_activity','notifications','outbox_event_audiences','outbox_events']);
+    const afterRows=rows();for(const table of tables)if(!changed.has(table))assert.deepEqual(afterRows[table],protectedBefore[table],table);
+    for(const pick of original.draft_picks)assert.deepEqual(database.prepare('SELECT * FROM draft_picks WHERE id=?').get(pick.id),pick);
+    const added=database.prepare('SELECT * FROM draft_picks WHERE original_team_id=? AND round_number=4 AND draft_id=?').get(scenario.teamIds[3],draftId);
+    assert.equal(added.current_owner_team_id,scenario.teamIds[1]);assert.equal(added.status,'unused');assert.equal(added.position_number,4);
+    assert.equal(database.prepare('SELECT count(*) AS n FROM draft_pick_ownership_events WHERE draft_pick_id=?').get(added.id).n,1);
+    const bytes=database.serialize();assert.equal((await(await post('/apply',body,writeHeaders)).json()).data.replayed,true);assert.deepEqual(database.serialize(),bytes);
+    assert.equal((await post('/apply',{...body,reason:'Different correction'},writeHeaders)).status,409);
+    assert.equal((await post('/apply',body,{...headers,'Idempotency-Key':'new-stale-pick-key'})).status,409);
+    assert.throws(()=>database.exec("UPDATE league_management_actions SET reason='altered'"),/immutable/);
+    assert.throws(()=>database.exec('DELETE FROM league_management_actions'),/immutable/);assert.deepEqual(database.pragma('foreign_key_check'),[]);
+    const history=(await(await fetch(origin+'/api/v1/leagues/'+scenario.leagueId+'/management/history?kind=pick_repair',{headers})).json()).data;
+    assert.equal(history.changes.length,1);assert.equal(history.changes[0].after.added[0].ownerName,preview.additions[0].ownerName);
+    database.prepare("INSERT INTO platform_roles(id,user_id,role,status,granted_by_user_id,granted_at_ms,ended_at_ms,version) VALUES(?,?,'platform_administrator','active',?,?,NULL,1)").run(uuid(986600),managerId,scenario.commissionerUserId,NOW_MS);
+    assert.equal((await fetch(url,{headers:headersFor(manager)})).status,200);
+    database.prepare("UPDATE platform_roles SET status='ended',ended_at_ms=?,version=version+1 WHERE id=?").run(NOW_MS,uuid(986600));
+    assert.equal((await fetch(url,{headers:headersFor(manager)})).status,403);
+  });
+
+  test('management reports are readonly, scoped, searchable before pagination and exclude private contents',async t=>{
+    const database=createDatabase(t),runtime=createTargetRuntime(runtimeOptions(database)),scenario=seedComposedLeagueStartScenario(runtime);
+    const repositories=runtime.repositories.context.repositories,otherLeague=uuid(987001),draftId=uuid(987002);
+    repositories.leagues.insert({id:otherLeague,name:'Other private league',name_normalized:'other private league',status:'setup',timezone:'America/Vancouver',commissioner_membership_id:null,current_season_id:null,created_at_ms:NOW_MS,updated_at_ms:NOW_MS,version:1});
+    repositories.entry_drafts.insert({id:draftId,league_id:scenario.leagueId,season_id:scenario.seasonId,status:'setup',rounds:4,pick_clock_seconds:300,starts_at_ms:null,completed_at_ms:null,created_by_user_id:scenario.commissionerUserId,created_at_ms:NOW_MS,updated_at_ms:NOW_MS,version:1});
+    for(let round=1;round<=4;round++)for(let team=0;team<scenario.teamIds.length;team++){
+      if(round===4&&team===3)continue;
+      repositories.draft_picks.insert({id:uuid(987010+round*10+team),league_id:scenario.leagueId,draft_id:draftId,target_season_id:scenario.seasonId,
+        round_number:round,position_number:team+1,original_team_id:scenario.teamIds[team],current_owner_team_id:scenario.teamIds[team===0?1:team],status:'unused',selection_id:null,created_at_ms:NOW_MS,updated_at_ms:NOW_MS,version:1});
+    }
+    database.prepare("UPDATE team_manager_assignments SET status='ended',ended_at_ms=?,version=version+1 WHERE league_id=? AND team_id=? AND status='accepted'").run(NOW_MS,scenario.leagueId,scenario.teamIds[3]);
+    const insert=database.prepare('INSERT INTO commissioner_corrections(id,league_id,season_id,feature,feature_record_id,actor_user_id,reason,before_snapshot_json,after_snapshot_json,corrected_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?)');
+    for(let i=0;i<52;i++)insert.run(uuid(987100+i),scenario.leagueId,scenario.seasonId,'roster',uuid(987500+i),scenario.commissionerUserId,i===0?'Specialneedle correction':'Reviewed correction '+i,
+      JSON.stringify({privateCanary:'DO_NOT_EXPORT_BID_999'}),JSON.stringify({candidateCanary:'DO_NOT_EXPORT_CARD_PLAYER'}),NOW_MS);
+    insert.run(uuid(987201),otherLeague,null,'roster',uuid(987202),scenario.commissionerUserId,'Other league secret reason','{}','{}',NOW_MS);
+    insert.run(uuid(987203),scenario.leagueId,scenario.seasonId,'auction',uuid(987204),scenario.commissionerUserId,'Hidden auction bid editing','{}','{}',NOW_MS);
+    for(let i=0;i<101;i++)database.prepare(`INSERT INTO job_runs(id,league_id,season_id,job_type,occurrence_key,scheduled_for_ms,status,attempt_count,created_at_ms,updated_at_ms,version)
+      VALUES(?,?,?,'fixture:report',?,?,'failed',1,?,?,1)`).run(uuid(987700+i),scenario.leagueId,scenario.seasonId,'failed-report-'+i,NOW_MS,NOW_MS,NOW_MS);
+    const commissioner=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId});
+    const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+    const manager=runtime.services.sessionService.issueForUser({userId:managerId}),origin=await startRuntimeApp(t,runtime);
+    const base=origin+'/api/v1/leagues/'+scenario.leagueId+'/management/',headersFor=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken});
+    const headers=headersFor(commissioner),before=database.serialize();
+    for(const endpoint of ['readiness','history','export','recovery','season-preview']){
+      assert.equal((await fetch(base+endpoint,{headers:browserHeaders()})).status,401);
+      assert.equal((await fetch(base+endpoint,{headers:headersFor(manager)})).status,403);
+      assert.equal((await fetch((base+endpoint).replace(scenario.leagueId,otherLeague),{headers})).status,404);
+    }
+    const read=await fetch(base+'readiness',{headers});assert.equal(read.status,200,JSON.stringify(await read.clone().json()));assert.match(read.headers.get('cache-control'),/no-store/);
+    const readiness=(await read.json()).data;assert.equal(readiness.summary.teams,4);assert.equal(readiness.summary.missingManagers,1);
+    assert.equal(readiness.summary.missingPicks,1);assert.equal(readiness.missingPicks[0].teamId,scenario.teamIds[3]);assert.equal(readiness.missingPicks[0].round,4);
+    assert.equal(readiness.summary.illegalRosters,0);assert.equal(readiness.teams[0].roster.legal,false);assert.equal(readiness.teams[0].roster.requiredNow,false);
+    assert.equal(readiness.summary.operations,101);assert.equal(readiness.operations.length,100);assert.equal(Object.hasOwn(readiness.operations[0],'total'),false);
+    const seasonResponse=await fetch(base+'season-preview',{headers});assert.equal(seasonResponse.status,200,JSON.stringify(await seasonResponse.clone().json()));
+    const seasonPreview=(await seasonResponse.json()).data;assert.equal(seasonPreview.readOnly,true);assert.equal(seasonPreview.source.id,scenario.seasonId);assert.ok(seasonPreview.issues.includes('SOURCE_DRAFT_UNFINISHED'));
+    const recoveryResponse=await fetch(base+'recovery',{headers});assert.equal(recoveryResponse.status,200,JSON.stringify(await recoveryResponse.clone().json()));
+    const recovery=(await recoveryResponse.json()).data;assert.equal(recovery.operationCount,101);assert.equal(recovery.operations.length,100);assert.equal(recovery.seasonId,scenario.seasonId);assert.deepEqual(recovery.trades,[]);
+    const historyResponse=await fetch(base+'history',{headers});assert.equal(historyResponse.status,200,JSON.stringify(await historyResponse.clone().json()));
+    const history=(await historyResponse.json()).data;assert.equal(history.changes.length,50);assert.equal(history.page.hasMore,true);
+    const next=(await(await fetch(base+'history?cursor='+history.page.nextCursor,{headers})).json()).data;
+    assert.equal(next.changes.length,2);assert.equal(next.page.hasMore,false);assert.equal(new Set([...history.changes,...next.changes].map(c=>c.id)).size,52);
+    const filtered=(await(await fetch(base+'history?q=SPECIALNEEDLE',{headers})).json()).data;assert.equal(filtered.changes.length,1);
+    assert.equal((await fetch(base+'history?q=different&cursor='+history.page.nextCursor,{headers})).status,400);
+    assert.equal((await fetch(base+'history?kind=unknown',{headers})).status,400);
+    assert.equal((await(await fetch(base+'history?q=DO_NOT_EXPORT',{headers})).json()).data.changes.length,0);
+    const exported=await fetch(base+'export',{headers});assert.equal(exported.status,200,JSON.stringify(await exported.clone().json()));
+    const data=(await exported.json()).data;assert.equal(data.format,'hundo-league-export-v1');assert.equal(data.picks.length,15);
+    assert.equal(data.teams.length,4);assert.equal(data.picks.find(p=>p.originalTeamId===scenario.teamIds[0]).ownerTeamId,scenario.teamIds[1]);
+    assert.deepEqual(Object.keys(data).sort(),['excluded','format','generatedAtMs','league','leagueId','notice','picks','results','rosters','scope','season','teams']);
+    for(const output of [readiness,history,next,data,recovery,seasonPreview])assert.doesNotMatch(JSON.stringify(output),/DO_NOT_EXPORT|Other league secret|Hidden auction bid/);
+    assert.deepEqual(database.serialize(),before);assert.deepEqual(database.pragma('foreign_key_check'),[]);
+    database.prepare("INSERT INTO platform_roles(id,user_id,role,status,granted_by_user_id,granted_at_ms,ended_at_ms,version) VALUES(?,?,'platform_administrator','active',?,?,NULL,1)").run(uuid(987600),managerId,scenario.commissionerUserId,NOW_MS);
+    assert.equal((await fetch(base+'export',{headers:headersFor(manager)})).status,200);
+    database.prepare("UPDATE platform_roles SET status='ended',ended_at_ms=?,version=version+1 WHERE id=?").run(NOW_MS,uuid(987600));
+    assert.equal((await fetch(base+'export',{headers:headersFor(manager)})).status,403);
+  });
+
+  test('league scoring HTTP preserves existing rows, audits reviewed changes and applies league weights before pagination',async t=>{
+    const {defaultScoringWeights,emptyScoringStats,calculateExpandedScore}=require('../../src/domain/statistics/expandedScoringPolicy');
+    const {createLeagueScoringRuleReader}=require('../../src/infrastructure/persistence/sqlite/leagueScoringRules');
+    const database=createDatabase(t,{migrated:false}),migrations=discoverMigrations({migrationsDirectory:MIGRATIONS_DIRECTORY});
+    const migrate=list=>applyMigrations({database,migrations:list,applicationBuildId:'scoring-test',now:()=>NOW_MS});
+    migrate(migrations.filter(m=>m.id<=77));
+    const oldDir=path.join(path.dirname(database.name),'scoring-schema77');fs.mkdirSync(oldDir);
+    for(const m of migrations.filter(m=>m.id<=77))fs.copyFileSync(path.join(MIGRATIONS_DIRECTORY,m.fileName),path.join(oldDir,m.fileName));
+    let time=NOW_MS;
+    const options={securityFoundations:createSecurityFoundations({env:securityEnv(),now:()=>time,loggerSink(){}}),
+      nhlCompletedStatisticsEnabled:true,expandedScoringEnabled:true,nhlFetchImplementation:async()=>{throw Error('Network forbidden in scoring fixtures');}};
+    let runtime=createTargetRuntime(runtimeOptions(database,{...options,migrationsDirectory:oldDir}));
+    const scenario=seedComposedLeagueStartScenario(runtime);
+    const tables=database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations','application_metadata') ORDER BY name").all().map(r=>r.name);
+    const rows=()=>Object.fromEntries(tables.map(name=>[name,database.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()]));
+    const priorRows=rows(),objects=database.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY name").all();
+    migrate(migrations.filter(m=>m.id<=78));assert.deepEqual(rows(),priorRows);
+    for(const row of objects)assert.equal(database.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(row.name).sql,row.sql);
+    migrate(migrations);
+    runtime=createTargetRuntime(runtimeOptions(database,options));
+    const sourceId=uuid(988001),refreshId=uuid(988002),firstId=uuid(988003),secondId=uuid(988004);
+    database.prepare("INSERT INTO stat_sources(id,provider,status,created_at_ms,updated_at_ms,version) VALUES(?,'nhl-completed-games','active',?,?,1)").run(sourceId,NOW_MS,NOW_MS);
+    database.prepare("INSERT INTO stat_refreshes(id,stat_source_id,nhl_season_key,source_version,status,started_at_ms,completed_at_ms,player_count,error_code,metadata_json,version) VALUES(?,?,'20262027','scoring-fixture','succeeded',?,?,2,NULL,NULL,1)").run(refreshId,sourceId,NOW_MS,NOW_MS);
+    database.prepare("INSERT INTO expanded_stat_refreshes(refresh_id,scoring_rule_version,evidence_sha256,total_count,observation_count) VALUES(?,'expanded-2026-v1',?,2,0)").run(refreshId,'a'.repeat(64));
+    for(const [index,playerId,name,hits,goals]of [[0,firstId,'Hit Leader',20,0],[1,secondId,'Goal Leader',0,1]]){
+      database.prepare("INSERT INTO players(id,first_name,last_name,full_name,birth_date,status,created_at_ms,updated_at_ms,version) VALUES(?,?,?,?,NULL,'active',?,?,1)").run(playerId,name.split(' ')[0],'Leader',name,NOW_MS,NOW_MS);
+      database.prepare("INSERT INTO player_source_state(id,player_id,provider,source_position,normalized_position,nhl_team_abbreviation,active,source_version,effective_at_ms,created_at_ms) VALUES(?,?,'scoring-fixture','F','F','VAN',1,'fixture',?,?)").run(uuid(988010+index),playerId,NOW_MS,NOW_MS);
+      const totalId=uuid(988020+index),stats={...emptyScoringStats(),hits,evenStrengthGoals:goals};
+      const points=calculateExpandedScore(stats,'F').fantasyPointsHundredths;
+      database.prepare("INSERT INTO player_stat_totals(id,stat_source_id,refresh_id,nhl_season_key,player_id,games_played,goals,assists,nhl_points,fantasy_points_hundredths,source_updated_at_ms,created_at_ms) VALUES(?,?,?,'20262027',?,1,?,0,?,?,?,?)").run(totalId,sourceId,refreshId,playerId,goals,goals,points,NOW_MS,NOW_MS);
+      database.prepare('INSERT INTO expanded_stat_totals(total_id,refresh_id,provider_player_id,stats_json,forward_fp_hundredths,defence_fp_hundredths) VALUES(?,?,?,?,?,?)').run(totalId,refreshId,String(index+1),JSON.stringify(stats),points,calculateExpandedScore(stats,'D').fantasyPointsHundredths);
+    }
+    const commissioner=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId});
+    const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+    const manager=runtime.services.sessionService.issueForUser({userId:managerId}),origin=await startRuntimeApp(t,runtime);
+    const url=origin+'/api/v1/leagues/'+scenario.leagueId+'/scoring',playersUrl=origin+'/api/v1/leagues/'+scenario.leagueId+'/players?sort=fantasyPoints&limit=1';
+    const headersFor=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken});
+    const headers=headersFor(commissioner),weights=defaultScoringWeights();weights.F.hits=5;weights.D.hits=10;
+    const input={weights,effectiveWeekSequence:1,comparisonWeekId:null,reason:'Managers voted to reduce hits'};
+    const before=database.serialize();
+    assert.equal((await fetch(url,{headers:browserHeaders()})).status,401);
+    assert.equal((await fetch(url,{headers:headersFor(manager)})).status,403);
+    assert.equal((await fetch(url+'/rules',{headers:headersFor(manager)})).status,200);
+    assert.equal((await fetch(url.replace(scenario.leagueId,uuid(988999)),{headers})).status,404);
+    assert.equal((await fetch(url+'/preview',{method:'POST',headers:{...headers,'X-CSRF-Token':'bad'},body:JSON.stringify(input)})).status,403);
+    const oldPlayers=await fetch(playersUrl,{headers});assert.equal(oldPlayers.status,200,JSON.stringify(await oldPlayers.clone().json()));
+    assert.equal((await oldPlayers.json()).data[0].id,firstId);
+    const previewResponse=await fetch(url+'/preview',{method:'POST',headers,body:JSON.stringify(input)});
+    assert.equal(previewResponse.status,200,JSON.stringify(await previewResponse.clone().json()));
+    const preview=(await previewResponse.json()).data;assert.match(previewResponse.headers.get('cache-control'),/no-store/);
+    assert.equal(preview.changes.length,2);assert.deepEqual(database.serialize(),before);
+    const body={...input,confirmed:true,previewHash:preview.previewHash},applyHeaders={...headers,'Idempotency-Key':'league-scoring-http'};
+    database.exec("CREATE TRIGGER test_scoring_failure BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT,'synthetic notice failure'); END");
+    const failBytes=database.serialize();assert.equal((await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)})).status,500);
+    assert.deepEqual(database.serialize(),failBytes);database.exec('DROP TRIGGER test_scoring_failure');
+    const applied=await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)});
+    assert.equal(applied.status,200,JSON.stringify(await applied.clone().json()));
+    const bytes=database.serialize();assert.equal((await(await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)})).json()).data.replayed,true);
+    assert.deepEqual(database.serialize(),bytes);
+    const pageResponse=await fetch(playersUrl,{headers});assert.equal(pageResponse.status,200,JSON.stringify(await pageResponse.clone().json()));
+    const page=await pageResponse.json();assert.equal(page.data[0].id,secondId);
+    const next=(await(await fetch(playersUrl+'&cursor='+page.page.nextCursor,{headers})).json()).data;
+    assert.equal(next[0].id,firstId);assert.equal(next[0].statistics.fantasyPointsHundredths,100);
+    assert.equal(next[0].statistics.scoringWeights.F.hits,5);
+    const global=(await(await fetch(origin+'/api/v1/players/'+firstId,{headers})).json()).data;
+    assert.equal(global.statistics.fantasyPointsHundredths,400);assert.equal(global.statistics.scoringWeights,undefined);
+    const publicRules=(await(await fetch(url+'/rules',{headers:headersFor(manager)})).json()).data;
+    assert.equal(publicRules.current.weights.F.hits,5);assert.equal(publicRules.rules[0].reason,undefined);
+    assert.equal(createLeagueScoringRuleReader(database)(uuid(988999)),null);
+    assert.throws(()=>database.exec('DELETE FROM league_scoring_rules'),/immutable/);
+    assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+  });
+
+  test('recurring auction schedule HTTP enforces authority, current previews and atomic repeat-safe confirmation',async t=>{
+    const database=createDatabase(t);let time=NOW_MS;
+    const runtime=createTargetRuntime(runtimeOptions(database,{securityFoundations:createSecurityFoundations({env:securityEnv(),now:()=>time,loggerSink(){}})}));
+    const scenario=seedComposedLeagueStartScenario(runtime);
+    const commissioner=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId});
+    const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+    const manager=runtime.services.sessionService.issueForUser({userId:managerId}),origin=await startRuntimeApp(t,runtime);
+    const url=origin+'/api/v1/leagues/'+scenario.leagueId+'/calendar/auction-schedule';
+    const headersFor=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken});
+    const headers=headersFor(commissioner),input={closeWeekday:6,closeMinuteOfDay:1125,creationCutoffMinutes:90,reason:'Managers chose a later closing time'};
+    const before=database.serialize();
+    assert.equal((await fetch(url,{headers:browserHeaders()})).status,401);
+    assert.equal((await fetch(url,{headers:headersFor(manager)})).status,403);
+    assert.equal((await fetch(url.replace(scenario.leagueId,uuid(997001)),{headers})).status,404);
+    assert.equal((await fetch(url+'/preview',{method:'POST',headers:{...headers,'X-CSRF-Token':'bad'},body:JSON.stringify(input)})).status,403);
+    const read=await fetch(url,{headers});assert.equal(read.status,200);assert.match(read.headers.get('cache-control'),/no-store/);
+    const status=(await read.json()).data;assert.equal(status.schedule,null);
+    const review=await fetch(url+'/preview',{method:'POST',headers,body:JSON.stringify(input)});
+    assert.equal(review.status,200,JSON.stringify(await review.clone().json()));const preview=(await review.json()).data;
+    assert.deepEqual(database.serialize(),before);
+    const body={...input,confirmed:true,previewHash:preview.previewHash},applyHeaders={...headers,'Idempotency-Key':'weekly-http-apply'};
+    database.exec("CREATE TRIGGER test_schedule_failure BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT,'synthetic notice failure'); END");
+    const failBytes=database.serialize();
+    assert.equal((await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)})).status,500);
+    assert.deepEqual(database.serialize(),failBytes);database.exec('DROP TRIGGER test_schedule_failure');
+    const applied=await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)});
+    assert.equal(applied.status,200,JSON.stringify(await applied.clone().json()));
+    const bytes=database.serialize();
+    assert.equal((await(await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)})).json()).data.replayed,true);
+    assert.deepEqual(database.serialize(),bytes);
+    const current=(await(await fetch(url,{headers})).json()).data;assert.equal(current.revision,1);assert.equal(current.history.length,1);
+    assert.equal(current.schedule.creationCutoffMinutes,90);
+    const next={...input,creationCutoffMinutes:0},fresh=await fetch(url+'/preview',{method:'POST',headers,body:JSON.stringify(next)});
+    const nextPreview=(await fresh.json()).data;
+    time=nextPreview.window.newAuctionCutoffAtMs;
+    const renewedHeaders=headersFor(runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId}));
+    assert.equal((await fetch(url+'/apply',{method:'POST',headers:{...renewedHeaders,'Idempotency-Key':'elapsed-weekly-review'},body:JSON.stringify({...next,confirmed:true,previewHash:nextPreview.previewHash})})).status,409);
+    assert.equal(database.prepare('SELECT count(*) n FROM league_auction_schedule_changes').get().n,1);
+    assert.deepEqual(database.pragma('foreign_key_check'),[]);
+  });
+
+  test('season calendar migration and HTTP edits preserve records and move only the reviewed pending work',async t=>{
+    const database=createDatabase(t,{migrated:false});
+    const migrations=discoverMigrations({migrationsDirectory:MIGRATIONS_DIRECTORY});
+    const migrate=list=>applyMigrations({database,migrations:list,applicationBuildId:'calendar-test',now:()=>NOW_MS});
+    migrate(migrations.filter(m=>m.id<=75));
+    const legacy=path.join(path.dirname(database.name),'calendar-schema75');fs.mkdirSync(legacy);
+    for(const m of migrations.filter(m=>m.id<=75))fs.copyFileSync(path.join(MIGRATIONS_DIRECTORY,m.fileName),path.join(legacy,m.fileName));
+    let runtime=createTargetRuntime(runtimeOptions(database,{migrationsDirectory:legacy}));
+    const scenario=seedComposedLeagueStartScenario(runtime),authenticated=runtime.services.sessionService.resolveWithoutActivity(scenario.session.rawSessionToken);
+    const started=runtime.services.league.start.start({leagueId:scenario.leagueId,input:{},expectedLeagueVersion:scenario.expectedLeagueVersion,idempotencyKey:'calendar-season-start',authenticated});
+    runtime.services.league.matchupSchedule.generate({leagueId:scenario.leagueId,seasonId:scenario.seasonId,expectedSeasonVersion:started.league.currentSeason.version,
+      input:{nhlRegularSeasonStartsAtMs:Date.parse('2026-10-06T07:00:00Z'),nhlRegularSeasonEndsAtMs:Date.parse('2027-04-12T07:00:00Z'),
+        fantasyPlayoffsStartAtMs:Date.parse('2027-03-15T07:00:00Z'),fantasyPlayoffsEndAtMs:Date.parse('2027-04-12T07:00:00Z'),
+        firstWeekStartsAtMs:Date.parse('2026-10-12T07:00:00Z'),confirmed:true},idempotencyKey:'calendar-season-schedule',authenticated});
+    const tables=database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations','application_metadata') ORDER BY name").all().map(r=>r.name);
+    const rows=()=>Object.fromEntries(tables.map(name=>[name,database.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()]));
+    const beforeMigration=rows(),objects=database.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY name").all();
+    migrate(migrations.filter(m=>m.id<=76));assert.deepEqual(rows(),beforeMigration);
+    for(const row of objects)assert.equal(database.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(row.name).sql,row.sql);
+    const migrated=database.serialize();migrate(migrations.filter(m=>m.id<=76));assert.deepEqual(database.serialize(),migrated);
+    migrate(migrations);
+    runtime=createTargetRuntime(runtimeOptions(database));
+    const draftBoundState=runtime.services.league.leagueCalendar.read({leagueId:scenario.leagueId,authenticated});
+    assert.match(draftBoundState.blockedReason,/unfinished Free Agent Draft/);
+    const guardedBytes=database.serialize();
+    assert.throws(()=>runtime.services.league.leagueCalendar.preview({leagueId:scenario.leagueId,authenticated,
+      input:{calendar:{...draftBoundState.calendar,fantasyPlayoffsEndAtMs:draftBoundState.calendar.fantasyPlayoffsEndAtMs-86400000},weeks:[],reason:'Attempt to change draft-bound calendar'}}),{code:'LEAGUE_CALENDAR_CONFLICT'});
+    assert.deepEqual(database.serialize(),guardedBytes);
+    assert.equal((await runtime.services.league.freeAgentDraftReadinessJob.run()).succeeded,1);
+    // Set up completed-FAD competition state; this test exercises calendar
+    // permissions/jobs, while composed deadline/award/completion suites test FAD.
+    const draft=database.prepare('SELECT id,first_matchup_starts_at_ms FROM free_agent_drafts WHERE league_id=?').get(scenario.leagueId);
+    const forwardGuard=database.prepare("SELECT sql FROM sqlite_schema WHERE name='free_agent_drafts_forward_update'").get().sql;
+    database.exec('DROP TRIGGER free_agent_drafts_forward_update');
+    completeComposedMatchupOccurrenceFad(database,{leagueId:scenario.leagueId,seasonId:scenario.seasonId,fadId:draft.id,startsAtMs:draft.first_matchup_starts_at_ms});
+    database.exec(forwardGuard);
+    const commissioner=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId});
+    const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+    const manager=runtime.services.sessionService.issueForUser({userId:managerId}),origin=await startRuntimeApp(t,runtime);
+    const url=origin+'/api/v1/leagues/'+scenario.leagueId+'/calendar/season';
+    const headersFor=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken});
+    const headers=headersFor(commissioner),beforeRead=database.serialize();
+    assert.equal((await fetch(url,{headers:browserHeaders()})).status,401);
+    assert.equal((await fetch(url,{headers:headersFor(manager)})).status,403);
+    assert.equal((await fetch(url.replace(scenario.leagueId,uuid(996900)),{headers})).status,404);
+    const read=await fetch(url,{headers});assert.equal(read.status,200,JSON.stringify(await read.clone().json()));
+    assert.match(read.headers.get('cache-control'),/no-store/);
+    const current=(await read.json()).data,week=current.weeks[1],oldLock=week.locksAtMs;
+    const input={calendar:{...current.calendar,fantasyPlayoffsEndAtMs:current.calendar.fantasyPlayoffsEndAtMs-86400000},
+      weeks:[{...week,locksAtMs:oldLock+3600000}],reason:'League agreed to revised lock and playoff dates'};
+    assert.equal((await fetch(url+'/preview',{method:'POST',headers:{...headers,'X-CSRF-Token':'bad'},body:JSON.stringify(input)})).status,403);
+    const review=await fetch(url+'/preview',{method:'POST',headers,body:JSON.stringify(input)});
+    assert.equal(review.status,200,JSON.stringify(await review.clone().json()));
+    const preview=(await review.json()).data;assert.equal(preview.pendingJobs,1);
+    assert.deepEqual(preview.changes[0].fields,['locksAtMs']);assert.deepEqual(database.serialize(),beforeRead);
+    assert.ok(!JSON.stringify(preview).includes('bidder'));assert.ok(!JSON.stringify(preview).includes('candidate_player'));
+    const body={...input,confirmed:true,previewHash:preview.previewHash},applyHeaders={...headers,'Idempotency-Key':'calendar-season-apply'};
+    database.exec("CREATE TRIGGER test_calendar_failure BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT,'calendar fixture failure'); END");
+    const beforeFailure=database.serialize();
+    assert.equal((await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)})).status,500);
+    assert.deepEqual(database.serialize(),beforeFailure);database.exec('DROP TRIGGER test_calendar_failure');
+    const beforeApply=rows(),applied=await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)});
+    assert.equal(applied.status,200,JSON.stringify(await applied.clone().json()));const receipt=(await applied.json()).data;
+    const allowed=new Set(['leagues','seasons','matchup_weeks','job_runs','league_activity','notifications','outbox_events','outbox_event_audiences']);
+    const afterApply=rows();for(const name of tables)if(!allowed.has(name))assert.deepEqual(afterApply[name],beforeApply[name],name);
+    assert.equal(database.prepare('SELECT locks_at_ms FROM matchup_weeks WHERE id=?').get(week.id).locks_at_ms,oldLock+3600000);
+    const jobs=runtime.repositories.leagueCalendar.state(scenario.leagueId).jobs;
+    const job=jobs.find(j=>j.weekId===week.id&&j.job_type==='matchup:lock');
+    assert.equal(job.scheduled_for_ms,oldLock+3600000);assert.ok(job.occurrence_key.endsWith(':'+job.scheduled_for_ms));
+    const bytes=database.serialize();
+    assert.equal((await(await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)})).json()).data.replayed,true);
+    assert.deepEqual(database.serialize(),bytes);
+    assert.equal((await fetch(url+'/apply',{method:'POST',headers:{...applyHeaders,'Idempotency-Key':'stale-calendar-change'},body:JSON.stringify(body)})).status,400);
+    assert.throws(()=>database.prepare('DELETE FROM league_calendar_changes WHERE id=?').run(receipt.id));
+    assert.equal((await(await fetch(url,{headers})).json()).data.history.length,1);
+    const adminId=uuid(996901);
+    runtime.repositories.context.repositories.platform_roles.insert({id:adminId,user_id:managerId,role:'platform_administrator',status:'active',granted_by_user_id:null,granted_at_ms:NOW_MS,ended_at_ms:null,version:1});
+    assert.equal((await fetch(url,{headers:headersFor(manager)})).status,200);
+    database.prepare("UPDATE platform_roles SET status='ended',ended_at_ms=?,version=version+1 WHERE id=?").run(NOW_MS,adminId);
+    assert.equal((await fetch(url,{headers:headersFor(manager)})).status,403);
+    assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+  });
+
+  test('trade calendar HTTP controls enforce current commissioner and admin authority without hidden writes',async t=>{
+    const database=createDatabase(t);
+    const runtime=createTargetRuntime(runtimeOptions(database)),scenario=seedComposedLeagueStartScenario(runtime);
+    const origin=await startRuntimeApp(t,runtime);
+    const url=new URL('/api/v1/leagues/'+scenario.leagueId+'/calendar/trade-deadline',origin);
+    const commissioner=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId});
+    const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+    const manager=runtime.services.sessionService.issueForUser({userId:managerId});
+    const headersFor=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken});
+    const headers=headersFor(commissioner),input={tradeDeadlineAtMs:NOW_MS+3*86400000,reason:'Adjust the season trade deadline'};
+    const before=database.serialize();
+    assert.equal((await fetch(url,{headers:browserHeaders()})).status,401);
+    assert.equal((await fetch(url,{headers:headersFor(manager)})).status,403);
+    assert.equal((await fetch(url+'/preview',{method:'POST',headers:{...headers,'X-CSRF-Token':'bad'},body:JSON.stringify(input)})).status,403);
+    const missing=new URL('/api/v1/leagues/'+uuid(994000)+'/calendar/trade-deadline',origin);
+    assert.equal((await fetch(missing,{headers})).status,404);
+    const read=await fetch(url,{headers});assert.equal(read.status,200);assert.match(read.headers.get('cache-control'),/no-store/);
+    const status=(await read.json()).data;assert.equal(status.canEdit,true);
+    assert.deepEqual(Object.keys(status).sort(),['leagueId','seasonId','timeZone','tradeDeadlineAtMs','serverNowMs','canEdit','blockedReason','history'].sort());
+    const previewResponse=await fetch(url+'/preview',{method:'POST',headers,body:JSON.stringify(input)});
+    assert.equal(previewResponse.status,200);const preview=(await previewResponse.json()).data;
+    assert.deepEqual(database.serialize(),before);
+    const body={...input,confirmed:true,previewHash:preview.previewHash},applyHeaders={...headers,'Idempotency-Key':'calendar-trade-http'};
+    const applied=await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)});
+    const result=await applied.json();assert.equal(applied.status,200,JSON.stringify(result));
+    const after=database.serialize();
+    const repeated=await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)});
+    assert.equal((await repeated.json()).data.replayed,true);assert.deepEqual(database.serialize(),after);
+    assert.equal((await fetch(url+'/apply',{method:'POST',headers:{...applyHeaders,'Idempotency-Key':'calendar-stale-http'},body:JSON.stringify({...body,tradeDeadlineAtMs:input.tradeDeadlineAtMs+86400000})})).status,409);
+    assert.throws(()=>database.prepare('DELETE FROM league_trade_deadline_changes WHERE id=?').run(result.data.id));
+    const notices=database.prepare("SELECT message_data_json FROM notifications WHERE event_type='league_trade_deadline_changed' AND league_id=?").all(scenario.leagueId);
+    assert.ok(notices.length>0);for(const row of notices)assert.deepEqual(Object.keys(JSON.parse(row.message_data_json)).sort(),['leagueId','message','tradeDeadlineAtMs']);
+    const auth=runtime.services.sessionService.resolveWithoutActivity(commissioner.rawSessionToken),league=database.prepare('SELECT version FROM leagues WHERE id=?').get(scenario.leagueId);
+    runtime.services.league.start.start({leagueId:scenario.leagueId,input:{},expectedLeagueVersion:league.version,idempotencyKey:'calendar-start-http',authenticated:auth});
+    runtime.repositories.context.repositories.platform_roles.insert({id:uuid(994001),user_id:managerId,role:'platform_administrator',status:'active',granted_by_user_id:null,granted_at_ms:NOW_MS,ended_at_ms:null,version:1});
+    const adminHeaders=headersFor(manager),adminInput={tradeDeadlineAtMs:input.tradeDeadlineAtMs+86400000,reason:'Administrator updates active league'};
+    const adminPreview=await fetch(url+'/preview',{method:'POST',headers:adminHeaders,body:JSON.stringify(adminInput)});
+    assert.equal(adminPreview.status,200);const adminReview=(await adminPreview.json()).data;
+    const adminApply=await fetch(url+'/apply',{method:'POST',headers:{...adminHeaders,'Idempotency-Key':'calendar-admin-http'},body:JSON.stringify({...adminInput,confirmed:true,previewHash:adminReview.previewHash})});
+    assert.equal(adminApply.status,200,JSON.stringify(await adminApply.json()));
+    assert.equal(database.prepare('SELECT count(*) n FROM league_trade_deadline_changes WHERE actor_authority=?').get('platform_administrator').n,1);
+    const finalRead=await fetch(url,{headers:adminHeaders});assert.equal((await finalRead.json()).data.history.length,2);
+    assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+  });
+
+  test('active FAD auction clocks preserve private bids and original receipts through extension, shortening and resolution', async t => {
+    const database=createDatabase(t);let time=NOW_MS;
+    const runtime=createTargetRuntime(runtimeOptions(database,{securityFoundations:createSecurityFoundations({env:securityEnv(),now:()=>time,loggerSink(){}})}));
+    const scenario=seedComposedLeagueStartScenario(runtime),repositories=runtime.repositories.context.repositories;
+    const authenticated=runtime.services.sessionService.resolveWithoutActivity(scenario.session.rawSessionToken);
+    const started=runtime.services.league.start.start({leagueId:scenario.leagueId,input:{},expectedLeagueVersion:scenario.expectedLeagueVersion,idempotencyKey:'active-dates-start',authenticated});
+    runtime.services.league.matchupSchedule.generate({leagueId:scenario.leagueId,seasonId:scenario.seasonId,expectedSeasonVersion:started.league.currentSeason.version,
+      input:{nhlRegularSeasonStartsAtMs:Date.parse('2026-10-06T07:00:00Z'),nhlRegularSeasonEndsAtMs:Date.parse('2027-04-12T07:00:00Z'),fantasyPlayoffsStartAtMs:Date.parse('2027-03-15T07:00:00Z'),fantasyPlayoffsEndAtMs:Date.parse('2027-04-12T07:00:00Z'),firstWeekStartsAtMs:Date.parse('2026-10-12T07:00:00Z'),confirmed:true},idempotencyKey:'active-dates-schedule',authenticated});
+    assert.equal((await runtime.services.league.freeAgentDraftReadinessJob.run()).succeeded,1);
+    const draft=database.prepare('SELECT * FROM free_agent_drafts WHERE league_id=?').get(scenario.leagueId);
+    const scope={leagueId:scenario.leagueId,fadId:draft.id,authenticated},timing=runtime.services.league.fadTiming;
+    time=draft.candidate_deadline_at_ms-259200000;
+    assert.equal((await runtime.services.league.freeAgentDraftDeadlineReminderJob.run()).succeeded,1);
+    time=draft.candidate_deadline_at_ms;
+    assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).held,1);
+    const proceed=runtime.services.league.fadDeadlineControl.preview({...scope,input:{reason:'Proceed with saved cards'}});
+    runtime.services.league.fadDeadlineControl.proceed({...scope,input:{confirmed:true,reason:proceed.reason,previewHash:proceed.previewHash},idempotencyKey:'active-dates-proceed'});
+    assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).succeeded,1);
+    assert.equal((await runtime.services.league.freeAgentDraftAllocationLifecycleJob.run()).enteredRapid,1);
+    const teamId=scenario.teamIds[0],managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE team_id=? AND status='accepted' AND ended_at_ms IS NULL").get(teamId).user_id;
+    const managerSession=runtime.services.sessionService.issueForUser({userId:managerId});
+    const manager=runtime.services.sessionService.resolveWithoutActivity(managerSession.rawSessionToken);
+    repositories.players.insert({id:uuid(996000),first_name:'Clock',last_name:'Fixture',full_name:'Private clock fixture',birth_date:null,status:'active',created_at_ms:NOW_MS,updated_at_ms:NOW_MS,version:1});
+    repositories.league_player_positions.insert({id:uuid(996010),league_id:scenario.leagueId,player_id:uuid(996000),position_group:'F',reason:'Synthetic timing check',corrected_by_user_id:scenario.commissionerUserId,effective_at_ms:NOW_MS,ended_at_ms:null,version:1});
+    time++;
+    const directCommand={leagueId:scenario.leagueId,authenticated:manager,input:{teamId,playerId:uuid(996000),aavCents:300,termYears:2,bindingIllegalityConfirmed:true},idempotencyKey:'active-timing-direct'};
+    const direct=runtime.services.league.auction.start(directCommand),auctionId=direct.auction.auctionId;
+    assert.equal(direct.kind,'auction_opened');
+    // Ordinary reads remain private even for commissioners. Each deliberate
+    // reveal is scoped, confirmed and audited without changing auction state.
+    const privateRead=runtime.services.league.auction.read({leagueId:scenario.leagueId,auctionId,authenticated});
+    assert.deepEqual(privateRead.administrativeBids,[]);
+    const revealService=runtime.services.league.auctionReveal;
+    const revealInput={bidId:null,confirmed:true,reason:'Review a reported accidental bid'};
+    const revealCommand={leagueId:scenario.leagueId,auctionId,authenticated,input:revealInput,idempotencyKey:'private-bid-records'};
+    const privateBefore=database.serialize();
+    assert.throws(()=>revealService.reveal({...revealCommand,input:{...revealInput,confirmed:false}}),{code:'PRIVATE_REVEAL_INVALID'});
+    assert.deepEqual(database.serialize(),privateBefore);
+    const reveal=revealService.reveal(revealCommand);
+    assert.equal(reveal.auction.administrativeBids.length,1);assert.equal(reveal.terms,null);
+    const revealedBid=reveal.auction.administrativeBids[0];
+    assert.equal(Object.hasOwn(revealedBid,'aavCents'),false);
+    const revealedBytes=database.serialize();
+    assert.equal(revealService.reveal(revealCommand).revealId,reveal.revealId);
+    assert.deepEqual(database.serialize(),revealedBytes);
+    const terms=revealService.reveal({...revealCommand,input:{...revealInput,bidId:revealedBid.bidId},idempotencyKey:'private-bid-terms'});
+    assert.equal(terms.terms.totalValueCents,600);assert.equal(terms.terms.termYears,2);
+    const privateAgain=runtime.services.league.auction.read({leagueId:scenario.leagueId,auctionId,authenticated});
+    assert.deepEqual(privateAgain.administrativeBids,[],'Revealing never changes subsequent GET behavior');
+    assert.equal(database.prepare('SELECT COUNT(*) n FROM league_private_reveals').get().n,2);
+    assert.throws(()=>database.prepare('UPDATE league_private_reveals SET reason=?').run('altered private history'));
+    assert.throws(()=>database.prepare('DELETE FROM league_private_reveals').run());
+    const initial=timing.read(scope),oldClose=initial.rolloverTimesAtMs[0];
+    assert.equal(initial.roundDates[0].canEdit,true,initial.roundDates[0].blockedReason);
+    const input={deadlineAtMs:initial.deadlineAtMs,rolloverTimesAtMs:initial.rolloverTimesAtMs.map((at,i)=>i===0?at+3600000:at),reason:'Give managers one extra hour'};
+    const origin=await startRuntimeApp(t,runtime),url=origin+'/api/v1/leagues/'+scenario.leagueId+'/free-agent-drafts/'+draft.id+'/deadline-control/timing';
+    const commissionerSession=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId});
+    const headers=browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+commissionerSession.rawSessionToken,'X-CSRF-Token':commissionerSession.rawCsrfToken});
+    const revealUrl=origin+'/api/v1/leagues/'+scenario.leagueId+'/auctions/'+auctionId+'/administration/reveal';
+    const otherManagerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+    const otherSession=runtime.services.sessionService.issueForUser({userId:otherManagerId});
+    const noRevealWrites=database.serialize();
+    const revealHeaders={...headers,'Idempotency-Key':'private-http-review'};
+    assert.equal((await fetch(revealUrl,{method:'POST',headers:{...revealHeaders,'X-CSRF-Token':'bad'},body:JSON.stringify(revealInput)})).status,403);
+    assert.equal((await fetch(revealUrl,{method:'POST',headers:browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+otherSession.rawSessionToken,
+      'X-CSRF-Token':otherSession.rawCsrfToken,'Idempotency-Key':'manager-private-review'}),body:JSON.stringify(revealInput)})).status,403);
+    assert.equal((await fetch(revealUrl.replace(auctionId,uuid(996100)),{method:'POST',headers:revealHeaders,body:JSON.stringify(revealInput)})).status,404);
+    assert.deepEqual(database.serialize(),noRevealWrites);
+    const httpReveal=await fetch(revealUrl,{method:'POST',headers:revealHeaders,body:JSON.stringify(revealInput)});
+    assert.equal(httpReveal.status,200,JSON.stringify(await httpReveal.clone().json()));assert.match(httpReveal.headers.get('cache-control'),/no-store/);
+    assert.equal((await httpReveal.json()).data.auction.administrativeBids.length,1);
+    const pauseService=runtime.services.league.leaguePause,pauseInput={action:'pause',reason:'Review an active auction clock'};
+    const pausePreview=pauseService.preview({...scope,input:pauseInput});
+    pauseService.apply({...scope,input:{...pauseInput,confirmed:true,previewHash:pausePreview.previewHash},idempotencyKey:'pause-active-auction-clock'});
+    const before=database.serialize(),read=await fetch(url,{headers});
+    assert.equal(read.status,200);assert.equal((await read.json()).data.canEditActiveAuctions,true);
+    const response=await fetch(url+'/preview',{method:'POST',headers,body:JSON.stringify(input)});
+    assert.equal(response.status,200);const preview=(await response.json()).data;
+    assert.equal(preview.affectedAuctions,1);
+    assert.equal(JSON.stringify(preview).includes(auctionId),false,'Only a count and public dates are returned');
+    assert.deepEqual(database.serialize(),before);
+    const command={...scope,input:{...input,confirmed:true,previewHash:preview.previewHash},idempotencyKey:'active-timing-extension'};
+    const names=database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('auctions','free_agent_drafts','free_agent_draft_rollovers','job_runs','fad_timing_changes','fad_auction_clock_changes','league_activity','notifications','outbox_events','outbox_event_audiences') ORDER BY name").all().map(r=>r.name);
+    const rows=()=>Object.fromEntries(names.map(name=>[name,database.prepare('SELECT * FROM '+name+' ORDER BY rowid').all()]));
+    const preserved=rows(),firstBid=database.prepare('SELECT * FROM auction_bids WHERE auction_id=?').get(auctionId);
+    const {createSqliteFadTimingRepository}=require('../../src/infrastructure/persistence/sqlite/SqliteFadTimingRepository');
+    const {planTimingChange}=require('../../src/domain/freeAgentDraft/fadTimingChangePolicy');
+    const timingRepository=createSqliteFadTimingRepository({database}),rawState=timingRepository.state(scenario.leagueId,draft.id);
+    for(const tamper of [p=>p.auctionChanges[0].closesAtMs++,p=>p.auctionChanges[0].auction.version++,
+      p=>p.auctionChanges[0].cutoffAtMs++,p=>p.auctionChanges[0].afterJob.id=uuid(996050),
+      p=>delete p.auctionChanges[0].afterJob.version,p=>delete p.auctionChanges[0].afterJob.scheduled_for_ms,
+      p=>p.auctionChanges=[],p=>p.afterRollovers[0].opens_at_ms++,
+    ]) {
+      const plan=planTimingChange(rawState,input,time);tamper(plan);
+      assert.throws(()=>timingRepository.transaction(()=>timingRepository.apply({state:rawState,plan,actorUserId:scenario.commissionerUserId,
+        authority:'commissioner',clientKey:'forged-active-timing',requestHash:'f'.repeat(64),nowMs:time})));
+      assert.deepEqual(database.serialize(),before);
+    }
+    database.exec("CREATE TEMP TRIGGER active_timing_failure BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT,'active timing injected failure'); END");
+    assert.throws(()=>timing.apply(command),{code:'REPOSITORY_CONSTRAINT'});
+    database.exec('DROP TRIGGER active_timing_failure');assert.deepEqual(database.serialize(),before);
+    database.exec("CREATE TEMP TRIGGER active_timing_outbox_failure BEFORE INSERT ON outbox_events BEGIN SELECT RAISE(ABORT,'active outbox injected failure'); END");
+    assert.throws(()=>timing.apply(command),{code:'REPOSITORY_CONSTRAINT'});
+    database.exec('DROP TRIGGER active_timing_outbox_failure');assert.deepEqual(database.serialize(),before);
+    const applied=await fetch(url+'/apply',{method:'POST',headers:{...headers,'Idempotency-Key':command.idempotencyKey},body:JSON.stringify(command.input)});
+    const result=await applied.json();assert.equal(applied.status,200,JSON.stringify(result));assert.equal(result.data.accepted,true);
+    assert.deepEqual(rows(),preserved);
+    const updateSignal=database.prepare("SELECT * FROM outbox_events WHERE aggregate_id=? AND event_type='auction.changed' ORDER BY rowid DESC LIMIT 1").get(auctionId);
+    const signal=JSON.parse(updateSignal.payload_json);
+    assert.equal(signal.related.auctionId,auctionId);assert.equal(signal.related.fadId,draft.id);
+    assert.equal(signal.version,database.prepare('SELECT version FROM auctions WHERE id=?').get(auctionId).version);
+    assert.deepEqual(database.prepare('SELECT audience_kind,team_id,user_id FROM outbox_event_audiences WHERE outbox_event_id=?').all(updateSignal.id),[{audience_kind:'league',team_id:null,user_id:null}]);
+    const resumeInput={action:'resume',reason:'Active auction schedule reviewed'},resumePreview=pauseService.preview({...scope,input:resumeInput});
+    pauseService.apply({...scope,input:{...resumeInput,confirmed:true,previewHash:resumePreview.previewHash},idempotencyKey:'resume-active-auction-clock'});
+    const current=database.serialize();assert.equal(timing.apply(command).replayed,true);assert.deepEqual(database.serialize(),current);
+    assert.equal(runtime.services.league.auction.start(directCommand).auction.resolvesAtMs,oldClose+3600000);
+    assert.deepEqual(database.serialize(),current,'Original start receipt replay remains read-only');
+    assert.throws(()=>database.prepare('UPDATE fad_auction_clock_changes SET closes_at_ms=closes_at_ms+1').run());
+    assert.throws(()=>database.prepare('DELETE FROM fad_auction_clock_changes').run());
+    assert.throws(()=>database.prepare('UPDATE auction_contexts SET created_at_ms=created_at_ms+1 WHERE auction_id=?').run(auctionId));
+    assert.throws(()=>database.prepare('UPDATE auctions SET resolves_at_ms=resolves_at_ms+1,version=version+1 WHERE id=?').run(auctionId));
+    time=oldClose+1;
+    assert.equal((await runtime.services.league.freeAgentDraftAuctionResolutionJob.run()).due,0);
+    assert.equal((await runtime.services.league.freeAgentDraftRolloverJob.run()).due,0);
+    const bidCommand={leagueId:scenario.leagueId,auctionId,authenticated:manager,input:{teamId,aavCents:350,termYears:2,bindingIllegalityConfirmed:true},
+      expectedBidVersion:firstBid.version,idempotencyKey:'bid-after-old-fad-close'};
+    runtime.services.league.auction.putMine(bidCommand);
+    const edited=database.prepare('SELECT * FROM auction_bids WHERE id=?').get(firstBid.id);
+    assert.equal(edited.first_submitted_at_ms,firstBid.first_submitted_at_ms);
+    const shorter={...input,rolloverTimesAtMs:initial.rolloverTimesAtMs.map((at,i)=>i===0?oldClose+1800000:at),reason:'Use the agreed final closing time'};
+    const review=timing.preview({...scope,input:shorter});
+    timing.apply({...scope,input:{...shorter,confirmed:true,previewHash:review.previewHash},idempotencyKey:'active-timing-shortening'});
+    assert.equal(database.prepare('SELECT COUNT(*) n FROM fad_auction_clock_changes WHERE auction_id=?').get(auctionId).n,2);
+    const beforeReplay=database.serialize();
+    assert.equal(runtime.services.league.auction.start(directCommand).auction.resolvesAtMs,oldClose+1800000);
+    runtime.services.league.auction.putMine(bidCommand);
+    assert.deepEqual(database.serialize(),beforeReplay);
+    time=oldClose+1800000;
+    assert.equal(timing.read(scope).canReschedule,false,'Overdue rounds must resolve first');
+    assert.throws(()=>runtime.services.league.auction.putMine({...bidCommand,input:{...bidCommand.input,aavCents:400},
+      expectedBidVersion:edited.version,idempotencyKey:'bid-at-new-fad-close'}),{reasonCode:'AUCTION_BID_WINDOW_CLOSED'});
+    const finalPause=pauseService.preview({...scope,input:pauseInput});
+    pauseService.apply({...scope,input:{...pauseInput,confirmed:true,previewHash:finalPause.previewHash},idempotencyKey:'pause-due-auction-clock'});
+    const pausedState=database.serialize();
+    assert.equal((await runtime.services.league.freeAgentDraftAuctionResolutionJob.run()).due,0);
+    assert.equal((await runtime.services.league.freeAgentDraftRolloverJob.run()).due,0);
+    assert.deepEqual(database.serialize(),pausedState);
+    const finalResume=pauseService.preview({...scope,input:resumeInput});assert.equal(finalResume.impacts.dueAuctions,1);
+    pauseService.apply({...scope,input:{...resumeInput,confirmed:true,previewHash:finalResume.previewHash},idempotencyKey:'resume-due-auction-clock'});
+    const resolved=await runtime.services.league.freeAgentDraftAuctionResolutionJob.run();
+    assert.equal(resolved.succeeded,1,JSON.stringify(resolved));
+    const rolled=await runtime.services.league.freeAgentDraftRolloverJob.run();assert.equal(rolled.succeeded,1,JSON.stringify(rolled));
+    assert.equal((await runtime.services.league.freeAgentDraftAuctionResolutionJob.run()).due,0);
+    assert.equal(database.prepare('SELECT COUNT(*) n FROM auction_resolutions WHERE auction_id=?').get(auctionId).n,1);
+    assert.equal(database.prepare('SELECT status FROM auctions WHERE id=?').get(auctionId).status,'resolved');
+    const finished=database.serialize();
+    const finalAuction=runtime.services.league.auction.read({leagueId:scenario.leagueId,auctionId,authenticated:manager});
+    assert.equal(finalAuction.resolvesAtMs,time);
+    assert.deepEqual(runtime.services.league.auction.start(directCommand).auction,finalAuction);
+    assert.equal(timing.apply(command).replayed,true);assert.deepEqual(database.serialize(),finished);
+    assert.equal(timing.read(scope).roundDates[0].canEdit,false);
+    const resetPause=pauseService.preview({...scope,input:pauseInput});pauseService.apply({...scope,input:{...pauseInput,confirmed:true,previewHash:resetPause.previewHash},idempotencyKey:'pause-populated-reset-rehearsal'});
+    database.prepare("UPDATE outbox_events SET status='published',published_at_ms=?,updated_at_ms=?,version=version+1 WHERE league_id=? AND status='pending'").run(time,time,scenario.leagueId);
+    const populatedBytes=database.serialize(),resetProof=require('../../src/operations/guidedLeagueReset').rehearse(database,scenario.leagueId,scenario.commissionerUserId,time);
+    assert.equal(resetProof.recoveryVerified,true);assert.ok(resetProof.manifest.clear.find(g=>g.label==='Saved bids').count>0);assert.ok(resetProof.manifest.clear.find(g=>g.label==='Contracts').count>0);assert.deepEqual(database.serialize(),populatedBytes);
+
+    assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+  });
+
+  test('reschedules unused rapid rounds atomically while accepted auctions and queued receipts remain intact', async t => {
+    const database=createDatabase(t);let time=NOW_MS;
+    const runtime=createTargetRuntime(runtimeOptions(database,{securityFoundations:createSecurityFoundations({env:securityEnv(),now:()=>time,loggerSink(){}})}));
+    const scenario=seedComposedLeagueStartScenario(runtime),repositories=runtime.repositories.context.repositories;
+    const authenticated=runtime.services.sessionService.resolveWithoutActivity(scenario.session.rawSessionToken);
+    const started=runtime.services.league.start.start({leagueId:scenario.leagueId,input:{},expectedLeagueVersion:scenario.expectedLeagueVersion,idempotencyKey:'rapid-dates-start',authenticated});
+    runtime.services.league.matchupSchedule.generate({leagueId:scenario.leagueId,seasonId:scenario.seasonId,expectedSeasonVersion:started.league.currentSeason.version,
+      input:{nhlRegularSeasonStartsAtMs:Date.parse('2026-10-06T07:00:00Z'),nhlRegularSeasonEndsAtMs:Date.parse('2027-04-12T07:00:00Z'),fantasyPlayoffsStartAtMs:Date.parse('2027-03-15T07:00:00Z'),fantasyPlayoffsEndAtMs:Date.parse('2027-04-12T07:00:00Z'),firstWeekStartsAtMs:Date.parse('2026-10-12T07:00:00Z'),confirmed:true},idempotencyKey:'rapid-dates-schedule',authenticated});
+    assert.equal((await runtime.services.league.freeAgentDraftReadinessJob.run()).succeeded,1);
+    const draft=database.prepare('SELECT * FROM free_agent_drafts WHERE league_id=?').get(scenario.leagueId);
+    const scope={leagueId:scenario.leagueId,fadId:draft.id,authenticated},timing=runtime.services.league.fadTiming;
+    time=draft.candidate_deadline_at_ms-259200000;
+    assert.equal((await runtime.services.league.freeAgentDraftDeadlineReminderJob.run()).succeeded,1);
+    time=draft.candidate_deadline_at_ms;
+    assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).held,1);
+    const proceed=runtime.services.league.fadDeadlineControl.preview({...scope,input:{reason:'Proceed with saved cards'}});
+    runtime.services.league.fadDeadlineControl.proceed({...scope,input:{confirmed:true,reason:proceed.reason,previewHash:proceed.previewHash},idempotencyKey:'rapid-dates-proceed'});
+    assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).succeeded,1);
+    assert.equal((await runtime.services.league.freeAgentDraftAllocationLifecycleJob.run()).enteredRapid,1);
+    const teamId=scenario.teamIds[0],managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE team_id=? AND status='accepted' AND ended_at_ms IS NULL").get(teamId).user_id;
+    const managerSession=runtime.services.sessionService.issueForUser({userId:managerId});
+    const manager=runtime.services.sessionService.resolveWithoutActivity(managerSession.rawSessionToken);
+    for(let i=0;i<2;i++) {
+      repositories.players.insert({id:uuid(997000+i),first_name:'Timing',last_name:String(i),full_name:'Private timing player '+i,birth_date:null,status:'active',created_at_ms:NOW_MS,updated_at_ms:NOW_MS,version:1});
+      repositories.league_player_positions.insert({id:uuid(997010+i),league_id:scenario.leagueId,player_id:uuid(997000+i),position_group:'F',reason:'Synthetic timing check',corrected_by_user_id:scenario.commissionerUserId,effective_at_ms:NOW_MS,ended_at_ms:null,version:1});
+    }
+    time++;
+    const directCommand={leagueId:scenario.leagueId,authenticated:manager,input:{teamId,playerId:uuid(997000),aavCents:300,termYears:2,bindingIllegalityConfirmed:true},idempotencyKey:'rapid-timing-direct'};
+    const direct=runtime.services.league.auction.start(directCommand);
+    assert.equal(direct.kind,'auction_opened');
+    const initial=timing.read(scope),staleInput={deadlineAtMs:initial.deadlineAtMs,rolloverTimesAtMs:initial.rolloverTimesAtMs.map((at,i)=>i===1?at+3600000:at),reason:'Move unused second round'};
+    assert.equal(initial.canReschedule,true,initial.blockedReason);
+    const stale=timing.preview({...scope,input:staleInput});
+    time=database.prepare('SELECT creation_cutoff_at_ms FROM free_agent_draft_rollovers WHERE fad_id=? AND sequence=1').get(draft.id).creation_cutoff_at_ms;
+    const queueCommand={...directCommand,input:{...directCommand.input,playerId:uuid(997001)},idempotencyKey:'rapid-timing-queued'};
+    const queued=runtime.services.league.auction.start(queueCommand);
+    assert.equal(queued.kind,'nomination_queued');
+    assert.throws(()=>timing.apply({...scope,input:{...staleInput,confirmed:true,previewHash:stale.previewHash},idempotencyKey:'rapid-stale-preview'}),{code:'FAD_TIMING_PREVIEW_CHANGED'});
+    const status=timing.read(scope);
+    assert.equal(status.canEditDeadline,false);assert.equal(status.roundDates[1].canEdit,false);
+    const input={deadlineAtMs:status.deadlineAtMs,rolloverTimesAtMs:status.rolloverTimesAtMs.map((at,i)=>i===3?at+3600000:at),reason:'Move the unused fourth round'};
+    const origin=await startRuntimeApp(t,runtime),url=origin+'/api/v1/leagues/'+scenario.leagueId+'/free-agent-drafts/'+draft.id+'/deadline-control/timing';
+    const commissionerSession=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId});
+    const headers=browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+commissionerSession.rawSessionToken,'X-CSRF-Token':commissionerSession.rawCsrfToken});
+    const beforeRead=database.serialize();
+    const read=await fetch(url,{headers});assert.equal(read.status,200);assert.match(read.headers.get('cache-control'),/no-store/);
+    const publicStatus=(await read.json()).data;
+    assert.deepEqual(Object.keys(publicStatus).sort(),['leagueId','fadId','deadlineAtMs','weekOneAtMs','serverNowMs','held','rolloverTimesAtMs','canReschedule','blockedReason','canEditDeadline','canEditActiveAuctions','roundDates','reminderAlreadySent'].sort());
+    const response=await fetch(url+'/preview',{method:'POST',headers,body:JSON.stringify(input)});
+    assert.equal(response.status,200);const preview=(await response.json()).data;
+    assert.deepEqual(database.serialize(),beforeRead);
+    const command={...scope,input:{...input,confirmed:true,previewHash:preview.previewHash},idempotencyKey:'rapid-dates-apply'};
+    const names=database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('free_agent_drafts','free_agent_draft_rollovers','job_runs','fad_timing_changes','league_activity','notifications') ORDER BY name").all().map(r=>r.name);
+    const preserved=()=>Object.fromEntries(names.map(name=>[name,database.prepare('SELECT * FROM '+name+' ORDER BY rowid').all()]));
+    const prior=preserved(),oldRounds=database.prepare('SELECT * FROM free_agent_draft_rollovers WHERE fad_id=? ORDER BY sequence').all(draft.id);
+    const timingRepository=runtime.repositories.fadTiming;
+    const rawState=timingRepository.state(scenario.leagueId,draft.id);
+    const {planTimingChange}=require('../../src/domain/freeAgentDraft/fadTimingChangePolicy');
+    // Database guards must reject forged audit plans independently of service validation.
+    for(const tamper of [
+      p=>p.afterRoot.candidate_deadline_at_ms++,
+      p=>p.afterRoot.help_opens_at_ms++,
+      p=>{const times=JSON.parse(p.afterRoot.initial_rollover_times_json);times[0]++;p.afterRoot.initial_rollover_times_json=JSON.stringify(times);},
+      p=>p.afterRollovers[0].creation_cutoff_at_ms++,
+      p=>{p.afterJobs.find(j=>j.job_type==='fad_deadline').occurrence_key='forged-completed-receipt';},
+    ]) {
+      const plan=planTimingChange(rawState,input,time);tamper(plan);
+      assert.throws(()=>timingRepository.transaction(()=>timingRepository.apply({state:rawState,plan,actorUserId:scenario.commissionerUserId,
+        authority:'commissioner',clientKey:'forged-rapid-timing',requestHash:'f'.repeat(64),nowMs:time})));
+      assert.deepEqual(database.serialize(),beforeRead);
+    }
+    database.exec("CREATE TEMP TRIGGER rapid_timing_failure BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT,'rapid timing injected failure'); END");
+    assert.throws(()=>timing.apply(command),{code:'REPOSITORY_CONSTRAINT'});
+    database.exec('DROP TRIGGER rapid_timing_failure');assert.deepEqual(database.serialize(),beforeRead);
+    const applied=await fetch(url+'/apply',{method:'POST',headers:{...headers,'Idempotency-Key':command.idempotencyKey},body:JSON.stringify(command.input)});
+    const result=await applied.json();assert.equal(applied.status,200,JSON.stringify(result));
+    assert.deepEqual(preserved(),prior);
+    const after=database.serialize();assert.equal(timing.apply(command).replayed,true);assert.deepEqual(database.serialize(),after);
+    const newRounds=database.prepare('SELECT * FROM free_agent_draft_rollovers WHERE fad_id=? ORDER BY sequence').all(draft.id);
+    for(const i of [0,1,2,5,6])assert.deepEqual(newRounds[i],oldRounds[i]);
+    assert.equal(newRounds[4].opens_at_ms,input.rolloverTimesAtMs[3]);
+    assert.equal(runtime.services.league.auction.start(queueCommand).queuedNomination.resolvesAtMs,queued.queuedNomination.resolvesAtMs);
+    assert.equal(runtime.services.league.auction.start(directCommand).auction.auctionId,direct.auction.auctionId);
+    assert.throws(()=>database.prepare('UPDATE free_agent_draft_rollovers SET rolls_over_at_ms=rolls_over_at_ms+1,version=version+1 WHERE id=?').run(newRounds[3].id));
+    // The regular worker must follow the revised occurrence, not its old date.
+    for(let i=0;i<3;i++) {
+      time=newRounds[i].rolls_over_at_ms;
+      await runtime.services.league.freeAgentDraftQueuedNominationActivationJob.run();
+      await runtime.services.league.freeAgentDraftAuctionResolutionJob.run();
+      const rolled=await runtime.services.league.freeAgentDraftRolloverJob.run();
+      assert.equal(rolled.succeeded,1,JSON.stringify(rolled));
+    }
+    time=oldRounds[3].rolls_over_at_ms;
+    assert.equal((await runtime.services.league.freeAgentDraftRolloverJob.run()).due,0);
+    time=newRounds[3].rolls_over_at_ms;
+    assert.equal((await runtime.services.league.freeAgentDraftRolloverJob.run()).succeeded,1);
+    assert.equal((await runtime.services.league.freeAgentDraftRolloverJob.run()).due,0);
+    assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+  });
+
+  test('changes FAD cutoff gaps through authenticated preview with atomic preservation and timing compatibility', async t => {
+    const database=createDatabase(t);let time=NOW_MS;
+    const runtime=createTargetRuntime(runtimeOptions(database,{securityFoundations:createSecurityFoundations({env:securityEnv(),now:()=>time,loggerSink(){}})}));
+    const scenario=seedComposedLeagueStartScenario(runtime);
+    const authenticated=runtime.services.sessionService.resolveWithoutActivity(scenario.session.rawSessionToken);
+    const started=runtime.services.league.start.start({leagueId:scenario.leagueId,input:{},expectedLeagueVersion:scenario.expectedLeagueVersion,idempotencyKey:'cutoff-start',authenticated});
+    runtime.services.league.matchupSchedule.generate({leagueId:scenario.leagueId,seasonId:scenario.seasonId,expectedSeasonVersion:started.league.currentSeason.version,
+      input:{nhlRegularSeasonStartsAtMs:Date.parse('2026-10-06T07:00:00Z'),nhlRegularSeasonEndsAtMs:Date.parse('2027-04-12T07:00:00Z'),fantasyPlayoffsStartAtMs:Date.parse('2027-03-15T07:00:00Z'),fantasyPlayoffsEndAtMs:Date.parse('2027-04-12T07:00:00Z'),firstWeekStartsAtMs:Date.parse('2026-10-12T07:00:00Z'),confirmed:true},idempotencyKey:'cutoff-schedule',authenticated});
+    assert.equal((await runtime.services.league.freeAgentDraftReadinessJob.run()).succeeded,1);
+    const draft=database.prepare('SELECT * FROM free_agent_drafts WHERE league_id=?').get(scenario.leagueId);
+    const scope={leagueId:scenario.leagueId,fadId:draft.id,authenticated},cutoff=runtime.services.league.fadAuctionCutoff;
+    const origin=await startRuntimeApp(t,runtime),url=new URL('/api/v1/leagues/'+scenario.leagueId+'/free-agent-drafts/'+draft.id+'/deadline-control/auction-cutoff',origin);
+    const manager=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId);
+    const session=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId}),managerSession=runtime.services.sessionService.issueForUser({userId:manager.user_id});
+    const headersFor=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken});
+    const headers=headersFor(session),input={gapMinutes:30,reason:'Allow nominations closer to closing'};
+    const before=database.serialize();
+    assert.equal((await fetch(url,{headers:browserHeaders()})).status,401);
+    assert.equal((await fetch(url,{headers:headersFor(managerSession)})).status,403);
+    assert.equal((await fetch(url+'/preview',{method:'POST',headers:{...headers,'X-CSRF-Token':'invalid'},body:JSON.stringify(input)})).status,403);
+    const read=await fetch(url,{headers});assert.equal(read.status,200);assert.match(read.headers.get('cache-control'),/no-store/);
+    assert.deepEqual(Object.keys((await read.json()).data).sort(),['leagueId','fadId','gapMinutes','canEdit','blockedReason','serverNowMs','rounds'].sort());
+    const previewResponse=await fetch(url+'/preview',{method:'POST',headers,body:JSON.stringify(input)});
+    assert.equal(previewResponse.status,200);const preview=(await previewResponse.json()).data;
+    assert.equal(preview.changes.length,7);assert.equal(preview.retained.length,0);
+    assert.deepEqual(database.serialize(),before,'Reads, previews and denied requests cannot write');
+    const tables=['free_agent_drafts','job_runs','candidate_cards','candidate_card_entries','free_agent_draft_readiness_operations','season_matchup_schedule_generations','teams','contracts','auctions','auction_bids','auction_contexts','free_agent_draft_nomination_queue'];
+    const rows=()=>Object.fromEntries(tables.map(name=>[name,database.prepare('SELECT * FROM '+name).all()]));
+    const preserved=rows(),command={...scope,input:{...input,confirmed:true,previewHash:preview.previewHash},idempotencyKey:'cutoff-apply-01'};
+    database.exec("CREATE TEMP TRIGGER cutoff_test_failure BEFORE UPDATE ON free_agent_draft_rollovers BEGIN SELECT RAISE(ABORT,'injected cutoff rollback'); END");
+    assert.throws(()=>cutoff.apply(command),/injected cutoff rollback/);
+    database.exec('DROP TRIGGER cutoff_test_failure');assert.deepEqual(database.serialize(),before);
+    const applyResponse=await fetch(url+'/apply',{method:'POST',headers:{...headers,'Idempotency-Key':command.idempotencyKey},body:JSON.stringify(command.input)});
+    const result=await applyResponse.json();assert.equal(applyResponse.status,200,JSON.stringify(result));
+    assert.equal(result.data.accepted,true);assert.equal(cutoff.read(scope).gapMinutes,30);assert.deepEqual(rows(),preserved);
+    const applied=database.serialize();assert.equal(cutoff.apply(command).replayed,true);assert.deepEqual(database.serialize(),applied);
+    assert.throws(()=>cutoff.apply({...command,input:{...command.input,reason:'Different reason'}}),{code:'FAD_CUTOFF_CONFLICT'});
+    assert.throws(()=>database.prepare('DELETE FROM fad_auction_cutoff_changes WHERE id=?').run(result.data.id));
+    assert.throws(()=>database.prepare('UPDATE free_agent_draft_rollovers SET creation_cutoff_at_ms=creation_cutoff_at_ms-1,version=version+1 WHERE fad_id=?').run(draft.id));
+    const timing=runtime.services.league.fadTiming,old=timing.read(scope),dates={deadlineAtMs:old.deadlineAtMs+60000,rolloverTimesAtMs:old.rolloverTimesAtMs,reason:'Move the card target'};
+    const review=timing.preview({...scope,input:dates});timing.apply({...scope,input:{...dates,confirmed:true,previewHash:review.previewHash},idempotencyKey:'cutoff-retimed-01'});
+    for(const round of database.prepare('SELECT * FROM free_agent_draft_rollovers WHERE fad_id=?').all(draft.id))assert.equal(round.creation_cutoff_at_ms,round.rolls_over_at_ms-1800000);
+    time=dates.deadlineAtMs;
+    assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).held,1);
+    const proceed=runtime.services.league.fadDeadlineControl.preview({...scope,input:{reason:'Proceed with saved cards'}});
+    runtime.services.league.fadDeadlineControl.proceed({...scope,input:{confirmed:true,reason:proceed.reason,previewHash:proceed.previewHash},idempotencyKey:'cutoff-proceed-01'});
+    assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).succeeded,1);
+    assert.equal((await runtime.services.league.freeAgentDraftAllocationLifecycleJob.run()).enteredRapid,1);
+    time=old.rolloverTimesAtMs[0];
+    assert.equal(cutoff.read(scope).canEdit,false,'Overdue rounds must finish first');
+    const rolled=await runtime.services.league.freeAgentDraftRolloverJob.run();assert.equal(rolled.succeeded,1,JSON.stringify(rolled));
+    assert.equal(cutoff.read(scope).canEdit,true);
+    const rapidInput={gapMinutes:120,reason:'Adjust during rapid auctions'},rapidPreview=cutoff.preview({...scope,input:rapidInput});
+    assert.equal(rapidPreview.retained.length,1);
+    cutoff.apply({...scope,input:{...rapidInput,confirmed:true,previewHash:rapidPreview.previewHash},idempotencyKey:'cutoff-rapid-02'});
+    assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+  });
+
+  for (const reminderSent of [false, true]) test('reschedules open FAD clocks atomically and preserves cards (sent reminder: ' + reminderSent + ')', async t => {
+    const database = createDatabase(t);
+    let time = NOW_MS;
+    const runtime = createTargetRuntime(runtimeOptions(database, { securityFoundations:
+      createSecurityFoundations({ env: securityEnv(), now: () => time, loggerSink() {} }) }));
+    const scenario = seedComposedLeagueStartScenario(runtime);
+    const authenticated = runtime.services.sessionService.resolveWithoutActivity(scenario.session.rawSessionToken);
+    const started = runtime.services.league.start.start({ leagueId: scenario.leagueId, input: {},
+      expectedLeagueVersion: scenario.expectedLeagueVersion, idempotencyKey: 'timing-start', authenticated });
+    runtime.services.league.matchupSchedule.generate({ leagueId: scenario.leagueId, seasonId: scenario.seasonId,
+      expectedSeasonVersion: started.league.currentSeason.version,
+      input: { nhlRegularSeasonStartsAtMs: Date.parse('2026-10-06T07:00:00Z'), nhlRegularSeasonEndsAtMs: Date.parse('2027-04-12T07:00:00Z'),
+        fantasyPlayoffsStartAtMs: Date.parse('2027-03-15T07:00:00Z'), fantasyPlayoffsEndAtMs: Date.parse('2027-04-12T07:00:00Z'),
+        firstWeekStartsAtMs: Date.parse('2026-10-12T07:00:00Z'), confirmed: true }, idempotencyKey: 'timing-schedule', authenticated });
+    assert.equal((await runtime.services.league.freeAgentDraftReadinessJob.run()).succeeded, 1);
+    const draft = database.prepare('SELECT * FROM free_agent_drafts WHERE league_id=?').get(scenario.leagueId);
+    const scope = { leagueId: scenario.leagueId, fadId: draft.id, authenticated };
+    const timing = runtime.services.league.fadTiming;
+    if (reminderSent) {
+      time = draft.candidate_deadline_at_ms - 259_200_000;
+      assert.equal((await runtime.services.league.freeAgentDraftDeadlineReminderJob.run()).succeeded, 1);
+      time = draft.candidate_deadline_at_ms;
+      assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).held, 1);
+    }
+    const pauseInput={action:'pause',reason:'Keep competition paused during schedule review'},pauseService=runtime.services.league.leaguePause;
+    const pausePreview=pauseService.preview({...scope,input:pauseInput});
+    pauseService.apply({...scope,input:{...pauseInput,confirmed:true,previewHash:pausePreview.previewHash},idempotencyKey:'pause-timing-review'});
+    assert.equal(runtime.repositories.freeAgentDraftJobs.listDue({nowMs:draft.first_matchup_starts_at_ms,limit:100}).length,0);
+    const protectedTables = ['candidate_cards','candidate_card_entries','candidate_card_revisions','candidate_card_help_requests',
+      'free_agent_draft_readiness_operations','season_matchup_schedule_generations','matchup_weeks','teams','contracts'];
+    const preserved = () => Object.fromEntries(protectedTables.map(name => [name,database.prepare('SELECT * FROM ' + name).all()]));
+    const beforeRows = preserved();
+    const current = timing.read(scope);
+    assert.equal(current.canReschedule, true);
+    const input = { deadlineAtMs: draft.candidate_deadline_at_ms + 3_600_000,
+      rolloverTimesAtMs: current.rolloverTimesAtMs.map((at,i) => i===0 ? at + 3_600_000 : at), reason: 'Managers need more time' };
+    let httpUrl, httpHeaders;
+    if (reminderSent) {
+      const origin = await startRuntimeApp(t,runtime);
+      httpUrl = new URL('/api/v1/leagues/'+scenario.leagueId+'/free-agent-drafts/'+draft.id+'/deadline-control/timing',origin);
+      const commissionerSession = runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId});
+      const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+      const managerSession=runtime.services.sessionService.issueForUser({userId:managerId});
+      const headersFor=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken});
+      httpHeaders=headersFor(commissionerSession);
+      const untouched=database.serialize();
+      assert.equal((await fetch(httpUrl,{headers:browserHeaders()})).status,401);
+      assert.equal((await fetch(httpUrl,{headers:headersFor(managerSession)})).status,403);
+      assert.equal((await fetch(httpUrl+'/preview',{method:'POST',headers:{...httpHeaders,'X-CSRF-Token':'invalid'},body:JSON.stringify(input)})).status,403);
+      const readResponse=await fetch(httpUrl,{headers:httpHeaders});
+      assert.equal(readResponse.status,200);assert.match(readResponse.headers.get('cache-control'),/no-store/);
+      assert.deepEqual(Object.keys((await readResponse.json()).data).sort(),['blockedReason','canReschedule','canEditDeadline','canEditActiveAuctions','roundDates','deadlineAtMs','fadId','held','leagueId','reminderAlreadySent','rolloverTimesAtMs','serverNowMs','weekOneAtMs'].sort());
+      const httpPreview=await fetch(httpUrl+'/preview',{method:'POST',headers:httpHeaders,body:JSON.stringify(input)});
+      assert.equal(httpPreview.status,200,JSON.stringify(await httpPreview.json()));
+      assert.deepEqual(database.serialize(),untouched,'HTTP reads, denied writes and previews cannot change state');
+    }
+    const before = database.serialize();
+    const review = timing.preview({ ...scope,input });
+    assert.deepEqual(database.serialize(), before, 'Timing read and preview are read-only');
+    assert.equal(JSON.stringify(review).includes('before_jobs_json'), false);
+    const command = { ...scope,input: { ...input,confirmed:true,previewHash:review.previewHash },idempotencyKey:'timing-apply-01' };
+    database.exec("CREATE TEMP TRIGGER fail_timing_test BEFORE UPDATE ON free_agent_drafts WHEN NEW.candidate_deadline_at_ms<>OLD.candidate_deadline_at_ms BEGIN SELECT RAISE(ABORT,'injected rollback'); END");
+    assert.throws(() => timing.apply(command), /injected rollback/);
+    database.exec('DROP TRIGGER fail_timing_test');
+    assert.deepEqual(database.serialize(),before,'Failure after job and round updates rolls back all changes');
+    const applied = httpUrl ? (await (await fetch(httpUrl+'/apply',{method:'POST',headers:{...httpHeaders,'Idempotency-Key':command.idempotencyKey},body:JSON.stringify(command.input)})).json()).data : timing.apply(command);
+    assert.equal(applied.replayed,false);
+    assert.deepEqual(preserved(),beforeRows);
+    assert.equal(timing.read(scope).held,false);
+    const after = database.serialize();
+    assert.equal(timing.apply(command).replayed,true);
+    assert.deepEqual(database.serialize(),after);
+    assert.throws(() => timing.apply({ ...command,input:{...command.input,reason:'A different reason'} }),{code:'FAD_TIMING_CONFLICT'});
+    assert.throws(() => timing.apply({ ...command,idempotencyKey:'timing-stale-02' }),{code:'FAD_TIMING_PREVIEW_CHANGED'});
+    const updated = database.prepare('SELECT * FROM free_agent_drafts WHERE id=?').get(draft.id);
+    assert.equal(updated.candidate_deadline_at_ms,input.deadlineAtMs);
+    assert.equal(updated.version,draft.version+1);
+    assert.throws(() => database.prepare('UPDATE free_agent_drafts SET candidate_deadline_at_ms=candidate_deadline_at_ms+60000,help_opens_at_ms=help_opens_at_ms+60000,version=version+1 WHERE id=?').run(draft.id));
+    assert.throws(() => database.prepare('DELETE FROM fad_timing_changes WHERE id=?').run(applied.id));
+    if (reminderSent) {
+      const currentTiming=timing.read(scope);
+      const rounds=currentTiming.rolloverTimesAtMs;
+      const next={...input,rolloverTimesAtMs:rounds.map((at,i)=>i<5?rounds[i+1]:i===5?Math.floor((at+rounds[6])/2):at),reason:'Adjust the planned round cadence'};
+      const nextReview=timing.preview({...scope,input:next});
+      timing.apply({...scope,input:{...next,confirmed:true,previewHash:nextReview.previewHash},idempotencyKey:'timing-repeat-02'});
+      assert.deepEqual(timing.read(scope).rolloverTimesAtMs,next.rolloverTimesAtMs,'A round can take a later round’s old clock without collisions');
+      assert.deepEqual(preserved(),beforeRows);
+      assert.equal(database.prepare('SELECT COUNT(*) n FROM fad_timing_changes WHERE fad_id=?').get(draft.id).n,2);
+    }
+    const jobs = database.prepare("SELECT * FROM job_runs WHERE league_id=? AND job_type IN ('fad_deadline','fad_deadline_reminder','fad_rollover')").all(scenario.leagueId);
+    const resumeInput={action:'resume',reason:'Timing changes reviewed'},resumePreview=pauseService.preview({...scope,input:resumeInput});
+    pauseService.apply({...scope,input:{...resumeInput,confirmed:true,previewHash:resumePreview.previewHash},idempotencyKey:'resume-timing-review'});
+    const oldReminder = jobs.find(j=>j.job_type==='fad_deadline_reminder');
+    if (reminderSent) assert.equal(oldReminder.status,'succeeded');
+    else {
+      time = oldReminder.scheduled_for_ms;
+      assert.equal((await runtime.services.league.freeAgentDraftDeadlineReminderJob.run()).succeeded,1);
+    }
+    time = draft.candidate_deadline_at_ms;
+    assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).due,0);
+    time = input.deadlineAtMs;
+    assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).held,1);
+    const proceed = runtime.services.league.fadDeadlineControl.preview({...scope,input:{reason:'Proceed after extension'}});
+    runtime.services.league.fadDeadlineControl.proceed({...scope,input:{confirmed:true,reason:proceed.reason,previewHash:proceed.previewHash},idempotencyKey:'timing-proceed-01'});
+    const locked = await runtime.services.league.freeAgentDraftDeadlineJob.run();
+    assert.equal(locked.succeeded,1,JSON.stringify(locked));
+    assert.equal(runtime.repositories.freeAgentDraftJobs.listDue({nowMs:updated.first_matchup_starts_at_ms,limit:100})
+      .filter(j=>j.jobType==='fad_rollover').length,7);
+    const allocation=await runtime.services.league.freeAgentDraftAllocationLifecycleJob.run();
+    assert.equal(allocation.enteredRapid,1,JSON.stringify(allocation));
+    time=timing.read(scope).rolloverTimesAtMs[0];
+    const rollover=await runtime.services.league.freeAgentDraftRolloverJob.run();
+    assert.equal(rollover.succeeded,1,JSON.stringify(rollover));
+    assert.equal(timing.read(scope).canReschedule,true);
+    assert.equal(timing.read(scope).canEditDeadline,false);
+    assert.deepEqual(database.pragma('foreign_key_check'),[]);
+    assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+  });
+
+  test('upgrades unscheduled Goon preparation without changing records, timing defaults or manager card access',async t=>{
+    const database=createDatabase(t,{migrated:false});
+    const migrations=discoverMigrations({migrationsDirectory:MIGRATIONS_DIRECTORY});
+    const migrate=list=>applyMigrations({database,migrations:list,applicationBuildId:'goon-compatibility',now:()=>NOW_MS});
+    migrate(migrations.filter(m=>m.id<=66));
+    const legacy=path.join(path.dirname(database.name),'released-goon-schema66');fs.mkdirSync(legacy);
+    for(const m of migrations.filter(m=>m.id<=66))fs.copyFileSync(path.join(MIGRATIONS_DIRECTORY,m.fileName),path.join(legacy,m.fileName));
+    let runtime=createTargetRuntime(runtimeOptions(database,{migrationsDirectory:legacy}));
+    const scenario=seedComposedLeagueStartScenario(runtime,{leagueId:'48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03'});
+    const authenticated=runtime.services.sessionService.resolveWithoutActivity(scenario.session.rawSessionToken);
+    const started=runtime.services.league.start.start({leagueId:scenario.leagueId,input:{},expectedLeagueVersion:scenario.expectedLeagueVersion,idempotencyKey:'goon-compatibility-start',authenticated});
+    runtime.services.league.matchupSchedule.generate({leagueId:scenario.leagueId,seasonId:scenario.seasonId,
+      expectedSeasonVersion:started.league.currentSeason.version,input:{nhlRegularSeasonStartsAtMs:Date.parse('2026-10-06T07:00:00Z'),
+        nhlRegularSeasonEndsAtMs:Date.parse('2027-04-12T07:00:00Z'),fantasyPlayoffsStartAtMs:Date.parse('2027-03-15T07:00:00Z'),
+        fantasyPlayoffsEndAtMs:Date.parse('2027-04-12T07:00:00Z'),firstWeekStartsAtMs:Date.parse('2026-10-12T07:00:00Z'),confirmed:true},
+      idempotencyKey:'goon-compatibility-schedule',authenticated});
+    assert.equal((await runtime.services.league.freeAgentDraftReadinessJob.run()).succeeded,1);
+    const draft=database.prepare('SELECT * FROM free_agent_drafts WHERE league_id=?').get(scenario.leagueId);
+    // Arrange a disposable schema66 preparation fixture. This is never an application reset path.
+    const triggers=database.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger'").all();
+    database.transaction(()=>{
+      for(const row of triggers)database.exec('DROP TRIGGER "'+row.name+'"');
+      database.prepare("UPDATE job_runs SET status='skipped',started_at_ms=?,completed_at_ms=? WHERE league_id=? AND job_type IN ('fad_deadline','fad_deadline_reminder','fad_rollover','fad_completion')").run(NOW_MS,NOW_MS,scenario.leagueId);
+      for(const round of database.prepare('SELECT id FROM free_agent_draft_rollovers WHERE league_id=? ORDER BY sequence DESC').all(scenario.leagueId))
+        database.prepare('DELETE FROM free_agent_draft_rollovers WHERE league_id=? AND id=?').run(scenario.leagueId,round.id);
+      database.prepare(`UPDATE free_agent_drafts SET first_matchup_week_id=NULL,current_competition_first_matchup_week_id=NULL,
+        candidate_deadline_at_ms=NULL,first_matchup_starts_at_ms=NULL,initial_rollover_times_json=NULL,help_opens_at_ms=opened_at_ms,
+        auction_creation_cutoff_minutes=0,rollover_interval_minutes=15 WHERE id=?`).run(draft.id);
+      for(const row of triggers)database.exec(row.sql);
+    })();
+    assert.deepEqual(database.pragma('foreign_key_check'),[]);
+    const tables=database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations','application_metadata') ORDER BY name").all();
+    const rows=()=>tables.map(({name})=>({name,rows:database.prepare('SELECT * FROM "'+name+'"').all()}));
+    const before=rows();migrate(migrations);assert.deepEqual(rows(),before);
+    const migrated=database.serialize();migrate(migrations);assert.deepEqual(database.serialize(),migrated);
+    runtime=createTargetRuntime(runtimeOptions(database));
+    const scope={leagueId:scenario.leagueId,fadId:draft.id,authenticated};
+    const settings=runtime.services.league.goonDraftSettings.read(scope);
+    assert.equal(settings.auctionCreationCutoffMinutes,0);assert.equal(settings.rolloverIntervalMinutes,15);assert.equal(settings.editable,true);
+    const overview=runtime.services.league.freeAgentDraftRead.overview(scope);
+    assert.equal(overview.candidateDeadlineAtMs,null);assert.equal(overview.phase,'cards_open');
+    const {createFadAuctionCutoffClock}=require('../../src/infrastructure/persistence/sqlite/fadAuctionCutoffClock');
+    assert.equal(createFadAuctionCutoffClock(database).gap(scope),0);
+    assert.deepEqual(database.serialize(),migrated,'Read-only compatibility checks cannot schedule anything');
+    const teamId=scenario.teamIds[0],managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE team_id=? AND status='accepted'").get(teamId).user_id;
+    const session=runtime.services.sessionService.issueForUser({userId:managerId});
+    const manager=runtime.services.sessionService.resolveWithoutActivity(session.rawSessionToken);
+    const playerId=uuid(995500),r=runtime.repositories.context.repositories;
+    r.players.insert({id:playerId,first_name:'Synthetic',last_name:'Goon',full_name:'Synthetic Goon',birth_date:null,status:'active',created_at_ms:NOW_MS,updated_at_ms:NOW_MS,version:1});
+    r.league_player_positions.insert({id:uuid(995501),league_id:scope.leagueId,player_id:playerId,position_group:'F',reason:'Synthetic Goon fixture',corrected_by_user_id:scenario.commissionerUserId,effective_at_ms:NOW_MS,ended_at_ms:null,version:1});
+    const card=runtime.services.league.candidateCards.privateCard({...scope,teamId,authenticated:manager});
+    const saved=runtime.services.league.candidateCards.addCandidate({...scope,teamId,authenticated:manager,slotKey:'F01',
+      input:{playerId,aavCents:300,termYears:2},expectedCardVersion:card.cardVersion,idempotencyKey:'unscheduled-card-add'});
+    assert.equal(saved.httpStatus,201);
+    assert.equal(database.prepare('SELECT candidate_deadline_at_ms FROM free_agent_drafts WHERE id=?').get(draft.id).candidate_deadline_at_ms,null);
+    assert.deepEqual(database.pragma('foreign_key_check'),[]);
+  });
+
+  for (const heldFirst of [false, true]) test(heldFirst
+    ? "saves all manager cards during a hold but waits for explicit processing"
+    : "automatically locks complete cards at the target without processing early", async t => {
+    const database = createDatabase(t, { migrated: false });
+    const migrations = discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY });
+    const migrate = list => applyMigrations({ database, migrations: list, applicationBuildId: "soft-deadline-test", now: () => NOW_MS });
+    migrate(migrations.filter(m => m.id <= 67));
+    const legacyMigrationsDirectory = path.join(path.dirname(database.name), "schema-66-migrations");
+    fs.mkdirSync(legacyMigrationsDirectory);
+    for (const migration of migrations.filter(m => m.id <= 67)) {
+      fs.copyFileSync(path.join(MIGRATIONS_DIRECTORY, migration.fileName), path.join(legacyMigrationsDirectory, migration.fileName));
+    }
+    let time = NOW_MS;
+    const buildRuntime = () => createTargetRuntime(runtimeOptions(database, {
+      migrationsDirectory: database.pragma("user_version", { simple: true }) < 68 ? legacyMigrationsDirectory : MIGRATIONS_DIRECTORY,
+      securityFoundations:
+      createSecurityFoundations({ env: securityEnv(), now: () => time, loggerSink() {} }) }));
+    let runtime = buildRuntime();
+    const scenario = seedComposedLeagueStartScenario(runtime);
+    const authenticated = runtime.services.sessionService.resolveWithoutActivity(scenario.session.rawSessionToken);
+    const started = runtime.services.league.start.start({ leagueId: scenario.leagueId, input: {},
+      expectedLeagueVersion: scenario.expectedLeagueVersion, idempotencyKey: "soft-deadline-start", authenticated });
+    runtime.services.league.matchupSchedule.generate({
+      leagueId: scenario.leagueId, seasonId: scenario.seasonId, expectedSeasonVersion: started.league.currentSeason.version,
+      input: { nhlRegularSeasonStartsAtMs: Date.parse("2026-10-06T07:00:00Z"),
+        nhlRegularSeasonEndsAtMs: Date.parse("2027-04-12T07:00:00Z"),
+        fantasyPlayoffsStartAtMs: Date.parse("2027-03-15T07:00:00Z"),
+        fantasyPlayoffsEndAtMs: Date.parse("2027-04-12T07:00:00Z"),
+        firstWeekStartsAtMs: Date.parse("2026-10-12T07:00:00Z"), confirmed: true },
+      idempotencyKey: "soft-deadline-schedule", authenticated });
+    assert.equal((await runtime.services.league.freeAgentDraftReadinessJob.run()).succeeded, 1);
+    const tableNames = database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations','application_metadata') ORDER BY name").all().map(r => r.name);
+    const rows = () => Object.fromEntries(tableNames.map(name => [name, database.prepare('SELECT * FROM "' + name + '"').all()]));
+    const preserved = rows();
+    const triggers = database.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger'").all();
+    migrate(migrations.filter(m => m.id <= 68));
+    assert.deepEqual(rows(), preserved, "Schema 67 must preserve every pre-existing league, card, clock and job row");
+    const changedTriggers = triggers.filter(row => database.prepare("SELECT sql FROM sqlite_schema WHERE name=?").get(row.name).sql !== row.sql);
+    assert.deepEqual(changedTriggers.map(r => r.name).sort(), [
+      "candidate_card_entries_open_insert", "candidate_card_entries_open_update", "candidate_card_revisions_authority_insert",
+    ]);
+    for (const prior of changedTriggers) {
+      const updated = database.prepare("SELECT sql FROM sqlite_schema WHERE name=?").get(prior.name).sql;
+      const restored = updated.replace(/NEW\.(created_by_authority|last_edited_by_authority|actor_authority) IN \('system', 'manager'\)/,
+        "NEW.$1 = 'system'");
+      assert.equal(restored, prior.sql, "All other database permission guards must remain intact");
+    }
+    const schema67Rows = rows();
+    const schema67Triggers = database.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger'").all();
+    migrate(migrations.filter(m=>m.id<=69));
+    assert.deepEqual(rows(),schema67Rows,'Schema 68 must preserve existing records');
+    assert.deepEqual(schema67Triggers.filter(row=>database.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(row.name).sql!==row.sql).map(row=>row.name).sort(),
+      ['free_agent_draft_rollovers_forward_update','free_agent_drafts_deadline_allocation_barrier','free_agent_drafts_forward_update','free_agent_drafts_initial_timing_immutable']);
+    for (const trigger of schema67Triggers.filter(r=>['free_agent_drafts_forward_update','free_agent_draft_rollovers_forward_update','free_agent_drafts_initial_timing_immutable'].includes(r.name))) {
+      const updated=database.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(trigger.name).sql;
+      assert.equal(updated.slice(updated.indexOf('\nBEGIN')),trigger.sql.slice(trigger.sql.indexOf('\nBEGIN')),'Existing transition guards remain verbatim');
+    }
+    const schema68Rows=rows(),schema68Objects=database.prepare("SELECT name,sql FROM sqlite_schema WHERE type IN ('table','trigger','view')").all();
+    migrate(migrations.filter(m=>m.id<=72));
+    assert.deepEqual(rows(),schema68Rows,'Schema 69 must preserve every existing card, round and job');
+    assert.deepEqual(schema68Objects.filter(row=>database.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(row.name).sql!==row.sql).map(r=>r.name).sort(),
+      ['free_agent_draft_nomination_queue_forward_update','free_agent_draft_rollovers','free_agent_draft_rollovers_forward_update','free_agent_draft_rollovers_goon_cutoff_insert']);
+    migrate(migrations);
+    const migratedBytes = database.serialize();
+    migrate(migrations);
+    assert.deepEqual(database.serialize(), migratedBytes);
+    runtime = buildRuntime();
+    const draft = database.prepare("SELECT * FROM free_agent_drafts WHERE league_id=?").get(scenario.leagueId);
+    const scope = { leagueId: scenario.leagueId, fadId: draft.id, authenticated };
+    const controls = runtime.services.league.fadDeadlineControl;
+    let stalePreview;
+    if (heldFirst) {
+      time = draft.candidate_deadline_at_ms;
+      assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).held, 1);
+      stalePreview = controls.preview({ ...scope, input: { reason: "Process the saved cards" } });
+    }
+    const repositories = runtime.repositories.context.repositories;
+    for (let index = 0; index < 18; index += 1) {
+      repositories.players.insert({ id: uuid(98_000 + index), first_name: "Private", last_name: String(index),
+        full_name: "Private candidate " + index, birth_date: null, status: "active", created_at_ms: NOW_MS, updated_at_ms: NOW_MS, version: 1 });
+      repositories.league_player_positions.insert({ id: uuid(98_100 + index), league_id: scenario.leagueId,
+        player_id: uuid(98_000 + index), position_group: index < 12 ? "F" : "D",
+        reason: "Soft deadline fixture", corrected_by_user_id: scenario.commissionerUserId,
+        effective_at_ms: NOW_MS, ended_at_ms: null, version: 1 });
+    }
+    const managerSessions = [];
+    for (const teamId of scenario.teamIds) {
+      const managerId = database.prepare("SELECT user_id FROM team_manager_assignments WHERE team_id=? AND status='accepted' AND ended_at_ms IS NULL").get(teamId).user_id;
+      const session = runtime.services.sessionService.issueForUser({ userId: managerId });
+      managerSessions.push(session);
+      const manager = runtime.services.sessionService.resolveWithoutActivity(session.rawSessionToken);
+      for (let index = 0; index < 18; index += 1) {
+        const added = runtime.services.league.candidateCards.addCandidate({ authenticated: manager, leagueId: scenario.leagueId,
+          fadId: draft.id, teamId, slotKey: (index < 12 ? "F" : "D") + String(index < 12 ? index + 1 : index - 11).padStart(2, "0"),
+          input: { playerId: uuid(98_000 + index), aavCents: 300, termYears: 2 }, expectedCardVersion: index + 1,
+          idempotencyKey: "soft-deadline-add-" + teamId + "-" + index });
+        assert.equal(added.httpStatus, 201);
+        assert.equal(added.data.card.cardVersion, index + 2);
+      }
+    }
+    assert.equal(controls.read(scope).complete, 4);
+    assert.equal(database.prepare("SELECT COUNT(*) n FROM candidate_cards WHERE status='open' AND completeness_code='complete'").get().n, 4);
+    if (heldFirst) {
+      assert.throws(() => controls.proceed({ ...scope,
+        input: { confirmed: true, reason: stalePreview.reason, previewHash: stalePreview.previewHash },
+        idempotencyKey: "soft-deadline-stale-preview" }), { code: "FAD_DEADLINE_CONTROL_PREVIEW_CHANGED" });
+      const saved = database.serialize();
+      assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).due, 0);
+      assert.deepEqual(database.serialize(), saved, "Saving the final card must not bypass an existing hold");
+      const baseUrl = await startRuntimeApp(t, runtime);
+      const url = new URL("/api/v1/leagues/" + scenario.leagueId + "/free-agent-drafts/" + draft.id + "/deadline-control", baseUrl);
+      const commissionerSession = runtime.services.sessionService.issueForUser({ userId: scenario.commissionerUserId });
+      const headersFor = session => browserHeaders({ Cookie: runtime.transport.sessionCookie.name + "=" + session.rawSessionToken,
+        "X-CSRF-Token": session.rawCsrfToken });
+      const headers = headersFor(commissionerSession);
+      const beforeRead = database.serialize();
+      assert.equal((await fetch(url, { headers: browserHeaders() })).status, 401);
+      const managerOnlySession = managerSessions.find(session => session.userId !== scenario.commissionerUserId) || managerSessions[1];
+      assert.equal((await fetch(url, { headers: headersFor(managerOnlySession) })).status, 403);
+      const readResponse = await fetch(url, { headers });
+      assert.equal(readResponse.status, 200);
+      const status = await readResponse.json();
+      assert.equal(status.data.complete, 4);
+      assert.equal(JSON.stringify(status).includes("Private candidate"), false);
+      assert.match(readResponse.headers.get("cache-control"), /no-store/);
+      assert.equal((await fetch(url + "/preview", { method: "POST", headers: { ...headers, "X-CSRF-Token": "invalid" },
+        body: JSON.stringify({ reason: "All cards are now ready" }) })).status, 403);
+      const response = await fetch(url + "/preview", { method: "POST", headers, body: JSON.stringify({ reason: "All cards are now ready" }) });
+      const review = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(review));
+      assert.deepEqual(database.serialize(), beforeRead, "Reads, rejected requests and preview must not write");
+      const command = { method: "POST", headers: { ...headers, "Idempotency-Key": "soft-deadline-confirm" },
+        body: JSON.stringify({ confirmed: true, reason: review.data.reason, previewHash: review.data.previewHash }) };
+      const confirmed = await fetch(url + "/proceed", command);
+      assert.equal(confirmed.status, 200, JSON.stringify(await confirmed.json()));
+      const afterConfirm = database.serialize();
+      assert.equal((await (await fetch(url + "/proceed", command)).json()).data.replayed, true);
+      assert.deepEqual(database.serialize(), afterConfirm);
+    } else {
+      const oldTarget = draft.candidate_deadline_at_ms;
+      const timing = runtime.services.league.fadTiming;
+      const initial = timing.read(scope);
+      const input = { deadlineAtMs: oldTarget + 3_600_000, rolloverTimesAtMs: initial.rolloverTimesAtMs,
+        reason: 'Move the complete-card target' };
+      const review = timing.preview({...scope,input});
+      const beforeCards=database.prepare('SELECT * FROM candidate_card_entries ORDER BY id').all();
+      timing.apply({...scope,input:{...input,confirmed:true,previewHash:review.previewHash},idempotencyKey:'timing-all-ready-01'});
+      assert.deepEqual(database.prepare('SELECT * FROM candidate_card_entries ORDER BY id').all(),beforeCards);
+      time=oldTarget;
+      assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).due,0);
+      draft.candidate_deadline_at_ms=input.deadlineAtMs;
+      time = draft.candidate_deadline_at_ms - 1;
+      const before = database.serialize();
+      assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).due, 0);
+      assert.deepEqual(database.serialize(), before);
+      time = draft.candidate_deadline_at_ms;
+    }
+    const result = await runtime.services.league.freeAgentDraftDeadlineJob.run();
+    assert.equal(result.failed, 0);
+    assert.equal(result.succeeded, 1, JSON.stringify(result));
+    assert.equal(database.prepare("SELECT COUNT(*) n FROM candidate_card_snapshots WHERE fad_id=?").get(draft.id).n, 4);
+    assert.equal(database.prepare("SELECT COUNT(*) n FROM candidate_cards WHERE fad_id=? AND status='open'").get(draft.id).n, 0);
+    const locked = database.serialize();
+    assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).due, 0);
+    assert.deepEqual(database.serialize(), locked);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    assert.equal(database.pragma("integrity_check", { simple: true }), "ok");
   });
 
   test("commits and exactly replays one Candidate add through the composed target runtime", async (t) => {
@@ -3652,6 +4889,11 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const overdueReminder = await runtime.services.league
       .freeAgentDraftDeadlineReminderJob.run();
     assert.equal(overdueReminder.skipped, 1);
+    const manualScope = { leagueId: scenario.leagueId, fadId: lifecycleDraft.id, authenticated: commissioner };
+    const manualPreview = runtime.services.league.fadDeadlineControl.preview({ ...manualScope, input: { reason: "Process this partial-card allocation fixture" } });
+    runtime.services.league.fadDeadlineControl.proceed({ ...manualScope,
+      input: { confirmed: true, previewHash: manualPreview.previewHash, reason: manualPreview.reason },
+      idempotencyKey: "candidate-fixture-process-partial" });
     const deadline = await runtime.services.league
       .freeAgentDraftDeadlineJob.run();
     assert.equal(deadline.succeeded, 1);
@@ -5761,6 +7003,52 @@ describe("M3-19 composed target HTTP boundary", () => {
     assert.equal((await rejected.json()).error.code, "SESSION_REQUIRED");
   });
 
+  test("previews and publishes league communications with real session, CSRF and league isolation", async (t) => {
+    const database = createDatabase(t);
+    const securityFoundations = foundations();
+    const passwordHash = await createScryptPasswordHasher({ secureRandom: securityFoundations.secureRandom }).hash("communications fixture password");
+    database.transaction(() => seedFixture(database, passwordHash, { includeIdentityMetadata: false })).immediate();
+    const runtime = createTargetRuntime(runtimeOptions(database, { securityFoundations }));
+    const baseUrl = await startRuntimeApp(t, runtime);
+    const leagueId = fixtureId("league:leagueA");
+    const makeHeaders = userId => {
+      const session = runtime.services.sessionService.issueForUser({ userId });
+      return browserHeaders({ Cookie: `${runtime.transport.sessionCookie.name}=${session.rawSessionToken}`, "X-CSRF-Token": session.rawCsrfToken });
+    };
+    const headers = makeHeaders(fixtureId("account:leagueACommissioner"));
+    const url = new URL(`/api/v1/leagues/${leagueId}/communications`, baseUrl);
+    const input = { kind: "announcement", title: "Practice notice", body: "Synthetic local announcement only.",
+      audience: "members", pinned: true, expiresAtMs: null, notify: true };
+    const initial = database.serialize();
+    const anonymous = await fetch(url, { headers: browserHeaders() });
+    assert.equal(anonymous.status, 401);
+    const denied = await fetch(`${url}/preview`, { method: "POST", headers: { ...headers, "X-CSRF-Token": "invalid" }, body: JSON.stringify(input) });
+    assert.equal(denied.status, 403);
+    const wrongLeague = await fetch(new URL(`/api/v1/leagues/${fixtureId("league:leagueB")}/communications`, baseUrl), { headers });
+    assert.equal(wrongLeague.status, 404);
+    const previewResponse = await fetch(`${url}/preview`, { method: "POST", headers, body: JSON.stringify(input) });
+    const preview = await previewResponse.json();
+    assert.equal(previewResponse.status, 200, JSON.stringify(preview));
+    assert.ok(preview.data.recipientCount > 0);
+    assert.equal(initial.equals(database.serialize()), true, "Authorization, reads and preview must not write");
+    const beforeNotifications = database.prepare("SELECT count(*) AS n FROM notifications").get().n;
+    const command = { method: "POST", headers: { ...headers, "Idempotency-Key": "composed-communications-1" },
+      body: JSON.stringify({ message: input, previewHash: preview.data.previewHash }) };
+    const firstResponse = await fetch(url, command);
+    const first = await firstResponse.json();
+    assert.equal(firstResponse.status, 200, JSON.stringify(first));
+    const replay = await (await fetch(url, command)).json();
+    assert.equal(replay.data.id, first.data.id);
+    assert.equal(replay.data.replayed, true);
+    assert.equal(database.prepare("SELECT count(*) AS n FROM notifications").get().n - beforeNotifications, preview.data.recipientCount);
+    const listed = await (await fetch(url, { headers })).json();
+    assert.equal(listed.data.messages[0].body, input.body);
+    assert.equal(Object.hasOwn(listed.data.messages[0], "recipientCount"), false);
+    const platformUser = database.prepare("SELECT user_id FROM platform_roles WHERE status='active'").get();
+    const adminHeaders = makeHeaders(platformUser.user_id);
+    assert.equal((await fetch(`${url}/preview`, { method: "POST", headers: adminHeaders, body: JSON.stringify(input) })).status, 200);
+  });
+
   test("previews and applies an audited commissioner roster addition through the composed routers", async (t) => {
     const database = createDatabase(t);
     const securityFoundations = foundations();
@@ -6589,4 +7877,390 @@ describe("M3-19 local target HTTP and Socket.IO server lifecycle", () => {
     assert.equal(targetServer.server.listening, false);
     assert.equal(runtime.database.open, false);
   });
+});
+
+test('private league help preserves populated state and enforces requester, commissioner and retry boundaries over HTTP',async t=>{
+ const database=createDatabase(t,{migrated:false}),migrations=discoverMigrations({migrationsDirectory:MIGRATIONS_DIRECTORY});
+ const old=migrations.filter(m=>m.id<=80);applyMigrations({database,migrations:old,applicationBuildId:'help-test',now:()=>NOW_MS});
+ const oldDir=path.join(path.dirname(database.name),'schema80');fs.mkdirSync(oldDir);for(const m of old)fs.copyFileSync(path.join(MIGRATIONS_DIRECTORY,m.fileName),path.join(oldDir,m.fileName));
+ const oldRuntime=createTargetRuntime(runtimeOptions(database,{migrationsDirectory:oldDir})),scenario=seedComposedLeagueStartScenario(oldRuntime);
+ const tables=database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations','application_metadata') ORDER BY name").all().map(r=>r.name);
+ const rows=()=>Object.fromEntries(tables.map(name=>[name,database.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()]));
+ const original=rows(),objects=database.prepare('SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY name').all();
+ applyMigrations({database,migrations:migrations.filter(m=>m.id<=81),applicationBuildId:'help-test',now:()=>NOW_MS});assert.deepEqual(rows(),original);
+ for(const object of objects)assert.equal(database.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(object.name).sql,object.sql,object.name);
+ applyMigrations({database,migrations,applicationBuildId:'help-test-current',now:()=>NOW_MS});
+ const runtime=createTargetRuntime(runtimeOptions(database));
+ const managers=database.prepare("SELECT user_id,team_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' ORDER BY team_id").all(scenario.leagueId,scenario.commissionerUserId);
+ const session=userId=>runtime.services.sessionService.issueForUser({userId}),commissioner=session(scenario.commissionerUserId),manager=session(managers[0].user_id),other=session(managers[1].user_id);
+ const origin=await startRuntimeApp(t,runtime),url=origin+'/api/v1/leagues/'+scenario.leagueId+'/help';
+ const headersFor=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken});
+ const mh=headersFor(manager),ch=headersFor(commissioner),oh=headersFor(other);
+ const get=(suffix='',headers=mh)=>fetch(url+suffix,{headers}),post=(suffix,body,key,headers=mh)=>fetch(url+suffix,{method:'POST',headers:{...headers,'Idempotency-Key':key},body:JSON.stringify(body)});
+ assert.equal((await get('',browserHeaders())).status,401);
+ const before=database.serialize();
+ for(const kind of ['general','auction','roster','trade']){const response=await get('/targets?kind='+kind+'&teamId='+managers[0].team_id);assert.equal(response.status,200,JSON.stringify(await response.clone().json()));}
+ assert.equal((await get('/targets?kind=auction&teamId='+managers[1].team_id)).status,403);
+ const list=await get();assert.equal(list.status,200,JSON.stringify(await list.clone().json()));assert.deepEqual((await list.json()).data.requests,[]);assert.deepEqual(database.serialize(),before);
+ const input={kind:'general',teamId:managers[0].team_id,targetId:null,subject:'Please check my setup',message:'Private issue for the commissioner to review.'};
+ assert.equal((await post('',input,'help-create-badcsrf',{...mh,'X-CSRF-Token':'bad'})).status,403);
+ assert.equal((await post('',{...input,teamId:managers[1].team_id},'help-create-other')).status,403);
+ assert.equal((await post('',{...input,kind:'auction',targetId:uuid(981100)},'help-create-badtarget')).status,409);
+ database.exec("CREATE TRIGGER help_fixture_failure BEFORE INSERT ON notifications BEGIN SELECT RAISE(ABORT,'Synthetic notice failure'); END");
+ const rollback=database.serialize();assert.equal((await post('',input,'help-create-once')).status,500);assert.deepEqual(database.serialize(),rollback);database.exec('DROP TRIGGER help_fixture_failure');
+ const protectedBefore=rows(),created=await post('',input,'help-create-once');assert.equal(created.status,200,JSON.stringify(await created.clone().json()));const id=(await created.json()).data.id;
+ const protectedAfter=rows();for(const name of tables)if(name!=='notifications')assert.deepEqual(protectedAfter[name],protectedBefore[name],name);
+ const notice=database.prepare("SELECT user_id,message_data_json FROM notifications WHERE event_type='league_help_updated'").all();assert.equal(notice.length,1);assert.equal(notice[0].user_id,scenario.commissionerUserId);assert.doesNotMatch(JSON.stringify(notice),/Private issue|Please check/);
+ const written=database.serialize();assert.equal((await(await post('',input,'help-create-once')).json()).data.replayed,true);assert.deepEqual(database.serialize(),written);
+ assert.equal((await post('',{...input,message:'Different contents'},'help-create-once')).status,409);
+ assert.equal((await get('/'+id,oh)).status,404);assert.deepEqual((await(await get('',oh)).json()).data.requests,[]);
+ const detail=(await(await get('/'+id,ch)).json()).data;assert.equal(detail.canManage,true);assert.equal(detail.request.message,input.message);
+ assert.equal((await post('/'+id+'/events',{action:'resolve',message:'Fix completed',expectedVersion:1},'help-wrong-resolve')).status,403);
+ const reply={action:'reply',message:'I am checking the issue',expectedVersion:1};
+ assert.equal((await post('/'+id+'/events',reply,'help-reply-one',ch)).status,200);
+ assert.equal((await post('/'+id+'/events',reply,'help-reply-stale',ch)).status,409);
+ const afterReply=database.serialize();assert.equal((await(await post('/'+id+'/events',reply,'help-reply-one',ch)).json()).data.replayed,true);assert.deepEqual(database.serialize(),afterReply);
+ assert.equal((await post('/'+id+'/events',{action:'resolve',message:'Setup reviewed and corrected',expectedVersion:2},'help-resolve-once',ch)).status,200);
+ assert.equal((await post('/'+id+'/events',{action:'reply',message:'An old reply',expectedVersion:3},'help-closed-reply')).status,409);
+ assert.equal((await post('/'+id+'/events',{action:'reopen',message:'The issue is still happening',expectedVersion:3},'help-reopen-once')).status,200);
+ assert.equal((await post('/'+id+'/events',{action:'withdraw',message:'I no longer need this request',expectedVersion:4},'help-withdraw-once')).status,200);
+ assert.equal((await(await get('/'+id)).json()).data.events.length,4);
+ assert.equal((await(await get()).json()).data.requests.length,0);assert.equal((await(await get('?status=closed')).json()).data.requests.length,1);
+ assert.throws(()=>database.prepare('DELETE FROM league_help_requests WHERE id=?').run(id),/retained/);
+ assert.throws(()=>database.exec("UPDATE league_help_events SET message='rewritten'"),/immutable/);
+ assert.throws(()=>database.prepare("UPDATE league_help_requests SET message='rewritten' WHERE id=?").run(id),/retain/);
+ database.prepare("INSERT INTO platform_roles(id,user_id,role,status,granted_by_user_id,granted_at_ms,ended_at_ms,version) VALUES(?,?,'platform_administrator','active',?,?,NULL,1)").run(uuid(981101),managers[1].user_id,scenario.commissionerUserId,NOW_MS);
+ assert.equal((await get('/'+id,oh)).status,200);database.prepare("UPDATE platform_roles SET status='ended',ended_at_ms=?,version=version+1 WHERE id=?").run(NOW_MS,uuid(981101));assert.equal((await get('/'+id,oh)).status,404);
+ assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+});
+
+test('standings rebuild confirmation replays its saved result without recomputing after snapshot changes',async t=>{
+ const database=createDatabase(t),runtime=createTargetRuntime(runtimeOptions(database)),scenario=seedComposedLeagueStartScenario(runtime);
+ const commissioner=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId});
+ const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+ const manager=runtime.services.sessionService.issueForUser({userId:managerId}),origin=await startRuntimeApp(t,runtime);
+ const url=origin+'/api/v1/leagues/'+scenario.leagueId+'/seasons/'+scenario.seasonId+'/standings/rebuilds';
+ const headersFor=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken}),headers=headersFor(commissioner);
+ const post=(body,h=headers)=>fetch(url,{method:'POST',headers:h,body:JSON.stringify(body)});
+ const before=database.serialize();assert.equal((await post({confirmed:false},headersFor(manager))).status,403);
+ const response=await post({confirmed:false});assert.equal(response.status,200,JSON.stringify(await response.clone().json()));const preview=(await response.json()).data.preview;assert.deepEqual(database.serialize(),before);
+ const body={confirmed:true,expectedCurrentSnapshotId:preview.currentSnapshotId,reason:'Rebuild derived standings from saved results'},writeHeaders={...headers,'If-Match':'"'+preview.expectedVersion+'"','Idempotency-Key':uuid(981201)};
+ const written=await post(body,writeHeaders);assert.equal(written.status,200,JSON.stringify(await written.clone().json()));assert.equal((await written.json()).data.result.replayed,false);
+ const after=database.serialize(),retry=await post(body,writeHeaders);assert.equal(retry.status,200,JSON.stringify(await retry.clone().json()));assert.equal((await retry.json()).data.result.replayed,true);assert.deepEqual(database.serialize(),after);
+ assert.equal((await post({...body,reason:'Different reason'},writeHeaders)).status,412);assert.deepEqual(database.serialize(),after);
+ assert.equal((await post(body,{...writeHeaders,'Idempotency-Key':uuid(981202)})).status,409);assert.deepEqual(database.serialize(),after);
+ assert.deepEqual(database.pragma('foreign_key_check'),[]);
+});
+
+test('season preview presents contract expiry and continuation from real rows and keeps preparation unscheduled',async t=>{
+ const database=createDatabase(t),runtime=createTargetRuntime(runtimeOptions(database)),scenario=seedComposedLeagueStartScenario(runtime),targetId=uuid(981301);
+ database.prepare("INSERT INTO seasons(id,league_id,label,nhl_season_key,status,created_at_ms,updated_at_ms,version) VALUES(?,?,'2027','20272028','planned',?,?,1)").run(targetId,scenario.leagueId,NOW_MS,NOW_MS);
+ for(let i=0;i<2;i++){
+  const playerId=uuid(981310+i),contractId=uuid(981320+i),term=i+1;
+  database.prepare("INSERT INTO players(id,first_name,last_name,full_name,birth_date,status,created_at_ms,updated_at_ms,version) VALUES(?,'Preview',?, ?,NULL,'active',?,?,1)").run(playerId,String(i),'Preview '+i,NOW_MS,NOW_MS);
+  database.prepare("INSERT INTO contracts(id,league_id,player_id,current_team_id,contract_type,original_total_value_cents,original_term_years,aav_cents,start_season_id,status,acquisition_source_type,created_at_ms,updated_at_ms,version) VALUES(?,?,?,?,'normal',?,?,100,?,'active','fixture',?,?,1)").run(contractId,scenario.leagueId,playerId,scenario.teamIds[0],100*term,term,scenario.seasonId,NOW_MS,NOW_MS);
+  database.prepare("INSERT INTO contract_years(id,league_id,contract_id,season_id,year_number,aav_cents,status,rollover_at_ms,created_at_ms) VALUES(?,?,?,?,1,100,'current',NULL,?)").run(uuid(981330+i),scenario.leagueId,contractId,scenario.seasonId,NOW_MS);
+  if(i===1)database.prepare("INSERT INTO contract_years(id,league_id,contract_id,season_id,year_number,aav_cents,status,rollover_at_ms,created_at_ms) VALUES(?,?,?,?,2,100,'future',NULL,?)").run(uuid(981340),scenario.leagueId,contractId,targetId,NOW_MS);
+  database.prepare("INSERT INTO player_ownerships(id,league_id,season_id,player_id,team_id,ownership_kind,roster_category,position_group,slot_number,acquired_transaction_type,created_at_ms,updated_at_ms,version) VALUES(?,?,?,?,?,'Rostered','Active','F',?,'fixture',?,?,1)").run(uuid(981350+i),scenario.leagueId,scenario.seasonId,playerId,scenario.teamIds[0],i+1,NOW_MS,NOW_MS);
+ }
+ const commissioner=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId}),origin=await startRuntimeApp(t,runtime);
+ const headers=browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+commissioner.rawSessionToken}),before=database.serialize();
+ const response=await fetch(origin+'/api/v1/leagues/'+scenario.leagueId+'/management/season-preview',{headers});assert.equal(response.status,200,JSON.stringify(await response.clone().json()));
+ const data=(await response.json()).data;assert.equal(data.target.id,targetId);assert.equal(data.target.startsAtMs,null);assert.equal(data.projectionAvailable,true,JSON.stringify(data));
+ assert.deepEqual(data.contracts.map(c=>[c.playerName,c.currentYears,c.nextYears,c.outcome]),[['Preview 0',1,0,'expire'],['Preview 1',2,1,'continue']]);
+ assert.equal(data.summary.contractsExpiring,1);assert.equal(data.summary.contractsContinuing,1);assert.equal(data.summary.playersReleased,1);assert.equal(data.summary.playersCarried,1);assert.equal(data.summary.tradesCancelled,0);
+ assert.ok(data.issues.includes('NEXT_CALENDAR_UNSET'));assert.ok(data.issues.includes('NEXT_DRAFT_NOT_SCHEDULED'));assert.deepEqual(database.serialize(),before);assert.deepEqual(database.pragma('foreign_key_check'),[]);
+});
+
+test('administrator catalogue preview and confirmation preserve league records and enforce identity, authority, rollback and durable retries',async t=>{
+ const database=createDatabase(t);let calls=0,failFeed=false,afterFetch=()=>{};
+ let row={playerId:8479999,firstName:{default:'Synthetic'},lastName:{default:'Skater'},birthDate:'1998-02-03',isActive:true,position:'C',currentTeamAbbrev:'VAN'};
+ const runtime=createTargetRuntime(runtimeOptions(database,{nhlFetchImplementation:async url=>{calls++;assert.equal(url,'https://api-web.nhle.com/v1/player/8479999/landing');afterFetch();if(failFeed)throw Error('fixture provider secret');return {ok:true,text:async()=>JSON.stringify(row)};}}));
+ const scenario=seedComposedLeagueStartScenario(runtime),adminId=scenario.commissionerUserId,roleId=uuid(981401);
+ database.prepare("INSERT INTO platform_roles(id,user_id,role,status,granted_by_user_id,granted_at_ms,ended_at_ms,version) VALUES(?,?,'platform_administrator','active',NULL,?,NULL,1)").run(roleId,adminId,NOW_MS);
+ const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? LIMIT 1").get(scenario.leagueId,adminId).user_id;
+ const admin=runtime.services.sessionService.issueForUser({userId:adminId}),manager=runtime.services.sessionService.issueForUser({userId:managerId}),origin=await startRuntimeApp(t,runtime);
+ const headers=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken,'Content-Type':'application/json'});
+ const ah=headers(admin),mh=headers(manager),base=origin+'/api/v1/operations/catalogue';
+ const post=(suffix,input,h=ah)=>fetch(base+suffix,{method:'POST',headers:h,body:JSON.stringify(input)});
+ assert.equal((await post('/preview',{nhlId:'8479999'},mh)).status,403);assert.equal(calls,0);
+ assert.equal((await post('/preview',{nhlId:'8479999'},{...ah,'X-CSRF-Token':'bad'})).status,403);
+ assert.equal((await post('/preview',{nhlId:'http://internal'})).status,400);assert.equal(calls,0);
+ database.prepare("INSERT INTO players(id,first_name,last_name,full_name,birth_date,status,created_at_ms,updated_at_ms,version) VALUES(?,'Synthetic','Skater','Synthetic Skater','1998-02-03','active',?,?,1)").run(uuid(981404),NOW_MS,NOW_MS);
+ const duplicateBefore=database.serialize();assert.equal((await post('/preview',{nhlId:'8479999'})).status,409);assert.deepEqual(database.serialize(),duplicateBefore);
+ row={...row,firstName:{default:'Unique'},lastName:{default:'Forward'}};
+ const before=database.serialize(),previewResponse=await post('/preview',{nhlId:'8479999'});assert.equal(previewResponse.status,200,JSON.stringify(await previewResponse.clone().json()));
+ assert.match(previewResponse.headers.get('cache-control'),/no-store/);const preview=(await previewResponse.json()).data;assert.equal(preview.action,'import');assert.deepEqual(database.serialize(),before);
+ const body={nhlId:'8479999',previewHash:preview.previewHash,operationId:uuid(981402),reason:'Import missing skater'};
+ const tables=database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r=>r.name);
+ const dump=()=>Object.fromEntries(tables.map(name=>[name,database.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all()]));
+ const protectedBefore=dump();
+ database.exec("CREATE TRIGGER fixture_catalogue_audit_failure BEFORE INSERT ON operational_events WHEN NEW.event_type='administrator_catalogue_change' BEGIN SELECT RAISE(ABORT,'fixture rollback'); END;");
+ const rollbackBefore=database.serialize();assert.equal((await post('/apply',body)).status,503);assert.deepEqual(database.serialize(),rollbackBefore);database.exec('DROP TRIGGER fixture_catalogue_audit_failure');
+ row={...row,currentTeamAbbrev:'SEA'};assert.equal((await post('/apply',body)).status,409);row={...row,currentTeamAbbrev:'VAN'};
+ const response=await post('/apply',body);assert.equal(response.status,200,JSON.stringify(await response.clone().json()));const result=(await response.json()).data;assert.equal(result.createdPlayerCount,1);
+ const protectedAfter=dump();for(const table of tables.filter(n=>!['players','player_external_ids','player_source_state','operational_events'].includes(n)))assert.deepEqual(protectedAfter[table],protectedBefore[table],table);
+ const after=database.serialize(),callsBefore=calls;failFeed=true;const replay=(await(await post('/apply',body)).json()).data;assert.equal(replay.replayed,true);assert.equal(replay.playerId,result.playerId);assert.equal(calls,callsBefore);assert.deepEqual(database.serialize(),after);
+ assert.equal((await post('/apply',{...body,reason:'Different reason'})).status,409);failFeed=false;
+ assert.throws(()=>database.prepare('DELETE FROM operational_events WHERE id=?').run(body.operationId),/retained/);
+ const search=await fetch(base+'?search=Unique',{headers:ah});assert.equal(search.status,200);const searchData=(await search.json()).data;assert.equal(searchData.players[0].nhlId,'8479999');assert.equal(searchData.history[0].reason,body.reason);assert.deepEqual(database.serialize(),after);
+ row={...row,currentTeamAbbrev:'SEA'};const refresh=(await(await post('/preview',{nhlId:'8479999'})).json()).data;
+ const refreshResponse=await post('/apply',{...body,previewHash:refresh.previewHash,operationId:uuid(981403)});assert.equal(refreshResponse.status,200);assert.equal((await refreshResponse.json()).data.playerId,result.playerId);assert.equal(database.prepare('SELECT count(*) n FROM players WHERE id=?').get(result.playerId).n,1);
+ afterFetch=()=>database.prepare("UPDATE platform_roles SET status='ended',ended_at_ms=?,version=version+1 WHERE id=? AND status='active'").run(NOW_MS,roleId);
+ const playerBeforeRevoke=database.prepare('SELECT * FROM players WHERE id=?').get(result.playerId);
+ assert.equal((await post('/apply',{...body,previewHash:refresh.previewHash,operationId:uuid(981405)})).status,403);assert.deepEqual(database.prepare('SELECT * FROM players WHERE id=?').get(result.playerId),playerBeforeRevoke);
+ assert.equal((await post('/preview',{nhlId:'8479999'})).status,403);assert.equal((await fetch(base,{headers:ah})).status,403);assert.equal((await post('/apply',body)).status,403);
+ assert.deepEqual(database.pragma('foreign_key_check'),[]);
+});
+
+test('eligible correction reversal restores roster and contract values with retained audit, current authority and atomic retry',async t=>{
+ const database=createDatabase(t);let time=NOW_MS;
+ const runtime=createTargetRuntime(runtimeOptions(database,{securityFoundations:createSecurityFoundations({env:securityEnv(),now:()=>time,loggerSink(){}})}));
+ const scenario=seedComposedLeagueStartScenario(runtime),teamId=scenario.teamIds[0],playerId=uuid(981501),contractId=uuid(981502),ownershipId=uuid(981503);
+ database.prepare("UPDATE teams SET status='active',updated_at_ms=?,version=version+1 WHERE league_id=?").run(time,scenario.leagueId);
+ database.prepare("INSERT INTO players(id,first_name,last_name,full_name,birth_date,status,created_at_ms,updated_at_ms,version) VALUES(?,'Casey','Forward','Casey Forward',NULL,'active',?,?,1)").run(playerId,time,time);
+ database.prepare("INSERT INTO contracts(id,league_id,player_id,current_team_id,contract_type,original_total_value_cents,original_term_years,aav_cents,start_season_id,status,acquisition_source_type,created_at_ms,updated_at_ms,version) VALUES(?,?,?,?,'normal',100,1,100,?,'active','fixture',?,?,1)").run(contractId,scenario.leagueId,playerId,teamId,scenario.seasonId,time,time);
+ database.prepare("INSERT INTO contract_years(id,league_id,contract_id,season_id,year_number,aav_cents,status,rollover_at_ms,created_at_ms) VALUES(?,?,?,?,1,100,'current',NULL,?)").run(uuid(981504),scenario.leagueId,contractId,scenario.seasonId,time);
+ database.prepare("INSERT INTO player_ownerships(id,league_id,season_id,player_id,team_id,ownership_kind,roster_category,position_group,slot_number,acquired_transaction_type,created_at_ms,updated_at_ms,version) VALUES(?,?,?,?,?,'Rostered','Active','F',1,'fixture',?,?,1)").run(ownershipId,scenario.leagueId,scenario.seasonId,playerId,teamId,time,time);
+ const commissioner=runtime.services.sessionService.issueForUser({userId:scenario.commissionerUserId});
+ const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+ const manager=runtime.services.sessionService.issueForUser({userId:managerId}),origin=await startRuntimeApp(t,runtime);
+ const headers=s=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+s.rawSessionToken,'X-CSRF-Token':s.rawCsrfToken,'Content-Type':'application/json'}),ch=headers(commissioner),mh=headers(manager);
+ const base=origin+'/api/v1/leagues/'+scenario.leagueId,post=(suffix,input,key,h=ch)=>fetch(base+suffix,{method:'POST',headers:{...h,'Idempotency-Key':key},body:JSON.stringify(input)});
+ const management='/management/reversals';
+ time+=100;
+ const correction={seasonId:scenario.seasonId,ownershipId,playerId,expectedVersion:1,correctedTeamId:teamId,correctedOwnershipKind:'Rostered',correctedRosterCategory:'Bench',correctedPositionGroup:'F',correctedSlotNumber:1,reason:'Mistaken bench move',confirmWarnings:true};
+ const moved=await post('/commissioner/roster-corrections',correction,'original-roster-change');assert.equal(moved.status,200,JSON.stringify(await moved.clone().json()));const original=(await moved.json()).data.evidence.correctionId;
+ const originalEvidence=database.prepare('SELECT * FROM commissioner_corrections WHERE id=?').get(original);
+ time+=100;
+ const proposal={correctionId:original,reason:'Restore original roster'};
+ assert.equal((await post(management+'/preview',proposal,'preview-mgr',mh)).status,403);
+ assert.equal((await post(management+'/preview',proposal,'preview-csrf',{...ch,'X-CSRF-Token':'bad'})).status,403);
+ const before=database.serialize();const r=await post(management+'/preview',proposal,'preview-roster');assert.equal(r.status,200,JSON.stringify(await r.clone().json()));const preview=(await r.json()).data;
+ assert.equal(preview.current.rosterCategory,'Bench');assert.equal(preview.restore.rosterCategory,'Active');assert.deepEqual(database.serialize(),before);
+ const confirmed={...proposal,previewHash:preview.previewHash,confirmed:true};
+ database.exec("CREATE TRIGGER fixture_reverse_notice_failure BEFORE INSERT ON notifications WHEN NEW.event_type='league_correction_reversed' BEGIN SELECT RAISE(ABORT,'fixture notification rollback'); END;");
+ const rollback=database.serialize();assert.equal((await post(management+'/apply',confirmed,'reverse-roster-once')).status,409);assert.deepEqual(database.serialize(),rollback);database.exec('DROP TRIGGER fixture_reverse_notice_failure');
+ const scopedTables=database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r=>r.name);
+ const protectedTables=scopedTables.filter(n=>!['player_ownerships','ownership_events','commissioner_corrections','league_activity','league_management_actions','notifications','outbox_events','outbox_event_audiences','idempotency_requests','leagues'].includes(n));
+ const protectedRecords=Object.fromEntries(protectedTables.map(n=>[n,database.prepare('SELECT * FROM "'+n+'" ORDER BY rowid').all()]));
+ const done=await post(management+'/apply',confirmed,'reverse-roster-once');assert.equal(done.status,200,JSON.stringify(await done.clone().json()));const reversedRoster=(await done.json()).data.correctionId;
+ assert.equal(database.prepare('SELECT roster_category FROM player_ownerships WHERE id=?').get(ownershipId).roster_category,'Active');
+ for(const name of protectedTables)assert.deepEqual(database.prepare('SELECT * FROM "'+name+'" ORDER BY rowid').all(),protectedRecords[name],name);
+ assert.deepEqual(database.prepare('SELECT * FROM commissioner_corrections WHERE id=?').get(original),originalEvidence);
+ const after=database.serialize();assert.equal((await(await post(management+'/apply',confirmed,'reverse-roster-once')).json()).data.replayed,true);assert.deepEqual(database.serialize(),after);
+ assert.equal((await post(management+'/apply',{...confirmed,reason:'Different reversal'},'reverse-roster-once')).status,409);
+ assert.equal((await post(management+'/preview',proposal,'already-reversed')).status,409);
+ time+=100;
+ const changed=await post('/commissioner/contract-corrections',{seasonId:scenario.seasonId,contractId,playerId,expectedVersion:1,correctedOriginalTotalValueCents:200,correctedOriginalTermYears:1,reason:'Incorrect salary',confirmWarnings:true},'original-contract-change');
+ assert.equal(changed.status,200,JSON.stringify(await changed.clone().json()));const contractCorrection=(await changed.json()).data.evidence.correctionId;
+ time+=100;
+ const contractProposal={correctionId:contractCorrection,reason:'Restore original salary'},cp=await post(management+'/preview',contractProposal,'preview-contract');assert.equal(cp.status,200,JSON.stringify(await cp.clone().json()));const contractPreview=(await cp.json()).data;
+ assert.equal(contractPreview.current.aavCents,200);assert.equal(contractPreview.restore.aavCents,100);
+ database.prepare('UPDATE teams SET version=version+1,updated_at_ms=? WHERE id=?').run(time,teamId);
+ assert.equal((await post(management+'/apply',{...contractProposal,previewHash:contractPreview.previewHash,confirmed:true},'stale-contract-reverse')).status,409);
+ const fresh=(await(await post(management+'/preview',contractProposal,'fresh-contract')).json()).data;
+ const reversed=await post(management+'/apply',{...contractProposal,previewHash:fresh.previewHash,confirmed:true},'reverse-contract-once');assert.equal(reversed.status,200,JSON.stringify(await reversed.clone().json()));
+ assert.equal(database.prepare('SELECT aav_cents FROM contracts WHERE id=?').get(contractId).aav_cents,100);
+ assert.equal(database.prepare("SELECT count(*) n FROM league_management_actions WHERE league_id=? AND action_type='reverse_correction'").get(scenario.leagueId).n,2);
+ assert.equal(database.prepare('SELECT count(*) n FROM commissioner_corrections WHERE league_id=?').get(scenario.leagueId).n,4);
+ const list=await fetch(base+management,{headers:ch});assert.equal(list.status,200);assert.match(list.headers.get('cache-control'),/no-store/);assert.equal((await list.json()).data.corrections.filter(c=>c.reversed).length,2);
+ assert.equal((await post(management+'/preview',{correctionId:reversedRoster,reason:'Attempt after later contract changes'},'later-change-denied')).status,409);
+ const roleId=uuid(981505);database.prepare("INSERT INTO platform_roles(id,user_id,role,status,granted_by_user_id,granted_at_ms,ended_at_ms,version) VALUES(?,?,'platform_administrator','active',NULL,?,NULL,1)").run(roleId,managerId,time);
+ assert.equal((await fetch(base+management,{headers:mh})).status,200);database.prepare("UPDATE platform_roles SET status='ended',ended_at_ms=?,version=version+1 WHERE id=?").run(time,roleId);
+ assert.equal((await fetch(base+management,{headers:mh})).status,403);assert.equal((await post(management+'/apply',confirmed,'revoked-admin',mh)).status,403);
+ time+=100;
+ const transfer=await post('/commissioner/roster-corrections',{...correction,expectedVersion:3,correctedTeamId:scenario.teamIds[1],correctedRosterCategory:'Active',reason:'Mistaken team transfer'},'original-team-transfer');assert.equal(transfer.status,200,JSON.stringify(await transfer.clone().json()));
+ const transferData=(await transfer.json()).data,transferProposal={correctionId:transferData.evidence.correctionId,reason:'Restore original team'};
+ time+=100;const tp=await post(management+'/preview',transferProposal,'preview-transfer');assert.equal(tp.status,200,JSON.stringify(await tp.clone().json()));const transferPreview=(await tp.json()).data;
+ assert.equal(transferPreview.current.teamId,scenario.teamIds[1]);assert.equal(transferPreview.restore.teamId,teamId);
+ const transferUndo=await post(management+'/apply',{...transferProposal,previewHash:transferPreview.previewHash,confirmed:true},'reverse-team-transfer');assert.equal(transferUndo.status,200,JSON.stringify(await transferUndo.clone().json()));
+ const restoredOwnership=database.prepare('SELECT * FROM player_ownerships WHERE league_id=? AND player_id=?').get(scenario.leagueId,playerId);
+ assert.equal(restoredOwnership.team_id,teamId);assert.notEqual(restoredOwnership.id,transferData.authoritative.id);assert.notEqual(restoredOwnership.id,ownershipId);
+ assert.equal(database.prepare('SELECT current_team_id FROM contracts WHERE id=?').get(contractId).current_team_id,teamId);
+ assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+});
+
+test('guided preseason reset rehearses exact restoration and preserves other leagues and account records',async t=>{
+ const core=require('../../src/operations/guidedLeagueReset');
+ const database=createDatabase(t),runtime=createTargetRuntime(runtimeOptions(database)),scenario=seedComposedLeagueStartScenario(runtime);
+ const authenticated=runtime.services.sessionService.resolveWithoutActivity(scenario.session.rawSessionToken);
+ const started=runtime.services.league.start.start({leagueId:scenario.leagueId,input:{},expectedLeagueVersion:scenario.expectedLeagueVersion,idempotencyKey:'reset-core-original-start',authenticated});
+ runtime.services.league.matchupSchedule.generate({leagueId:scenario.leagueId,seasonId:scenario.seasonId,expectedSeasonVersion:started.league.currentSeason.version,input:{
+  nhlRegularSeasonStartsAtMs:Date.parse('2026-10-06T07:00:00Z'),nhlRegularSeasonEndsAtMs:Date.parse('2027-04-12T07:00:00Z'),
+  fantasyPlayoffsStartAtMs:Date.parse('2027-03-15T07:00:00Z'),fantasyPlayoffsEndAtMs:Date.parse('2027-04-12T07:00:00Z'),firstWeekStartsAtMs:Date.parse('2026-10-12T07:00:00Z'),confirmed:true},idempotencyKey:'reset-core-original-schedule',authenticated});
+ await runtime.services.league.freeAgentDraftReadinessJob.run();
+ assert.equal(database.prepare('SELECT count(*) n FROM candidate_cards WHERE league_id=?').get(scenario.leagueId).n,4);
+ assert.throws(()=>core.rehearse(database,scenario.leagueId,scenario.commissionerUserId,NOW_MS),/Pause the league/);
+ const input={action:'pause',reason:'Review a preseason reset'},pause=runtime.services.league.leaguePause.preview({leagueId:scenario.leagueId,authenticated,input});
+ runtime.services.league.leaguePause.apply({leagueId:scenario.leagueId,authenticated,input:{...input,confirmed:true,previewHash:pause.previewHash},idempotencyKey:'reset-core-pause'});
+ assert.throws(()=>core.rehearse(database,scenario.leagueId,scenario.commissionerUserId,NOW_MS),/deliveries must finish/);
+ database.prepare("UPDATE outbox_events SET status='published',published_at_ms=?,updated_at_ms=?,version=version+1 WHERE league_id=? AND status='pending'").run(NOW_MS,NOW_MS,scenario.leagueId);
+ const other=uuid(981701),otherSeason=uuid(981702),otherTeam=uuid(981703);
+ const insert=(table,row)=>{const columns=Object.keys(row);database.prepare('INSERT INTO '+table+' ('+columns.join(',')+') VALUES('+columns.map(()=>'?').join(',')+')').run(...columns.map(k=>row[k]));};
+ const originalLeague=database.prepare('SELECT * FROM leagues WHERE id=?').get(scenario.leagueId);
+ insert('leagues',{...originalLeague,id:other,name:'Untouched League',name_normalized:'untouched league',status:'setup',commissioner_membership_id:null,current_season_id:null});
+ const originalSeason=database.prepare('SELECT * FROM seasons WHERE id=?').get(scenario.seasonId);insert('seasons',{...originalSeason,id:otherSeason,league_id:other});
+ insert('teams',{...database.prepare('SELECT * FROM teams WHERE id=?').get(scenario.teamIds[0]),id:otherTeam,league_id:other});
+ const beforeBytes=database.serialize(),snapshot=core.capture(database,scenario.leagueId),beforeHash=core.scopeHash(database,scenario.leagueId);
+ const review=core.rehearse(database,scenario.leagueId,scenario.commissionerUserId,NOW_MS);assert.equal(review.recoveryVerified,true);assert.deepEqual(database.serialize(),beforeBytes);
+ assert.equal(review.manifest.clear.find(g=>g.label==='Candidate Cards').count,4);
+ const afterHash=database.transaction(()=>core.reset(database,scenario.leagueId,scenario.commissionerUserId,NOW_MS)).immediate();assert.equal(afterHash,review.afterHash);
+ assert.equal(database.prepare('SELECT status FROM leagues WHERE id=?').get(scenario.leagueId).status,'setup');
+ assert.equal(database.prepare('SELECT count(*) n FROM free_agent_drafts WHERE league_id=?').get(scenario.leagueId).n,0);
+ assert.equal(database.prepare('SELECT regular_season_starts_at_ms FROM seasons WHERE id=?').get(scenario.seasonId).regular_season_starts_at_ms,null);
+ assert.equal(database.prepare('SELECT trade_deadline_at_ms FROM league_settings WHERE league_id=?').get(scenario.leagueId).trade_deadline_at_ms,null);
+ assert.equal(database.prepare('SELECT count(*) n FROM team_manager_assignments WHERE league_id=?').get(scenario.leagueId).n,4);
+ const resetBytes=database.serialize();assert.equal(core.rehearseRestore(database,snapshot,afterHash).recoveryVerified,true);assert.deepEqual(database.serialize(),resetBytes);
+ database.transaction(()=>core.restore(database,snapshot)).immediate();assert.equal(core.scopeHash(database,scenario.leagueId),beforeHash);
+ assert.deepEqual(database.prepare('SELECT * FROM leagues WHERE id=?').get(scenario.leagueId),originalLeague);
+ const afterSecond=database.transaction(()=>core.reset(database,scenario.leagueId,scenario.commissionerUserId,NOW_MS)).immediate();
+ database.prepare('UPDATE teams SET name=?,name_normalized=?,version=version+1 WHERE id=?').run('Later Manager Work','later manager work',scenario.teamIds[0]);
+ assert.throws(()=>core.rehearseRestore(database,snapshot,afterSecond),/changed after reset/);
+ assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+});
+
+
+test('guided reset HTTP keeps encrypted recovery, atomic rollback, scoped authority and durable retries',async t=>{
+ const core=require('../../src/operations/guidedLeagueReset');
+ const database=createDatabase(t),runtime=createTargetRuntime(runtimeOptions(database)),s=seedComposedLeagueStartScenario(runtime),authenticated=runtime.services.sessionService.resolveWithoutActivity(s.session.rawSessionToken);
+ const started=runtime.services.league.start.start({leagueId:s.leagueId,input:{},expectedLeagueVersion:s.expectedLeagueVersion,idempotencyKey:'reset-http-start',authenticated});
+ const dates={nhlRegularSeasonStartsAtMs:Date.parse('2026-10-06T07:00:00Z'),nhlRegularSeasonEndsAtMs:Date.parse('2027-04-12T07:00:00Z'),fantasyPlayoffsStartAtMs:Date.parse('2027-03-15T07:00:00Z'),fantasyPlayoffsEndAtMs:Date.parse('2027-04-12T07:00:00Z'),firstWeekStartsAtMs:Date.parse('2026-10-12T07:00:00Z'),confirmed:true};
+ runtime.services.league.matchupSchedule.generate({leagueId:s.leagueId,seasonId:s.seasonId,expectedSeasonVersion:started.league.currentSeason.version,input:dates,idempotencyKey:'reset-http-calendar',authenticated});
+ await runtime.services.league.freeAgentDraftReadinessJob.run();
+ const pauseInput={action:'pause',reason:'Restart preseason with new settings'},pause=runtime.services.league.leaguePause.preview({leagueId:s.leagueId,authenticated,input:pauseInput});
+ runtime.services.league.leaguePause.apply({leagueId:s.leagueId,authenticated,input:{...pauseInput,confirmed:true,previewHash:pause.previewHash},idempotencyKey:'reset-http-pause'});
+ database.prepare("UPDATE outbox_events SET status='published',published_at_ms=?,updated_at_ms=?,version=version+1 WHERE league_id=? AND status='pending'").run(NOW_MS,NOW_MS,s.leagueId);
+ const commissioner=runtime.services.sessionService.issueForUser({userId:s.commissionerUserId}),managerId=database.prepare('SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? LIMIT 1').get(s.leagueId,s.commissionerUserId).user_id,manager=runtime.services.sessionService.issueForUser({userId:managerId});
+ const origin=await startRuntimeApp(t,runtime),base=origin+'/api/v1/leagues/'+s.leagueId+'/management/reset';
+ const headers=session=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+session.rawSessionToken,'X-CSRF-Token':session.rawCsrfToken,'Content-Type':'application/json'}),ch=headers(commissioner),mh=headers(manager);
+ const post=(suffix,body,key='reset-http-preview',h=ch)=>fetch(base+suffix,{method:'POST',headers:{...h,'Idempotency-Key':key},body:JSON.stringify(body)});
+ const proposed={action:'reset',archiveId:null,reason:'Restart preseason with new settings'};
+ assert.equal((await fetch(base,{headers:mh})).status,403);assert.equal((await post('/preview',proposed,'reset-denied',mh)).status,403);assert.equal((await post('/preview',proposed,'reset-csrf',{...ch,'X-CSRF-Token':'bad'})).status,403);
+ const before=database.serialize(),original=core.capture(database,s.leagueId);
+ const state=await fetch(base,{headers:ch});assert.equal(state.status,200);assert.equal((await state.json()).data.blockedReason,null);
+ const review=await post('/preview',proposed);assert.equal(review.status,200,JSON.stringify(await review.clone().json()));const preview=(await review.json()).data;assert.equal(preview.recoveryVerified,true);assert.deepEqual(database.serialize(),before);assert.doesNotMatch(JSON.stringify(preview),/ciphertext|snapshot|actor_user_id|bidder/);
+ const body={...proposed,confirmation:preview.confirmation,previewHash:preview.previewHash};
+ assert.equal((await post('/apply',{...body,confirmation:'wrong'},'reset-wrong')).status,409);assert.deepEqual(database.serialize(),before);
+ database.exec("CREATE TRIGGER fixture_reset_notice_failure BEFORE INSERT ON notifications WHEN NEW.event_type='league_preseason_reset' BEGIN SELECT RAISE(ABORT,'fixture rollback'); END;");
+ const rollback=database.serialize();const failed=await post('/apply',body,'reset-http-apply');assert.equal(failed.status,500,JSON.stringify(await failed.clone().json()));assert.deepEqual(database.serialize(),rollback);database.exec('DROP TRIGGER fixture_reset_notice_failure');
+ const result=await post('/apply',body,'reset-http-apply');assert.equal(result.status,200,JSON.stringify(await result.clone().json()));const receipt=(await result.json()).data;
+ assert.equal(database.prepare('SELECT status FROM leagues WHERE id=?').get(s.leagueId).status,'setup');
+ const archive=database.prepare('SELECT * FROM league_reset_archives WHERE id=?').get(receipt.archiveId);assert.ok(archive.ciphertext.length>100);assert.doesNotMatch(archive.ciphertext,/candidate_cards|cards_open|commissioner/);
+ const after=database.serialize();assert.equal((await(await post('/apply',body,'reset-http-apply')).json()).data.replayed,true);assert.deepEqual(database.serialize(),after);
+ assert.equal((await post('/apply',{...body,reason:'Different purpose'},'reset-http-apply')).status,409);
+ const read=await fetch(base,{headers:ch});assert.doesNotMatch(JSON.stringify(await read.json()),/ciphertext|authentication_tag|before_hash/);assert.deepEqual(database.serialize(),after);
+ const restore={action:'restore',archiveId:receipt.archiveId,reason:'Restore the previous preseason for review'};
+ assert.equal((await post('/preview',{...restore,archiveId:uuid(981802)})).status,404);
+ const restoredPreview=await post('/preview',restore);assert.equal(restoredPreview.status,200,JSON.stringify(await restoredPreview.clone().json()));const recovery=(await restoredPreview.json()).data;assert.deepEqual(database.serialize(),after);
+ const restoreBody={...restore,confirmation:recovery.confirmation,previewHash:recovery.previewHash};
+ const restored=await post('/apply',restoreBody,'reset-http-restore');assert.equal(restored.status,200,JSON.stringify(await restored.clone().json()));
+ const actual=core.capture(database,s.leagueId);assert.ok(actual.tables.leagues[0].version>original.tables.leagues[0].version);actual.tables.leagues[0].version=original.tables.leagues[0].version;assert.deepEqual(actual,original);
+ const restoredBytes=database.serialize();assert.equal((await(await post('/apply',restoreBody,'reset-http-restore')).json()).data.replayed,true);assert.deepEqual(database.serialize(),restoredBytes);assert.equal((await post('/preview',restore)).status,409);
+ const history=await fetch(origin+'/api/v1/leagues/'+s.leagueId+'/management/history?kind=preseason_reset',{headers:ch});assert.equal(history.status,200);assert.equal((await history.json()).data.changes.length,2);
+ assert.throws(()=>database.exec('DELETE FROM league_reset_archives'),/immutable|retained/);assert.throws(()=>database.exec("UPDATE league_reset_actions SET reason='rewrite'"),/immutable|retained/);
+ // Repeat a reset, then complete the real setup/start/calendar/readiness workflow.
+ database.prepare("UPDATE outbox_events SET status='published',published_at_ms=?,updated_at_ms=?,version=version+1 WHERE league_id=? AND status='pending'").run(NOW_MS,NOW_MS,s.leagueId);
+ const second=(await(await post('/preview',proposed)).json()).data,secondResult=await post('/apply',{...proposed,previewHash:second.previewHash,confirmation:second.confirmation},'reset-http-second');assert.equal(secondResult.status,200,JSON.stringify(await secondResult.clone().json()));
+ const secondArchive=(await secondResult.json()).data.archiveId;
+ const setupVersion=database.prepare('SELECT version FROM leagues WHERE id=?').get(s.leagueId).version;
+ const deadlineSaved=await fetch(origin+'/api/v1/leagues/'+s.leagueId+'/setup/trade-deadline',{method:'PUT',headers:{...ch,'If-Match':'"'+setupVersion+'"','Idempotency-Key':'reset-new-trade-deadline'},body:JSON.stringify({tradeDeadlineAtMs:Date.parse('2027-03-01T00:00:00Z')})});
+ assert.equal(deadlineSaved.status,200,JSON.stringify(await deadlineSaved.clone().json()));
+ const current=database.prepare('SELECT version FROM leagues WHERE id=?').get(s.leagueId);
+ const restarted=runtime.services.league.start.start({leagueId:s.leagueId,input:{},expectedLeagueVersion:current.version,idempotencyKey:'reset-http-new-start',authenticated});
+ runtime.services.league.matchupSchedule.generate({leagueId:s.leagueId,seasonId:s.seasonId,expectedSeasonVersion:restarted.league.currentSeason.version,input:dates,idempotencyKey:'reset-http-new-calendar',authenticated});
+ await runtime.services.league.freeAgentDraftReadinessJob.run();
+ assert.equal(database.prepare('SELECT count(*) n FROM candidate_cards WHERE league_id=?').get(s.leagueId).n,4);assert.equal(database.prepare('SELECT count(*) n FROM free_agent_drafts WHERE league_id=?').get(s.leagueId).n,1);
+ assert.equal((await post('/preview',{...restore,archiveId:secondArchive})).status,409);
+ assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+});
+
+
+test('new league FAD timing saves a zero cutoff and processes fifteen minute rounds through actual workers',async t=>{
+ const database=createDatabase(t);let time=NOW_MS;
+ const runtime=createTargetRuntime(runtimeOptions(database,{securityFoundations:createSecurityFoundations({env:securityEnv(),now:()=>time,loggerSink(){}})}));
+ const s=seedComposedLeagueStartScenario(runtime),authenticated=runtime.services.sessionService.resolveWithoutActivity(s.session.rawSessionToken);
+ const started=runtime.services.league.start.start({leagueId:s.leagueId,input:{},expectedLeagueVersion:s.expectedLeagueVersion,idempotencyKey:'creation-gap-start',authenticated});
+ const candidateDeadlineAtMs=NOW_MS+4*86400000,rolloverTimesAtMs=Array.from({length:7},(_,i)=>candidateDeadlineAtMs+(i+1)*900000);
+ const input={nhlRegularSeasonStartsAtMs:Date.parse('2026-10-06T07:00:00Z'),nhlRegularSeasonEndsAtMs:Date.parse('2027-04-12T07:00:00Z'),fantasyPlayoffsStartAtMs:Date.parse('2027-03-15T07:00:00Z'),fantasyPlayoffsEndAtMs:Date.parse('2027-04-12T07:00:00Z'),firstWeekStartsAtMs:Date.parse('2026-10-12T07:00:00Z'),draftTiming:{candidateDeadlineAtMs,rolloverTimesAtMs,auctionCreationCutoffMinutes:0},confirmed:true};
+ runtime.services.league.matchupSchedule.generate({leagueId:s.leagueId,seasonId:s.seasonId,expectedSeasonVersion:started.league.currentSeason.version,input,idempotencyKey:'creation-gap-calendar',authenticated});
+ const ready=await runtime.services.league.freeAgentDraftReadinessJob.run();
+ assert.equal(ready.succeeded,1,JSON.stringify(ready));
+ const draft=database.prepare('SELECT * FROM free_agent_drafts WHERE league_id=?').get(s.leagueId),scope={leagueId:s.leagueId,fadId:draft.id,authenticated};
+ assert.equal(database.prepare('SELECT gap_ms FROM fad_auction_cutoff_settings WHERE id=?').get(draft.id).gap_ms,0);
+ assert.deepEqual(database.prepare('SELECT creation_cutoff_at_ms cutoff,rolls_over_at_ms close FROM free_agent_draft_rollovers WHERE fad_id=? ORDER BY sequence').all(draft.id),rolloverTimesAtMs.map(at=>({cutoff:at,close:at})));
+ time=candidateDeadlineAtMs-1;await runtime.services.league.freeAgentDraftDeadlineReminderJob.run();time++;
+ assert.equal((await runtime.services.league.freeAgentDraftDeadlineJob.run()).held,1);
+ const service=runtime.services.league.fadDeadlineControl,preview=service.preview({...scope,input:{reason:'Managers agreed to skip empty cards'}});
+ service.proceed({...scope,input:{reason:preview.reason,previewHash:preview.previewHash,confirmed:true},idempotencyKey:'creation-gap-proceed'});
+ const locked=await runtime.services.league.freeAgentDraftDeadlineJob.run();assert.equal(locked.succeeded,1,JSON.stringify(locked));
+ const allocated=await runtime.services.league.freeAgentDraftAllocationLifecycleJob.run();assert.equal(allocated.enteredRapid,1,JSON.stringify(allocated));
+ const timing=runtime.services.league.fadTiming,change={deadlineAtMs:candidateDeadlineAtMs,rolloverTimesAtMs:rolloverTimesAtMs.map((at,i)=>i===0?at+60000:at),reason:'Adjust short first round'};
+ const reviewed=timing.preview({...scope,input:change});timing.apply({...scope,input:{...change,confirmed:true,previewHash:reviewed.previewHash},idempotencyKey:'creation-gap-timing'});
+ time=rolloverTimesAtMs[0];assert.equal((await runtime.services.league.freeAgentDraftRolloverJob.run()).due,0);time+=60000;
+ const rolled=await runtime.services.league.freeAgentDraftRolloverJob.run();assert.equal(rolled.succeeded,1,JSON.stringify(rolled));
+ assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+});
+
+
+test('calendar recovery moves an unattempted overdue Week 1 lock and its actual worker runs only at the new clock',async t=>{
+ const database=createDatabase(t),scope=seedComposedMatchupOccurrenceScope(database,981900);let time=NOW_MS;
+ const originalGuard=database.prepare("SELECT sql FROM sqlite_schema WHERE name='free_agent_drafts_forward_update'").get().sql;database.exec('DROP TRIGGER free_agent_drafts_forward_update');completeComposedMatchupOccurrenceFad(database,scope);database.exec(originalGuard);
+ const runtime=createTargetRuntime(runtimeOptions(database,{securityFoundations:createSecurityFoundations({env:securityEnv(),now:()=>time,loggerSink(){}})}));
+ scheduleComposedBaselineOccurrence(runtime,scope);assert.equal((await runtime.services.league.matchupOccurrenceJob.run()).succeeded,1);
+ const jobType='matchup:lock',runId=uuid(981930),bindingId=uuid(981931);
+ runtime.repositories.matchupJobs.schedule({runId,bindingId,leagueId:scope.leagueId,seasonId:scope.seasonId,jobType,occurrenceKey:buildMatchupOccurrenceKey({jobType,leagueId:scope.leagueId,seasonId:scope.seasonId,weekId:scope.weekId,scheduleOperationId:scope.scheduleOperationId,scheduleVersion:1,scheduledForMs:scope.locksAtMs}),weekId:scope.weekId,scheduleOperationId:scope.scheduleOperationId,scheduleVersion:1,owningMatchupId:null,scheduledForMs:scope.locksAtMs,nowMs:5});
+ const service=require('../../src/application/services/leagues/createLeagueCalendarService').createLeagueCalendarService({repository:runtime.repositories.leagueCalendar,leagueAuthorization:{requireCommissioner:()=>({actorUserId:scope.userId,authority:'commissioner'})},clock:{nowMs:()=>time}});
+ const current=service.read({leagueId:scope.leagueId}),input={calendar:{regularSeasonStartsAtMs:scope.startsAtMs,regularSeasonEndsAtMs:scope.endsAtMs+30*86400000,fantasyPlayoffsStartAtMs:scope.endsAtMs+86400000,fantasyPlayoffsEndAtMs:scope.endsAtMs+29*86400000},weeks:current.weeks.map(w=>({...w,locksAtMs:scope.locksAtMs+7200000})),reason:'Recover missed unattempted Week 1 roster lock'};
+ time=scope.locksAtMs-1;const early=service.preview({leagueId:scope.leagueId,input});assert.equal(early.recoversUnprocessedLock,false);
+ time=scope.locksAtMs+1;assert.throws(()=>service.apply({leagueId:scope.leagueId,input:{...input,confirmed:true,previewHash:early.previewHash},idempotencyKey:'calendar-recovery-stale'}),{code:'LEAGUE_CALENDAR_PREVIEW_CHANGED'});
+ const before=database.serialize(),preview=service.preview({leagueId:scope.leagueId,input});assert.equal(preview.recoversUnprocessedLock,true);assert.equal(preview.pendingJobs,1);assert.deepEqual(database.serialize(),before);
+ service.apply({leagueId:scope.leagueId,input:{...input,confirmed:true,previewHash:preview.previewHash},idempotencyKey:'calendar-lock-recovery'});
+ assert.equal((await runtime.services.league.matchupOccurrenceJob.run()).due,0);time=scope.locksAtMs+7200000;
+ const ran=await runtime.services.league.matchupOccurrenceJob.run();assert.equal(ran.succeeded,1,JSON.stringify({ran,job:database.prepare('SELECT * FROM job_runs WHERE id=?').get(runId)}));assert.equal((await runtime.services.league.matchupOccurrenceJob.run()).due,0);
+ assert.equal(database.prepare('SELECT status FROM job_runs WHERE id=?').get(runId).status,'succeeded');assert.deepEqual(database.pragma('foreign_key_check'),[]);
+});
+
+test('Week 1 website preview stays read-only and confirms only the reviewed pre-card schedule through HTTP',async t=>{
+ const database=createDatabase(t),runtime=createTargetRuntime(runtimeOptions(database)),scenario=seedComposedLeagueStartScenario(runtime);
+ const authenticated=runtime.services.sessionService.resolveWithoutActivity(scenario.session.rawSessionToken);
+ const started=runtime.services.league.start.start({leagueId:scenario.leagueId,input:{},expectedLeagueVersion:scenario.expectedLeagueVersion,idempotencyKey:'week-shift-start',authenticated});
+ const defaults=require('../../src/domain/matchups/matchupSchedulePolicy').defaultSeasonCalendar('20262027','America/Vancouver');
+ runtime.services.league.matchupSchedule.generate({leagueId:scenario.leagueId,seasonId:scenario.seasonId,expectedSeasonVersion:started.league.currentSeason.version,
+  input:{nhlRegularSeasonStartsAtMs:defaults.nhlRegularSeasonStartsAtMs,nhlRegularSeasonEndsAtMs:defaults.nhlRegularSeasonEndsAtMs,
+   fantasyPlayoffsStartAtMs:defaults.fantasyPlayoffsStartAtMs,fantasyPlayoffsEndAtMs:defaults.fantasyPlayoffsEndAtMs,
+   firstWeekStartsAtMs:defaults.firstWeekStartsAtMs,draftTiming:{candidateDeadlineAtMs:defaults.firstWeekStartsAtMs-7*86400000,
+    rolloverTimesAtMs:Array.from({length:7},(_,i)=>defaults.firstWeekStartsAtMs-(6-i)*86400000)},confirmed:true},idempotencyKey:'week-shift-schedule',authenticated});
+ const week=database.prepare('SELECT * FROM matchup_weeks WHERE league_id=? ORDER BY sequence').all(scenario.leagueId)[0];
+ const origin=await startRuntimeApp(t,runtime),url=origin+'/api/v1/leagues/'+scenario.leagueId+'/seasons/'+scenario.seasonId+'/matchup-weeks/'+week.id;
+ const headers=browserHeaders({Cookie:runtime.transport.sessionCookie.name+'='+scenario.session.rawSessionToken,'X-CSRF-Token':scenario.session.rawCsrfToken});
+ const body={action:'preview_shift_week_one',firstWeekStartsAtMs:Date.parse('2026-09-30T07:00:00Z')};
+ const patch=(value,extra={})=>fetch(url,{method:'PATCH',headers:{...headers,...extra},body:JSON.stringify(value)});
+ const before=database.serialize();
+ assert.equal((await patch(body,{'X-CSRF-Token':'bad'})).status,403);
+ const managerId=database.prepare("SELECT user_id FROM team_manager_assignments WHERE league_id=? AND user_id<>? AND status='accepted' LIMIT 1").get(scenario.leagueId,scenario.commissionerUserId).user_id;
+ const manager=runtime.services.sessionService.issueForUser({userId:managerId});
+ assert.equal((await patch(body,{Cookie:runtime.transport.sessionCookie.name+'='+manager.rawSessionToken,'X-CSRF-Token':manager.rawCsrfToken})).status,403);
+ const beforeReview=database.serialize(),review=await patch(body);assert.equal(review.status,200,JSON.stringify(await review.clone().json()));
+ const preview=(await review.json()).data;assert.equal(preview.code,'MATCHUP_WEEK_ONE_SHIFT_PREVIEWED');assert.equal(preview.expectedWeekVersion,week.version);
+ assert.equal(preview.weeks[0].startsAtMs,body.firstWeekStartsAtMs);assert.equal(preview.weeks.length,preview.shiftedWeekCount);
+ assert.deepEqual(database.serialize(),beforeReview);
+ const command={action:'shift_week_one',firstWeekStartsAtMs:body.firstWeekStartsAtMs,confirmation:'CHANGE WEEK 1 START',previewHash:preview.previewHash};
+ const applyHeaders={'If-Match':'"'+week.version+'"','Idempotency-Key':'week-shift-confirm'};
+ database.prepare('UPDATE matchup_weeks SET version=version+1 WHERE league_id=? AND sequence=2').run(scenario.leagueId);
+ assert.equal((await patch(command,applyHeaders)).status,412);
+ const fresh=await patch(body);assert.equal(fresh.status,200,JSON.stringify(await fresh.clone().json()));command.previewHash=(await fresh.json()).data.previewHash;
+ const applied=await patch(command,applyHeaders);assert.equal(applied.status,200,JSON.stringify(await applied.clone().json()));
+ const result=(await applied.json()).data;assert.equal(result.firstWeekStartsAtMs,body.firstWeekStartsAtMs);assert.equal(result.weekVersion,week.version+1);
+ const saved=database.serialize(),replayed=await patch(command,applyHeaders);assert.equal(replayed.status,200);assert.deepEqual((await replayed.json()).data,result);assert.deepEqual(database.serialize(),saved);
+ assert.equal(database.prepare('SELECT COUNT(*) n FROM free_agent_drafts').get().n,0);
+ const shiftedReadiness=await runtime.services.league.freeAgentDraftReadinessJob.run();
+ assert.equal(shiftedReadiness.succeeded,1,JSON.stringify(shiftedReadiness));
+ const draft=database.prepare('SELECT * FROM free_agent_drafts WHERE league_id=?').get(scenario.leagueId);
+ assert.equal(draft.first_matchup_starts_at_ms,body.firstWeekStartsAtMs);
+ const protectedPreview=await patch({...body,firstWeekStartsAtMs:week.starts_at_ms});
+ assert.equal(protectedPreview.status,409);assert.equal((await protectedPreview.json()).error.code,'FAD_WEEK_ONE_FROZEN');
+ const afterOpening=database.serialize();assert.equal((await patch(command,applyHeaders)).status,200);assert.deepEqual(database.serialize(),afterOpening);
+ assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
+ assert.ok(before.length>0);
 });

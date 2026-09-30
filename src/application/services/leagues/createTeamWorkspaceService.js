@@ -69,7 +69,8 @@ function statistics(row) {
         nhlPoints: row.nhl_points,
         fantasyPointsHundredths: row.fantasy_points_hundredths,
         ...(row.scoring_stats_json ? {
-          scoringRuleVersion: "expanded-2026-v1",
+          scoringRuleVersion: row.scoring_rule_version || "expanded-2026-v1",
+          ...(row.scoring_weights ? {scoringWeights:row.scoring_weights} : {}),
           scoringStats: Object.freeze(JSON.parse(row.scoring_stats_json)),
         } : {}),
       });

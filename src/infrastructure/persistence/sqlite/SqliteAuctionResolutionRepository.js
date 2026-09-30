@@ -345,7 +345,8 @@ function createSqliteAuctionResolutionRepository({
       JOIN seasons
         ON seasons.league_id = auctions.league_id
        AND seasons.id = auctions.season_id
-      WHERE auctions.status = 'open'
+      WHERE NOT EXISTS (SELECT 1 FROM league_freezes pause WHERE pause.league_id=auctions.league_id AND pause.status='active')
+        AND auctions.status = 'open'
         AND (
           auctions.resolves_at_ms <= @nowMs
           OR (
@@ -394,7 +395,8 @@ function createSqliteAuctionResolutionRepository({
       LEFT JOIN player_ownerships
         ON player_ownerships.league_id = auctions.league_id
        AND player_ownerships.player_id = auctions.player_id
-      WHERE auctions.league_id = @leagueId
+      WHERE NOT EXISTS (SELECT 1 FROM league_freezes pause WHERE pause.league_id=auctions.league_id AND pause.status='active')
+        AND auctions.league_id = @leagueId
         AND auctions.id = @auctionId
       LIMIT 2
     `);

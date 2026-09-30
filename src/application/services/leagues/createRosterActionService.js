@@ -154,6 +154,7 @@ function createRosterActionService({
   lateLockCoordinator,
   clock,
   secureRandom,
+  assertCompetitionOpen = () => {},
 } = {}) {
   assertMethod(
     leagueAuthorization,
@@ -251,6 +252,7 @@ function createRosterActionService({
   }
 
   function record(leagueId, teamId) {
+    assertCompetitionOpen(leagueId);
     const result = workspaceRepository.read({ leagueId, teamId });
     if (!result) {
       const error = new Error("The team was not found.");

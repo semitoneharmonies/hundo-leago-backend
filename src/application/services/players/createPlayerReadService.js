@@ -131,7 +131,8 @@ function safeStatistics(row) {
     fantasyPointsHundredths: row.statistics_fantasy_points_hundredths,
     sourceUpdatedAtMs: row.statistics_source_updated_at_ms,
     ...(row.statistics_scoring_stats_json ? {
-      scoringRuleVersion: "expanded-2026-v1",
+      scoringRuleVersion: row.statistics_scoring_rule_version || "expanded-2026-v1",
+          ...(row.statistics_scoring_weights ? {scoringWeights:row.statistics_scoring_weights} : {}),
       scoringStats: Object.freeze(JSON.parse(row.statistics_scoring_stats_json)),
     } : {}),
   });

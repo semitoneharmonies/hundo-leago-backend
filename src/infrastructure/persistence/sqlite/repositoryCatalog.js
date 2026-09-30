@@ -28,6 +28,24 @@ function repositoryDefinition(
 }
 
 const DEFINITIONS = [
+  repositoryDefinition('league_reset_archives', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_reset_actions', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_help_requests', REPOSITORY_SCOPES.requiredLeague, {versioned:true}),
+  repositoryDefinition('league_help_events', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_management_actions', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_scoring_rules', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_auction_schedule_changes', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_calendar_changes', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_private_reveals', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_trade_deadline_changes', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('auction_timing_changes', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('fad_auction_clock_changes', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition("league_communications", REPOSITORY_SCOPES.requiredLeague, { versioned: true }),
+  repositoryDefinition("fad_deadline_controls", REPOSITORY_SCOPES.requiredLeague, { versioned: true }),
+  repositoryDefinition("fad_deadline_commands", REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition("fad_timing_changes", REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('fad_auction_cutoff_settings', REPOSITORY_SCOPES.requiredLeague, {versioned:true}),
+  repositoryDefinition('fad_auction_cutoff_changes', REPOSITORY_SCOPES.requiredLeague),
   repositoryDefinition("player_injury_status", REPOSITORY_SCOPES.global, { versioned: true }),
   repositoryDefinition("player_injury_feed", REPOSITORY_SCOPES.global, { versioned: true }),
   repositoryDefinition("player_injury_events", REPOSITORY_SCOPES.global),
@@ -703,7 +721,7 @@ validateRepositoryCatalog(DEFINITIONS);
 const REPOSITORY_CATALOG = Object.freeze([...DEFINITIONS]);
 // Retired reset/restore protocols remain pinned to their original table set.
 const SCHEMA_54_REPOSITORY_CATALOG = Object.freeze(REPOSITORY_CATALOG.filter(
-  ({ tableName }) => !tableName.startsWith("player_injury_") && !["trade_participants", "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats"].includes(tableName)
+  ({ tableName }) => !tableName.startsWith('league_reset_') && !tableName.startsWith('league_help_') && tableName !== 'league_management_actions' && tableName !== 'league_scoring_rules' && tableName !== 'league_auction_schedule_changes' && tableName !== 'league_calendar_changes' && tableName !== 'league_private_reveals' && tableName !== 'fad_auction_clock_changes' && tableName !== 'auction_timing_changes' && tableName !== 'league_trade_deadline_changes' && !tableName.startsWith('fad_auction_cutoff_') && tableName !== "fad_timing_changes" && !tableName.startsWith("fad_deadline_") && !tableName.startsWith("player_injury_") && !["league_communications", "trade_participants", "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats"].includes(tableName)
 ));
 
 function getRepositoryCatalogForSchemaVersion(schemaVersion) {
@@ -711,7 +729,20 @@ function getRepositoryCatalogForSchemaVersion(schemaVersion) {
     throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible, "A migrated database schema is required.");
   }
   return [54, 55, 56].includes(schemaVersion) ? SCHEMA_54_REPOSITORY_CATALOG : REPOSITORY_CATALOG.filter(({ tableName }) =>
-    (schemaVersion >= 64 || tableName !== "trade_participants") && (schemaVersion >= 65 || !tableName.startsWith("player_injury_"))
+    (schemaVersion >= 64 || tableName !== "trade_participants") && (schemaVersion >= 65 || !tableName.startsWith("player_injury_")) &&
+    (schemaVersion >= 67 || tableName !== "league_communications") &&
+    (schemaVersion >= 68 || !tableName.startsWith("fad_deadline_")) && (schemaVersion >= 69 || tableName !== "fad_timing_changes") &&
+    (schemaVersion >= 70 || !tableName.startsWith('fad_auction_cutoff_')) &&
+    (schemaVersion >= 71 || tableName !== 'league_trade_deadline_changes') &&
+    (schemaVersion >= 72 || tableName !== 'auction_timing_changes') &&
+    (schemaVersion >= 74 || tableName !== 'fad_auction_clock_changes') &&
+    (schemaVersion >= 75 || tableName !== 'league_private_reveals') &&
+    (schemaVersion >= 76 || tableName !== 'league_calendar_changes') &&
+    (schemaVersion >= 77 || tableName !== 'league_auction_schedule_changes') &&
+    (schemaVersion >= 78 || tableName !== 'league_scoring_rules') &&
+    (schemaVersion >= 79 || tableName !== 'league_management_actions') &&
+    (schemaVersion >= 81 || !tableName.startsWith('league_help_')) &&
+    (schemaVersion >= 83 || !tableName.startsWith('league_reset_'))
   );
 }
 const REPOSITORY_CATALOG_BY_TABLE = Object.freeze(

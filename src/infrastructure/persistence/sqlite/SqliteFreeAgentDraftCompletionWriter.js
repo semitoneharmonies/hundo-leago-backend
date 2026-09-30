@@ -1,5 +1,7 @@
 "use strict";
 
+const { readGoonDraftTiming } = require("./goonDraftTiming");
+
 const { freeAgentDraftSchedulerScopeSql } = require("./SqliteFreeAgentDraftSchedulerScope");
 
 const crypto = require("node:crypto");
@@ -1730,6 +1732,7 @@ function createSqliteFreeAgentDraftCompletionWriter({
     try {
       evaluation =
         evaluateFreeAgentDraftCompletionEligibility({
+          ...(command.leagueId === "48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03" ? { creationCutoffLeadMs: readGoonDraftTiming(database, command.leagueId).cutoffMs } : {}),
           ...(root.initial_rollover_times_json == null ? {} : { initialRolloverTimesAtMs: JSON.parse(root.initial_rollover_times_json) }),
           status: root.status,
           nowMs: command.completedAtMs,

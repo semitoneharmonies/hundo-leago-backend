@@ -457,7 +457,7 @@ function createFixture(t, label, options = {}) {
     database: connection.database,
     migrations: discoverMigrations({
       migrationsDirectory: MIGRATIONS_DIRECTORY,
-    }).filter((migration) => migration.id <= (options.migratePopulated55 ? 55 : Infinity)),
+    }).filter((migration) => migration.id <= (options.migratePopulated55 ? 55 : options.schemaVersion ?? Infinity)),
     applicationBuildId: `fad-start-writer-${label}`,
     now: () => 44,
   });
@@ -587,6 +587,79 @@ function assertRepositoryReason(action, code, reasonCode) {
 }
 
 describe("FAD-13 SQLite auction start/queue writer", () => {
+  for(const version of [73,74,75]) test('schema'+version+' preserves populated private auction and queue receipts and every original lifecycle body',t=>{
+    const fixture=createFixture(t,'populated-rapid-timing-'+version,{schemaVersion:version-1}),db=fixture.database;
+    const directCommand=command(PRIMARY,DIRECT_AT_MS,'rapid-migration-direct');
+    const queueCommand=command(SECONDARY,CREATION_CUTOFF_AT_MS,'rapid-migration-queue');
+    const direct=fixture.writer.startOrQueue(directCommand),queued=fixture.writer.startOrQueue(queueCommand);
+    const names=db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('application_metadata','schema_migrations') ORDER BY name").all().map(r=>r.name);
+    const rows=()=>Object.fromEntries(names.map(name=>[name,db.prepare('SELECT * FROM '+name+' ORDER BY rowid').all()]));
+    const before=rows(),objects=db.prepare("SELECT name,sql FROM sqlite_schema WHERE type IN ('table','view','trigger','index') AND sql IS NOT NULL ORDER BY name").all();
+    const migrate=()=>applyMigrations({database:db,migrations:discoverMigrations({migrationsDirectory:MIGRATIONS_DIRECTORY}).filter(m=>m.id<=version),applicationBuildId:'rapid-timing-preservation',now:()=>DIRECT_AT_MS});
+    migrate();assert.deepEqual(rows(),before);
+    const changed=objects.filter(r=>db.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(r.name).sql!==r.sql);
+    assert.deepEqual(changed.map(r=>r.name),version===73
+      ? ['fad_timing_changes_valid_insert','free_agent_draft_rollovers_forward_update','free_agent_drafts_forward_update','free_agent_drafts_initial_timing_immutable']
+      : version===74 ? ['auctions_require_context_update','fad_timing_changes_rapid_valid_insert'] : []);
+    for(const row of changed.filter(r=>!r.name.startsWith('fad_timing_changes_'))) {
+      const sql=db.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(row.name).sql;
+      assert.equal(sql.slice(sql.indexOf('\nBEGIN')),row.sql.slice(row.sql.indexOf('\nBEGIN')),'Original lifecycle transition checks remain verbatim');
+    }
+    const {createSqliteFadTimingRepository}=require('../../src/infrastructure/persistence/sqlite/SqliteFadTimingRepository');
+    const repository=createSqliteFadTimingRepository({database:db}),bytes=db.serialize();
+    for(const ids of [PRIMARY,SECONDARY])assert.ok(repository.state(ids.league,ids.fad).committedRoundIds.includes(ids.rollover));
+    assert.deepEqual(fixture.writer.startOrQueue(directCommand),{...direct,replayed:true});
+    assert.deepEqual(fixture.writer.startOrQueue(queueCommand),{...queued,replayed:true});
+    assert.deepEqual(db.serialize(),bytes);
+    migrate();assert.deepEqual(db.serialize(),bytes);
+    assert.deepEqual(db.pragma('foreign_key_check'),[]);assert.equal(db.pragma('integrity_check',{simple:true}),'ok');
+  });
+
+  test('cutoff migration preserves populated auctions and queues and protects their saved acceptance clocks',t=>{
+    const fixture=createFixture(t,'populated-cutoff-70',{schemaVersion:69}),db=fixture.database;
+    const direct=fixture.writer.startOrQueue(command(PRIMARY,DIRECT_AT_MS,'cutoff-legacy-direct'));
+    const queuedCommand=command(SECONDARY,CREATION_CUTOFF_AT_MS,'cutoff-legacy-queued');
+    const queued=fixture.writer.startOrQueue(queuedCommand);assert.equal(queued.kind,'nomination_queued');
+    const names=db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('application_metadata','schema_migrations') ORDER BY name").all().map(r=>r.name);
+    const rows=()=>Object.fromEntries(names.map(name=>[name,db.prepare('SELECT * FROM '+name+' ORDER BY rowid').all()]));
+    const before=rows();
+    applyMigrations({database:db,migrations:discoverMigrations({migrationsDirectory:MIGRATIONS_DIRECTORY}),applicationBuildId:'populated-cutoff-69',now:()=>DIRECT_AT_MS});
+    assert.deepEqual(rows(),before,'Every legacy auction, bid, queued offer and receipt survives migration');
+    const {createSqliteFadAuctionCutoffRepository}=require('../../src/infrastructure/persistence/sqlite/SqliteFadAuctionCutoffRepository');
+    const {createFadAuctionCutoffService}=require('../../src/application/services/freeAgentDraft/createFadAuctionCutoffService');
+    for(const ids of [PRIMARY,SECONDARY]){
+      const service=createFadAuctionCutoffService({repository:createSqliteFadAuctionCutoffRepository({database:db}),clock:{nowMs:()=>CREATION_CUTOFF_AT_MS},
+        leagueAuthorization:{requireCommissioner:()=>({actorUserId:ids.commissionerUser,authority:'commissioner'})}});
+      const scope={leagueId:ids.league,fadId:ids.fad,authenticated:{}},input={gapMinutes:30,reason:'Adjust future extensions'};
+      const preview=service.preview({...scope,input});
+      assert.equal(preview.changes.length,0);assert.equal(preview.retained.length,1);
+      service.apply({...scope,input:{...input,confirmed:true,previewHash:preview.previewHash},idempotencyKey:'cutoff-after-acceptance'});
+    }
+    for(const name of ['free_agent_draft_rollovers','auctions','auction_bids','auction_contexts','free_agent_draft_nomination_queue','idempotency_requests'])assert.deepEqual(rows()[name],before[name],name);
+    assert.equal(fixture.writer.startOrQueue(queuedCommand).resolvesAtMs,queued.resolvesAtMs);
+    assert.equal(fixture.writer.startOrQueue(command(PRIMARY,DIRECT_AT_MS,'cutoff-legacy-direct')).auctionId,direct.auctionId);
+    assert.deepEqual(db.pragma('foreign_key_check'),[]);assert.equal(db.pragma('integrity_check',{simple:true}),'ok');
+  });
+
+  test('custom cutoff accepts an immediate nomination just before the boundary and queues at the boundary',t=>{
+    const fixture=createFixture(t,'custom-cutoff-boundary'),db=fixture.database;
+    const {createSqliteFadAuctionCutoffRepository}=require('../../src/infrastructure/persistence/sqlite/SqliteFadAuctionCutoffRepository');
+    const {createFadAuctionCutoffService}=require('../../src/application/services/freeAgentDraft/createFadAuctionCutoffService');
+    for(const ids of [PRIMARY,SECONDARY]){
+      const service=createFadAuctionCutoffService({repository:createSqliteFadAuctionCutoffRepository({database:db}),clock:{nowMs:()=>DIRECT_AT_MS},
+        leagueAuthorization:{requireCommissioner:()=>({actorUserId:ids.commissionerUser,authority:'commissioner'})}});
+      const scope={leagueId:ids.league,fadId:ids.fad,authenticated:{}},input={gapMinutes:30,reason:'More nomination time'};
+      const preview=service.preview({...scope,input});
+      service.apply({...scope,input:{...input,confirmed:true,previewHash:preview.previewHash},idempotencyKey:'cutoff-before-nominations'});
+    }
+    const at=ROLLOVER_AT_MS-1_800_000;
+    assert.equal(fixture.writer.startOrQueue(command(PRIMARY,at-1,'cutoff-before-boundary')).kind,'auction_opened');
+    const queuedCommand=command(SECONDARY,at,'cutoff-exact-boundary'),queued=fixture.writer.startOrQueue(queuedCommand);
+    assert.equal(queued.kind,'nomination_queued');assert.equal(queued.opensAtMs,ROLLOVER_AT_MS);
+    assert.equal(fixture.writer.startOrQueue(queuedCommand).resolvesAtMs,queued.resolvesAtMs);
+    assert.deepEqual(db.pragma('foreign_key_check'),[]);
+  });
+
   test("migration56 preserves every original column and row in populated schema55 leagues", (t) => {
     const fixture = createFixture(t, 'populated-55-to-56', { migratePopulated55: true });
     assert.equal(fixture.database.prepare('SELECT count(*) AS n FROM free_agent_drafts WHERE initial_rollover_times_json IS NULL').get().n, 2);

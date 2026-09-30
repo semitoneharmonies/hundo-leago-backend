@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const {snapshotSqliteState} = require('./snapshotSqliteState');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createTradeRouter } = require('../../src/transport/http/createTradeRouter');
@@ -208,7 +209,8 @@ async function runThreeTeamTradeFlow(t, { createRuntime, IDS, NOW_MS, authentica
   await scenario('sending a counter closes an open offer atomically', async () => {
     const id = await create(); const counter = input(); counter.proposingTeamId = teamC; counter.participants = [counter.participants[2], counter.participants[0], counter.participants[1]];
     db.exec("CREATE TEMP TRIGGER fail_counter BEFORE UPDATE OF status ON trades WHEN NEW.status = 'declined' BEGIN SELECT RAISE(ABORT, 'injected'); END");
-    const bytes = db.serialize(); assert.equal((await request(`/${id}/counter`, counter, managerC)).status, 500); assert.equal(bytes.equals(db.serialize()), true);
+    const sqlState=snapshotSqliteState(db); assert.equal((await request(`/${id}/counter`, counter, managerC)).status, 500);
+    assert.deepEqual(snapshotSqliteState(db),sqlState,'All SQL state must survive counter rollback');
     db.exec('DROP TRIGGER fail_counter');
     assert.equal((await request(`/${id}/counter`, counter, managerC)).status, 201);
     assert.equal(db.prepare('SELECT status FROM trades WHERE id = ?').get(id).status, 'declined');

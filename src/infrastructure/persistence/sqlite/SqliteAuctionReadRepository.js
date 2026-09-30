@@ -1,5 +1,7 @@
 "use strict";
 
+const { readGoonDraftTiming } = require("./goonDraftTiming");
+
 const { resolveTeamDisplayColours } = require("../../../domain/leagues/teamDisplayPolicy");
 
 const { readFreeAgentDraftCommissionerWindow } = require("./SqliteFreeAgentDraftCommissionerWindow");
@@ -391,6 +393,7 @@ function sortUniqueRows(rows, key, message) {
 }
 
 function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabled = false } = {}) {
+  const readLeagueSchedule = require('./leagueAuctionSchedule').createLeagueAuctionScheduleReader(database);
   if (
     !database ||
     typeof database.prepare !== "function" ||
@@ -498,8 +501,8 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
       !UUID_PATTERN.test(context.fad_id || "") ||
       !UUID_PATTERN.test(context.fad_rollover_id || "") ||
       context.target_rollover_at_ms !== head.resolves_at_ms ||
-      context.creation_cutoff_at_ms !==
-        Math.max(context.rollover_opens_at_ms, context.target_rollover_at_ms - 3_600_000)
+      context.creation_cutoff_at_ms < context.rollover_opens_at_ms ||
+      context.creation_cutoff_at_ms > context.target_rollover_at_ms
     ) {
       incompatible("The FAD auction rollover context is inconsistent.");
     }
@@ -1254,7 +1257,8 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
     head,
     authority,
     managed,
-    nowMs
+    nowMs,
+    revealAdministration = false
   ) {
     const context = requireContext(head);
     const resolutionRows = listResolutions.all({
@@ -1366,7 +1370,7 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
       creationCutoffAtMs:
         context.creation_cutoff_at_ms,
       eligibleTeams: freeze(
-        administrative
+        administrative && revealAdministration
           ? participants.map((row) => teamProjection(row))
           : []
       ),
@@ -1383,7 +1387,7 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
         authority
       ),
       administrativeBids: administrativeBidRows(
-        administrative,
+        administrative && revealAdministration,
         bids,
         participants,
         head,
@@ -1461,6 +1465,7 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
     let window = null;
     if (authority.league_timezone) {
       window = getAuctionCreationWindow({
+        schedule: readLeagueSchedule(input.leagueId),
         stagingDaily: stagingDailyAuctionsEnabled,
         nowMs: input.nowMs,
         timeZone: authority.league_timezone,
@@ -2176,7 +2181,7 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
       }
     },
 
-    readAuction(input) {
+    readAuction(input, { revealAdministration = false } = {}) {
       const canonical = canonicalDetailInput(input);
       try {
         const authority = requireAuthority(canonical);
@@ -2193,7 +2198,8 @@ function createSqliteAuctionReadRepository({ database, stagingDailyAuctionsEnabl
           head,
           authority,
           managedTeams(canonical),
-          canonical.nowMs
+          canonical.nowMs,
+          revealAdministration
         );
       } catch (error) {
         throw mapRepositoryError(error, {

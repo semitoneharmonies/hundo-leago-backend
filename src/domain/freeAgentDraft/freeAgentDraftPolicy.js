@@ -465,7 +465,7 @@ function createFreeAgentDraftClock(input = {}) {
     normalHelpOpensAtMs
   );
   const initialRollovers =
-    draftTiming ? initialRolloverClock(draftTiming, FREE_AGENT_DRAFT_CREATION_CUTOFF_MS) : buildInitialRolloverClock(
+    draftTiming ? initialRolloverClock(draftTiming, (draftTiming.auctionCreationCutoffMinutes ?? 60)*60_000) : buildInitialRolloverClock(
       candidateDeadlineAtMs
     );
   if (
@@ -530,7 +530,11 @@ function deriveFreeAgentDraftViewerPhase(
     "cardsOpenedAtMs",
     "helpOpensAtMs",
     "candidateDeadlineAtMs",
+    ...(input != null && Object.hasOwn(input, "softDeadline") ? ["softDeadline"] : []),
   ]);
+  if (Object.hasOwn(input, "softDeadline") && typeof input.softDeadline !== "boolean") {
+    failClock("soft_deadline_invalid");
+  }
   const nowMs = safeTimestamp(
     input.nowMs,
     "now_ms_invalid"
@@ -551,6 +555,11 @@ function deriveFreeAgentDraftViewerPhase(
   const status = validateFreeAgentDraftStatus(
     input.status
   );
+  if (input.candidateDeadlineAtMs === null && status === "cards_open") {
+    const opened = safeTimestamp(input.cardsOpenedAtMs, "cards_opened_at_ms_invalid");
+    if (input.helpOpensAtMs !== opened || nowMs < opened) failClock("unscheduled_clock_invalid");
+    return "cards_open";
+  }
   const { opened, help, deadline } =
     validateViewerClock(input);
   if (nowMs < opened) {
@@ -559,7 +568,7 @@ function deriveFreeAgentDraftViewerPhase(
 
   if (status === "cards_open") {
     if (nowMs >= deadline) {
-      return "deadline_processing";
+      return input.softDeadline === true ? "cards_open" : "deadline_processing";
     }
     return nowMs >= help
       ? "help_window"
@@ -586,6 +595,7 @@ function validateNominationWindow(input) {
     "opensAtMs",
     "creationCutoffAtMs",
     "rollsOverAtMs",
+    ...(Object.hasOwn(input, "creationCutoffLeadMs") ? ["creationCutoffLeadMs"] : []),
     ...(Object.hasOwn(input, "followingRolloverAtMs") ? ["followingRolloverAtMs"] : []),
   ]);
   const acceptedAtMs = safeTimestamp(
@@ -610,7 +620,7 @@ function validateNominationWindow(input) {
     (followingRolloverAtMs === undefined
       ? rollsOverAtMs - opensAtMs !== FREE_AGENT_DRAFT_DAY_MS
       : rollsOverAtMs <= opensAtMs || followingRolloverAtMs <= rollsOverAtMs) ||
-    creationCutoffAtMs !== Math.max(opensAtMs, rollsOverAtMs - FREE_AGENT_DRAFT_CREATION_CUTOFF_MS)
+    creationCutoffAtMs < opensAtMs || creationCutoffAtMs > rollsOverAtMs
   ) {
     failClock("nomination_rollover_clock_invalid");
   }
@@ -677,7 +687,8 @@ function validateRolloverRow(
   index,
   candidateDeadlineAtMs,
   previousRow,
-  initialRolloverTimesAtMs
+  initialRolloverTimesAtMs,
+  creationCutoffLeadMs = FREE_AGENT_DRAFT_CREATION_CUTOFF_MS
 ) {
   requireExactObject(
     row,
@@ -751,8 +762,7 @@ function validateRolloverRow(
     opensAtMs !== expectedOpensAtMs ||
     rollsOverAtMs !==
       expectedRollsOverAtMs ||
-    creationCutoffAtMs !==
-      Math.max(opensAtMs, rollsOverAtMs - FREE_AGENT_DRAFT_CREATION_CUTOFF_MS)
+    creationCutoffAtMs < opensAtMs || creationCutoffAtMs > rollsOverAtMs
   ) {
     failRollover(
       "rollover_clock_not_contiguous"
@@ -861,6 +871,7 @@ function validateFreeAgentDraftRolloverSequence(
     "candidateDeadlineAtMs",
     "rollovers",
     ...(customTiming ? ["initialRolloverTimesAtMs"] : []),
+    ...(Object.hasOwn(input, "creationCutoffLeadMs") ? ["creationCutoffLeadMs"] : []),
   ]);
   const candidateDeadlineAtMs = safeTimestamp(
     input.candidateDeadlineAtMs,
@@ -900,7 +911,8 @@ function validateFreeAgentDraftRolloverSequence(
       index,
       candidateDeadlineAtMs,
       previousRow,
-      initialRolloverTimesAtMs
+      initialRolloverTimesAtMs,
+      input.creationCutoffLeadMs === undefined ? FREE_AGENT_DRAFT_CREATION_CUTOFF_MS : safeTimestamp(input.creationCutoffLeadMs, "cutoff_lead_invalid")
     );
     if (ids.has(row.id)) {
       failRollover("rollover_id_duplicate");
@@ -960,6 +972,7 @@ function planNextFreeAgentDraftExtensionRollover(
     "rollovers",
     "requirement",
     ...(customTiming ? ["initialRolloverTimesAtMs"] : []),
+    ...(Object.hasOwn(input, "creationCutoffLeadMs") ? ["creationCutoffLeadMs"] : []),
   ]);
   const rollovers =
     validateFreeAgentDraftRolloverSequence({
@@ -967,6 +980,7 @@ function planNextFreeAgentDraftExtensionRollover(
         input.candidateDeadlineAtMs,
       rollovers: input.rollovers,
       ...(customTiming ? { initialRolloverTimesAtMs: input.initialRolloverTimesAtMs } : {}),
+      ...(input.creationCutoffLeadMs === undefined ? {} : { creationCutoffLeadMs: input.creationCutoffLeadMs }),
     });
   const requirement =
     validateExtensionRequirement(
@@ -1025,8 +1039,7 @@ function planNextFreeAgentDraftExtensionRollover(
       extensionSourceId: requirement.sourceId,
       opensAtMs,
       creationCutoffAtMs:
-        rollsOverAtMs -
-        FREE_AGENT_DRAFT_CREATION_CUTOFF_MS,
+        Math.max(opensAtMs, rollsOverAtMs - (input.creationCutoffLeadMs ?? FREE_AGENT_DRAFT_CREATION_CUTOFF_MS)),
       rollsOverAtMs,
       status: "scheduled",
     },
@@ -1071,6 +1084,7 @@ function evaluateFreeAgentDraftCompletionEligibility(
     "unaccountedPathCount",
     "quarantinedPlayerCount",
     ...(customTiming ? ["initialRolloverTimesAtMs"] : []),
+    ...(Object.hasOwn(input, "creationCutoffLeadMs") ? ["creationCutoffLeadMs"] : []),
   ]);
   const status = validateFreeAgentDraftStatus(
     input.status
@@ -1088,6 +1102,7 @@ function evaluateFreeAgentDraftCompletionEligibility(
       candidateDeadlineAtMs,
       rollovers: input.rollovers,
       ...(customTiming ? { initialRolloverTimesAtMs: input.initialRolloverTimesAtMs } : {}),
+      ...(input.creationCutoffLeadMs === undefined ? {} : { creationCutoffLeadMs: input.creationCutoffLeadMs }),
     });
   const cardStatuses = validateStatusArray({
     value: input.cardStatuses,
@@ -1795,9 +1810,10 @@ function validateFreeAgentDraftTiming(value, firstMatchupStartsAtMs) {
   timingTimestamp(firstMatchupStartsAtMs, "week_one_invalid");
   if (!value || typeof value !== "object" || Array.isArray(value) ||
       ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
-      Object.keys(value).sort().join(",") !== "candidateDeadlineAtMs,rolloverTimesAtMs") {
+      !["candidateDeadlineAtMs,rolloverTimesAtMs","auctionCreationCutoffMinutes,candidateDeadlineAtMs,rolloverTimesAtMs"].includes(Object.keys(value).sort().join(","))) {
     failTiming("timing_fields_invalid");
   }
+  if (Object.hasOwn(value,"auctionCreationCutoffMinutes") && (!Number.isSafeInteger(value.auctionCreationCutoffMinutes) || value.auctionCreationCutoffMinutes<0 || value.auctionCreationCutoffMinutes>10080)) failTiming("cutoff_gap_invalid");
   const candidateDeadlineAtMs = timingTimestamp(value.candidateDeadlineAtMs, "deadline_invalid");
   if (candidateDeadlineAtMs >= firstMatchupStartsAtMs) failTiming("deadline_not_before_week_one");
   if (!Array.isArray(value.rolloverTimesAtMs) || value.rolloverTimesAtMs.length < 1 || value.rolloverTimesAtMs.length > MAX_INITIAL_ROLLOVERS) {
@@ -1811,7 +1827,7 @@ function validateFreeAgentDraftTiming(value, firstMatchupStartsAtMs) {
     previous = instant;
     return instant;
   });
-  return Object.freeze({ candidateDeadlineAtMs, rolloverTimesAtMs: Object.freeze(rolloverTimesAtMs) });
+  return Object.freeze({ candidateDeadlineAtMs, rolloverTimesAtMs: Object.freeze(rolloverTimesAtMs), ...(Object.hasOwn(value,"auctionCreationCutoffMinutes")?{auctionCreationCutoffMinutes:value.auctionCreationCutoffMinutes}:{}) });
 }
 
 function defaultFreeAgentDraftTiming(firstMatchupStartsAtMs, candidateDeadlineAtMs = firstMatchupStartsAtMs - DEFAULT_RAPID_AUCTION_PERIOD_MS) {

@@ -106,18 +106,22 @@ function insert(database, tableName, values) {
 }
 
 function withoutTriggers(database, mutate) {
-  const triggers = database.prepare(`
-    SELECT name, sql FROM sqlite_schema
-    WHERE type = 'trigger' ORDER BY name
-  `).all();
-  try {
-    for (const { name } of triggers) {
-      database.exec(`DROP TRIGGER "${name.replaceAll('"', '""')}"`);
+  // Batch disposable fixture setup; application commands still run after the
+  // original guards have been restored and committed, with FULL durability.
+  database.transaction(() => {
+    const triggers = database.prepare(`
+      SELECT name, sql FROM sqlite_schema
+      WHERE type = 'trigger' ORDER BY name
+    `).all();
+    try {
+      for (const { name } of triggers) {
+        database.exec(`DROP TRIGGER "${name.replaceAll('"', '""')}"`);
+      }
+      mutate();
+    } finally {
+      for (const { sql } of triggers) database.exec(sql);
     }
-    mutate();
-  } finally {
-    for (const { sql } of triggers) database.exec(sql);
-  }
+  })();
 }
 
 function seed(database) {
@@ -880,6 +884,19 @@ describe("SQLite FAD rollover writer", () => {
       `).get(IDS.rollover),
       { status: "completed", version: 3 }
     );
+  });
+
+  test('recovery extensions use the saved cutoff gap and retain exact replay',t=>{
+    const {database,writer}=createFixture(t);
+    database.prepare('INSERT INTO fad_auction_cutoff_settings(id,league_id,season_id,gap_ms,updated_at_ms,version) VALUES(?,?,?,?,?,1)')
+      .run(IDS.fad,IDS.league,IDS.season,1800000,ROLLOVER_AT_MS-1);
+    writer.ensurePendingJobs({ensuredAtMs:ROLLOVER_AT_MS-1,limit:10});
+    seedBoundaryRecovery(database);claim(database);
+    const result=writer.recordFailure(failureCommand());
+    const round=database.prepare('SELECT * FROM free_agent_draft_rollovers WHERE id=?').get(result.extensionRolloverId);
+    assert.equal(round.creation_cutoff_at_ms,round.rolls_over_at_ms-1800000);
+    assert.equal(writer.recordFailure(failureCommand()).replayed,true);
+    assert.deepEqual(database.pragma('foreign_key_check'),[]);
   });
 
   test("records first terminal failure with one recovery extension and pending successor job", (t) => {

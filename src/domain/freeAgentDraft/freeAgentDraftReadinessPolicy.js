@@ -7,7 +7,7 @@ const {
   "../leagues/seasonRolloverEvidencePolicy"
 );
 const {
-  FREE_AGENT_DRAFT_CREATION_CUTOFF_MS,
+
   FREE_AGENT_DRAFT_DAY_MS,
   FREE_AGENT_DRAFT_HELP_WINDOW_MS,
   FREE_AGENT_DRAFT_INITIAL_ROLLOVER_COUNT,
@@ -623,8 +623,9 @@ function readinessInitialRollovers(
           : priorRollsOverAtMs) ||
       rollsOverAtMs <= opensAtMs ||
       rollsOverAtMs > firstMatchupStartsAtMs ||
-      creationCutoffAtMs !==
-        Math.max(opensAtMs, rollsOverAtMs - FREE_AGENT_DRAFT_CREATION_CUTOFF_MS)
+      creationCutoffAtMs < opensAtMs || creationCutoffAtMs > rollsOverAtMs ||
+      (creationCutoffAtMs > opensAtMs &&
+        ((rollsOverAtMs-creationCutoffAtMs)%60_000!==0 || rollsOverAtMs-creationCutoffAtMs>604_800_000))
     ) {
       failResult("initial_rollover_invalid");
     }
