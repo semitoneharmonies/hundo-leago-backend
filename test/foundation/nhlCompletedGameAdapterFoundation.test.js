@@ -177,10 +177,10 @@ test("NHL completed-game totals exclude live goals, include zero-game catalog pl
   assert.equal(summaryRequest.searchParams.get("cayenneExp"), "gameId in (2025020001)");
 });
 
-test("NHL FINAL games awaiting official reports do not block confirmed scores or publish provisional points", async () => {
+for (const pendingBoxState of ["FINAL", "OFF"]) test(`NHL ${pendingBoxState} games awaiting official reports do not block confirmed scores or publish provisional points`, async () => {
   const cached = [];
   const f = fixture({ completedGameCache: { read: () => new Map(), save: entries => cached.push(...entries) },
-    change: ({ games, boxes }) => { games[1].gameStateId = 6; boxes.get(String(games[1].id)).gameState = "FINAL"; } });
+    change: ({ games, boxes }) => { games[1].gameStateId = 6; boxes.get(String(games[1].id)).gameState = pendingBoxState; } });
   const first = await f.adapter.fetchLiveSnapshot(f.input);
   assert.deepEqual(first.totalsRows[0], { playerId: "8478000", gamesPlayed: 1, goals: 2, assists: 1 });
   const pending = first.playerGameRows.find(row => row.nhlGameId === "2025020002");
@@ -204,10 +204,28 @@ test("NHL FINAL games awaiting official reports do not block confirmed scores or
   assert.deepEqual((await f.adapter.fetchLiveSnapshot(f.input)).totalsRows, finalized.totalsRows);
 });
 
+test("completed-game captures overwrite the real SQLite cache without caching pending games", async t => {
+  const database = new (require("better-sqlite3"))(":memory:");
+  t.after(() => database.close());
+  require("../../src/infrastructure/database/migrate").migrateDatabase({ database,
+    migrationsDirectory: require("node:path").resolve(__dirname, "../../database/migrations"), applicationBuildId: "pending-game-cache-test", now: () => 1 });
+  const cache = require("../../src/infrastructure/persistence/sqlite/SqliteCompletedGameCacheRepository").createSqliteCompletedGameCacheRepository({ database });
+  const f = fixture({ completedGameCache: cache,
+    change: ({ games, boxes }) => { games[1].gameStateId = 6; boxes.get("2025020002").gameState = "OFF"; } });
+  const first = await f.adapter.fetchLiveSnapshot(f.input);
+  f.setNow(NOW + 60_000);
+  assert.deepEqual((await f.adapter.fetchLiveSnapshot(f.input)).totalsRows, first.totalsRows);
+  const entries = cache.read({ season: "20252026", expanded: false });
+  assert.deepEqual([...entries.keys()], ["2025020001"]);
+  assert.equal(entries.get("2025020001").checkedAtMs, NOW + 60_000);
+  assert.equal(entries.get("2025020001").data.rows.length, 36);
+  assert.equal(database.prepare("SELECT count(*) n FROM nhl_completed_game_cache").get().n, 1);
+});
+
 test("NHL official games retain FINAL support and reject genuinely contradictory states", async () => {
   const official = fixture({ change: ({ boxes }) => { boxes.get("2025020001").gameState = "FINAL"; } });
   assert.equal((await official.adapter.fetchLiveSnapshot(official.input)).playerGameRows[0].observedGameState, "final");
-  for (const [scheduleState, boxState] of [[7, "LIVE"], [6, "OFF"], [3, "FINAL"]]) {
+  for (const [scheduleState, boxState] of [[7, "LIVE"], [3, "OFF"], [3, "FINAL"]]) {
     const f = fixture({ change: ({ games, boxes }) => {
       games[1].gameStateId = scheduleState; boxes.get("2025020002").gameState = boxState;
     } });
