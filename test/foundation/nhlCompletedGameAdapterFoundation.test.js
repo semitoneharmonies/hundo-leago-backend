@@ -57,6 +57,56 @@ test("enabled NHL collector carries all categories and the real penalty-shot exc
   await assert.rejects(adapter.fetchLiveSnapshot(input), { code: "NHL_EXPANDED_REPORT_INCOMPLETE" });
 });
 
+test("expanded NHL reports read every page when the provider caps responses at 100 rows", async () => {
+  const captured = expandedFixtures.games.find(game => game.gameId === 2025020477);
+  const gameIds = [2026020477, 2026020478, 2026020479];
+  const reports = Object.fromEntries(["summary", "realtime", "scoringpergame", "penalties", "penaltyShots"].map(report =>
+    [report, gameIds.flatMap(gameId => captured[report].map(row => ({ ...row, gameId })))]));
+  const calls = [];
+  let truncateSecondPage = false;
+  let changeSecondPageTotal = false;
+  const adapter = createNhlCompletedGameAdapter({ expandedScoringEnabled: true,
+    nowMs: () => Date.parse("2026-12-20T12:00:00Z"), retryDelay: async () => {},
+    readCatalogPlayers: () => captured.summary.map(row => ({ providerPlayerId: String(row.playerId) })),
+    fetchImpl: async uri => {
+      const url = new URL(uri);
+      let data;
+      if (url.pathname.endsWith("/game")) {
+        const games = gameIds.map(id => ({ id, season: 20262027, gameType: 2,
+          easternStartTime: "2026-12-10T19:00:00", homeTeamId: 13, visitingTeamId: 16, gameStateId: 7 }));
+        data = { total: games.length, data: games };
+      } else if (url.pathname.includes("/gamecenter/")) {
+        data = { ...structuredClone(captured.penaltyShotLandings[0]), id: Number(url.pathname.split("/").at(-2)), season: 20262027 };
+      } else {
+        const report = url.pathname.split("/").at(-1);
+        const rows = reports[report];
+        assert.ok(rows, url.pathname);
+        const start = Number(url.searchParams.get("start"));
+        const limit = Number(url.searchParams.get("limit"));
+        calls.push({ report, start, limit });
+        const page = rows.slice(start, start + Math.min(limit, 100));
+        if (report === "summary" && start === 100 && truncateSecondPage) page.pop();
+        data = { total: rows.length + (report === "summary" && start === 100 && changeSecondPageTotal ? 1 : 0), data: page };
+      }
+      return { ok: true, json: async () => structuredClone(data) };
+    },
+  });
+  const input = { nhlSeasonKey: "20262027", requiredPlayers: [], requiredPlayerGames: [] };
+  const snapshot = await adapter.fetchLiveSnapshot(input);
+  assert.equal(reports.summary.length, 108);
+  assert.equal(snapshot.totalsRows.length, 36);
+  assert(snapshot.totalsRows.every(row => row.gamesPlayed === 3));
+  for (const report of ["summary", "realtime", "scoringpergame", "penalties"]) {
+    assert.deepEqual(calls.filter(call => call.report === report).map(call => call.start), [0, 100]);
+  }
+  assert(calls.every(call => call.limit <= 100));
+  truncateSecondPage = true;
+  await assert.rejects(adapter.fetchLiveSnapshot(input), /response is incomplete/);
+  truncateSecondPage = false;
+  changeSecondPageTotal = true;
+  await assert.rejects(adapter.fetchLiveSnapshot(input), /pagination changed/);
+});
+
 function fixture(overrides = {}) {
   let now = NOW;
   const calls = [];

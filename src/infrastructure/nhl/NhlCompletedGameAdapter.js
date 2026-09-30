@@ -165,7 +165,8 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
     for (let offset = 0; offset < completed.length; offset += 200) {
       const batch = completed.slice(offset, offset + 200);
       const expression = `gameId in (${batch.map(({ id }) => id).join(",")})`;
-      const pageOptions = expanded ? { pageSize: 1000 } : {};
+      // NHL reports cap responses at 100 rows even when a larger limit is requested.
+      const pageOptions = { pageSize: 100 };
       const rows = await pages("skater/summary", expression, pageOptions);
       if (rows.length === 0) fail("Completed NHL games have no statistics.");
       if (expanded) {
