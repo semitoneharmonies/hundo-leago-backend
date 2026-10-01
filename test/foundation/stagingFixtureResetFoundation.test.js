@@ -207,6 +207,7 @@ test("M7-10 resets only the exact staging fixture after a verified backup and pr
     "expanded_player_game_stats_immutable_delete",
     "expanded_stat_refreshes_immutable_delete",
     "expanded_stat_totals_immutable_delete",
+    "operational_events_catalogue_controls_immutable_delete",
   ];
   const installedProtectedTriggerNames = [
     ...FIXTURE_RESET_PROTECTED_TRIGGER_NAMES,

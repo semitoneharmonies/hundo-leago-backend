@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { CURRENT_SCHEMA_VERSION } = require("../helpers/currentSchemaVersion");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -452,7 +453,7 @@ function createRuntime(t) {
           "FROM schema_migrations"
       )
       .get().migration_id,
-    57
+    CURRENT_SCHEMA_VERSION
   );
   seedStatistics(connection.database);
   const repository =

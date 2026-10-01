@@ -1,4 +1,5 @@
 "use strict";
+const { CURRENT_SCHEMA_VERSION } = require("../helpers/currentSchemaVersion");
 
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
@@ -740,7 +741,7 @@ function createFixture(t, prefix, base, {
     connection.database.pragma("user_version", {
       simple: true,
     }),
-    57
+    CURRENT_SCHEMA_VERSION
   );
   const fixtureIds = ids(base);
   const actions = actionMatrix(fixtureIds);

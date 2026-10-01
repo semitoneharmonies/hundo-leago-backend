@@ -8,6 +8,7 @@ test('configured staging scope filters before pagination and remains bound to le
   const database = new Database(':memory:');
   t.after(() => database.close());
   database.exec(`CREATE TABLE job_runs (id INTEGER, league_id TEXT, season_id TEXT);
+    CREATE TABLE league_freezes (league_id TEXT, status TEXT);
     CREATE TABLE season_matchup_schedule_generations (league_id TEXT, season_id TEXT, status TEXT, fad_timing_json TEXT);
     INSERT INTO job_runs VALUES (1,'legacy','old'),(2,'selected','old'),(3,'other','new'),(4,'selected','new');
     INSERT INTO season_matchup_schedule_generations VALUES ('legacy','old','current',NULL),('selected','new','superseded','{}'),('selected','new','current',NULL);`);
@@ -22,9 +23,16 @@ test('configured staging scope filters before pagination and remains bound to le
 test('historical staging schemas remain paused and ordinary runtime discovery stays available', (t) => {
   const database = new Database(':memory:');
   t.after(() => database.close());
-  database.exec('CREATE TABLE season_matchup_schedule_generations (league_id TEXT, season_id TEXT)');
+  database.exec(`CREATE TABLE season_matchup_schedule_generations (league_id TEXT, season_id TEXT);
+    CREATE TABLE league_freezes (league_id TEXT, status TEXT);
+    CREATE TABLE draft (league_id TEXT);
+    INSERT INTO draft VALUES ('open'),('paused');
+    INSERT INTO league_freezes VALUES ('paused','active');`);
   assert.equal(freeAgentDraftSchedulerScopeSql({ database, configuredSeasonsOnly: true, alias: 'draft' }), '0');
-  assert.equal(freeAgentDraftSchedulerScopeSql({ database, alias: 'draft' }), '1');
+  const ordinary = freeAgentDraftSchedulerScopeSql({ database, alias: 'draft' });
+  const before = database.serialize();
+  assert.deepEqual(database.prepare(`SELECT league_id FROM draft WHERE ${ordinary}`).all(), [{ league_id: 'open' }]);
+  assert.deepEqual(database.serialize(), before);
   assert.throws(() => freeAgentDraftSchedulerScopeSql({ database, configuredSeasonsOnly: 'false', alias: 'draft' }), TypeError);
   assert.throws(() => freeAgentDraftSchedulerScopeSql({ database, configuredSeasonsOnly: true, alias: 'draft; DROP TABLE job_runs' }), TypeError);
 });

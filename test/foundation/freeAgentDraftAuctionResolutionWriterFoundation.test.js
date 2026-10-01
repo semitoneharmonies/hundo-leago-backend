@@ -1070,7 +1070,7 @@ function assertFirstBidMigrationPreservesRows(database) {
   }));
   const before = snapshot();
   const ledger = database.prepare('SELECT * FROM schema_migrations ORDER BY migration_id').all();
-  applyMigrations({ database, migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }), applicationBuildId: 'first-bid-preservation', now: () => EXECUTES_AT_MS });
+  applyMigrations({ database, migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }).filter(({ id }) => id <= 61), applicationBuildId: 'first-bid-preservation', now: () => EXECUTES_AT_MS });
   assert.deepEqual(snapshot(), before);
   assert.deepEqual(database.prepare('SELECT * FROM schema_migrations WHERE migration_id <= 59 ORDER BY migration_id').all(), ledger);
   assert.equal(database.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key = 'data_model_version'").get().metadata_value, '61');

@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { CURRENT_SCHEMA_VERSION } = require("../helpers/currentSchemaVersion");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
@@ -140,7 +141,7 @@ test("M7 release-QA runtime passes full-stack role, isolation, privacy, health, 
   assert.equal(fs.existsSync(started.databasePath), true);
   assert.equal(
     started.runtime.database.pragma("user_version", { simple: true }),
-    57
+    CURRENT_SCHEMA_VERSION
   );
 
   const report = await verifyReleaseQaRuntime({

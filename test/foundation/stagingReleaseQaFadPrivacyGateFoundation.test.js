@@ -1,3 +1,4 @@
+require("../helpers/useSchema54AllocationPolicy");
 const { historicalSchema54Migrations } = require("../helpers/historicalSchema54Migrations");
 "use strict";
 

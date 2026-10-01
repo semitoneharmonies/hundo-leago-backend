@@ -1,4 +1,5 @@
 "use strict";
+const { CURRENT_SCHEMA_VERSION } = require("../helpers/currentSchemaVersion");
 
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
@@ -985,7 +986,7 @@ describe("FAD-11 SQLite recovery-read repository", () => {
     }
   });
 
-  test("prepares every read against the real schema migrated through 57", () => {
+  test("prepares every read against the full current schema", () => {
     const directory = fs.mkdtempSync(
       path.join(os.tmpdir(), "hundo-fad-recovery-schema-")
     );
@@ -999,7 +1000,7 @@ describe("FAD-11 SQLite recovery-read repository", () => {
         applicationBuildId:
           "fad-11-recovery-read-schema-foundation",
       });
-      assert.equal(state.userVersion, 57);
+      assert.equal(state.userVersion, CURRENT_SCHEMA_VERSION);
       assert.doesNotThrow(() =>
         createSqliteFreeAgentDraftRecoveryReadRepository({
           database: connection.database,

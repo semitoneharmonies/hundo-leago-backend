@@ -10,6 +10,7 @@ const {
   "../../src/infrastructure/database/connection"
 );
 const {
+  discoverMigrations,
   migrateDatabase,
 } = require(
   "../../src/infrastructure/database/migrate"
@@ -2741,7 +2742,7 @@ describe(
           database.pragma("user_version", {
             simple: true,
           }),
-          57
+          discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }).at(-1).id
         );
         assert.equal(
           database
@@ -2752,7 +2753,7 @@ describe(
                 'data_model_version'
             `)
             .get().metadata_value,
-          "57"
+          String(discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }).at(-1).id)
         );
         assert.deepEqual(
           repository

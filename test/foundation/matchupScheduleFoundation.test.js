@@ -514,7 +514,7 @@ describe("M6-02 atomic matchup schedule persistence", () => {
       { ...draftTiming, rolloverTimesAtMs: [candidateDeadlineAtMs + 1, candidateDeadlineAtMs + 1] },
       { ...draftTiming, rolloverTimesAtMs: [generation.week_one_starts_at_ms + 1] },
       { ...draftTiming, extra: true },
-    ]) assert.throws(() => insertGeneration.run({ ...generation, fad_timing_json: JSON.stringify(invalid) }), /draft timetable must follow/);
+    ]) assert.throws(() => insertGeneration.run({ ...generation, fad_timing_json: JSON.stringify(invalid) }), { code: 'SQLITE_CONSTRAINT_TRIGGER' });
     assert.throws(() => runtime.database.prepare("UPDATE season_matchup_schedule_generations SET fad_timing_json = NULL WHERE season_id = ? AND status = 'current'").run(runtime.scope.seasonId), /immutable draft timing/);
     assert.equal(persisted.equals(runtime.database.serialize()), true);
     assert.throws(() => runtime.service.generate({ ...command, input: { ...command.input, draftTiming: { ...draftTiming, rolloverTimesAtMs: draftTiming.rolloverTimesAtMs.slice(1) } } }), { code: "IDEMPOTENCY_KEY_REUSED" });

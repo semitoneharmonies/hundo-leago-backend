@@ -57,11 +57,12 @@ const ROOT_DIRECTORY = path.resolve(
   "..",
   ".."
 );
-const MIGRATIONS_DIRECTORY = path.join(
+const { historicalSchema65Migrations } = require("../helpers/historicalSchema65Migrations");
+const MIGRATIONS_DIRECTORY = historicalSchema65Migrations(path.join(
   ROOT_DIRECTORY,
   "database",
   "migrations"
-);
+));
 const FRONTEND_ORIGIN = "http://127.0.0.1:5173";
 const ORIGINAL_FIXTURE_PASSWORD = "hundo";
 const ROTATED_TEST_PASSWORD =
@@ -235,7 +236,7 @@ test(
       started.runtime.database.pragma("user_version", {
         simple: true,
       }),
-      57
+      65
     );
     assert.equal(
       isStagingAccountAutoVerificationEnabled({

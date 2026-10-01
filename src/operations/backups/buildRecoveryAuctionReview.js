@@ -16,8 +16,8 @@ const same = (left, right) => canonicalize(left) === canonicalize(right);
 const fingerprint = rows => ({ count: rows.length, sha256: hash(canonicalize(rows.map(row => hash(canonicalize(row))).sort())) });
 const safeTime = value => Number.isSafeInteger(value) && value >= 0;
 class RecoveryAuctionReviewError extends Error {
-  constructor(code) {
-    super("Auction recovery review requires an exact held candidate, occurrence and two preserved offline copies.");
+  constructor(code, options) {
+    super("Auction recovery review requires an exact held candidate, occurrence and two preserved offline copies.", options);
     this.name = "RecoveryAuctionReviewError"; this.code = code;
   }
 }
@@ -139,7 +139,7 @@ function buildRecoveryAuctionReview({ preparedDatabase, restoredDatabase, preser
     return Object.freeze({ ...report, reportChecksum: hash(canonicalize(report)) });
   } catch (error) {
     if (error instanceof RecoveryAuctionReviewError) throw error;
-    fail("RECOVERY_AUCTION_REVIEW_FAILED");
+    throw new RecoveryAuctionReviewError("RECOVERY_AUCTION_REVIEW_FAILED", { cause: error });
   }
 }
 module.exports = { RecoveryAuctionReviewError, buildRecoveryAuctionReview };

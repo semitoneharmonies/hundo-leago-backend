@@ -333,6 +333,11 @@ function createSchema(database) {
       league_id TEXT NOT NULL
     ) STRICT;
 
+    CREATE TABLE league_freezes (
+      league_id TEXT NOT NULL,
+      status TEXT NOT NULL
+    ) STRICT;
+
     CREATE TABLE players (
       id TEXT PRIMARY KEY
     ) STRICT;

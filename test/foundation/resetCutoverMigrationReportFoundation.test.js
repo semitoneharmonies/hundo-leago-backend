@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { CURRENT_SCHEMA_VERSION } = require("../helpers/currentSchemaVersion");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -59,7 +60,7 @@ function zeroMoneyFamily(familyId) {
 
 function projection({
   bundleId = sourceBundleId(),
-  schemaVersion = 57,
+  schemaVersion = CURRENT_SCHEMA_VERSION,
   targetHash = "b".repeat(64),
 } = {}) {
   const reset = createResetManifest();
@@ -404,7 +405,7 @@ describe("FAD-04 committed reset migration-report repository", () => {
         leagueId: uuid(2),
       });
     assert.equal(found.id, uuid(1));
-    assert.equal(found.databaseSchemaVersion, 57);
+    assert.equal(found.databaseSchemaVersion, CURRENT_SCHEMA_VERSION);
 
     runtime.database.pragma("user_version = 41");
     const postMigrationReplay =

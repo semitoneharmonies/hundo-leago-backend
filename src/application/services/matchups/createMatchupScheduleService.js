@@ -1,5 +1,6 @@
 const {
   MatchupSchedulePolicyError,
+  firstEligibleMonday,
   planExplicitMatchupSchedule,
   planMatchupWeekOneShift,
 } = require("../../../domain/matchups/matchupSchedulePolicy");
@@ -34,7 +35,7 @@ const {
   "../../../domain/matchups/matchupScheduleCommandPolicy"
 );
 
-const { validateFreeAgentDraftTiming } = require("../../../domain/freeAgentDraft/freeAgentDraftPolicy");
+const { defaultFreeAgentDraftTiming, validateFreeAgentDraftTiming } = require("../../../domain/freeAgentDraft/freeAgentDraftPolicy");
 const { digest } = require("../../../domain/leagues/leagueCommunicationPolicy");
 
 const MATCHUP_SCHEDULE_SERVICE_CODES = Object.freeze({
@@ -1017,19 +1018,18 @@ function inspectShiftContext({
       "The active team set changed after schedule creation."
     );
   }
-  const canonicalShift = planExplicitMatchupSchedule({
-    teamIds: schedulePlan.teamIds, nhlSeasonKey: context.nhlSeasonKey,
-    nhlRegularSeasonStartsAtMs: context.nhlRegularSeasonStartsAtMs,
-    nhlRegularSeasonEndsAtMs: context.nhlRegularSeasonEndsAtMs,
-    fantasyPlayoffsStartAtMs: context.fantasyPlayoffsStartAtMs,
-    fantasyPlayoffsEndAtMs: context.fantasyPlayoffsEndAtMs,
-    firstWeekStartsAtMs: schedulePlan.firstWeekStartsAtMs, timeZone: context.timeZone, nowMs,
-  });
-  if (canonicalShift.weeks.length !== schedulePlan.weeks.length || schedulePlan.weeks.some((week, i) =>
-      ['startsAtMs','baselineAtMs','locksAtMs','endsAtMs','rollsOverAtMs'].some(field => week[field] !== canonicalShift.weeks[i][field]))) {
-    fail(MATCHUP_SCHEDULE_SERVICE_CODES.weekInvalid, "The shift must preserve matchup count and the complete calendar through playoffs.");
-  }
-  const draftTiming = requireFutureCandidateDeadline(schedulePlan.firstWeekStartsAtMs, nowMs, generation.draftTiming);
+  // The policy validates the complete default calendar and preserves custom
+  // schedules' existing week count within their selected scoring range.
+  // Replanning a custom calendar here would invent additional matchup weeks.
+  // Partial opening weeks need an explicit clock: the legacy implicit clock
+  // requires Monday, whereas approved default calendars can start midweek.
+  const selectedDraftTiming = generation.draftTiming ?? (
+    firstEligibleMonday(schedulePlan.firstWeekStartsAtMs, context.timeZone) !== schedulePlan.firstWeekStartsAtMs
+      ? defaultFreeAgentDraftTiming(schedulePlan.firstWeekStartsAtMs,
+        schedulePlan.firstWeekStartsAtMs - 7 * 24 * 60 * 60 * 1000)
+      : undefined
+  );
+  const draftTiming = requireFutureCandidateDeadline(schedulePlan.firstWeekStartsAtMs, nowMs, selectedDraftTiming);
   // Apply the same clock validation the readiness worker will use, before any
   // schedule mutation. Legacy timetables have stricter opening-day rules.
   require('../../../domain/freeAgentDraft/freeAgentDraftScheduleRecoveryPolicy').planFreeAgentDraftPreOpenScheduleRecovery({

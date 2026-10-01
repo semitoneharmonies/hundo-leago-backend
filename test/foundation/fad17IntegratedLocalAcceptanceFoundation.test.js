@@ -53,11 +53,12 @@ const ROOT_DIRECTORY = path.resolve(
   "..",
   ".."
 );
-const MIGRATIONS_DIRECTORY = path.join(
+const { historicalSchema65Migrations } = require("../helpers/historicalSchema65Migrations");
+const MIGRATIONS_DIRECTORY = historicalSchema65Migrations(path.join(
   ROOT_DIRECTORY,
   "database",
   "migrations"
-);
+));
 const FRONTEND_ORIGIN = "http://127.0.0.1:5173";
 const REAL_CATALOG_FORWARD_COUNT = 500;
 const REAL_CATALOG_DEFENCE_COUNT = 250;
