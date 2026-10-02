@@ -1,3 +1,4 @@
+const {publishLeagueChangeAnnouncement}=require('./leagueChangeAnnouncement');
 const crypto = require("node:crypto");
 const { createSqliteNotificationWriter } = require("./SqliteNotificationWriter");
 
@@ -97,6 +98,7 @@ function createSqliteFadDeadlineControlRepository({ database }) {
         VALUES (?,?,?,?,?,?,?,?,?,?)`).run(id,record.leagueId,record.fadId,record.actorUserId,
         record.clientKey,record.requestHash,record.reason,priorVersion,priorVersion+1,record.nowMs);
       publish({ ...record, mode: "proceed" }, "The commissioner authorized processing of the saved Candidate Cards.");
+      publishLeagueChangeAnnouncement(database,{id,leagueId:record.leagueId,actorUserId:record.actorUserId,title:'Candidate Card processing authorized',message:'The commissioner authorized processing of the saved Candidate Cards. The draft can proceed using the saved cards.',reason:record.reason,nowMs:record.nowMs});
       return { id, controlVersion: priorVersion + 1 };
     },
   };

@@ -1,3 +1,4 @@
+const {publishLeagueChangeAnnouncement,changedDates}=require('./leagueChangeAnnouncement');
 const crypto = require('node:crypto');
 const { timingError } = require('../../../domain/freeAgentDraft/fadTimingChangePolicy');
 const { createSqliteNotificationWriter } = require('./SqliteNotificationWriter');
@@ -115,6 +116,11 @@ function createSqliteFadTimingRepository({ database, leagueOutboxWriter }) {
         payload:createSocketEventMetadata({eventType:'auction.changed',version:change.auction.version+1,
           reasonCode:'auction_changed',occurredAtMs:nowMs,related:createEmptySocketRelated({fadId:draft.id,auctionId:change.auction.id})}),
         occurredAtMs:nowMs,audiences:[{kind:'league'}] });
+      const zone=database.prepare('SELECT timezone FROM leagues WHERE id=?').get(draft.league_id).timezone;
+      const dates=changedDates(draft,plan.afterRoot,{candidate_deadline_at_ms:'Candidate Card deadline'},zone);
+      const rounds=rollovers.flatMap((round,i)=>changedDates(round,plan.afterRollovers[i],{opens_at_ms:'Round '+round.sequence+' opens',creation_cutoff_at_ms:'Round '+round.sequence+' new-auction cutoff',rolls_over_at_ms:'Round '+round.sequence+' closes'},zone));
+      const allDates=[...dates,...rounds];
+      publishLeagueChangeAnnouncement(database,{id,leagueId:draft.league_id,actorUserId,title:'Free Agent Draft dates changed',message:message+'\n'+allDates.slice(0,17).join('\n')+(allDates.length>17?'\nMore dates changed; review the draft schedule.':''),reason:plan.proposed.reason,nowMs});
       return { id };
     },
   };

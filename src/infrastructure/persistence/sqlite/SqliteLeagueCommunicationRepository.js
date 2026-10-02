@@ -22,20 +22,21 @@ function createSqliteLeagueCommunicationRepository({ database, notificationWrite
       AND u.status = 'active' ORDER BY u.id`);
   // Select operational status only. Never load players, offer values, or card contents.
   const cards = database.prepare(`
-    SELECT c.team_id AS teamId, t.name AS teamName,
-      c.filled_mandatory_count + c.filled_bench_count AS filledCount,
+    SELECT t.id AS teamId, t.name AS teamName,
+      COALESCE(c.filled_mandatory_count + c.filled_bench_count, 0) AS filledCount,
       c.completeness_code AS completenessCode, c.allocation_eligibility AS eligibility,
       u.id AS userId, u.display_name AS displayName
-    FROM candidate_cards c JOIN free_agent_drafts f ON f.id = c.fad_id AND f.league_id = c.league_id
-    JOIN leagues l ON l.id = c.league_id AND l.current_season_id = c.season_id
-    JOIN teams t ON t.id = c.team_id AND t.league_id = c.league_id AND t.status = 'active'
-    LEFT JOIN team_manager_assignments a ON a.team_id = c.team_id AND a.league_id = c.league_id
+    FROM free_agent_drafts f
+    JOIN leagues l ON l.id = f.league_id AND l.current_season_id = f.season_id
+    JOIN teams t ON t.league_id = f.league_id AND t.status = 'active'
+    LEFT JOIN candidate_cards c ON c.fad_id = f.id AND c.league_id = f.league_id AND c.team_id = t.id AND c.status = 'open'
+    LEFT JOIN team_manager_assignments a ON a.team_id = t.id AND a.league_id = t.league_id
       AND a.status = 'accepted' AND a.ended_at_ms IS NULL
-    LEFT JOIN league_memberships m ON m.id = a.membership_id AND m.league_id = c.league_id
+    LEFT JOIN league_memberships m ON m.id = a.membership_id AND m.league_id = t.league_id
       AND m.user_id = a.user_id AND m.status = 'active'
     LEFT JOIN users u ON u.id = m.user_id AND u.status = 'active'
-    WHERE c.league_id = ? AND c.status = 'open' AND f.status = 'cards_open'
-      AND f.deadline_locked_at_ms IS NULL ORDER BY t.name, c.team_id`);
+    WHERE f.league_id = ? AND f.status = 'cards_open'
+      AND f.deadline_locked_at_ms IS NULL ORDER BY t.name, t.id`);
   const findReplay = database.prepare(`SELECT * FROM league_communications
     WHERE league_id = ? AND created_by_user_id = ? AND client_key = ?`);
   const findOne = database.prepare("SELECT * FROM league_communications WHERE league_id = ? AND id = ?");

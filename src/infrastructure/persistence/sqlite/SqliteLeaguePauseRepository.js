@@ -16,7 +16,7 @@ function createSqliteLeaguePauseRepository({database,leagueOutboxWriter}){
       const freeze=database.prepare("SELECT * FROM league_freezes WHERE league_id=? AND status='active'").get(leagueId)||null;
       const receipt=freeze?database.prepare("SELECT before_json FROM league_management_actions WHERE league_id=? AND target_id=? AND action_type='pause'").get(leagueId,freeze.id):null;
       return {league,freeze,originalStatus:receipt?JSON.parse(receipt.before_json).status:null,
-        busyJobs:database.prepare("SELECT id,version,status FROM job_runs WHERE league_id=? AND status IN ('leased','running') ORDER BY id").all(leagueId),
+        busyJobs:database.prepare("SELECT id,version,status,lease_expires_at_ms AS leaseExpiresAtMs FROM job_runs WHERE league_id=? AND status IN ('leased','running') ORDER BY id").all(leagueId),
         jobs:database.prepare("SELECT id,job_type AS type,status,scheduled_for_ms AS scheduledForMs,next_attempt_at_ms AS nextAttemptAtMs,version FROM job_runs WHERE league_id=? AND status IN ('pending','failed') ORDER BY id").all(leagueId),
         auctions:database.prepare("SELECT id,resolves_at_ms AS resolvesAtMs,version FROM auctions WHERE league_id=? AND status='open' ORDER BY id").all(leagueId),
         proposals:database.prepare("SELECT id,effective_deadline_at_ms AS deadlineAtMs,version FROM trades WHERE league_id=? AND status='proposed' AND effective_deadline_at_ms IS NOT NULL ORDER BY id").all(leagueId),

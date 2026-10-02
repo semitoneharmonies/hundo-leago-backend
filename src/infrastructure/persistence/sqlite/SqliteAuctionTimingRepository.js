@@ -1,3 +1,4 @@
+const {publishLeagueChangeAnnouncement,displayDate}=require('./leagueChangeAnnouncement');
 const crypto = require('node:crypto');
 const { fail } = require('../../../domain/auctions/auctionTimingPolicy');
 const { createSqliteNotificationWriter } = require('./SqliteNotificationWriter');
@@ -42,6 +43,7 @@ function createSqliteAuctionTimingRepository({ database, leagueOutboxWriter }) {
       outbox.write({ id:crypto.randomUUID(),leagueId:a.league_id,eventType:'auction.changed',aggregateType:'auction',aggregateId:a.id,
         payload:createSocketEventMetadata({eventType:'auction.changed',version:a.version+1,reasonCode:'auction_changed',occurredAtMs:nowMs,
           related:{...createEmptySocketRelated(),auctionId:a.id}}),occurredAtMs:nowMs,audiences:[{kind:'league'}] });
+      publishLeagueChangeAnnouncement(database,{id,leagueId:a.league_id,actorUserId,title:'Auction closing time changed',message:'Previous close: '+displayDate(a.resolves_at_ms,state.league.timezone)+'.\n'+message,reason:proposed.reason,nowMs});
       return { id };
     },
   };

@@ -1,3 +1,4 @@
+const {publishLeagueChangeAnnouncement,displayDate}=require('./leagueChangeAnnouncement');
 const crypto=require('node:crypto');
 const {fail}=require('../../../domain/leagues/tradeDeadlineChangePolicy');
 const {createSqliteNotificationWriter}=require('./SqliteNotificationWriter');
@@ -44,6 +45,7 @@ function createSqliteTradeDeadlineChangeRepository({database,leagueOutboxWriter}
       outbox.write({id:crypto.randomUUID(),leagueId,eventType:'league.changed',aggregateType:'league',aggregateId:leagueId,
         payload:createSocketEventMetadata({eventType:'league.changed',version:s.league.version+1,reasonCode:'league_changed',occurredAtMs:nowMs,related:createEmptySocketRelated()}),
         occurredAtMs:nowMs,audiences:[{kind:'league'}]});
+      publishLeagueChangeAnnouncement(database,{id,leagueId,actorUserId,title:'Trade deadline changed',message:'Trade deadline: '+displayDate(s.settings.trade_deadline_at_ms,s.league.timezone)+' → '+displayDate(p.proposed.tradeDeadlineAtMs,s.league.timezone)+'. '+message,reason:p.proposed.reason,nowMs});
       return{id};
     },
   };

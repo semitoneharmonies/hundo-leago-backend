@@ -1,3 +1,4 @@
+const {publishLeagueChangeAnnouncement}=require('./leagueChangeAnnouncement');
 const crypto=require('node:crypto');
 const {fail,settings}=require('../../../domain/leagues/leagueAuctionSchedulePolicy');
 const {createSqliteNotificationWriter}=require('./SqliteNotificationWriter');
@@ -28,7 +29,10 @@ function createSqliteLeagueAuctionScheduleRepository({database,leagueOutboxWrite
     notifications.insert({id:crypto.randomUUID(),userId:user.id,leagueId,eventType:'league_auction_schedule_changed',messageDataJson:JSON.stringify({leagueId,message}),relatedFeature:'league',relatedRecordId:leagueId,deliveryStatus:'delivered',createdAtMs:nowMs,deliveredAtMs:nowMs,deduplicationKey:'auction-schedule:'+id+':'+user.id});
    outbox.write({id:crypto.randomUUID(),leagueId,eventType:'league.changed',aggregateType:'league',aggregateId:leagueId,payload:createSocketEventMetadata({
     eventType:'league.changed',version:s.league.version+1,reasonCode:'league_changed',occurredAtMs:nowMs,related:createEmptySocketRelated()}),occurredAtMs:nowMs,audiences:[{kind:'league'}]});
-   return{id};
+   const previous=settings(s.current)||{closeWeekday:6,closeMinuteOfDay:960,creationCutoffMinutes:2400};
+   const previousRule=s.stagingDaily&&!s.current?'Daily at 16:00 with no start cutoff':days[previous.closeWeekday]+' '+String(Math.floor(previous.closeMinuteOfDay/60)).padStart(2,'0')+':'+String(previous.closeMinuteOfDay%60).padStart(2,'0')+', '+previous.creationCutoffMinutes+'-minute cutoff';
+   publishLeagueChangeAnnouncement(database,{id,leagueId,actorUserId,title:'Auction schedule changed',message:'Previous schedule: '+previousRule+'.\n'+message,reason:p.reason,nowMs});
+      return{id};
   },
  };
 }

@@ -10,7 +10,7 @@ function createLeagueScoringService({repository,leagueAuthorization,clock,scorin
       weeks:s.weeks.map(w=>({id:w.id,sequence:w.sequence,status:w.status,startsAtMs:w.starts_at_ms,endsAtMs:w.ends_at_ms,
         editable:!s.weeks.some(later=>later.sequence>=w.sequence&&(later.ends_at_ms<=now||s.finalWeeks.includes(later.id)||['final','cancelled'].includes(later.status)))})),
       rules:s.rules.map(r=>({id:r.id,revision:r.revision,effectiveWeekSequence:r.effective_week_sequence,weights:JSON.parse(r.weights_json),createdAtMs:r.created_at_ms,
-        ...(administration?{reason:r.reason,actorName:r.actor_name}:{})}))};
+        ...(administration?{reason:r.reason,actorName:r.actor_name,beforeWeights:r.before_json?JSON.parse(r.before_json).weights:null}:{})}))};
   }
   function review(s,value,actorUserId) {
     const p=plan(s,value,clock.nowMs());

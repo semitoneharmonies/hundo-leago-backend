@@ -1,3 +1,4 @@
+const {publishLeagueChangeAnnouncement}=require('./leagueChangeAnnouncement');
 const crypto=require('node:crypto');
 const {fail,ruleAt}=require('../../../domain/leagues/leagueScoringPolicy');
 const {createSqliteNotificationWriter}=require('./SqliteNotificationWriter');
@@ -33,6 +34,9 @@ function createSqliteLeagueScoringRepository({database,leagueOutboxWriter}) {
         notifications.insert({id:crypto.randomUUID(),userId:user.id,leagueId,eventType:'league_scoring_changed',messageDataJson:JSON.stringify({leagueId,message}),relatedFeature:'league',relatedRecordId:leagueId,deliveryStatus:'delivered',createdAtMs:nowMs,deliveredAtMs:nowMs,deduplicationKey:'scoring:'+id+':'+user.id});
       outbox.write({id:crypto.randomUUID(),leagueId,eventType:'league.changed',aggregateType:'league',aggregateId:leagueId,payload:createSocketEventMetadata({
         eventType:'league.changed',version:s.league.version+1,reasonCode:'league_changed',occurredAtMs:nowMs,related:createEmptySocketRelated()}),occurredAtMs:nowMs,audiences:[{kind:'league'}]});
+      const previous=ruleAt(s.rules,p.effectiveWeekSequence).weights;
+      const changes=Object.entries(p.weights).flatMap(([position,weights])=>Object.entries(weights).filter(([key,value])=>previous[position][key]!==value).map(([key,value])=>key.replaceAll('_',' ').replace(/([a-z])([A-Z])/g,'$1 $2')+' ('+(position==='F'?'Forward':'Defence')+'): '+(previous[position][key]/100).toFixed(2)+' → '+(value/100).toFixed(2)+' FP'));
+      publishLeagueChangeAnnouncement(database,{id,leagueId,actorUserId,title:'Scoring values changed',message:message+'\n'+changes.join('\n'),reason:p.reason,nowMs});
       return {id};
     },
   };

@@ -7,7 +7,7 @@ function createLeaguePauseService({repository,leagueAuthorization,clock}){
     status({leagueId,authenticated}){leagueAuthorization.requireActiveMembership(authenticated,leagueId);ready();return repository.status(leagueId);},
     read({leagueId,authenticated}){
       leagueAuthorization.requireCommissioner(authenticated,leagueId);ready();const state=repository.state(leagueId);
-      return {...repository.status(leagueId),canResume:Boolean(state.originalStatus),busyJobs:state.busyJobs.length,reason:state.freeze?.reason??null,
+      return {...repository.status(leagueId),canResume:Boolean(state.originalStatus),busyJobs:state.busyJobs.length,interruptedJobs:state.busyJobs.filter(j=>Number.isSafeInteger(j.leaseExpiresAtMs)&&j.leaseExpiresAtMs<clock.nowMs()).length,reason:state.freeze?.reason??null,
         jobs:state.jobs.map(({id,type,status,scheduledForMs})=>({id,type,status,scheduledForMs})),
         auctionCount:state.auctions.length,proposalCount:state.proposals.length};
     },

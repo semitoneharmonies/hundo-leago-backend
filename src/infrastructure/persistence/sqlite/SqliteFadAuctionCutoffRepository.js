@@ -1,3 +1,4 @@
+const {publishLeagueChangeAnnouncement}=require('./leagueChangeAnnouncement');
 const crypto=require('node:crypto');
 const {cutoffError}=require('../../../domain/freeAgentDraft/fadAuctionCutoffPolicy');
 const {createSqliteNotificationWriter}=require('./SqliteNotificationWriter');
@@ -42,6 +43,7 @@ function createSqliteFadAuctionCutoffRepository({database}) {
         id:crypto.randomUUID(),userId:user.id,leagueId:f.league_id,eventType:'league_fad_deadline_changed',
         messageDataJson:JSON.stringify({message,leagueId:f.league_id,fadId:f.id}),relatedFeature:'free_agent_draft',relatedRecordId:f.id,
         deliveryStatus:'delivered',createdAtMs:nowMs,deliveredAtMs:nowMs,deduplicationKey:`fad-cutoff:${id}:${user.id}`});
+      publishLeagueChangeAnnouncement(database,{id,leagueId:f.league_id,actorUserId,title:'Draft auction cutoff changed',message:'Previous gap: '+((state.settings?.gap_ms??(state.draft.auction_creation_cutoff_minutes??60)*60000)/60000)+' minutes.\n'+message,reason:plan.proposed.reason,nowMs});
       return {id};
     },
   };

@@ -1,3 +1,4 @@
+const {publishLeagueChangeAnnouncement,changedDates}=require('./leagueChangeAnnouncement');
 const crypto=require('node:crypto');
 const {fail,SEASON_FIELDS,WEEK_FIELDS}=require('../../../domain/leagues/leagueCalendarPolicy');
 const {createSqliteNotificationWriter}=require('./SqliteNotificationWriter');
@@ -51,7 +52,11 @@ function createSqliteLeagueCalendarRepository({database,leagueOutboxWriter}) {
     notifications.insert({id:crypto.randomUUID(),userId:user.id,leagueId,eventType:'league_calendar_changed',messageDataJson:JSON.stringify({leagueId,message}),relatedFeature:'league',relatedRecordId:leagueId,deliveryStatus:'delivered',createdAtMs:nowMs,deliveredAtMs:nowMs,deduplicationKey:'calendar:'+id+':'+user.id});
    outbox.write({id:crypto.randomUUID(),leagueId,eventType:'league.changed',aggregateType:'league',aggregateId:leagueId,
     payload:createSocketEventMetadata({eventType:'league.changed',version:s.league.version+1,reasonCode:'league_changed',occurredAtMs:nowMs,related:createEmptySocketRelated()}),occurredAtMs:nowMs,audiences:[{kind:'league'}]});
-   return {id};
+   const dates=changedDates(p.before.calendar,p.after.calendar,{regularSeasonStartsAtMs:'Season starts',regularSeasonEndsAtMs:'Season ends',fantasyPlayoffsStartAtMs:'Playoffs start',fantasyPlayoffsEndAtMs:'Playoffs end'},s.league.timezone);
+   const weekDates=p.changes.flatMap(w=>changedDates(w.before,w.after,{startsAtMs:'Week '+w.sequence+' starts',endsAtMs:'Week '+w.sequence+' ends',baselineAtMs:'Week '+w.sequence+' statistics baseline',locksAtMs:'Week '+w.sequence+' roster lock',rollsOverAtMs:'Week '+w.sequence+' rollover'},s.league.timezone));
+   const allDates=[...dates,...weekDates],shown=allDates.slice(0,18);
+   publishLeagueChangeAnnouncement(database,{id,leagueId,actorUserId,title:'League calendar changed',message:shown.join('\n')+(allDates.length>shown.length?'\n'+(allDates.length-shown.length)+' more date changes; review the league calendar.':''),reason:p.proposed.reason,nowMs});
+      return {id};
   },
  };
 }

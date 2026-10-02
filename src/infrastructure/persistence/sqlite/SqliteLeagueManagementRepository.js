@@ -49,8 +49,8 @@ function createSqliteLeagueManagementRepository({database,expandedScoringEnabled
       const reportTeams=allTeams.map(t=>{
         let roster=null;
         if(s){const record=workspace.read({leagueId,teamId:t.id});if(record){
-          const structural=evaluateTeamRosterLegality(record),lineup=evaluateMatchupLineupLegality(record.players.filter(p=>p.roster_category==='Active'));
-          roster={legal:structural.legal&&lineup.legal,counts:structural.counts,cap:structural.cap,
+          const structural=evaluateTeamRosterLegality(record),lineup=s.fadCompletedAtMs===null?evaluateMatchupLineupLegality(record.players.filter(p=>p.roster_category==='Active')):{legal:true,reasonCodes:[]};
+          roster={legal:structural.legal&&lineup.legal,counts:structural.counts,limits:structural.limits,cap:structural.cap,
             reasonCodes:[...new Set([...structural.reasons.map(r=>r.code),...lineup.reasonCodes])],requiredNow:s.fadCompletedAtMs!==null};
         }}
         return {...t,cardStatus:drafts.some(d=>d.status==='cards_open')?(cards.find(c=>c.teamId===t.id)?.status||'not_created'):null,roster};
@@ -72,7 +72,7 @@ function createSqliteLeagueManagementRepository({database,expandedScoringEnabled
         const expected=order.length?order:[...new Set([...allTeams.map(t=>t.id),...existing.map(p=>p.teamId)])].map(id=>({id}));
         for(const team of expected)for(let round=1;round<=draft.rounds;round++)if(!existing.some(p=>p.teamId===team.id&&p.round===round))picks.push({draftId:draft.id,teamId:team.id,teamName:allTeams.find(t=>t.id===team.id)?.name||'Former team',round});
       }
-      const jobs=s?database.prepare(`SELECT id,job_type AS jobName,status,scheduled_for_ms AS scheduledForMs,attempt_count AS attempts,count(*) OVER() AS total FROM job_runs
+      const jobs=s?database.prepare(`SELECT id,job_type AS jobName,status,scheduled_for_ms AS scheduledForMs,attempt_count AS attempts,lease_expires_at_ms AS leaseExpiresAtMs,last_error_code AS errorCode,count(*) OVER() AS total FROM job_runs
         WHERE league_id=? AND season_id=? AND (status='failed' OR (status IN ('leased','running') AND lease_expires_at_ms<?)) ORDER BY scheduled_for_ms,id LIMIT 100`).all(leagueId,s.id,at):[];
       return {leagueId,checkedAtMs:at,season:s,teams:reportTeams,drafts,calendarIssues:[...new Set(calendarIssues)],missingPicks:picks,operations:jobs.map(({total,...job})=>job),
         summary:{teams:reportTeams.length,missingManagers:reportTeams.filter(t=>!t.managerName).length,unfinishedCards:reportTeams.filter(t=>t.cardStatus&&t.cardStatus!=='complete').length,
@@ -82,7 +82,7 @@ function createSqliteLeagueManagementRepository({database,expandedScoringEnabled
     recovery(leagueId,at) {
       const l=league(leagueId),s=season(leagueId,l.seasonId);
       const operations=database.prepare(`SELECT id,job_type AS kind,status,attempt_count AS attempts,scheduled_for_ms AS scheduledForMs,
-        next_attempt_at_ms AS nextAttemptAtMs,count(*) OVER() AS total FROM job_runs WHERE league_id=?
+        next_attempt_at_ms AS nextAttemptAtMs,lease_expires_at_ms AS leaseExpiresAtMs,last_error_code AS errorCode,count(*) OVER() AS total FROM job_runs WHERE league_id=?
         AND (status='failed' OR (status IN ('leased','running') AND lease_expires_at_ms<?)) ORDER BY scheduled_for_ms,id LIMIT 100`).all(leagueId,at);
       const drafts=s?database.prepare(`SELECT id,status FROM free_agent_drafts WHERE league_id=? AND season_id=? ORDER BY created_at_ms DESC,id`).all(leagueId,s.id):[];
       const weeks=s?database.prepare(`SELECT id,sequence,status FROM matchup_weeks WHERE league_id=? AND season_id=?

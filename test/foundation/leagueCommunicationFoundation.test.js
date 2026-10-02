@@ -185,3 +185,30 @@ test("all communication endpoints are routed through the target security boundar
     assert.equal(selectTargetRouterKey("OPTIONS", pathname, method), "leagueCommunication");
   }
 });
+
+test('automatic change announcements share the save transaction, retain history, and never duplicate notifications', t => {
+  const f=fixture(t);
+  const {publishLeagueChangeAnnouncement}=require('../../src/infrastructure/persistence/sqlite/leagueChangeAnnouncement');
+  const change={id:id(801),leagueId:id(10),actorUserId:id(1),title:'Trade deadline changed',message:'Deadline moved to next Friday.',reason:'League agreed',nowMs:NOW};
+  const before=snapshot(f.db);
+  assert.throws(()=>publishLeagueChangeAnnouncement(f.db,change),/transaction/);
+  assert.deepEqual(snapshot(f.db),before);
+  assert.throws(()=>f.db.transaction(()=>{publishLeagueChangeAnnouncement(f.db,change);throw Error('Rollback');}).immediate(),/Rollback/);
+  assert.deepEqual(snapshot(f.db),before);
+  f.db.transaction(()=>{publishLeagueChangeAnnouncement(f.db,change);publishLeagueChangeAnnouncement(f.db,change);}).immediate();
+  const messages=f.service.list(f.scope).messages;
+  assert.equal(messages.length,1);assert.match(messages[0].body,/Reason: League agreed/);
+  assert.equal(f.service.list({...f.scope,leagueId:id(20),authenticated:auth(3)}).messages.length,0);
+  assert.deepEqual(snapshot(f.db,['league_communications']),snapshotFrom(before,['league_communications']));
+  f.service.archive({...f.scope,id:messages[0].id,input:{version:1,confirmed:true}});
+  assert.equal(f.service.list(f.scope).messages.length,0);
+  assert.equal(f.service.list({...f.scope,history:true}).messages.length,1);
+});
+
+function snapshotFrom(value,excluded){return Object.fromEntries(Object.entries(value).filter(([key])=>!excluded.includes(key)));}
+
+test('large scoring change notices keep the reason and stay within the communication contract', t=>{
+  const f=fixture(t),{publishLeagueChangeAnnouncement}=require('../../src/infrastructure/persistence/sqlite/leagueChangeAnnouncement');
+  f.db.transaction(()=>publishLeagueChangeAnnouncement(f.db,{id:id(802),leagueId:id(10),actorUserId:id(1),title:'Scoring values changed',message:'Hits: 0.25 → 0.10\n'.repeat(250),reason:'R'.repeat(500),nowMs:NOW})).immediate();
+  const notice=f.service.list(f.scope).messages[0];assert(notice.body.length<=3000);assert.match(notice.body,/More changes/);assert(notice.body.endsWith('R'.repeat(500)));
+});
