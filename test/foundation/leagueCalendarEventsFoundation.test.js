@@ -4,12 +4,14 @@ const Database=require('better-sqlite3');
 const {leagueCalendarEvents}=require('../../src/infrastructure/persistence/sqlite/leagueCalendarEvents');
 test('calendar metadata is read-only, season-scoped and contains no card or bid data',t=>{
  const db=new Database(':memory:');t.after(()=>db.close());
- db.exec(`CREATE TABLE leagues(id,current_season_id);CREATE TABLE league_settings(league_id,trade_deadline_at_ms);
+ db.exec(`CREATE TABLE leagues(id,current_season_id,timezone);
+ CREATE TABLE seasons(id,league_id,regular_season_starts_at_ms,regular_season_ends_at_ms,fantasy_playoffs_start_at_ms,free_agent_draft_completed_at_ms);
+ CREATE TABLE league_auction_schedule_changes(league_id,revision,close_weekday,close_minute_of_day,creation_cutoff_minutes);CREATE TABLE league_settings(league_id,trade_deadline_at_ms);
  CREATE TABLE free_agent_drafts(id,league_id,season_id,candidate_deadline_at_ms);
  CREATE TABLE free_agent_draft_rollovers(id,league_id,fad_id,sequence,opens_at_ms,creation_cutoff_at_ms,rolls_over_at_ms);
  CREATE TABLE auctions(league_id,season_id,status,resolves_at_ms,secret_bid);
  CREATE TABLE entry_drafts(league_id,season_id,status,starts_at_ms);
- INSERT INTO leagues VALUES('a','current'),('b','bseason'),('empty',NULL);
+ INSERT INTO leagues VALUES('a','current','America/Vancouver'),('b','bseason','America/Vancouver'),('empty',NULL,'America/Vancouver');
  INSERT INTO league_settings VALUES('a',2000),('b',9999);
  INSERT INTO free_agent_drafts VALUES('fad','a','current',1000),('old','a','previous',5),('other','b','bseason',9999);
  INSERT INTO free_agent_draft_rollovers VALUES('r','a','fad',1,1000,1500,1800),('oldr','a','old',1,5,6,7);

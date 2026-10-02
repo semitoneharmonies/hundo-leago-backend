@@ -1999,7 +1999,7 @@ function createTargetRepositories({
     leagueAuctionSchedule: database.pragma('user_version', { simple: true }) >= 77
       ? createSqliteLeagueAuctionScheduleRepository({ database, leagueOutboxWriter, stagingDailyAuctionsEnabled }) : null,
     leagueCalendar: database.pragma('user_version', { simple: true }) >= 76
-      ? createSqliteLeagueCalendarRepository({ database, leagueOutboxWriter }) : null,
+      ? createSqliteLeagueCalendarRepository({ database, leagueOutboxWriter, stagingDailyAuctionsEnabled }) : null,
     tradeDeadlineChange: database.pragma('user_version', { simple: true }) >= 71
       ? createSqliteTradeDeadlineChangeRepository({ database, leagueOutboxWriter }) : null,
     auctionTiming: database.pragma('user_version', { simple: true }) >= 72
