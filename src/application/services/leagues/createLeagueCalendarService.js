@@ -3,7 +3,7 @@ const {fail,input,calendar,plan,blockedReason}=require('../../../domain/leagues/
 function createLeagueCalendarService({repository,leagueAuthorization,clock}) {
  function state(leagueId){if(!repository)fail('Calendar controls are not available yet.','LEAGUE_CALENDAR_UNAVAILABLE');return repository.state(leagueId);}
  function project(s){return {leagueId:s.league.id,seasonId:s.season?.id??null,timeZone:s.league.timezone,
-  blockedReason:blockedReason(s),
+  blockedReason:blockedReason(s),events:repository.events?.(s.league.id)||[],
   serverNowMs:clock.nowMs(),...(s.season?calendar(s):{calendar:null,weeks:[]}),
   weekOneShift:s.fadCount===0&&s.currentGeneration&&s.weeks[0]?.status==='scheduled'&&s.weeks[0].starts_at_ms>clock.nowMs()
     ?{weekId:s.weeks[0].id,version:s.weeks[0].version,startsAtMs:s.weeks[0].starts_at_ms}:null,

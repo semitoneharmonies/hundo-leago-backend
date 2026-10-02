@@ -1,5 +1,6 @@
 const {publishLeagueChangeAnnouncement,changedDates}=require('./leagueChangeAnnouncement');
 const crypto=require('node:crypto');
+const {leagueCalendarEvents}=require('./leagueCalendarEvents');
 const {fail,SEASON_FIELDS,WEEK_FIELDS}=require('../../../domain/leagues/leagueCalendarPolicy');
 const {createSqliteNotificationWriter}=require('./SqliteNotificationWriter');
 const {resolveSqliteLeagueOutboxWriter}=require('./SqliteLeagueOutboxWriter');
@@ -27,6 +28,7 @@ function createSqliteLeagueCalendarRepository({database,leagueOutboxWriter}) {
     openAuctions:database.prepare("SELECT id,resolves_at_ms FROM auctions WHERE league_id=? AND season_id=? AND status='open' ORDER BY id").all(leagueId,league.current_season_id),
    };
   },
+  events:leagueId=>leagueCalendarEvents(database,leagueId),
   history:leagueId=>database.prepare(`SELECT c.id,c.season_id AS seasonId,c.reason,c.created_at_ms AS createdAtMs,u.display_name AS actorName,
    c.before_json,c.after_json FROM league_calendar_changes c JOIN users u ON u.id=c.actor_user_id
    WHERE c.league_id=? ORDER BY c.created_at_ms DESC,c.id DESC LIMIT 25`).all(leagueId).map(({before_json,after_json,...row})=>({...row,before:JSON.parse(before_json),after:JSON.parse(after_json)})),

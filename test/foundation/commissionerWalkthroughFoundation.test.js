@@ -49,8 +49,10 @@ test('walkthrough changes preserve populated leagues, keep reads private and pub
  const management=createSqliteLeagueManagementRepository({database:db,nowMs:()=>now});
  const active=db.prepare("SELECT l.id FROM leagues l JOIN seasons s ON s.id=l.current_season_id AND s.league_id=l.id WHERE s.free_agent_draft_completed_at_ms IS NOT NULL").all();
  assert(active.length>0);
+ const {leagueCalendarEvents}=require('../../src/infrastructure/persistence/sqlite/leagueCalendarEvents');
  const beforeReads=db.prepare('SELECT total_changes() n').get().n;
  for(const {id}of active){
+  const events=leagueCalendarEvents(db,id);assert(events.length>0);assert(events.every(e=>Number.isSafeInteger(e.atMs)));
   const report=management.readiness(id,now);
   assert(report.teams.length>0);
   for(const team of report.teams.filter(x=>x.roster)){
