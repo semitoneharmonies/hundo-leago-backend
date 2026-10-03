@@ -119,7 +119,8 @@ function calculateAge(birthDate, asOfDate) {
 
 function statistics(value, position) {
   if (value === null) return null;
-  const expanded = value.scoringRuleVersion === EXPANDED_SCORING_VERSION;
+  const custom = /^league-scoring-[a-f0-9-]{36}$/.test(value.scoringRuleVersion || '');
+  const expanded = custom || value.scoringRuleVersion === EXPANDED_SCORING_VERSION;
   assertExactObject(value, [
     "gamesPlayed",
     "goals",
@@ -127,10 +128,11 @@ function statistics(value, position) {
     "nhlPoints",
     "fantasyPointsHundredths",
     ...(expanded ? ["scoringRuleVersion", "scoringStats"] : []),
+    ...(custom ? ["scoringWeights"] : []),
   ]);
   let scored;
   if (expanded) {
-    try { scored = calculateExpandedScore(value.scoringStats, position); }
+    try { scored = calculateExpandedScore(value.scoringStats, position, custom ? {version:value.scoringRuleVersion,weights:value.scoringWeights} : null); }
     catch { fail(PUBLIC_ROSTER_CODES.playerInvalid); }
     if (scored.fantasyPointsHundredths !== value.fantasyPointsHundredths ||
         value.goals !== scored.scoringStats.evenStrengthGoals + scored.scoringStats.powerPlayGoals + scored.scoringStats.shortHandedGoals ||
@@ -142,7 +144,7 @@ function statistics(value, position) {
     assists: nonnegative(value.assists),
     nhlPoints: nonnegative(value.nhlPoints),
     fantasyPointsHundredths: expanded ? signedInteger(value.fantasyPointsHundredths) : nonnegative(value.fantasyPointsHundredths),
-    ...(expanded ? { scoringRuleVersion: EXPANDED_SCORING_VERSION, scoringStats: scored.scoringStats } : {}),
+    ...(expanded ? { scoringRuleVersion: scored.scoringRuleVersion, scoringStats: scored.scoringStats, ...(custom ? {scoringWeights:scored.scoringWeights} : {}) } : {}),
   });
   if (projected.nhlPoints !== projected.goals + projected.assists) {
     fail(PUBLIC_ROSTER_CODES.playerInvalid);

@@ -3149,13 +3149,13 @@ function harness(t) {
 describe(
   "SQLite league lifecycle transition repository foundation",
   () => {
-    test("exposes exactly the service's twenty-method contract", (t) => {
+    test("exposes the lifecycle contract and readonly rollover matrix", (t) => {
       const { repository } = harness(t);
       assert.deepEqual(
         Object.keys(repository),
         REPOSITORY_METHODS
       );
-      assert.equal(REPOSITORY_METHODS.length, 20);
+      assert.equal(REPOSITORY_METHODS.length, 21);
     });
 
     test("binds reads to the requested league and occurrence while preserving superseded history", (t) => {
@@ -5770,3 +5770,12 @@ describe(
     });
   }
 );
+
+
+test('season preview uses the execution matrix for nonzero effects without changing records',t=>{
+ const {database,repository}=harness(t);nonzeroRolloverSchema(database);const fixture=nonzeroRolloverFixture();seedRolloverMatrixRows(database,fixture);
+ const before=database.serialize(),expected=readFixtureContext(fixture).context.matrix;
+ const matrix=repository.readSeasonRolloverMatrix({leagueId:IDS.league,sourceSeasonId:IDS.sourceSeason,targetSeasonId:IDS.targetSeason});
+ assert.deepEqual(matrix,expected);assert.equal(matrix.contractEffects.length,2);assert.equal(matrix.ownershipEffects.length,3);assert.equal(matrix.retentionEffects.length,2);assert.equal(matrix.buyoutEffects.length,2);assert.equal(matrix.tradeEffects.length,1);
+ assert.throws(()=>repository.readSeasonRolloverMatrix({leagueId:IDS.league,sourceSeasonId:IDS.sourceSeason,targetSeasonId:uuid(99001)}));assert.deepEqual(database.serialize(),before);
+});

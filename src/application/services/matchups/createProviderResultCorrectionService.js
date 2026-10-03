@@ -22,7 +22,8 @@ function createProviderResultCorrectionService({ repository, scoringService, clo
           weekId: candidate.matchup_week_id, matchupId: candidate.matchup_id, providers: ["nhl-completed-games"], nowMs: clock.nowMs() };
         const current = scoringService.readForCorrection(scope);
         if (current.source.pendingGameCount > 0 || current.source.freshnessStatus !== "fresh" ||
-            current.home.scoringRuleVersion !== EXPANDED_SCORING_VERSION || current.away.scoringRuleVersion !== EXPANDED_SCORING_VERSION) {
+            !current.home.scoringRuleVersion || current.home.scoringRuleVersion !== current.away.scoringRuleVersion ||
+            !(current.home.scoringRuleVersion === EXPANDED_SCORING_VERSION || /^league-scoring-[a-f0-9-]{36}$/.test(current.home.scoringRuleVersion))) {
           report.awaitingData += 1;
           continue;
         }
@@ -30,7 +31,7 @@ function createProviderResultCorrectionService({ repository, scoringService, clo
         if (breakdownIdentity(previous) === breakdownIdentity(current)) { report.unchanged += 1; continue; }
         const result = repository.commit({ ...scope, expectedResultVersion: candidate.result_version,
           resultId: candidate.result_id, supersedesVersionId: candidate.result_version_id,
-          versionNumber: candidate.version_number + 1, refreshId: current.source.refreshId,
+          versionNumber: candidate.version_number + 1, refreshId: current.source.refreshId, scoringRuleVersion: current.home.scoringRuleVersion,
           homeScoreHundredths: current.home.scoreHundredths, awayScoreHundredths: current.away.scoreHundredths,
           resultVersionId: createId(), snapshotId: createId(), operationId: createId() });
         if (result.status === "requires_playoff_review") {

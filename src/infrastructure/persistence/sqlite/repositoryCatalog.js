@@ -35,6 +35,25 @@ const DEFINITIONS = [
   repositoryDefinition("shared_game_evidence_changes", REPOSITORY_SCOPES.global),
   repositoryDefinition("nhl_completed_game_cache", REPOSITORY_SCOPES.global),
   repositoryDefinition("stat_refresh_payload_retirements", REPOSITORY_SCOPES.global, { keyColumn: "refresh_id" }),
+  repositoryDefinition("quote_submissions", REPOSITORY_SCOPES.global, { versioned: true }),
+  repositoryDefinition('league_reset_archives', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_reset_actions', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_help_requests', REPOSITORY_SCOPES.requiredLeague, {versioned:true}),
+  repositoryDefinition('league_help_events', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_management_actions', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_scoring_rules', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_auction_schedule_changes', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_calendar_changes', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_private_reveals', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('league_trade_deadline_changes', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('auction_timing_changes', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('fad_auction_clock_changes', REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition("league_communications", REPOSITORY_SCOPES.requiredLeague, { versioned: true }),
+  repositoryDefinition("fad_deadline_controls", REPOSITORY_SCOPES.requiredLeague, { versioned: true }),
+  repositoryDefinition("fad_deadline_commands", REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition("fad_timing_changes", REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition('fad_auction_cutoff_settings', REPOSITORY_SCOPES.requiredLeague, {versioned:true}),
+  repositoryDefinition('fad_auction_cutoff_changes', REPOSITORY_SCOPES.requiredLeague),
   repositoryDefinition("player_injury_status", REPOSITORY_SCOPES.global, { versioned: true }),
   repositoryDefinition("player_injury_feed", REPOSITORY_SCOPES.global, { versioned: true }),
   repositoryDefinition("player_injury_events", REPOSITORY_SCOPES.global),
@@ -710,7 +729,7 @@ validateRepositoryCatalog(DEFINITIONS);
 const REPOSITORY_CATALOG = Object.freeze([...DEFINITIONS]);
 // Retired reset/restore protocols remain pinned to their original table set.
 const SCHEMA_54_REPOSITORY_CATALOG = Object.freeze(REPOSITORY_CATALOG.filter(
-  ({ tableName }) => !tableName.startsWith("player_injury_") && !tableName.startsWith("shared_game_evidence_") && !["compact_stat_refreshes", "shared_stat_total_changes", "shared_empty_coverage_sets", "nhl_completed_game_cache", "stat_refresh_payload_retirements", "trade_participants", "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats"].includes(tableName)
+  ({ tableName }) => tableName !== "quote_submissions" && !tableName.startsWith('league_reset_') && !tableName.startsWith('league_help_') && tableName !== 'league_management_actions' && tableName !== 'league_scoring_rules' && tableName !== 'league_auction_schedule_changes' && tableName !== 'league_calendar_changes' && tableName !== 'league_private_reveals' && tableName !== 'fad_auction_clock_changes' && tableName !== 'auction_timing_changes' && tableName !== 'league_trade_deadline_changes' && !tableName.startsWith('fad_auction_cutoff_') && tableName !== "fad_timing_changes" && !tableName.startsWith("fad_deadline_") && !tableName.startsWith("player_injury_") && !["league_communications", "trade_participants", "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats"].includes(tableName) && !tableName.startsWith("player_injury_") && !tableName.startsWith("shared_game_evidence_") && !["compact_stat_refreshes", "shared_stat_total_changes", "shared_empty_coverage_sets", "nhl_completed_game_cache", "stat_refresh_payload_retirements", "trade_participants", "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats"].includes(tableName)
 ));
 
 function getRepositoryCatalogForSchemaVersion(schemaVersion) {
@@ -721,7 +740,21 @@ function getRepositoryCatalogForSchemaVersion(schemaVersion) {
     (schemaVersion >= 70 || !["compact_stat_refreshes", "shared_stat_total_changes", "shared_empty_coverage_sets"].includes(tableName)) &&
     (schemaVersion >= 69 || !tableName.startsWith("shared_game_evidence_")) &&
     (schemaVersion >= 67 || tableName !== "nhl_completed_game_cache") && (schemaVersion >= 68 || tableName !== "stat_refresh_payload_retirements") &&
-    (schemaVersion >= 64 || tableName !== "trade_participants") && (schemaVersion >= 65 || !tableName.startsWith("player_injury_"))
+    (schemaVersion >= 64 || tableName !== "trade_participants") && (schemaVersion >= 65 || !tableName.startsWith("player_injury_")) &&
+    (schemaVersion >= 71 || tableName !== "league_communications") &&
+    (schemaVersion >= 72 || !tableName.startsWith("fad_deadline_")) && (schemaVersion >= 73 || tableName !== "fad_timing_changes") &&
+    (schemaVersion >= 74 || !tableName.startsWith('fad_auction_cutoff_')) &&
+    (schemaVersion >= 75 || tableName !== 'league_trade_deadline_changes') &&
+    (schemaVersion >= 76 || tableName !== 'auction_timing_changes') &&
+    (schemaVersion >= 78 || tableName !== 'fad_auction_clock_changes') &&
+    (schemaVersion >= 79 || tableName !== 'league_private_reveals') &&
+    (schemaVersion >= 80 || tableName !== 'league_calendar_changes') &&
+    (schemaVersion >= 81 || tableName !== 'league_auction_schedule_changes') &&
+    (schemaVersion >= 82 || tableName !== 'league_scoring_rules') &&
+    (schemaVersion >= 83 || tableName !== 'league_management_actions') &&
+    (schemaVersion >= 85 || !tableName.startsWith('league_help_')) &&
+    (schemaVersion >= 87 || !tableName.startsWith('league_reset_')) &&
+    (schemaVersion >= 89 || tableName !== "quote_submissions")
   );
 }
 const REPOSITORY_CATALOG_BY_TABLE = Object.freeze(

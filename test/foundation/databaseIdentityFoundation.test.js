@@ -14,6 +14,7 @@ const {
   openReadonlyDatabase,
 } = require("../../src/infrastructure/database/connection");
 const {
+  discoverMigrations,
   migrateDatabase,
 } = require("../../src/infrastructure/database/migrate");
 const {
@@ -76,7 +77,7 @@ describe("M7-02 explicit database environment identity", () => {
 
     assert.equal(result.initialized, true);
     assert.equal(result.replayed, false);
-    assert.equal(result.schemaVersion, 57);
+    assert.equal(result.schemaVersion, discoverMigrations({ migrationsDirectory: MIGRATIONS }).at(-1).id);
     assert.deepEqual(result.identity, {
       createdAt: CREATED_AT,
       databaseId: DATABASE_ID,

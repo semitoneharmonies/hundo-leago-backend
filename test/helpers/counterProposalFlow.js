@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const {snapshotSqliteState} = require('./snapshotSqliteState');
 const { createTradeRouter } = require("../../src/transport/http/createTradeRouter");
 const { createTargetApplication, TARGET_ROUTER_KEYS } = require("../../src/bootstrap/createTargetRuntime");
 
@@ -131,15 +132,15 @@ async function runCounterProposalFlow(t, { createRuntime, IDS, NOW_MS, authentic
   await scenario("an expired original rolls back the new offer", async ({ input, path, tradeId }) => {
     db.prepare("UPDATE trades SET effective_deadline_at_ms = ? WHERE id = ?").run(NOW_MS + 1, tradeId);
     runtime.setNow(NOW_MS + 1);
-    const bytes = db.serialize();
+    const sqlState = snapshotSqliteState(db);
     assert.equal((await request(path, input)).status, 409);
-    assert.equal(bytes.equals(db.serialize()), true);
+    assert.deepEqual(snapshotSqliteState(db), sqlState, 'All SQL state must survive counter rollback');
   });
   await scenario("a late decline failure rolls back proposal, history, notification and idempotency", async ({ input, path, tradeId }) => {
     db.exec(`CREATE TEMP TRIGGER fail_counter_decline BEFORE UPDATE OF status ON trades WHEN OLD.id = '${tradeId}' AND NEW.status = 'declined' BEGIN SELECT RAISE(ABORT, 'counter rollback test'); END`);
-    const bytes = db.serialize();
+    const sqlState = snapshotSqliteState(db);
     assert.equal((await request(path, input)).status, 500);
-    assert.equal(bytes.equals(db.serialize()), true);
+    assert.deepEqual(snapshotSqliteState(db), sqlState, 'All SQL state must survive counter rollback');
   });
 }
 

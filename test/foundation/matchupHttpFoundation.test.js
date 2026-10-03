@@ -1225,7 +1225,7 @@ describe("M6-12 matchup HTTP integration service", () => {
       valid: true,
       sessionId: "shift-session",
     };
-    const input = matchupShiftInput();
+    const input = Object.freeze({ ...matchupShiftInput(), previewHash: "reviewed-week-one-preview" });
 
     assert.deepEqual(
       service.transitionWeek({
@@ -1249,16 +1249,18 @@ describe("M6-12 matchup HTTP integration service", () => {
       leagueId: LEAGUE_ID,
       seasonId: SEASON_ID,
       weekId: WEEK_ID,
-      input,
+      input: matchupShiftInput(),
+      previewHash: input.previewHash,
       expectedWeekVersion: 4,
       idempotencyKey:
         "opaque-http-shift-key",
       authenticated,
     });
-    assert.equal(
+    assert.deepEqual(
       shiftCall.input.input,
-      input
+      matchupShiftInput()
     );
+    assert.equal(input.previewHash, "reviewed-week-one-preview");
     assert.equal(
       shiftCall.input.authenticated,
       authenticated

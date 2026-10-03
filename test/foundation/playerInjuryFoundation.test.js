@@ -22,7 +22,7 @@ function apply(repo,s){return repo.apply(s,repo.claim(true));}
 test('schema is additive, registered, and injury reads perform no writes',t=>{
  const {db,repo}=setup(t);const before=db.prepare('SELECT total_changes() AS n').get().n;
  repo.list();repo.read(id(1));assert.equal(db.prepare('SELECT total_changes() AS n').get().n,before);
- assert.equal(db.pragma('user_version',{simple:true}),65);
+ assert.equal(db.pragma('user_version',{simple:true}),89);
 });
 test('injury import matches unique name and birthdate without editing players',t=>{
  const {db,repo}=setup(t);const before=db.prepare('SELECT * FROM players').all();

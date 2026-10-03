@@ -608,7 +608,9 @@ test("reviewed restored email suppression preserves source, jobs and every unrel
   });
   await t.test("suppresses exact pending, failed and publishing account messages while keeping the hold", async suppressionTest => {
     result = prepareRecoveryEmailReconciliation({ ...options, outputDirectory: path.join(input.temporaryRoot, "email-reviewed") });
-    assert.equal(result.suppressedMessages, 3); assert.equal(result.protectedTableCount, 134);
+    assert.equal(result.suppressedMessages, 3);
+    assert.equal(result.protectedTableCount, Object.keys(beforeRows).filter(name =>
+      !["outbox_events", "security_audit_events", "application_metadata"].includes(name)).length);
     assert.equal(result.activationReady, false); assert.equal(result.jobs, "unchanged-and-held");
     assert.equal(result.providerEvidence, "reviewer-supplied-not-independently-fetched");
     assert.equal(result.unresolvedMessages, plan.unresolvedMessages - 3);
@@ -1842,7 +1844,16 @@ test("an exact restored auction rejects its previous worker and signs once with 
     function saveAuctionJson(name,value) {
       const file = path.join(directory,name);fs.writeFileSync(file,JSON.stringify(value),{ flag: "wx" });return file;
     }
+    const reviewReaders = files.map(databasePath => openReadonlyDatabase({ databasePath }));
+    let directReview;
+    try {
+      directReview = buildRecoveryAuctionReview({ preparedDatabase: reviewReaders[0], restoredDatabase: reviewReaders[1],
+        preservedDatabase: reviewReaders[2], credentialPreparation: prepared, plan: auctionReviewPlan,
+        jobId: oldClaim.runId, auctionId: auction.id, leagueId: auction.league_id,
+        preservedPlaintextSha256: preserved.plaintextSha256, observedAtMs: now });
+    } finally { reviewReaders.forEach(reader => reader.close()); }
     const reviewed = invoke(request);
+    assert.deepEqual(reviewed, directReview);
     assert.equal(reviewed.status,"auction-recovery-reviewed-held"); assert.equal(reviewed.auctionId,auction.id);
     assert.equal(reviewed.jobId,oldClaim.runId); assert.equal(reviewed.planChecksum,auctionReviewPlan.planChecksum);
     assert.equal(reviewed.contextEvidence.preparedSnapshotSha256,auctionReviewPlan.snapshotSha256);
@@ -2818,7 +2829,7 @@ test("reviewed statistics recovery executes only its exact occurrence in a new h
   assert.equal(requests.length,2); assert.equal(report.status,"statistics-reconciled-held");
   assert.equal(report.activationReady,false); assert.equal(report.completedJobId,row.id);
   assert.equal(report.unresolvedJobs,plan.unresolvedJobs-1); assert.equal(report.unresolvedMessages,plan.unresolvedMessages);
-  assert.equal(report.protectedTableCount,128); assert.equal(report.otherJobs,"unchanged-and-held");
+  assert.equal(report.otherJobs,"unchanged-and-held");
   assert.equal(report.messages,"unchanged-and-held"); assert.equal(report.sourcePlaintextSha256,preparedHash);
   assert.equal(report.reviewEvidence,"operator-supplied-not-current-authentication");
   assert.equal(report.providerEvidence,"fetched-through-nhl-completed-game-adapter");
@@ -2834,6 +2845,7 @@ test("reviewed statistics recovery executes only its exact occurrence in a new h
   try {
     const after = allRows(database),changed = new Set(["job_runs","stat_sources","stat_refreshes","player_stat_totals","player_game_stat_observations",
       "stat_refresh_player_game_sets","stat_refresh_player_game_coverage_entries","application_metadata","security_audit_events"]);
+    assert.equal(report.protectedTableCount,Object.keys(before).filter(name => !changed.has(name)).length);
     for (const [table,rows] of Object.entries(before)) if (!changed.has(table)) assert.deepEqual(after[table],rows,table);
     assert.deepEqual(after.job_runs.filter(value => JSON.parse(value).id!==row.id),before.job_runs.filter(value => JSON.parse(value).id!==row.id));
     const completed = database.prepare("SELECT * FROM job_runs WHERE id=?").get(row.id);

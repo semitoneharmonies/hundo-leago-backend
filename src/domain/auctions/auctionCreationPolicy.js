@@ -198,9 +198,10 @@ function calendarDate(year, month, day, offsetDays) {
   });
 }
 
-function zonedInstant({ year, month, day, hour }, timeZone) {
-  const desired = Date.UTC(year, month - 1, day, hour, 0, 0);
+function zonedInstant({ year, month, day, hour, minute = 0 }, timeZone, shiftMissingTime = false) {
+  const desired = Date.UTC(year, month - 1, day, hour, minute, 0);
   let candidate = desired;
+  const candidates = [];
   for (let index = 0; index < 4; index += 1) {
     const parts = zonedParts(candidate, timeZone);
     const actual = Date.UTC(
@@ -214,6 +215,7 @@ function zonedInstant({ year, month, day, hour }, timeZone) {
     const delta = desired - actual;
     if (delta === 0) return candidate;
     candidate += delta;
+    candidates.push(candidate);
   }
   const finalParts = zonedParts(candidate, timeZone);
   if (
@@ -221,15 +223,16 @@ function zonedInstant({ year, month, day, hour }, timeZone) {
     Number(finalParts.month) !== month ||
     Number(finalParts.day) !== day ||
     Number(finalParts.hour) !== hour ||
-    Number(finalParts.minute) !== 0 ||
+    Number(finalParts.minute) !== minute ||
     Number(finalParts.second) !== 0
   ) {
+    if (shiftMissingTime) return Math.max(...candidates);
     fail(AUCTION_CREATION_CODES.timezoneInvalid);
   }
   return candidate;
 }
 
-function getAuctionCreationWindow({ nowMs, timeZone, stagingDaily = false } = {}) {
+function getAuctionCreationWindow({ nowMs, timeZone, stagingDaily = false, schedule = null } = {}) {
   safeTimestamp(nowMs);
   if (
     typeof timeZone !== "string" ||
@@ -240,6 +243,24 @@ function getAuctionCreationWindow({ nowMs, timeZone, stagingDaily = false } = {}
     fail(AUCTION_CREATION_CODES.timezoneInvalid);
   }
   const parts = zonedParts(nowMs, timeZone);
+  if (schedule !== null) {
+    const {closeWeekday, closeMinuteOfDay, creationCutoffMinutes} = schedule;
+    if (!Number.isInteger(closeWeekday) || closeWeekday < 0 || closeWeekday > 6 ||
+        !Number.isInteger(closeMinuteOfDay) || closeMinuteOfDay < 0 || closeMinuteOfDay > 1439 ||
+        !Number.isInteger(creationCutoffMinutes) || creationCutoffMinutes < 0 ||
+        creationCutoffMinutes >= closeWeekday * 1440 + closeMinuteOfDay)
+      fail(AUCTION_CREATION_CODES.inputInvalid);
+    const weekday = {Mon:0,Tue:1,Wed:2,Thu:3,Fri:4,Sat:5,Sun:6}[parts.weekday];
+    const monday = calendarDate(Number(parts.year), Number(parts.month), Number(parts.day), -weekday);
+    const closeDate = calendarDate(monday.year, monday.month, monday.day, closeWeekday);
+    const nextMonday = calendarDate(monday.year, monday.month, monday.day, 7);
+    const opensAtMs = zonedInstant({...monday, hour:0}, timeZone);
+    const bidClosesAtMs = zonedInstant({...closeDate, hour:Math.floor(closeMinuteOfDay/60), minute:closeMinuteOfDay%60}, timeZone, true);
+    const newAuctionCutoffAtMs = Math.max(opensAtMs, bidClosesAtMs - creationCutoffMinutes * 60_000);
+    const nextOpensAtMs = zonedInstant({...nextMonday, hour:0}, timeZone);
+    return Object.freeze({opensAtMs, newAuctionCutoffAtMs, bidClosesAtMs, scheduledResolutionAtMs:bidClosesAtMs,
+      nextOpensAtMs, canStart:nowMs>=opensAtMs && nowMs<newAuctionCutoffAtMs});
+  }
   if (stagingDaily === true) {
     const today = calendarDate(Number(parts.year), Number(parts.month), Number(parts.day), 0);
     const todayClose = zonedInstant({ ...today, hour: 16 }, timeZone);

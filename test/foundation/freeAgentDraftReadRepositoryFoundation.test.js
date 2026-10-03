@@ -5232,6 +5232,7 @@ function assertOverviewShape(overview) {
     "competitionFirstMatchupStartsAtMs",
     "counts",
     "deadlineLockedAtMs",
+    "deadlinePolicy",
     "fadId",
     "frozenFadFirstMatchupStartsAtMs",
     "helpOpensAtMs",
@@ -9133,7 +9134,7 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
     assertNoWrites(runtime.database, before);
   });
 
-  test("uses DEADLINE_PROCESSING at the exact deadline regardless of card state", (t) => {
+  test("keeps cards open at the soft target until the deadline worker locks them", (t) => {
     const runtime = createRuntime(t);
     openDraft(runtime.database, PRIMARY);
     const before = noWriteSnapshot(runtime.database);
@@ -9145,11 +9146,11 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
     );
 
     assertNavigationShape(navigation);
-    assert.equal(navigation.phase, "deadline_processing");
-    assert.equal(navigation.urgencyCode, "DEADLINE_PROCESSING");
+    assert.equal(navigation.phase, "cards_open");
+    assert.equal(navigation.urgencyCode, "CARD_INCOMPLETE");
     assert.ok(
       navigation.managedCards.every(
-        ({ urgencyCode }) => urgencyCode === "DEADLINE_PROCESSING"
+        ({ urgencyCode }) => urgencyCode === "CARD_INCOMPLETE"
       )
     );
     assertNoWrites(runtime.database, before);
@@ -9272,7 +9273,7 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
         })
       );
 
-    assert.equal(expiredNavigation.phase, "deadline_processing");
+    assert.equal(expiredNavigation.phase, "cards_open");
     assert.deepEqual(expiredNavigation.rosterLinks, []);
     const expiredHelpCard =
       expiredOverview.viewer.commissionerCards.find(
@@ -10664,9 +10665,9 @@ describe("SQLite Free Agent Draft read repository foundation", () => {
         })
       );
 
-    assert.equal(justBefore.phase, "deadline_processing");
+    assert.equal(justBefore.phase, "cards_open");
     assert.equal(justBefore.showMainNavigation, true);
-    assert.equal(exactlyAt.phase, "deadline_processing");
+    assert.equal(exactlyAt.phase, "cards_open");
     assert.equal(exactlyAt.showMainNavigation, false);
     assert.equal(justAfter.showMainNavigation, false);
     assert.deepEqual(

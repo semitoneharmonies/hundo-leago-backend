@@ -47,6 +47,7 @@ const {
   resolveSqliteNotificationWriter,
 } = require("./SqliteNotificationWriter");
 
+const { supportsSoftFadDeadline, createSqliteFadDeadlineControlRepository } = require("./SqliteFadDeadlineControlRepository");
 const JOB_TYPE = "fad_deadline";
 const ALLOCATION_JOB_TYPE = "fad_allocation";
 const COMMAND_FIELDS = Object.freeze([
@@ -586,6 +587,9 @@ function createSqliteFreeAgentDraftDeadlineWriter({
     );
   }
 
+  const deadlineControls = supportsSoftFadDeadline(database)
+    ? createSqliteFadDeadlineControlRepository({ database }) : null;
+  const holdRequired = Object.freeze({ deadlineHoldRequired: true });
   let notifications;
   let outbox;
   let rootStatement;
@@ -1735,6 +1739,10 @@ function createSqliteFreeAgentDraftDeadlineWriter({
         );
       }
 
+      if (deadlineControls && !deadlineControls.permitsIncomplete(command.leagueId, command.fadId) &&
+          (evaluation.completeness.code !== "complete" || evaluation.allocationEligibility !== "eligible")) {
+        throw holdRequired;
+      }
       const lockedCardVersion = card.version + 1;
       const cardParameters = {
         ...command,
@@ -2165,6 +2173,15 @@ function createSqliteFreeAgentDraftDeadlineWriter({
           "FAD_NOT_CARDS_OPEN"
         );
       }
+      if (deadlineControls?.read(command.leagueId, command.fadId)?.mode === "held") {
+        throw holdRequired;
+      }
+      if (deadlineControls?.permitsIncomplete(command.leagueId, command.fadId)) {
+        const state = deadlineControls.state(command.leagueId, command.fadId);
+        if (state.nextRolloverAtMs === null || state.nextRolloverAtMs <= command.executedAtMs + (state.cutoffGapMs ?? 3_600_000)) {
+          throw holdRequired;
+        }
+      }
       const transitionResult = assertSynchronous(
         lifecycleRepository.advanceStatus(
           transitionCommand(command, root)
@@ -2241,6 +2258,7 @@ function createSqliteFreeAgentDraftDeadlineWriter({
           lifecycleRepository
         );
       } catch (error) {
+        if (error === holdRequired || error.cause === holdRequired) return deadlineControls.holdClaimed(command);
         throw mapRepositoryError(error, {
           operation:
             "executeClaimedFreeAgentDraftDeadline",

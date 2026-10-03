@@ -40,20 +40,39 @@ function normalizeScoringStats(value) {
   return Object.freeze(result);
 }
 
-function calculateExpandedScore(value, positionGroup) {
+function defaultScoringWeights() {
+  return Object.fromEntries(['F', 'D'].map(position => [position, Object.fromEntries(SCORING_CATEGORIES.map(category =>
+    [category.key, category.hundredths + (position === 'D' && ['hits', 'blockedShots'].includes(category.key) ? 15 : 0)]))]));
+}
+
+function normalizeScoringWeights(value) {
+  if (!value || Array.isArray(value) || Object.keys(value).sort().join() !== 'D,F') throw new TypeError('Forward and defence scoring weights are required.');
+  return Object.freeze(Object.fromEntries(['F', 'D'].map(position => {
+    const weights = value[position];
+    if (!weights || Array.isArray(weights) || Object.keys(weights).length !== CATEGORY_KEYS.length ||
+        CATEGORY_KEYS.some(key => !Number.isSafeInteger(weights[key]) || Math.abs(weights[key]) > 100000)) {
+      throw new TypeError('Every scoring weight must be an exact hundredth between -1000 and 1000 points.');
+    }
+    return [position, Object.freeze(Object.fromEntries(CATEGORY_KEYS.map(key => [key, weights[key]])))];
+  })));
+}
+
+function calculateExpandedScore(value, positionGroup, rule = null) {
   const stats = normalizeScoringStats(value);
   if (!["F", "D"].includes(positionGroup)) {
     throw new TypeError("Expanded scoring requires a forward or defence position.");
   }
-  const breakdown = SCORING_CATEGORIES.map(({ key, hundredths }) => {
-    const weight = hundredths + (positionGroup === "D" && ["hits", "blockedShots"].includes(key) ? 15 : 0);
+  const weights = rule ? normalizeScoringWeights(rule.weights) : defaultScoringWeights();
+  const breakdown = SCORING_CATEGORIES.map(({ key }) => {
+    const weight = weights[positionGroup][key];
     const pointsHundredths = stats[key] * weight;
     if (!Number.isSafeInteger(pointsHundredths)) throw new RangeError("Expanded points exceed exact arithmetic.");
     return Object.freeze({ key, count: stats[key], weightHundredths: weight, pointsHundredths });
   });
   const fantasyPointsHundredths = breakdown.reduce((sum, row) => sum + row.pointsHundredths, 0);
   if (!Number.isSafeInteger(fantasyPointsHundredths)) throw new RangeError("Expanded total exceeds exact arithmetic.");
-  return Object.freeze({ scoringRuleVersion: EXPANDED_SCORING_VERSION, scoringStats: stats, fantasyPointsHundredths, breakdown: Object.freeze(breakdown) });
+  return Object.freeze({ scoringRuleVersion: rule?.version || EXPANDED_SCORING_VERSION,
+    ...(rule ? { scoringWeights: weights } : {}), scoringStats: stats, fantasyPointsHundredths, breakdown: Object.freeze(breakdown) });
 }
 
 function addScoringStats(target, value) {
@@ -67,4 +86,5 @@ function addScoringStats(target, value) {
 }
 
 module.exports = { EXPANDED_SCORING_VERSION, EXPANDED_NHL_SEASON, SCORING_CATEGORIES, CATEGORY_KEYS,
-  usesExpandedScoring, emptyScoringStats, normalizeScoringStats, calculateExpandedScore, addScoringStats };
+  usesExpandedScoring, emptyScoringStats, normalizeScoringStats, calculateExpandedScore, addScoringStats,
+  defaultScoringWeights, normalizeScoringWeights };

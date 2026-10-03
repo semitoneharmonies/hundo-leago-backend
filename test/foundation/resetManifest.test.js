@@ -200,6 +200,25 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
         { tableName: "shared_game_evidence_changes", introducedByMigrationId: 69, treatment: "require_empty" },
         { tableName: "nhl_completed_game_cache", introducedByMigrationId: 67, treatment: "require_empty" },
         { tableName: "stat_refresh_payload_retirements", introducedByMigrationId: 68, treatment: "require_empty" },
+        { tableName: "quote_submissions", introducedByMigrationId: 89, treatment: "require_empty" },
+        { tableName: "fad_deadline_controls", introducedByMigrationId: 72, treatment: "require_empty" },
+        { tableName: "fad_deadline_commands", introducedByMigrationId: 72, treatment: "require_empty" },
+        { tableName: "fad_timing_changes", introducedByMigrationId: 73, treatment: "require_empty" },
+        { tableName: "fad_auction_cutoff_settings", introducedByMigrationId: 74, treatment: "require_empty" },
+        { tableName: "fad_auction_cutoff_changes", introducedByMigrationId: 74, treatment: "require_empty" },
+        { tableName: "league_trade_deadline_changes", introducedByMigrationId: 75, treatment: "require_empty" },
+        { tableName: "auction_timing_changes", introducedByMigrationId: 76, treatment: "require_empty" },
+        { tableName: "fad_auction_clock_changes", introducedByMigrationId: 78, treatment: "require_empty" },
+        { tableName: "league_private_reveals", introducedByMigrationId: 79, treatment: "require_empty" },
+        { tableName: "league_calendar_changes", introducedByMigrationId: 80, treatment: "require_empty" },
+        { tableName: "league_auction_schedule_changes", introducedByMigrationId: 81, treatment: "require_empty" },
+        { tableName: "league_scoring_rules", introducedByMigrationId: 82, treatment: "require_empty" },
+        { tableName: "league_help_requests", introducedByMigrationId: 85, treatment: "require_empty" },
+        { tableName: "league_help_events", introducedByMigrationId: 85, treatment: "require_empty" },
+        { tableName: "league_reset_archives", introducedByMigrationId: 87, treatment: "require_empty" },
+        { tableName: "league_reset_actions", introducedByMigrationId: 87, treatment: "require_empty" },
+        { tableName: "league_management_actions", introducedByMigrationId: 83, treatment: "require_empty" },
+        { tableName: "league_communications", introducedByMigrationId: 71, treatment: "require_empty" },
         { tableName: "player_injury_status", introducedByMigrationId: 65, treatment: "require_empty" },
         { tableName: "player_injury_feed", introducedByMigrationId: 65, treatment: "require_empty" },
         { tableName: "player_injury_events", introducedByMigrationId: 65, treatment: "require_empty" },
@@ -494,9 +513,9 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
         },
       ]
     );
-    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 66);
-    assert.equal(classifiedTables.length, 148);
-    assert.equal(new Set(classifiedTables).size, 148);
+    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 85);
+    assert.equal(classifiedTables.length, 167);
+    assert.equal(new Set(classifiedTables).size, 167);
     assert.deepEqual(
       [...classifiedTables].sort(),
       [...catalogTables].sort()

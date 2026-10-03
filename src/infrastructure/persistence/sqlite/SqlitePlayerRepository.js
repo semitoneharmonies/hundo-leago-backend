@@ -1,3 +1,5 @@
+const {createLeagueScoringRuleReader} = require('./leagueScoringRules');
+const {calculateExpandedScore} = require('../../../domain/statistics/expandedScoringPolicy');
 const { createInjuryReader } = require('./SqlitePlayerInjuryRepository');
 const { injuryProjection } = require('../../../domain/players/injuryStatusPolicy');
 const {
@@ -127,10 +129,18 @@ function escapeLike(value) {
   return value.replace(/[\\%_]/g, "\\$&");
 }
 
-function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = null, expandedScoringEnabled = false } = {}) {
+function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = null, expandedScoringEnabled = false, nowMs = Date.now } = {}) {
   if (currentNhlStatisticsSeason !== null && !/^\d{8}$/.test(currentNhlStatisticsSeason)) throw new TypeError("Current NHL statistics require an exact season key.");
   const readInjury = createInjuryReader(database);
   const withInjury = row => row ? { ...row, injury: injuryProjection(readInjury(row.id)) } : row;
+  const readScoringRule = createLeagueScoringRuleReader(database, nowMs);
+  const ruleParameters = leagueId => {
+    const rule = readScoringRule(leagueId);
+    return {scoringWeightsJson:rule ? JSON.stringify(rule.weights) : null, scoringRuleVersion:rule?.version || null};
+  };
+  database.function('hl_league_fantasy_points', {deterministic:true}, (stats, position, weights) =>
+    ['F','D'].includes(position) ? calculateExpandedScore(JSON.parse(stats), position, {weights:JSON.parse(weights)}).fantasyPointsHundredths : null);
+  const scoredRow = row => row && ({...row, ...(row.statistics_scoring_weights_json ? {statistics_scoring_weights:JSON.parse(row.statistics_scoring_weights_json)} : {})});
   const players = createSqliteRecordRepository({
     database,
     definition: getRepositoryDefinition("players"),
@@ -192,7 +202,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
     const expandedSchema = database.pragma("user_version", { simple: true }) >= 57;
     const expandedJoin = expandedSchema ? " LEFT JOIN expanded_stat_totals AS expanded ON expanded.total_id = statistics.id " : "";
     const fantasyPoints = expandedSchema
-      ? "CASE WHEN expanded.total_id IS NOT NULL THEN CASE source.normalized_position WHEN 'D' THEN expanded.defence_fp_hundredths WHEN 'F' THEN expanded.forward_fp_hundredths END " +
+      ? "CASE WHEN expanded.total_id IS NOT NULL AND @scoringWeightsJson IS NOT NULL THEN hl_league_fantasy_points(expanded.stats_json,source.normalized_position,@scoringWeightsJson) WHEN expanded.total_id IS NOT NULL THEN CASE source.normalized_position WHEN 'D' THEN expanded.defence_fp_hundredths WHEN 'F' THEN expanded.forward_fp_hundredths END " +
         (expandedRequired ? "ELSE NULL END" : "ELSE statistics.fantasy_points_hundredths END")
       : "statistics.fantasy_points_hundredths";
     const sortFantasyPoints = `COALESCE(${fantasyPoints}, -9007199254740991)`;
@@ -200,6 +210,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
       ? `${fantasyPoints} AS statistics_fantasy_points_hundredths` : column).concat([
         `${expandedSchema ? 'expanded.stats_json' : 'NULL'} AS statistics_scoring_stats_json`,
         `${expandedRequired ? 1 : 0} AS statistics_expanded_required`,
+        '@scoringRuleVersion AS statistics_scoring_rule_version', '@scoringWeightsJson AS statistics_scoring_weights_json',
       ]);
     findDetailByIdStatement = database.prepare(
       `SELECT ${readColumns.join(", ")} FROM players ` +
@@ -212,7 +223,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         `${sortFantasyPoints} ` +
         "AS sort_fantasy_points_hundredths " +
         `FROM players ${currentSourceJoin} ${currentStatisticsJoin} ${expandedJoin} ` +
-        "WHERE players.id = ? LIMIT 1"
+        "WHERE players.id = @playerId LIMIT 1"
     );
     listExternalIdsStatement = database.prepare(
       "SELECT provider, external_value, created_at_ms " +
@@ -452,11 +463,11 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         })
       );
     },
-    findDetailById(playerId) {
+    findDetailById(playerId, {leagueId = null} = {}) {
       const canonicalPlayerId = assertStablePlayerId(playerId);
       try {
         return freezeRow(
-          withInjury(findDetailByIdStatement.get({ playerId: canonicalPlayerId }))
+          scoredRow(withInjury(findDetailByIdStatement.get({ playerId: canonicalPlayerId, ...ruleParameters(leagueId) })))
         );
       } catch (error) {
         throw mapRepositoryError(error, {
@@ -465,10 +476,10 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         });
       }
     },
-    findPageCursor(playerId) {
+    findPageCursor(playerId, {leagueId = null} = {}) {
       const canonicalPlayerId = assertStablePlayerId(playerId);
       try {
-        return freezeRow(findPageCursorStatement.get(canonicalPlayerId));
+        return freezeRow(findPageCursorStatement.get({playerId:canonicalPlayerId, ...ruleParameters(leagueId)}));
       } catch (error) {
         throw mapRepositoryError(error, {
           operation: "findPlayerPageCursor",
@@ -642,6 +653,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
             cursorFantasyPoints: options.cursorFantasyPoints,
             limit: options.limit,
             leagueId: options.leagueId,
+            ...ruleParameters(options.leagueId),
             ownershipTeamId: options.ownershipTeamId,
             providerPosition: options.providerPosition,
             providerActive: options.providerActive === true ? 1 : null,
@@ -654,7 +666,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
             remainingYears: options.remainingYears,
             contractType: options.contractType,
             auctionEligible: options.auctionEligible ? 1 : 0,
-          }).map(withInjury)
+          }).map(withInjury).map(scoredRow)
         );
       } catch (error) {
         throw mapRepositoryError(error, {

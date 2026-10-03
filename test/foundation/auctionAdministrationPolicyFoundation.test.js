@@ -674,6 +674,19 @@ describe(
 describe(
   "auction administration persisted result policy",
   () => {
+    test('accepts current awarded-term receipts and preserves historical cancellation receipts', () => {
+      const legacy=storedResultFor('cancel_auction',{data:restrictedCancellationData()});
+      assert.equal(validateAuctionAdministrationStoredResult(legacy).responseJson,legacy.responseJson);
+      assert.equal(validateAuctionAdministrationStoredResult(legacy).responseSha256,legacy.responseSha256);
+      const data=restrictedCancellationData();data.auction.result.finalTermYears=null;
+      const modern=storedResultFor('cancel_auction',{data});
+      assert.equal(validateAuctionAdministrationStoredResult(modern).responseJson,modern.responseJson);
+      assert.equal(validateAuctionAdministrationStoredResult(modern).data.auction.result.finalTermYears,null);
+      for(const finalTermYears of [1,0,4,'2']) {
+        const invalid=restrictedCancellationData();invalid.auction.result.finalTermYears=finalTermYears;
+        assert.throws(()=>validateAuctionAdministrationStoredResult(storedResultFor('cancel_auction',{data:invalid})),{code:'AUCTION_ADMINISTRATION_RESULT_INVALID'});
+      }
+    });
     test("accepts and freezes safe replay data for all four actions", () => {
       for (const action of Object.keys(
         ACTION_EXPECTATIONS

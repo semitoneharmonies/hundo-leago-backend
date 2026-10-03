@@ -32,7 +32,6 @@ const UUID_PATTERN =
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const MAX_TIMESTAMP_MS = 8_640_000_000_000_000;
 const MAX_UINT32 = 0xffff_ffff;
-const AUCTION_CREATION_CUTOFF_LEAD_MS = 3_600_000;
 
 const PUBLIC_STATUSES = Object.freeze([
   "active",
@@ -650,7 +649,7 @@ function validateAuctionContext(value) {
       reason
     );
     if (
-      (value.leagueId === "48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03" ? cutoff > target : cutoff !== target - AUCTION_CREATION_CUTOFF_LEAD_MS)
+      cutoff > target
     ) {
       fail(reason);
     }
@@ -1106,8 +1105,7 @@ function validateAuctionStartTeamsProjection(value) {
           reason
         );
         if (
-          (value.leagueId === "48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03" ? cutoff > target : cutoff !==
-            target - AUCTION_CREATION_CUTOFF_LEAD_MS)
+          cutoff > target
         ) {
           fail(reason);
         }

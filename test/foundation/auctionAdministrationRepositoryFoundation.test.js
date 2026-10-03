@@ -3457,12 +3457,8 @@ describe(
           result.data.drawCommitment,
           fixture.commitmentHex
         );
-        assert.equal(result.data.eligibleTeams.length, 2);
-        assert.equal(
-          result.data.administrativeBids[0]
-            .participantStatus,
-          "active"
-        );
+        assert.equal(result.data.eligibleTeams.length, 0, 'Editing does not reveal competing participant identities');
+        assert.deepEqual(result.data.administrativeBids, [], 'A separate explicit reveal is required');
 
         const bid = bidRow(runtime.database);
         assert.deepEqual(
@@ -6999,6 +6995,24 @@ describe(
         }
       }
     );
+
+    test('restricted fallback extensions use the saved cutoff gap',t=>{
+      const runtime=createRuntime(t);
+      installRestrictedContext(runtime,{fallbackReady:true,fallbackNeedsExtension:true});
+      removeRestrictedImprovementForFallback(runtime);
+      installRestrictedRolloverProcessingLease(runtime);
+      const execution=installRestrictedResolutionLease(runtime);
+      const priorForeignKeys=runtime.database.pragma('foreign_key_check');
+      runtime.database.prepare('INSERT INTO fad_auction_cutoff_settings(id,league_id,season_id,gap_ms,updated_at_ms,version) VALUES(?,?,?,?,?,1)')
+        .run(IDS.fad,IDS.league,IDS.season,1800000,execution.nowMs-1);
+      const command=restrictedFallbackCommand(execution,{ids:restrictedFallbackIds({extensionRolloverId:IDS.fallbackExtensionRollover})});
+      const result=openRestrictedFallback(runtime,command);
+      assert.equal(result.applied,true);
+      const round=runtime.database.prepare('SELECT * FROM free_agent_draft_rollovers WHERE id=?').get(result.fallbackRolloverId);
+      assert.equal(round.creation_cutoff_at_ms,round.rolls_over_at_ms-1800000);
+      assert.equal(openRestrictedFallback(runtime,command).replayed,true);
+      assert.deepEqual(runtime.database.pragma('foreign_key_check'),priorForeignKeys,'The historical fixture has omitted card/readiness parents; this operation must introduce no new violations');
+    });
 
     test(
       "shared restricted fallback creates a sequence-eight extension when the seventh boundary has no successor",

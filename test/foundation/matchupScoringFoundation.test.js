@@ -64,7 +64,7 @@ function uuid(value) {
 }
 
 for (const useSharedWriter of [false, true, "compact"]) {
-test(`${useSharedWriter === "compact" ? "compact" : useSharedWriter ? "shared" : "legacy"} expanded NHL refresh corrects a finalized matchup using its original locked lineup and keeps audit history`, async t => {
+for (const custom of [false, true]) test(`${custom ? "custom scoring " : ""}${useSharedWriter === "compact" ? "compact" : useSharedWriter ? "shared" : "legacy"} expanded NHL refresh corrects a finalized matchup using its original locked lineup and keeps audit history`, async t => {
   const playerIdentityProvider = useSharedWriter ? "nhl" : "nhl-catalog";
   const providerTeamId = useSharedWriter ? "22" : "team-1";
   const { database, service } = createRuntime(t, { provider: "nhl-completed-games",
@@ -72,6 +72,13 @@ test(`${useSharedWriter === "compact" ? "compact" : useSharedWriter ? "shared" :
   database.prepare("INSERT INTO player_external_ids (id, player_id, provider, external_value, created_at_ms) VALUES (?, ?, ?, '8', 1)").run(uuid(100), IDS.player, playerIdentityProvider);
   database.prepare("UPDATE leagues SET current_season_id = ? WHERE id = ?").run(IDS.season, IDS.league);
   database.prepare("UPDATE seasons SET fantasy_playoffs_start_at_ms = ?, fantasy_playoffs_end_at_ms = ? WHERE id = ?").run(NOW_MS + 10 * HOUR_MS, NOW_MS + 20 * HOUR_MS, IDS.season);
+  let weights;
+  if(custom){
+    weights=require('../../src/domain/statistics/expandedScoringPolicy').defaultScoringWeights();
+    for(const p of ['F','D']){weights[p].evenStrengthGoals=400;weights[p].primaryAssists=100;weights[p].giveaways=-5;}
+    database.prepare("INSERT INTO users(id,email_normalized,email_display,display_name,display_name_normalized,status,created_at_ms,updated_at_ms,version) VALUES(?,'scoring@example.test','scoring@example.test','Scoring Commissioner','scoring commissioner','active',1,1,1)").run(uuid(190));
+    database.prepare("INSERT INTO league_scoring_rules(id,league_id,season_id,actor_user_id,actor_authority,revision,effective_week_sequence,weights_json,client_key,request_hash,reason,before_json,created_at_ms) VALUES(?,?,?,?,'commissioner',1,1,?,'scoring-live-test',?,'Approved custom values','{}',?)").run(uuid(191),IDS.league,IDS.season,uuid(190),JSON.stringify(weights),'a'.repeat(64),NOW_MS);
+  }
   const initialStats = { ...emptyScoringStats(), evenStrengthGoals: 1, primaryAssists: 1 };
   persistExpandedStatistics(database, { refreshId: IDS.liveRefresh, nhlSeasonKey: "20262027", playerIdentityProvider,
     rows: [{ externalPlayerId: "8", gamesPlayed: 12, goals: 2, assists: 3 }],
@@ -80,8 +87,34 @@ test(`${useSharedWriter === "compact" ? "compact" : useSharedWriter ? "shared" :
       totalsRows: [{ playerId: "8", scoringStats: { ...initialStats, evenStrengthGoals: 2, primaryAssists: 3 } }],
       playerGameRows: [{ playerId: "8", nhlGameId: "2026020001", gamesPlayed: 1, scoringStats: initialStats }] } });
   const scope = { ...input(), provider: "nhl-completed-games" };
-  assert.equal(service.readLive(scope).home.scoreHundredths, 525);
-  persistFinalResult(database, 525);
+  assert.equal(service.readLive(scope).home.scoreHundredths, custom?500:525);
+  if(custom){
+    const before=database.serialize();
+    assert.equal(service.previewRule(scope,null).home.scoreHundredths,525);
+    const {createLeagueScoringService}=require('../../src/application/services/leagues/createLeagueScoringService');
+    const {createSqliteLeagueScoringRepository}=require('../../src/infrastructure/persistence/sqlite/SqliteLeagueScoringRepository');
+    const controls=createLeagueScoringService({repository:createSqliteLeagueScoringRepository({database}),scoringService:service,
+      expandedScoringEnabled:true,clock:{nowMs:()=>NOW_MS},leagueAuthorization:{requireCommissioner:()=>({actorUserId:uuid(190),authority:'commissioner'})}});
+    const review=controls.preview({leagueId:IDS.league,input:{weights:require('../../src/domain/statistics/expandedScoringPolicy').defaultScoringWeights(),effectiveWeekSequence:1,comparisonWeekId:null,reason:'Compare before saving'}});
+    assert.equal(review.impacts[0].available,true);assert.equal(review.impacts[0].beforeHome,500);assert.equal(review.impacts[0].afterHome,525);
+    assert.deepEqual(database.serialize(),before);
+    const {assertCurrentScoringRule}=require('../../src/infrastructure/persistence/sqlite/leagueScoringRules');
+    assert.throws(()=>assertCurrentScoringRule(database,{...scope,scoringRuleVersion:EXPANDED_SCORING_VERSION}),{code:'MATCHUP_SCORING_RULE_CHANGED'});
+    assertCurrentScoringRule(database,{...scope,scoringRuleVersion:'league-scoring-'+uuid(191)});
+  }
+  persistFinalResult(database, custom?500:525);
+  if(custom){
+    assert.throws(()=>database.prepare("INSERT INTO league_scoring_rules SELECT ?,league_id,season_id,actor_user_id,actor_authority,2,1,weights_json,'scoring-final-test',request_hash,reason,before_json,created_at_ms FROM league_scoring_rules").run(uuid(192)),/Completed matchup scoring/);
+    assert.equal(service.previewRule(scope,null).home.scoreHundredths,525);
+    database.prepare("INSERT INTO matchup_weeks SELECT ?,league_id,season_id,'regular-02',2,ends_at_ms,ends_at_ms,ends_at_ms+1,ends_at_ms+100000,ends_at_ms+100000,'scheduled',created_at_ms,updated_at_ms,1 FROM matchup_weeks WHERE id=?").run(uuid(193),IDS.week);
+    const {createLeagueScoringService}=require('../../src/application/services/leagues/createLeagueScoringService');
+    const {createSqliteLeagueScoringRepository}=require('../../src/infrastructure/persistence/sqlite/SqliteLeagueScoringRepository');
+    const controls=createLeagueScoringService({repository:createSqliteLeagueScoringRepository({database}),scoringService:service,
+      expandedScoringEnabled:true,clock:{nowMs:()=>NOW_MS},leagueAuthorization:{requireCommissioner:()=>({actorUserId:uuid(190),authority:'commissioner'})}});
+    const before=database.serialize(),review=controls.preview({leagueId:IDS.league,input:{weights:require('../../src/domain/statistics/expandedScoringPolicy').defaultScoringWeights(),effectiveWeekSequence:2,comparisonWeekId:IDS.week,reason:'Historical comparison only'}});
+    assert.equal(review.impacts[0].available,true);assert.equal(review.impacts[0].officialHomeScore,500);assert.equal(review.impacts[0].afterHome,525);
+    assert.deepEqual(database.serialize(),before);
+  }
   const locksBefore = database.prepare("SELECT * FROM matchup_roster_players ORDER BY id").all();
   const historyBefore = database.prepare("SELECT * FROM matchup_result_versions ORDER BY id").all();
   let nextId = 1000;
@@ -109,13 +142,14 @@ test(`${useSharedWriter === "compact" ? "compact" : useSharedWriter ? "shared" :
   assert.deepEqual(corrections.reconcile(), { checked: 1, corrected: 1, unchanged: 0, awaitingData: 0, requiresPlayoffReview: 0 }, JSON.stringify(errors));
   const versions = database.prepare("SELECT * FROM matchup_result_versions ORDER BY version_number").all();
   assert.deepEqual(versions[0], historyBefore[0]);
-  assert.equal(versions[1].home_score_hundredths, -60);
+  assert.equal(versions[1].home_score_hundredths, custom?-30:-60);
   assert.equal(versions[1].outcome, "away_win");
   assert.equal(versions[1].source_type, "provider_correction");
   assert.deepEqual(database.prepare("SELECT * FROM matchup_roster_players ORDER BY id").all(), locksBefore);
   const final = service.readAtRefresh({ ...scope, nowMs: completedAtMs + 1, refreshId });
   assert.equal(final.home.players[0].scoringStats.giveaways, 6);
-  assert.equal(final.home.players[0].scoreHundredths, -60);
+  assert.equal(final.home.players[0].scoreHundredths, custom?-30:-60);
+  if(custom)assert.equal(final.home.scoringRuleVersion,'league-scoring-'+uuid(191));
   const writesBefore = database.prepare("SELECT total_changes() AS count").get().count;
   assert.equal(corrections.reconcile().unchanged, 1);
   assert.equal(database.prepare("SELECT total_changes() AS count").get().count, writesBefore);
@@ -161,7 +195,7 @@ for (const durationDays of [7, 9, 14]) {
       const preexistingTables = database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('application_metadata','schema_migrations') ORDER BY name").all().map(row => row.name);
       const beforeMigration = readProtectedTables(database, preexistingTables);
       migrateDatabase({ database, migrationsDirectory: MIGRATIONS_DIRECTORY, applicationBuildId: "active-scoring-migration-test", now: () => NOW_MS });
-      assert.equal(database.pragma("user_version", { simple: true }), 70);
+      assert.equal(database.pragma("user_version", { simple: true }), 89);
       assert.deepEqual(readProtectedTables(database, preexistingTables), beforeMigration);
       assert.deepEqual(service.readLive(scope), initialScore);
 

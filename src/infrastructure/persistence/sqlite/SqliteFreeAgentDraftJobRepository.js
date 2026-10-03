@@ -998,6 +998,14 @@ function createSqliteFreeAgentDraftJobRepository({
   let readinessRetryPreparationError = null;
 
   try {
+    const softDeadlineFilter = database.prepare("PRAGMA user_version").get().user_version >= 72 ? `
+        AND NOT (job_type='fad_deadline' AND EXISTS (
+          SELECT 1 FROM fad_deadline_controls c JOIN free_agent_drafts f ON f.id=c.id AND f.league_id=c.league_id
+          WHERE c.league_id=job_runs.league_id AND c.season_id=job_runs.season_id
+            AND c.mode='held' AND f.status='cards_open'))
+        AND NOT (job_type IN ('fad_rollover','fad_completion') AND EXISTS (
+          SELECT 1 FROM free_agent_drafts f WHERE f.league_id=job_runs.league_id
+            AND f.season_id=job_runs.season_id AND f.status='cards_open'))` : "";
     dueStatement = database.prepare(`
       SELECT *
       FROM job_runs
@@ -1029,6 +1037,7 @@ function createSqliteFreeAgentDraftJobRepository({
             AND lease_expires_at_ms <= ?
           )
         )
+      ${softDeadlineFilter}
       ORDER BY
         CASE job_type
           ${FREE_AGENT_DRAFT_JOB_TYPES
@@ -2180,8 +2189,8 @@ function createSqliteFreeAgentDraftJobRepository({
         ? rollover.rolls_over_at_ms !== times[rollover.sequence - 1] ||
           rollover.opens_at_ms !== (rollover.sequence === 1 ? root.candidate_deadline_at_ms : times[rollover.sequence - 2])
         : rollover.opens_at_ms !== rollover.rolls_over_at_ms - FAD_DAY_MS) ||
-      rollover.creation_cutoff_at_ms !==
-        Math.max(rollover.opens_at_ms, rollover.rolls_over_at_ms - readGoonDraftTiming(database, scope.leagueId).cutoffMs) ||
+      rollover.creation_cutoff_at_ms < rollover.opens_at_ms ||
+      rollover.creation_cutoff_at_ms > rollover.rolls_over_at_ms ||
       (
         rollover.sequence === 1 &&
         rollover.predecessor_rollover_id !==

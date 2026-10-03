@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { CURRENT_SCHEMA_VERSION } = require("../helpers/currentSchemaVersion");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -442,7 +443,7 @@ for (const { recoverKnownLoss, backupEnvironment } of [
           assert.equal(observed.backendBuildId, f.options.backendBuildId); assert.equal(observed.environmentId, f.config.environmentId);
           assert.equal(observed.schemaVersion, runtime.migrationState.userVersion); assert.equal(observed.lifecycle, "ready");
           assert.deepEqual(observed.scheduler, { enabled: false, state: "disabled" });
-          assert.deepEqual(observed.accountEmailDelivery, { enabled: false }); assert.equal(observed.maintenance.state, "open");
+          assert.deepEqual(observed.accountEmailDelivery, { enabled: false, pending: 0, publishing: 0, failed: 0, lastDeliveredAtMs: null }); assert.equal(observed.maintenance.state, "open");
           assert.deepEqual(observed.outbox, { pending: 0, publishing: 0, failed: 0 });
           assert.deepEqual(snapshots(readRows(database)), before); assert.equal(database.prepare("SELECT total_changes() n").get().n, writesBefore);
           healthSamples.push({ phase, observedAt: new Date().toISOString(), elapsedMs: performance.now() - observationStarted, ready: true });
@@ -600,7 +601,7 @@ test("held maintenance uses real fresh HTTP authentication and read-only feature
       assert.equal((await request(maintenance.baseUrl,"/api/v1/operations/health",manager)).status,403);
       const health = await request(maintenance.baseUrl,"/api/v1/operations/health",administrator);
       assert.equal(health.status,200,health.text);assert.deepEqual(health.json.data.databaseIdentity,f.options.reviewOptions.plan.databaseIdentity);
-      assert.equal(health.json.data.sourceBackupId,f.prepared.sourceBackupId);assert.equal(health.json.data.schemaVersion,57);
+      assert.equal(health.json.data.sourceBackupId,f.prepared.sourceBackupId);assert.equal(health.json.data.schemaVersion,CURRENT_SCHEMA_VERSION);
       assert.equal(health.json.data.backendBuildId,f.options.backendBuildId);assert.equal(health.json.data.activationReady,false);
       assert.equal(health.json.data.jobs,"not-started");assert.equal(health.json.data.email,"held");
       assert.equal((await request(maintenance.baseUrl,"/api/v1/operations/recovery/review",manager)).status,403);

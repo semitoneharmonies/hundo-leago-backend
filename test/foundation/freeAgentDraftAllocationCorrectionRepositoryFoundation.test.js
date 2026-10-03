@@ -1,4 +1,5 @@
 "use strict";
+const { CURRENT_SCHEMA_VERSION } = require("../helpers/currentSchemaVersion");
 
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
@@ -505,9 +506,9 @@ function seedOffers(database) {
     entryId: IDS.wrongEntry,
     sourceEntryId: IDS.wrongSourceEntry,
     slotNumber: 2,
-    totalValueCents: 500,
+    totalValueCents: 200,
     termYears: 1,
-    aavCents: 500,
+    aavCents: 200,
   });
 }
 
@@ -554,9 +555,9 @@ function seedWrongCompleted(database) {
     player_id: IDS.player,
     current_team_id: IDS.teamWrong,
     contract_type: "normal",
-    original_total_value_cents: 500,
+    original_total_value_cents: 200,
     original_term_years: 1,
-    aav_cents: 500,
+    aav_cents: 200,
     start_season_id: IDS.season,
     status: "active",
     acquisition_source_type:
@@ -574,7 +575,7 @@ function seedWrongCompleted(database) {
     contract_id: IDS.oldContract,
     season_id: IDS.season,
     year_number: 1,
-    aav_cents: 500,
+    aav_cents: 200,
     status: "current",
     rollover_at_ms: null,
     created_at_ms: DEADLINE_AT_MS + 1_000,
@@ -1105,7 +1106,7 @@ before(() => {
     connection.database.pragma("user_version", {
       simple: true,
     }),
-    57
+    CURRENT_SCHEMA_VERSION
   );
   connection.database.pragma("wal_checkpoint(TRUNCATE)");
   connection.database.close();

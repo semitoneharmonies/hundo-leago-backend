@@ -5,6 +5,7 @@ const { readGoonDraftTiming } = require("./goonDraftTiming");
 const { freeAgentDraftSchedulerScopeSql } = require("./SqliteFreeAgentDraftSchedulerScope");
 
 const { randomUUID } = require("node:crypto");
+const { createFadAuctionCutoffClock } = require('./fadAuctionCutoffClock');
 
 const {
   FREE_AGENT_DRAFT_DAY_MS,
@@ -439,6 +440,7 @@ function createSqliteFreeAgentDraftRolloverWriter({
     throw new TypeError("FAD rollover beforeCommit must be a function");
   }
 
+  const cutoffClock = createFadAuctionCutoffClock(database);
   let missingJobsStatement;
   let insertJobStatement;
   let finalizationStatement;
@@ -1131,8 +1133,8 @@ function createSqliteFreeAgentDraftRolloverWriter({
       (successor.window_kind === "extension"
         ? successor.rolls_over_at_ms !== scope.rolloverAtMs + FREE_AGENT_DRAFT_DAY_MS
         : successor.rolls_over_at_ms <= scope.rolloverAtMs) ||
-      successor.creation_cutoff_at_ms !==
-        Math.max(successor.opens_at_ms, successor.rolls_over_at_ms - readGoonDraftTiming(database, scope.leagueId).cutoffMs)
+      successor.creation_cutoff_at_ms < successor.opens_at_ms ||
+      successor.creation_cutoff_at_ms > successor.rolls_over_at_ms
     ) {
       incompatible(
         "The rollover successor is not a contiguous canonical window.",
@@ -1697,8 +1699,7 @@ function createSqliteFreeAgentDraftRolloverWriter({
         extensionSequence: command.sequence + 1,
         extensionRolloverAtMs,
         extensionCreationCutoffAtMs:
-          extensionRolloverAtMs -
-          readGoonDraftTiming(database, command.leagueId).cutoffMs,
+          cutoffClock.cutoff(command, command.rolloverAtMs, extensionRolloverAtMs),
         occurrenceKey: buildFreeAgentDraftRolloverOccurrenceKey({
           fadId: command.fadId,
           sequence: command.sequence + 1,

@@ -1290,6 +1290,7 @@ function createSqliteCandidateCardRepository({
     );
   }
 
+  const softDeadline = database.prepare("PRAGMA user_version").get().user_version >= 72;
   const capReader =
     capReadRepository === undefined
       ? createSqliteCapReadRepository({
@@ -1787,13 +1788,14 @@ function createSqliteCandidateCardRepository({
         AND team_id = @teamId
         AND status = 'open'
         AND version = @expectedCardVersion
-        AND @nowMs < (
-          SELECT coalesce(candidate_deadline_at_ms, 8640000000000000)
+        AND EXISTS (
+          SELECT 1
           FROM free_agent_drafts
           WHERE league_id = @leagueId
             AND season_id = @seasonId
             AND id = @fadId
             AND status = 'cards_open'
+            AND (@nowMs < candidate_deadline_at_ms OR ${softDeadline ? 1 : 0} = 1)
         )
     `);
     updateSummerCardStatement = database.prepare(`
@@ -3384,6 +3386,7 @@ function createSqliteCandidateCardRepository({
           currentCommissioner !== null &&
           authorityBacked,
         activeHelpRequest: activeHelp,
+        ...(softDeadline ? { softDeadline: true } : {}),
         nowMs,
         helpOpensAtMs:
           context.help_opens_at_ms,
@@ -3571,8 +3574,8 @@ function createSqliteCandidateCardRepository({
     nowMs,
   }) {
     if (
-      nowMs >=
-      (context.candidate_deadline_at_ms ?? Infinity)
+      (!softDeadline && nowMs >=
+      (context.candidate_deadline_at_ms ?? Infinity))
     ) {
       return "DEADLINE_PASSED";
     }
@@ -3721,6 +3724,7 @@ function createSqliteCandidateCardRepository({
       aggregate;
     const phase =
       deriveFreeAgentDraftViewerPhase({
+        ...(softDeadline ? { softDeadline: true } : {}),
         status: context.fad_status,
         nowMs,
         cardsOpenedAtMs:
@@ -4062,8 +4066,8 @@ function createSqliteCandidateCardRepository({
       );
     }
     if (
-      command.nowMs >=
-      (context.candidate_deadline_at_ms ?? Infinity)
+      (!softDeadline && command.nowMs >=
+      (context.candidate_deadline_at_ms ?? Infinity))
     ) {
       conflict(
         "The Candidate Card deadline has passed.",
@@ -6137,8 +6141,8 @@ function createSqliteCandidateCardRepository({
         );
       }
       if (
-        options.nowMs >=
-        (context.candidate_deadline_at_ms ?? Infinity)
+        (!softDeadline && options.nowMs >=
+        (context.candidate_deadline_at_ms ?? Infinity))
       ) {
         conflict(
           "The Candidate Card deadline has passed.",
@@ -6427,8 +6431,8 @@ function createSqliteCandidateCardRepository({
         );
       }
       if (
-        options.nowMs >=
-        (context.candidate_deadline_at_ms ?? Infinity)
+        (!softDeadline && options.nowMs >=
+        (context.candidate_deadline_at_ms ?? Infinity))
       ) {
         conflict(
           "The Candidate Card deadline has passed.",
@@ -6610,8 +6614,8 @@ function createSqliteCandidateCardRepository({
           "open" ||
         context.fad_status !==
           "cards_open" ||
-        options.nowMs >=
-          (context.candidate_deadline_at_ms ?? Infinity)
+        (!softDeadline && options.nowMs >=
+          (context.candidate_deadline_at_ms ?? Infinity))
       ) {
         return null;
       }
@@ -8404,9 +8408,9 @@ function createSqliteCandidateCardRepository({
           "open" ||
         before.context.fad_status !==
           "cards_open" ||
-        command.nowMs >=
+        (!softDeadline && command.nowMs >=
           before.context
-            .candidate_deadline_at_ms
+            .candidate_deadline_at_ms)
       ) {
         conflict(
           "Summer carryover synchronization is closed.",

@@ -950,8 +950,8 @@ function createSqliteFreeAgentDraftFallbackActivationWriter({
       row.context_created_at_ms !== row.auction_created_at_ms ||
       row.rollover_opens_at_ms !== row.opened_at_ms ||
       row.rolls_over_at_ms !== row.resolves_at_ms ||
-      row.creation_cutoff_at_ms !==
-        Math.max(row.opened_at_ms, row.resolves_at_ms - readGoonDraftTiming(database, scope.leagueId).cutoffMs) ||
+      row.creation_cutoff_at_ms < row.opened_at_ms ||
+      row.creation_cutoff_at_ms > row.resolves_at_ms ||
       ![
         "scheduled",
         "processing",

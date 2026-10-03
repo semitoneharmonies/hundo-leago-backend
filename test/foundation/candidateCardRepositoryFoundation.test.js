@@ -2686,7 +2686,7 @@ describe(
     );
 
     test(
-      "keeps manager reads private and read-only at deadline or freeze, expires help by clock, and phase-conflicts after publication",
+      "keeps manager cards editable at a soft target, read-only during freeze, expires help and phase-conflicts after publication",
       (t) => {
         const runtime = createRuntime(t);
         runtime.repository.requestHelp({
@@ -2712,11 +2712,11 @@ describe(
         );
         assert.equal(
           atDeadline.phase,
-          "deadline_processing"
+          "cards_open"
         );
         assert.equal(
           atDeadline.visibilityMode,
-          "private_read_only"
+          "private_editable"
         );
         assert.equal(
           atDeadline.helpContext.status,
@@ -2725,16 +2725,15 @@ describe(
         assert.deepEqual(
           atDeadline.capabilities.editCard,
           {
-            allowed: false,
-            reasonCode: "DEADLINE_PASSED",
+            allowed: true,
+            reasonCode: null,
           }
         );
         assert.equal(
           atDeadline.slots.every((slot) =>
             Object.values(slot.capabilities).every(
               (capability) =>
-                capability.allowed === false &&
-                capability.reasonCode ===
+                capability.reasonCode !==
                   "DEADLINE_PASSED"
             )
           ),
@@ -3329,7 +3328,7 @@ describe(
     );
 
     test(
-      "requires exact private edit authority, stays readable during freeze, and closes at deadline or publication",
+      "requires private authority, stays readable during freeze and soft target, and closes at publication",
       (t) => {
         const runtime = createRuntime(t);
         const playerId = uuid(4_300);
@@ -3392,14 +3391,8 @@ describe(
           databaseBytes(runtime.database),
           beforeFrozenRead
         );
-        assertRepositoryError(
-          () =>
-            readEligiblePlayers(runtime, {
-              nowMs:
-                CANDIDATE_DEADLINE_AT_MS,
-            }),
-          "FAD_DEADLINE_PASSED"
-        );
+        assert.equal(readEligiblePlayers(runtime, { nowMs: CANDIDATE_DEADLINE_AT_MS }).data.length, 1);
+        assert.equal(databaseBytes(runtime.database), beforeFrozenRead);
 
         const occupied = createRuntime(t);
         const occupiedPlayer = uuid(4_310);
@@ -4072,7 +4065,7 @@ describe(
     );
 
     test(
-      "keeps authority private, allows freeze reads, and orders phase and deadline before entry errors",
+      "keeps authority private, allows freeze and soft-target reads, and orders phase before entry errors",
       (t) => {
         const runtime = createRuntime(t);
         const playerId = uuid(4_530);
@@ -4127,7 +4120,7 @@ describe(
               nowMs:
                 CANDIDATE_DEADLINE_AT_MS,
             }),
-          "FAD_DEADLINE_PASSED"
+          "CANDIDATE_CARD_ENTRY_NOT_FOUND"
         );
         assert.equal(
           databaseBytes(runtime.database),
@@ -5256,7 +5249,7 @@ describe(
     );
 
     test(
-      "rejects stale, cross-team, deadline, and cross-scope writes with complete rollback",
+      "rejects stale, cross-team and cross-scope writes while allowing a current manager after the soft target",
       (t) => {
         const runtime = createRuntime(t);
         const playerId = uuid(5_100);
@@ -5285,17 +5278,6 @@ describe(
             }),
             reason:
               "CANDIDATE_CARD_NOT_FOUND",
-          },
-          {
-            command: addCommand(runtime, {
-              playerId,
-              nowMs:
-                CANDIDATE_DEADLINE_AT_MS,
-              requestId: uuid(5_105),
-              revisionId: uuid(5_106),
-              clientKey: "deadline",
-            }),
-            reason: "FAD_DEADLINE_PASSED",
           },
           {
             command: {
@@ -5361,6 +5343,11 @@ describe(
           ),
           0
         );
+        const afterTarget = runtime.repository.mutate(addCommand(runtime, {
+          playerId, nowMs: CANDIDATE_DEADLINE_AT_MS, requestId: uuid(5_105),
+          revisionId: uuid(5_106), clientKey: "soft-target-save",
+        }));
+        assert.equal(afterTarget.card.cardVersion, 2);
       }
     );
 

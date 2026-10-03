@@ -1,4 +1,5 @@
 "use strict";
+const { CURRENT_SCHEMA_VERSION } = require("../helpers/currentSchemaVersion");
 
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
@@ -501,9 +502,9 @@ function seedLockedOffers(database) {
     entryId: IDS.wrongEntry,
     sourceEntryId: IDS.wrongSourceEntry,
     slotNumber: 2,
-    totalValueCents: 500,
+    totalValueCents: 200,
     termYears: 1,
-    aavCents: 500,
+    aavCents: 200,
   });
 }
 
@@ -515,9 +516,9 @@ function seedWrongCompletedResult(database) {
     player_id: IDS.player,
     current_team_id: IDS.teamWrong,
     contract_type: "normal",
-    original_total_value_cents: 500,
+    original_total_value_cents: 200,
     original_term_years: 1,
-    aav_cents: 500,
+    aav_cents: 200,
     start_season_id: IDS.season,
     status: "active",
     acquisition_source_type:
@@ -535,7 +536,7 @@ function seedWrongCompletedResult(database) {
     contract_id: IDS.contract,
     season_id: IDS.season,
     year_number: 1,
-    aav_cents: 500,
+    aav_cents: 200,
     status: "current",
     rollover_at_ms: null,
     created_at_ms: DEADLINE_AT_MS + 1_000,
@@ -1082,7 +1083,7 @@ before(() => {
     connection.database.pragma("user_version", {
       simple: true,
     }),
-    57
+    CURRENT_SCHEMA_VERSION
   );
   connection.database.pragma("wal_checkpoint(TRUNCATE)");
   connection.database.close();
@@ -1131,7 +1132,7 @@ describe(
           ]
         ),
         [
-          [500, 1, 500],
+          [200, 1, 200],
           [600, 2, 300],
         ]
       );
@@ -1141,7 +1142,7 @@ describe(
           preview.currentDecision.winner.termYears,
           preview.currentDecision.winner.aavCents,
         ],
-        [500, 1, 500]
+        [200, 1, 200]
       );
       assert.equal(preview.reversible, true);
       assert.equal(
@@ -1154,11 +1155,11 @@ describe(
       );
       assert.equal(
         preview.recomputedDecision.decisionCode,
-        "highest_total"
+        "highest_aav"
       );
       assert.equal(
         preview.previewFingerprint,
-        "d3d4dc12bfb2a75466a24d4ee296269dfffa88c6b7f75e7f4c5eea872423b662"
+        "9687f255897cdabe1c992c846188c235543d6fb3d3e56316d42953cc7151e672"
       );
       assert.deepEqual(
         preview.deltas.map(

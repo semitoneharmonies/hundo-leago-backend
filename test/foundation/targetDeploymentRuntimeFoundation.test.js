@@ -167,6 +167,14 @@ function deployedEnvironment(overrides = {}) {
   };
 }
 
+test('staging migration lineage requires an explicit staging-only selection', () => {
+  const selected = loadTargetRuntimeConfig({ env: deployedEnvironment({ STAGING_MIGRATION_LINEAGE: 'true' }), backendRoot: ROOT });
+  assert.equal(selected.migrationsDirectory, path.join(ROOT, 'database', 'staging-migrations'));
+  const normal = loadTargetRuntimeConfig({ env: deployedEnvironment(), backendRoot: ROOT });
+  assert.equal(normal.migrationsDirectory, path.join(ROOT, 'database', 'migrations'));
+  assert.throws(() => loadTargetRuntimeConfig({ env: deployedEnvironment({ APP_ENV: 'production', STAGING_MIGRATION_LINEAGE: 'true' }), backendRoot: ROOT, loadSecurity: () => ({ appEnv: 'production' }) }), error => error.field === 'STAGING_MIGRATION_LINEAGE');
+});
+
 function createDeployedDatabase(t, { identity = true, migrated = true } = {}) {
   const persistentRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "hundo-m7-target-runtime-")
@@ -1522,7 +1530,7 @@ describe("M7-01 deployed target runtime configuration", () => {
       inspect.database
         .prepare("SELECT COUNT(*) AS count FROM schema_migrations")
         .get().count,
-      70
+      89
     );
     assert.equal(
       inspect.database
@@ -1622,6 +1630,8 @@ describe("M7-01 deployed target runtime configuration", () => {
       version: 1,
     });
     const session = runtime.services.sessionService.issueForUser({ userId });
+    runtime.database.prepare("INSERT INTO outbox_events(id,league_id,event_type,aggregate_type,aggregate_id,payload_json,status,attempt_count,available_at_ms,published_at_ms,last_error_code,created_at_ms,updated_at_ms,version) VALUES(?,NULL,'account.password_changed_notification','user',?,'{\"private\":\"PRIVATE_HEALTH_PAYLOAD\"}','failed',1,1,NULL,'PRIVATE_HEALTH_ERROR',1,1,1)").run(uuid(7190),userId);
+    runtime.database.prepare("INSERT INTO job_runs(id,league_id,season_id,job_type,occurrence_key,scheduled_for_ms,status,attempt_count,last_error_code,created_at_ms,updated_at_ms,version) VALUES(?,NULL,NULL,'fixture:health','private-health-fixture',1,'failed',1,'PRIVATE_JOB_ERROR',1,1,1)").run(uuid(7191));
     const before = runtime.database.serialize();
     const operations = await fetch(
       new URL("/api/v1/operations/health", baseUrl),
@@ -1647,6 +1657,7 @@ describe("M7-01 deployed target runtime configuration", () => {
         "environmentId",
         "frontendBuildId",
         "freeAgentDraftRoutes",
+        "jobs",
         "lastValidStatisticsRefresh",
         "lastVerifiedBackup",
         "lifecycle",
@@ -1660,9 +1671,11 @@ describe("M7-01 deployed target runtime configuration", () => {
       ].sort()
     );
     assert.equal(body.data.environment, "staging");
-    assert.equal(body.data.schemaVersion, 70);
+    assert.equal(body.data.schemaVersion, 89);
     assert.equal(body.data.scheduler.state, "disabled");
-    assert.deepEqual(body.data.accountEmailDelivery, { enabled: false });
+    assert.deepEqual(body.data.accountEmailDelivery, { enabled: false,pending:0,publishing:0,failed:1,lastDeliveredAtMs:null });
+    assert.deepEqual(body.data.jobs,{pending:0,running:0,failed:1,interrupted:0});
+    assert.match(operations.headers.get("cache-control"),/no-store/);
     assert.deepEqual(body.data.backupSchedule, { enabled: false, latestRun: null });
     assert.deepEqual(body.data.freeAgentDraftRoutes, { enabled: true });
     assert.deepEqual(body.data.maintenance, { state: "closed" });
@@ -1684,13 +1697,14 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.deepEqual(body.data.outbox, {
       pending: 0,
       publishing: 0,
-      failed: 0,
+      failed: 1,
     });
     assert.match(body.data.migrationChecksumSetId, /^[0-9a-f]{64}$/);
     const serialized = JSON.stringify(body);
     for (const forbidden of [
       input.config.databasePath,
       input.config.persistentRoot,
+      "PRIVATE_HEALTH_PAYLOAD", "PRIVATE_HEALTH_ERROR", "PRIVATE_JOB_ERROR",
       "RATE_LIMIT_KEY_SECRET",
       "secret-material",
       "league.sqlite3",

@@ -1,8 +1,8 @@
 const { EXPANDED_SCORING_VERSION, emptyScoringStats, addScoringStats, calculateExpandedScore } = require("../statistics/expandedScoringPolicy");
 
-function calculateExpandedTeamScore({ lock, lockedPlayers, currentPlayerGames, expandedPlayerGames, excludedPlayerGames, weekStartsAtMs, weekEndsAtMs }) {
+function calculateExpandedTeamScore({ lock, lockedPlayers, currentPlayerGames, expandedPlayerGames, excludedPlayerGames, weekStartsAtMs, weekEndsAtMs, scoringRule = null }) {
   if (!lock || ![0, 1].includes(lock.legal) || !Number.isSafeInteger(weekStartsAtMs) || !Number.isSafeInteger(weekEndsAtMs) || weekEndsAtMs <= weekStartsAtMs) throw new TypeError("A valid matchup scoring window and team lock are required.");
-  if (lock.legal === 0) return Object.freeze({ teamId: lock.team_id, legal: false, scoreHundredths: 0, scoringRuleVersion: EXPANDED_SCORING_VERSION, players: Object.freeze([]) });
+  if (lock.legal === 0) return Object.freeze({ teamId: lock.team_id, legal: false, scoreHundredths: 0, scoringRuleVersion: scoringRule?.version || EXPANDED_SCORING_VERSION, ...(scoringRule ? {scoringWeights: scoringRule.weights} : {}), players: Object.freeze([]) });
   const exclusions = new Set(excludedPlayerGames.map((row) => `${row.player_id}\u0000${row.nhl_game_id}`));
   const startsAtMs = lock.lock_type === "late" ? lock.locked_at_ms : weekStartsAtMs;
   const totals = new Map();
@@ -23,16 +23,16 @@ function calculateExpandedTeamScore({ lock, lockedPlayers, currentPlayerGames, e
   }
   const players = lockedPlayers.map((player) => {
     const total = totals.get(player.player_id);
-    const calculation = calculateExpandedScore(total.stats, player.position_group);
+    const calculation = calculateExpandedScore(total.stats, player.position_group, scoringRule);
     const goalDelta = total.stats.evenStrengthGoals + total.stats.powerPlayGoals + total.stats.shortHandedGoals;
     const assistDelta = total.stats.primaryAssists + total.stats.secondaryAssists;
     return Object.freeze({ playerId: player.player_id, fullName: player.player_full_name, positionGroup: player.position_group, slotNumber: player.slot_number,
       gamesPlayedDelta: total.gamesPlayed, goalDelta, assistDelta, pointDelta: goalDelta + assistDelta,
-      scoreHundredths: calculation.fantasyPointsHundredths, dataStatus: "available", scoringRuleVersion: EXPANDED_SCORING_VERSION,
+      scoreHundredths: calculation.fantasyPointsHundredths, dataStatus: "available", scoringRuleVersion: scoringRule?.version || EXPANDED_SCORING_VERSION, ...(scoringRule ? {scoringWeights: scoringRule.weights} : {}),
       scoringStats: calculation.scoringStats, scoringBreakdown: calculation.breakdown });
   });
   players.sort((a, b) => a.positionGroup.localeCompare(b.positionGroup) || a.slotNumber - b.slotNumber || a.playerId.localeCompare(b.playerId));
-  return Object.freeze({ teamId: lock.team_id, legal: true, scoreHundredths: players.reduce((sum, player) => sum + player.scoreHundredths, 0), scoringRuleVersion: EXPANDED_SCORING_VERSION, players: Object.freeze(players) });
+  return Object.freeze({ teamId: lock.team_id, legal: true, scoreHundredths: players.reduce((sum, player) => sum + player.scoreHundredths, 0), scoringRuleVersion: scoringRule?.version || EXPANDED_SCORING_VERSION, ...(scoringRule ? {scoringWeights: scoringRule.weights} : {}), players: Object.freeze(players) });
 }
 
 module.exports = { calculateExpandedTeamScore };

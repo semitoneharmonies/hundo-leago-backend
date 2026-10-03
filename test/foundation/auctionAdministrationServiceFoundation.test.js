@@ -405,6 +405,49 @@ function createHarness({
   };
 }
 
+test('administrative writes and old receipt replays omit competitor identities',()=>{
+  for(const action of ['edit_bid','remove_bid','cancel_auction']) for(const replayed of [false,true]) {
+    let stored;
+    const response=command=>{
+      const data=dataFor(command);
+      const auction=action==='edit_bid'?data:data.auction;
+      auction.administrativeBids=[{bidId:IDS.bid,teamId:IDS.secondTeam}];
+      auction.eligibleTeams=[{teamId:IDS.secondTeam}];
+      stored=resultFor({...command,occurredAtMs:NOW_MS},{data,replayed});
+      return stored;
+    };
+    const harness=createHarness(replayed?{findReplay:response}:{administer:response});
+    const result=invoke(harness.service,action,methodOptions(action));
+    const auction=action==='edit_bid'?result.data:result.data.auction;
+    assert.deepEqual(auction.administrativeBids,[]);
+    assert.deepEqual(auction.eligibleTeams,[]);
+    const storedAuction=action==='edit_bid'?stored.data:stored.data.auction;
+    assert.equal(storedAuction.administrativeBids.length,1,'redaction preserves the durable receipt');
+    assert.equal(storedAuction.eligibleTeams.length,1);
+  }
+});
+
+test('restricted cancellation and stored retries hide allocation participants without rewriting receipts', () => {
+  for (const replayed of [false, true]) {
+    let stored;
+    const response = command => {
+      stored = resultFor({...command, occurredAtMs: NOW_MS}, {
+        data: restrictedCancellationData(), replayed,
+      });
+      return stored;
+    };
+    const harness = createHarness(replayed ? {findReplay: response} : {administer: response});
+    const result = harness.service.cancelAuction(methodOptions('cancel_auction'));
+    assert.deepEqual(result.data.fadAllocation.rankedOffers, []);
+    assert.deepEqual(result.data.fadAllocation.restricted.participantTeamIds, []);
+    assert.deepEqual(result.data.fadAllocation.draws, []);
+    assert.equal(result.data.fadAllocation.winner, null);
+    assert.equal(JSON.stringify(result.data).includes(IDS.secondTeam), false);
+    assert.equal(stored.data.fadAllocation.rankedOffers.length, 1);
+    assert.equal(stored.data.fadAllocation.restricted.participantTeamIds.length, 2);
+  }
+});
+
 describe(
   "FAD-11 context-aware auction administration application service",
   () => {
@@ -1150,7 +1193,14 @@ describe(
           methodOptions("cancel_auction")
         );
 
-        assert.deepEqual(result.data, expected);
+        assert.deepEqual(result.data, {
+          ...expected,
+          fadAllocation: {
+            ...expected.fadAllocation,
+            rankedOffers: [],
+            restricted: {...expected.fadAllocation.restricted, participantTeamIds: []},
+          },
+        });
         assert.equal(
           result.data.auction.status,
           "correction_required"

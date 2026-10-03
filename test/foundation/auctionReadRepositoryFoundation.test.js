@@ -1077,6 +1077,25 @@ function seedFallbackAuction(database) {
 }
 
 describe("FAD-06 SQLite auction read repository", () => {
+  test("keeps commissioner and administrator reads private until a scoped reveal", t => {
+    const runtime=createRuntime(t);
+    seedOrdinaryActiveAuctions(runtime.database);
+    seedRestrictedAuction(runtime.database);
+    const before=runtime.database.serialize();
+    for(const [viewerUserId,viewerMembershipId] of [
+      [IDS.commissionerUser,IDS.commissionerMembership],
+      [IDS.administratorUser,IDS.administratorMembership],
+    ]) for(const auctionId of [IDS.ordinaryAuction,IDS.restrictedAuction]) {
+      const input=detailInput(auctionId,{viewerUserId,viewerMembershipId});
+      const hidden=runtime.repository.readAuction(input);
+      assert.deepEqual(hidden.administrativeBids,[]);
+      assert.deepEqual(hidden.eligibleTeams,[]);
+      assert.equal(JSON.stringify(hidden).includes(IDS.ordinaryBidThree),false);
+      assert.ok(runtime.repository.readAuction(input,{revealAdministration:true}).administrativeBids.length>0);
+      assert.deepEqual(runtime.repository.readAuction(input).administrativeBids,[]);
+    }
+    assert.equal(before.equals(runtime.database.serialize()),true);
+  });
   for (const kind of ["ordinary", "restricted", "fallback"]) {
     test(`counts active teams without exposing competitor edits: ${kind}`, (t) => {
       const runtime = createRuntime(t);
@@ -1142,7 +1161,7 @@ describe("FAD-06 SQLite auction read repository", () => {
     const before = runtime.database.serialize();
     const read = (auctionId) => runtime.repository.readAuction(detailInput(auctionId, {
       viewerUserId: IDS.commissionerUser, viewerMembershipId: IDS.commissionerMembership,
-    }));
+    }), { revealAdministration: true });
     const fad = read(IDS.restrictedAuction);
     assert.deepEqual(fad.capabilities.adminCancel, { allowed: false, reasonCode: "FAD_SEASON_CLOSED" });
     assert.deepEqual(fad.capabilities.adminResolve, { allowed: false, reasonCode: "FAD_SEASON_CLOSED" });
@@ -1252,7 +1271,7 @@ describe("FAD-06 SQLite auction read repository", () => {
       detailInput(IDS.ordinaryAuction, {
         viewerUserId: IDS.commissionerUser,
         viewerMembershipId: IDS.commissionerMembership,
-      })
+      }), { revealAdministration: true }
     );
     assert.equal(commissioner.viewerTeams.length, 0);
     assert.equal(commissioner.administrativeBids.length, 2);
@@ -1278,7 +1297,7 @@ describe("FAD-06 SQLite auction read repository", () => {
       detailInput(IDS.ordinaryAuction, {
         viewerUserId: IDS.administratorUser,
         viewerMembershipId: IDS.administratorMembership,
-      })
+      }), { revealAdministration: true }
     );
     assert.equal(administrator.administrativeBids.length, 2);
     assert.equal(
@@ -1330,7 +1349,7 @@ describe("FAD-06 SQLite auction read repository", () => {
       detailInput(IDS.ordinaryAuction, {
         viewerUserId: IDS.commissionerUser,
         viewerMembershipId: IDS.commissionerMembership,
-      })
+      }), { revealAdministration: true }
     );
     assert.deepEqual(
       ordinaryAdministration.administrativeBids
@@ -1440,7 +1459,7 @@ describe("FAD-06 SQLite auction read repository", () => {
       detailInput(IDS.openFadAuction, {
         viewerUserId: IDS.commissionerUser,
         viewerMembershipId: IDS.commissionerMembership,
-      })
+      }), { revealAdministration: true }
     );
     assert.deepEqual(
       fadAdministration.administrativeBids
@@ -1572,7 +1591,7 @@ describe("FAD-06 SQLite auction read repository", () => {
       detailInput(IDS.queuedFadAuction, {
         viewerUserId: IDS.commissionerUser,
         viewerMembershipId: IDS.commissionerMembership,
-      })
+      }), { revealAdministration: true }
     );
     assert.equal(commissioner.viewerTeams.length, 0);
     assert.equal(commissioner.administrativeBids.length, 2);
@@ -2195,7 +2214,7 @@ describe("FAD-06 SQLite auction read repository", () => {
           detailInput(IDS.restrictedAuction, {
             viewerUserId: IDS.commissionerUser,
             viewerMembershipId: IDS.commissionerMembership,
-          })
+          }), { revealAdministration: true }
         ),
       (error) =>
         error.code === "REPOSITORY_SCHEMA_INCOMPATIBLE" &&
@@ -2614,7 +2633,7 @@ describe("FAD-06 SQLite auction read repository", () => {
       detailInput(IDS.ordinaryAuction, {
         viewerUserId: IDS.commissionerUser,
         viewerMembershipId: IDS.commissionerMembership,
-      })
+      }), { revealAdministration: true }
     );
     for (const bid of commissioner.administrativeBids) {
       assert.deepEqual(bid.capabilities, {
@@ -3053,7 +3072,7 @@ describe("FAD-06 SQLite auction read repository", () => {
         detailInput(IDS.ordinaryAuction, {
           viewerUserId: IDS.commissionerUser,
           viewerMembershipId: IDS.commissionerMembership,
-        })
+        }), { revealAdministration: true }
       );
     assert.equal(
       currentCommissioner.administrativeBids.length,

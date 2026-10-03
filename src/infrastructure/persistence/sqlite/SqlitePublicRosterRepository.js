@@ -1,3 +1,4 @@
+const {createLeagueScoringRuleReader,withLeagueScoring} = require('./leagueScoringRules');
 const {
   PublicRosterPolicyError,
   createPublicRosterProjection,
@@ -12,7 +13,7 @@ const {
   createSqliteCapReadRepository,
 } = require("./SqliteCapReadRepository");
 
-function createSqlitePublicRosterRepository({ database, expandedScoringEnabled = false } = {}) {
+function createSqlitePublicRosterRepository({ database, expandedScoringEnabled = false, nowMs = Date.now } = {}) {
   const capRepository = createSqliteCapReadRepository({ database });
   const expandedSchema = database.pragma("user_version", { simple: true }) >= 57;
   let scopeStatement;
@@ -165,7 +166,9 @@ function createSqlitePublicRosterRepository({ database, expandedScoringEnabled =
           scope.season_updated_at_ms,
           scope.team_updated_at_ms
         );
-        const players = playersStatement.all(query).map((row) => {
+        const scoringRule = createLeagueScoringRuleReader(database, nowMs)(scope.league_id);
+        const players = playersStatement.all(query).map((original) => {
+          const row = withLeagueScoring(original, scoringRule);
           updatedAt = Math.max(
             updatedAt,
             row.ownership_updated_at_ms,
@@ -191,7 +194,8 @@ function createSqlitePublicRosterRepository({ database, expandedScoringEnabled =
                     fantasyPointsHundredths:
                       row.fantasy_points_hundredths,
                     ...(row.scoring_stats_json ? {
-                      scoringRuleVersion: "expanded-2026-v1",
+                      scoringRuleVersion: row.scoring_rule_version || "expanded-2026-v1",
+                      ...(row.scoring_weights ? {scoringWeights:row.scoring_weights} : {}),
                       scoringStats: JSON.parse(row.scoring_stats_json),
                     } : {}),
                   },

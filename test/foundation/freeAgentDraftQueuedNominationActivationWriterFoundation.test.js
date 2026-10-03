@@ -824,6 +824,23 @@ describe("FAD-13 queued-nomination activation writer", () => {
     });
   }
 
+  test('queued activation preserves accepted offers and uses the configured gap for a future extension',t=>{
+    const fixture=createFixture(t,'custom-extension-cutoff'),db=fixture.database;
+    // Historical queue fixtures have older rounds still scheduled. Set only the
+    // extension setting here; the full authorized setting command is tested in runtime.
+    db.prepare('INSERT INTO fad_auction_cutoff_settings(id,league_id,season_id,gap_ms,updated_at_ms,version) VALUES(?,?,?,?,?,1)')
+      .run(PRIMARY.fad,PRIMARY.league,PRIMARY.season,1800000,ACCEPTED_AT_MS);
+    const accepted=db.prepare('SELECT * FROM free_agent_draft_nomination_queue WHERE id=?').get(PRIMARY.queue);
+    claim(db);const result=fixture.writer.executeClaimed(executeCommand());
+    assert.equal(result.outcome,'opened');
+    const round=db.prepare('SELECT * FROM free_agent_draft_rollovers WHERE id=?').get(result.resolutionRolloverId);
+    assert.equal(round.creation_cutoff_at_ms,round.rolls_over_at_ms-1800000);
+    const opened=db.prepare('SELECT * FROM free_agent_draft_nomination_queue WHERE id=?').get(PRIMARY.queue);
+    for(const name of Object.keys(accepted).filter(k=>k.startsWith('opening_')||k==='accepted_at_ms'))assert.equal(opened[name],accepted[name],name);
+    assert.equal(fixture.writer.executeClaimed(executeCommand()).replayed,true);
+    assert.deepEqual(db.pragma('foreign_key_check'),[]);
+  });
+
   test("opens a queued nomination into the configured two-hour final round", (t) => {
     const fixture = createFixture(t, 'custom-final-round');
     const resolutionAtMs = OPENING_AT_MS + 2 * HOUR_MS;

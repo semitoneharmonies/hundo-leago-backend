@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { createLeagueAuctionScheduleReader } = require('./leagueAuctionSchedule');
 
 const {
   AUCTION_CREATION_CODES,
@@ -44,6 +45,7 @@ function policyFail(reasonCode) {
 }
 
 function createSqliteAuctionRepository({ database, stagingDailyAuctionsEnabled = false } = {}) {
+  const readLeagueSchedule = createLeagueAuctionScheduleReader(database);
   let findIdempotency;
   let findAuthority;
   let findPlayer;
@@ -440,6 +442,7 @@ function createSqliteAuctionRepository({ database, stagingDailyAuctionsEnabled =
         "Auction creation authority is not unique."
       );
       const window = getAuctionCreationWindow({
+        schedule: readLeagueSchedule(command.leagueId),
         stagingDaily: stagingDailyAuctionsEnabled,
         nowMs: command.occurredAtMs,
         timeZone: authority?.league_timezone || "America/Vancouver",

@@ -126,7 +126,7 @@ function createMatchupScoringService({ repository, expandedScoringEnabled = fals
     throw new TypeError("createMatchupScoringService requires a scoring repository");
   }
 
-  function readScore(input, allowedStatuses) {
+  function readScore(input, allowedStatuses, scoringRuleOverride) {
     const context = repository.readContext(input);
     if (!context) fail(MATCHUP_SCORING_SERVICE_CODES.contextMissing, "The matchup was not found.");
     if (!allowedStatuses.has(context.matchup.status)) {
@@ -451,6 +451,7 @@ function createMatchupScoringService({ repository, expandedScoringEnabled = fals
         if (context.refresh.provider !== "nhl-completed-games" || !context.expandedScoring) fail(MATCHUP_SCORING_SERVICE_CODES.statisticsMissing, "Expanded statistics await a complete NHL refresh.");
         return calculateExpandedTeamScore({ lock, lockedPlayers, currentPlayerGames,
           expandedPlayerGames: context.expandedScoring.playerGames, excludedPlayerGames,
+          scoringRule: scoringRuleOverride === undefined ? context.scoringRule : scoringRuleOverride,
           weekStartsAtMs: context.matchup.week_starts_at_ms, weekEndsAtMs: context.matchup.week_ends_at_ms });
       }
       if (context.refresh.provider === "nhl-completed-games") {
@@ -521,7 +522,11 @@ function createMatchupScoringService({ repository, expandedScoringEnabled = fals
     return readScore(input, new Set(["final"]));
   }
 
-  return Object.freeze({ readAtRefresh, readLive, readForCorrection });
+  function previewRule(input, rule) {
+    if (!expandedScoringEnabled) fail(MATCHUP_SCORING_SERVICE_CODES.stateInvalid, 'Expanded scoring is not enabled.');
+    return readScore(input, new Set(['live', 'awaiting_data', 'final']), rule);
+  }
+  return Object.freeze({ readAtRefresh, readLive, readForCorrection, previewRule });
 }
 
 module.exports = {

@@ -1030,6 +1030,17 @@ describe("FAD-05 completed-FAD schedule gate", () => {
     assert.equal(scoped([IDS.league], null).claim(command).acquired, true);
   });
 
+  test('league pause holds due matchup work without consuming its job or changing the clock',t=>{
+    const {database,repository}=createRuntime(t),valid=insertLegacyJob(database);completeFadGate(database);
+    const actor=database.prepare('SELECT id FROM users LIMIT 1').get().id,freezeId=uuid(9100);
+    database.prepare("INSERT INTO league_freezes(id,league_id,actor_user_id,status,reason,frozen_at_ms,version) VALUES(?,?,?,'active','Review calendar',?,1)").run(freezeId,IDS.league,actor,WEEK_START_MS);
+    const before=database.serialize();assert.deepEqual(repository.listDue({nowMs:WEEK_END_MS+1,limit:100}),[]);
+    const command={leagueId:IDS.league,seasonId:IDS.season,jobType:valid.jobType,occurrenceKey:valid.occurrenceKey,leaseOwner:'pause-worker',leaseToken:'pause-token',nowMs:WEEK_END_MS+1,leaseExpiresAtMs:WEEK_END_MS+101};
+    assert.equal(repository.claim(command).acquired,false);assert.deepEqual(database.serialize(),before);
+    database.prepare("UPDATE league_freezes SET status='ended',ended_at_ms=?,ended_by_user_id=?,version=version+1 WHERE id=?").run(WEEK_END_MS,actor,freezeId);
+    assert.equal(repository.listDue({nowMs:WEEK_END_MS+1,limit:100}).length,1);assert.equal(repository.claim(command).acquired,true);
+  });
+
   test("admits an exact migrated legacy occurrence only when its durable binding is valid", (t) => {
     const { database, repository } =
       createRuntime(t);

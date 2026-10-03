@@ -716,7 +716,8 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
        AND job.occurrence_key =
             'auction:' || auction.id || ':' || auction.resolves_at_ms
        AND job.scheduled_for_ms = auction.resolves_at_ms
-      WHERE auction.status IN ('open', 'resolving', 'failed')
+      WHERE NOT EXISTS (SELECT 1 FROM league_freezes pause WHERE pause.league_id=auction.league_id AND pause.status='active')
+        AND auction.status IN ('open', 'resolving', 'failed')
         AND auction.resolves_at_ms <= @nowMs
         AND draw.revealed_at_ms IS NULL
         AND draw.version = 1
@@ -1802,7 +1803,7 @@ function createSqliteFreeAgentDraftAuctionResolutionWriter({
         AND predecessor.opens_at_ms <= @nowMs
         AND @nowMs <= predecessor.rolls_over_at_ms
         AND target.rolls_over_at_ms > target.opens_at_ms
-        AND (target.league_id = '48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03' OR target.creation_cutoff_at_ms = max(target.opens_at_ms, target.rolls_over_at_ms - 3600000))
+        AND target.creation_cutoff_at_ms BETWEEN target.opens_at_ms AND target.rolls_over_at_ms
         AND target.status IN ('scheduled', 'processing')
       ORDER BY target.opens_at_ms, target.id
     `);

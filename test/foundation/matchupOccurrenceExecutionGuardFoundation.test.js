@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { CURRENT_SCHEMA_VERSION } = require("../helpers/currentSchemaVersion");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -516,7 +517,7 @@ function createRuntime(t) {
       SELECT MAX(migration_id) AS migration_id
       FROM schema_migrations
     `).get().migration_id,
-    57
+    CURRENT_SCHEMA_VERSION
   );
   seedLeague(connection.database);
   seedSchedule(connection.database);

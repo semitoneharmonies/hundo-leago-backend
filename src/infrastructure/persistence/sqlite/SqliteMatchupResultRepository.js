@@ -1,3 +1,4 @@
+const {assertCurrentScoringRule} = require('./leagueScoringRules');
 const {
   REPOSITORY_ERROR_CODES,
   mapRepositoryError,
@@ -251,6 +252,7 @@ function createSqliteMatchupResultRepository({
     ) {
       throw repositoryError(REPOSITORY_ERROR_CODES.versionConflict, "The matchup cannot be finalized.");
     }
+    assertCurrentScoringRule(database, command);
     const refreshRows = refreshStatement.all({ refreshId: stableId(command.refreshId) });
     if (
       refreshRows.length !== 1 ||

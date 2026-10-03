@@ -297,9 +297,10 @@ function cardDescriptor(row, mode, evidence) {
   });
 }
 
-function viewerPhase(row, nowMs) {
+function viewerPhase(row, nowMs, softDeadline = false) {
   try {
     return deriveFreeAgentDraftViewerPhase({
+      ...(softDeadline ? { softDeadline: true } : {}),
       status: row?.status ?? null,
       nowMs,
       cardsOpenedAtMs: row?.opened_at_ms ?? null,
@@ -837,6 +838,7 @@ function createSqliteFreeAgentDraftReadRepository({
   }
 
   const supportsScheduleTiming = database.prepare("PRAGMA user_version").get().user_version >= 56 || database.prepare("SELECT name FROM pragma_table_info('season_matchup_schedule_generations') WHERE name = 'fad_timing_json'").get() !== undefined;
+  const softDeadline = database.prepare("PRAGMA user_version").get().user_version >= 72;
   let openingSeasonStatement;
   let openingLeagueSettingsStatement;
   let openingReadinessStatement;
@@ -3558,7 +3560,7 @@ function createSqliteFreeAgentDraftReadRepository({
             "The current league FAD"
           )
         : null;
-      const phase = viewerPhase(fad, scope.nowMs);
+      const phase = viewerPhase(fad, scope.nowMs, softDeadline);
       const managedRows = fad
         ? readManagedCards(scope, fad.id)
         : [];
@@ -3764,7 +3766,7 @@ function createSqliteFreeAgentDraftReadRepository({
           "The scoped Free Agent Draft was not found."
         );
       }
-      const phase = viewerPhase(fad, scope.nowMs);
+      const phase = viewerPhase(fad, scope.nowMs, softDeadline);
       const commissionerWindow = readFreeAgentDraftCommissionerWindow(database, {
         leagueId: scope.leagueId, seasonId: fad.season_id, nowMs: scope.nowMs,
       });
@@ -3910,6 +3912,7 @@ function createSqliteFreeAgentDraftReadRepository({
         version: fad.version,
         status: fad.status,
         phase,
+        ...(softDeadline ? { deadlinePolicy: "soft" } : {}),
         serverNowMs: scope.nowMs,
         timeZone: authority.timezone,
         openedAtMs: fad.opened_at_ms,

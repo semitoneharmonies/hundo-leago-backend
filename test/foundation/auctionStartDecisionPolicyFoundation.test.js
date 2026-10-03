@@ -112,7 +112,7 @@ function decisionInput({
   };
 }
 
-test("Goon fifteen-minute windows allow zero cutoff and respect a positive cutoff without changing Amigo", () => {
+test("Configured fifteen-minute windows honor zero and positive cutoff gaps", () => {
   const goon = "48e59cfb-b12d-4dfb-ae1a-4d8b3512ef03";
   const end = OPENS_AT_MS + 15 * 60_000;
   const context = (leagueId, cutoff) => rapidContext({ leagueId }, {
@@ -126,7 +126,7 @@ test("Goon fifteen-minute windows allow zero cutoff and respect a positive cutof
   assert.equal(queued.kind, "nomination_queued");
   assert.equal(queued.resolvesAtMs, end + 15 * 60_000);
   assert.throws(() => decideFreeAgentDraftAuctionStart(decisionInput({ nowMs: end, rapidContext: context(goon, 0) })));
-  assert.throws(() => decideFreeAgentDraftAuctionStart(decisionInput({ nowMs: end - 1, rapidContext: context("bbfb5b17-0080-465f-a2cd-ac3d2c946e83", 0) })));
+  assert.equal(decideFreeAgentDraftAuctionStart(decisionInput({ nowMs: end - 1, rapidContext: context("bbfb5b17-0080-465f-a2cd-ac3d2c946e83", 0) })).kind, "auction_opened");
 });
 
 function assertPolicyError(callback, reasonCode) {
@@ -545,7 +545,7 @@ describe("FAD-13 server-derived rapid start decision policy", () => {
     for (const rolloverValue of [
       {
         creationCutoffAtMs:
-          CREATION_CUTOFF_AT_MS + 1,
+          ROLLS_OVER_AT_MS + 1,
       },
       { rollsOverAtMs: ROLLS_OVER_AT_MS + 1 },
     ]) {

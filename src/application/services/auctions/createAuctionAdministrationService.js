@@ -520,6 +520,36 @@ function validateRepositoryResult({
       result.data
     );
   }
+  // Mutations and historical receipt replays must not reveal competing bidders.
+  if (result.data?.administrativeBids) result={...result,data:{...result.data,administrativeBids:[],eligibleTeams:[]}};
+  if (result.data?.auction?.administrativeBids) result={...result,data:{...result.data,auction:{...result.data.auction,administrativeBids:[],eligibleTeams:[]}}};
+  // A cancellation needs the recovery status, not the private allocation's
+  // participants, ranking or draw evidence. Keep the durable receipt intact.
+  if (request.action === "cancel_auction" && result.data.fadAllocation) {
+    const allocation = result.data.fadAllocation;
+    result = {
+      ...result,
+      data: {
+        ...result.data,
+        fadAllocation: {
+          ...allocation,
+          rankedOffers: [],
+          winner: null,
+          draws: [],
+          restricted: allocation.restricted === null ? null : {
+            ...allocation.restricted,
+            participantTeamIds: [],
+          },
+          fallback: allocation.fallback === null ? null : {
+            ...allocation.fallback,
+            winningBidId: null,
+            contractId: null,
+            ownershipId: null,
+          },
+        },
+      },
+    };
+  }
   return deepFreeze(result);
 }
 

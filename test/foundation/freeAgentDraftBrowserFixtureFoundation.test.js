@@ -47,11 +47,12 @@ const ROOT_DIRECTORY = path.resolve(
   "..",
   ".."
 );
-const MIGRATIONS_DIRECTORY = path.join(
+const { historicalSchema65Migrations } = require("../helpers/historicalSchema65Migrations");
+const MIGRATIONS_DIRECTORY = historicalSchema65Migrations(path.join(
   ROOT_DIRECTORY,
   "database",
   "migrations"
-);
+));
 const FRONTEND_ORIGIN = "http://127.0.0.1:5173";
 const PASSWORD = "hundo";
 const UUID_PATTERN =

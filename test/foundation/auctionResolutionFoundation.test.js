@@ -562,6 +562,20 @@ describe("M5-03 deterministic auction resolution policy", () => {
 });
 
 describe("M5-03 read-only SQLite auction resolution candidates", () => {
+  test('paused leagues do not expose due auctions to resolution and retain all bids', t=>{
+    const {database,repository}=createPersistenceRuntime(t);
+    const bids=database.prepare('SELECT * FROM auction_bids ORDER BY id').all();
+    const actor=database.prepare('SELECT id FROM users ORDER BY id LIMIT 1').get().id;
+    database.prepare("INSERT INTO league_freezes(id,league_id,actor_user_id,status,reason,frozen_at_ms,version) VALUES(?,?,?,'active','Review competition',?,1)").run(uuid(992),IDS.league,actor,NOW_MS-1);
+    const before=semanticHash(database);
+    assert.deepEqual(repository.listDue({nowMs:NOW_MS,limit:10}),[]);
+    assert.equal(repository.loadCandidate({leagueId:IDS.league,auctionId:IDS.auction,nowMs:NOW_MS}),null);
+    assert.equal(semanticHash(database),before);
+    database.prepare("UPDATE league_freezes SET status='ended',ended_at_ms=?,ended_by_user_id=?,version=version+1 WHERE id=?").run(NOW_MS,actor,uuid(992));
+    assert.equal(repository.listDue({nowMs:NOW_MS,limit:10}).length,1);
+    assert.equal(repository.loadCandidate({leagueId:IDS.league,auctionId:IDS.auction,nowMs:NOW_MS}).bids.length,bids.length);
+    assert.deepEqual(database.prepare('SELECT * FROM auction_bids ORDER BY id').all(),bids);
+  });
   test("lists only due work and decides the deterministic winner without writes", (t) => {
     const { database, repository, service } = createPersistenceRuntime(t);
     const before = semanticHash(database);

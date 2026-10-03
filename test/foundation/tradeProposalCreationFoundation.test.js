@@ -756,14 +756,17 @@ function count(database, tableName, where = "") {
 
 function createRuntime(
   t,
-  { candidateCardSummerSynchronizer } = {}
+  { candidateCardSummerSynchronizer, schemaVersion } = {}
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-m5-06-create-"));
   const connection = openDatabase({
     databasePath: path.join(root, "league.sqlite3"),
     environment: "test",
   });
-  migrateDatabase({
+  if(schemaVersion){
+    const {applyMigrations,discoverMigrations}=require('../../src/infrastructure/database/migrate');
+    applyMigrations({database:connection.database,migrations:discoverMigrations({migrationsDirectory:MIGRATIONS_DIRECTORY}).filter(m=>m.id<=schemaVersion),applicationBuildId:'trade-calendar-legacy',now:()=>NOW_MS});
+  }else migrateDatabase({
     database: connection.database,
     migrationsDirectory: MIGRATIONS_DIRECTORY,
     applicationBuildId: "m5-06-test",
@@ -1106,6 +1109,69 @@ describe("M5-06 atomic pending trade-proposal creation", () => {
     } finally {
       second.database.close();
     }
+  });
+
+  test('trade deadline edits preserve assets and completed history while pending offers and expiry follow the new time',async t=>{
+    const runtime=createRuntime(t,{schemaVersion:74}),db=runtime.database;
+    const {createSqliteTradeDeadlineChangeRepository}=require('../../src/infrastructure/persistence/sqlite/SqliteTradeDeadlineChangeRepository');
+    const {createTradeDeadlineChangeService}=require('../../src/application/services/leagues/createTradeDeadlineChangeService');
+    const control=createTradeDeadlineChangeService({repository:createSqliteTradeDeadlineChangeRepository({database:db}),leagueAuthorization:runtime.leagueAuthorization,clock:runtime.clock});
+    const scope={leagueId:IDS.league,authenticated:authenticated(IDS.commissioner)};
+    const first=create(runtime,'deadline-edit-offer'),second=create(runtime,'deadline-edit-other-offer');
+    const oldTables=db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations','application_metadata') ORDER BY name").all().map(r=>r.name);
+    const oldRows=()=>Object.fromEntries(oldTables.map(name=>[name,db.prepare('SELECT * FROM '+name+' ORDER BY rowid').all()]));
+    const old=oldRows(),objects=db.prepare("SELECT name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all();
+    const {applyMigrations,discoverMigrations}=require('../../src/infrastructure/database/migrate');
+    applyMigrations({database:db,migrations:discoverMigrations({migrationsDirectory:MIGRATIONS_DIRECTORY}).filter(m=>m.id<=75),applicationBuildId:'trade-calendar-migrated',now:()=>NOW_MS});
+    assert.deepEqual(oldRows(),old,'Migration preserves all populated league and proposal rows');
+    for(const row of objects)assert.equal(db.prepare('SELECT sql FROM sqlite_schema WHERE name=?').get(row.name).sql,row.sql,'Existing schema objects remain unchanged');
+    migrateDatabase({database:db,migrationsDirectory:MIGRATIONS_DIRECTORY,applicationBuildId:'trade-calendar-current',now:()=>NOW_MS});
+    const tables=['trade_assets','trade_events','trade_participants','contracts','contract_years','player_ownerships','draft_picks','retention_obligations','buyout_obligations','idempotency_requests'];
+    const rows=()=>Object.fromEntries(tables.map(name=>[name,db.prepare('SELECT * FROM '+name+' ORDER BY rowid').all()]));
+    const original=rows(),pastTrade=db.prepare('SELECT * FROM trades WHERE id=?').get(IDS.priorTrade);
+    const input={tradeDeadlineAtMs:NOW_MS+10*86400000,reason:'Extend the trading window'};
+    const bytes=db.serialize(),preview=control.preview({...scope,input});
+    assert.equal(preview.impact.extended,2);assert.deepEqual(db.serialize(),bytes);
+    assert.equal(JSON.stringify(preview).includes(first.proposal.id),false,'No private proposal identities in previews');
+    const command={...scope,input:{...input,confirmed:true,previewHash:preview.previewHash},idempotencyKey:'trade-deadline-extend'};
+    db.exec("CREATE TEMP TRIGGER fail_deadline_change BEFORE INSERT ON notifications WHEN NEW.event_type='league_trade_deadline_changed' BEGIN SELECT RAISE(ABORT,'injected deadline rollback'); END");
+    assert.throws(()=>control.apply(command),error=>error.code==='REPOSITORY_CONSTRAINT'&&error.cause?.code==='SQLITE_CONSTRAINT_TRIGGER');db.exec('DROP TRIGGER fail_deadline_change');assert.deepEqual(db.serialize(),bytes);
+    control.apply(command);assert.deepEqual(rows(),original);assert.deepEqual(db.prepare('SELECT * FROM trades WHERE id=?').get(IDS.priorTrade),pastTrade);
+    const changed=db.serialize();assert.equal(control.apply(command).replayed,true);assert.deepEqual(db.serialize(),changed);
+    assert.equal(create(runtime,'deadline-edit-offer').replayed,true,'Original proposal acceptance receipt remains usable');
+    const read=runtime.readService.read({leagueId:IDS.league,tradeId:first.proposal.id,authenticated:authenticated()});
+    assert.equal(read.proposal.effectiveDeadlineAtMs,NOW_MS+7*86400000);
+    assert.equal(control.read(scope).history.length,1);
+    const shorten={tradeDeadlineAtMs:NOW_MS+86400000,reason:'Move the deadline earlier'},shortPreview=control.preview({...scope,input:shorten});
+    assert.equal(shortPreview.impact.shortened,2);
+    control.apply({...scope,input:{...shorten,confirmed:true,previewHash:shortPreview.previewHash},idempotencyKey:'trade-deadline-shorten'});
+    runtime.setNow(shorten.tradeDeadlineAtMs);
+    const reopening={tradeDeadlineAtMs:NOW_MS+3*86400000,reason:'Reopen for new proposals'},reopenPreview=control.preview({...scope,input:reopening});
+    assert.equal(reopenPreview.impact.expiredRetained,2);assert.equal(reopenPreview.impact.reopensDeadline,true);
+    control.apply({...scope,input:{...reopening,confirmed:true,previewHash:reopenPreview.previewHash},idempotencyKey:'trade-deadline-reopen'});
+    await assert.rejects(()=>accept(runtime,first.proposal.id,'no-revived-acceptance'));
+    const expired=await runtime.expiryJob.run();assert.equal(expired.expired,2,JSON.stringify(expired));
+    assert.equal(db.prepare('SELECT status FROM trades WHERE id=?').get(second.proposal.id).status,'expired');
+    const fresh=create(runtime,'deadline-fresh-offer');assert.equal(fresh.proposal.effectiveDeadlineAtMs,reopening.tradeDeadlineAtMs);
+    const accepted=await accept(runtime,fresh.proposal.id,'deadline-fresh-acceptance');assert.equal(accepted.code,'TRADE_ACCEPTED');
+    assert.deepEqual(db.prepare('SELECT * FROM trades WHERE id=?').get(IDS.priorTrade),pastTrade);
+    assert.deepEqual(db.pragma('foreign_key_check'),[]);assert.equal(db.pragma('integrity_check',{simple:true}),'ok');
+  });
+
+  test('trade deadline edits retain receiver acceptance and allow later commissioner approval',async t=>{
+    const runtime=createRuntime(t),db=runtime.database;
+    const {createSqliteTradeDeadlineChangeRepository}=require('../../src/infrastructure/persistence/sqlite/SqliteTradeDeadlineChangeRepository');
+    const {createTradeDeadlineChangeService}=require('../../src/application/services/leagues/createTradeDeadlineChangeService');
+    const service=createTradeDeadlineChangeService({repository:createSqliteTradeDeadlineChangeRepository({database:db}),leagueAuthorization:runtime.leagueAuthorization,clock:runtime.clock});
+    const proposal=create(runtime,'calendar-awaiting-offer',creationInput());
+    await accept(runtime,proposal.proposal.id,'calendar-receiver-accept');
+    const accepted=db.prepare('SELECT * FROM trade_future_consideration_acceptances').all(),scope={leagueId:IDS.league,authenticated:authenticated(IDS.commissioner)},input={tradeDeadlineAtMs:NOW_MS+4*86400000,reason:'Allow time for approval'};
+    const review=service.preview({...scope,input});assert.equal(review.impact.extended,1);
+    service.apply({...scope,input:{...input,confirmed:true,previewHash:review.previewHash},idempotencyKey:'calendar-awaiting-extend'});
+    assert.deepEqual(db.prepare('SELECT * FROM trade_future_consideration_acceptances').all(),accepted);
+    runtime.setNow(TRADE_DEADLINE_MS+1);
+    const result=await approve(runtime,proposal.proposal.id,'calendar-delayed-approval');assert.equal(result.code,'TRADE_APPROVED');
+    assert.deepEqual(db.pragma('foreign_key_check'),[]);
   });
 
   test("snapshots every approved asset and writes only proposal evidence atomically", (t) => {
@@ -3199,6 +3265,15 @@ describe("M5-07 atomic proposal response and cancellation", () => {
 });
 
 describe("M5-07 durable proposal expiry", () => {
+  test('paused leagues preserve pending proposals and expire once after resume',async t=>{
+    const runtime=createRuntime(t),proposal=create(runtime,'pause-proposal-expiry');runtime.setNow(TRADE_DEADLINE_MS);
+    const actor=runtime.database.prepare('SELECT id FROM users LIMIT 1').get().id,freezeId=crypto.randomUUID();
+    runtime.database.prepare("INSERT INTO league_freezes(id,league_id,actor_user_id,status,reason,frozen_at_ms,version) VALUES(?,?,?,'active','Review trade timing',?,1)").run(freezeId,IDS.league,actor,NOW_MS);
+    const before=runtime.database.serialize();assert.equal((await runtime.expiryJob.run()).due,0);assert.deepEqual(runtime.database.serialize(),before);
+    runtime.database.prepare("UPDATE league_freezes SET status='ended',ended_at_ms=?,ended_by_user_id=?,version=version+1 WHERE id=?").run(TRADE_DEADLINE_MS,actor,freezeId);
+    assert.equal((await runtime.expiryJob.run()).expired,1);assert.equal(runtime.database.prepare('SELECT status FROM trades WHERE id=?').get(proposal.proposal.id).status,'expired');
+    assert.equal((await runtime.expiryJob.run()).due,0);
+  });
   test("requires the exact live occurrence claim before any trade expiry write", t => {
     const runtime = createRuntime(t),proposal = create(runtime,"proposal-expiry-claim-evidence");
     const occurrenceKey = `trade-expiry:${proposal.proposal.id}:${TRADE_DEADLINE_MS}`;

@@ -471,6 +471,10 @@ function loadTargetRuntimeConfig({
     if (nhlStatisticsEfficiencyEnabled && !expandedScoringEnabled) {
       fail("NHL_STATISTICS_EFFICIENCY_ENABLED", "compact statistics require expanded scoring");
     }
+  const stagingMigrationLineage = optionalExactBoolean(env, "STAGING_MIGRATION_LINEAGE") === true;
+  if (stagingMigrationLineage && security.appEnv !== "staging") {
+    fail("STAGING_MIGRATION_LINEAGE", "the alternate migration lineage is restricted to staging");
+  }
   const runtimeConfig = {
     nhlCompletedStatisticsEnabled,
     nhlStatisticsEfficiencyEnabled,
@@ -500,7 +504,7 @@ function loadTargetRuntimeConfig({
     migrationsDirectory: path.join(
       path.resolve(backendRoot),
       "database",
-      "migrations"
+      stagingMigrationLineage ? "staging-migrations" : "migrations"
     ),
     persistentRoot,
     port: parsePort(env),

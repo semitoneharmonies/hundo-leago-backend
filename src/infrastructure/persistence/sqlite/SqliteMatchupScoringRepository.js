@@ -1,3 +1,4 @@
+const {createLeagueScoringRuleReader} = require('./leagueScoringRules');
 const { readExpandedStatistics } = require("./expandedStatisticsPersistence");
 const { readCompactStatistics } = require("./compactStatisticsEvidence");
 const {
@@ -24,10 +25,11 @@ function createSqliteMatchupScoringRepository({ database } = {}) {
   if (!database || typeof database.prepare !== "function") {
     throw new TypeError("createSqliteMatchupScoringRepository requires a database");
   }
+  const readRule = createLeagueScoringRuleReader(database);
   const matchupStatement = database.prepare(
     "SELECT matchups.*, matchup_weeks.status AS week_status, " +
       "matchup_weeks.starts_at_ms AS week_starts_at_ms, " +
-      "matchup_weeks.ends_at_ms AS week_ends_at_ms, seasons.nhl_season_key " +
+      "matchup_weeks.ends_at_ms AS week_ends_at_ms, matchup_weeks.sequence AS week_sequence, seasons.nhl_season_key " +
       "FROM matchups JOIN matchup_weeks ON matchup_weeks.league_id = matchups.league_id " +
       "AND matchup_weeks.id = matchups.matchup_week_id " +
       "JOIN seasons ON seasons.league_id = matchups.league_id AND seasons.id = matchups.season_id " +
@@ -407,6 +409,7 @@ function createSqliteMatchupScoringRepository({ database } = {}) {
       }
       return Object.freeze({
         matchup,
+        scoringRule: readRule(matchup.league_id, matchup.season_id, matchup.week_sequence),
         locks: freezeRows(locksStatement.all(teams)),
         lockedPlayers: freezeRows(playersStatement.all(teams)),
         refresh: refresh ? Object.freeze({ ...refresh }) : null,

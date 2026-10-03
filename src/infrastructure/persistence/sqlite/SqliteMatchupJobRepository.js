@@ -359,7 +359,7 @@ function createSqliteMatchupJobRepository({ database, beforeCommit, executionSco
           seasons.free_agent_draft_completed_at_ms
      AND free_agent_drafts.current_competition_first_matchup_week_id =
           season_matchup_schedule_generations.week_one_matchup_week_id
-    WHERE (
+    WHERE NOT EXISTS (SELECT 1 FROM league_freezes pause WHERE pause.league_id=job_runs.league_id AND pause.status='active') AND (
       job_runs.occurrence_key =
         job_runs.job_type || ':' ||
         job_runs.league_id || ':' ||

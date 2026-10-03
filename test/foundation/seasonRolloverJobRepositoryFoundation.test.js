@@ -72,6 +72,7 @@ function runtime(t, beforeCommit) {
     });
   });
   connection.database.exec(`
+    CREATE TABLE league_freezes (id TEXT PRIMARY KEY,league_id TEXT NOT NULL,status TEXT NOT NULL) STRICT;
     CREATE TABLE entry_draft_rollover_bindings (
       id TEXT PRIMARY KEY,
       league_id TEXT NOT NULL,
@@ -282,6 +283,15 @@ function bindingResult() {
 describe(
   "T-037 SQLite season-rollover job repository",
   () => {
+    test('pause excludes rollover work and denies a claim listed before the pause',t=>{
+      const {database,repository}=runtime(t);
+      assert.equal(repository.listDueRolloverBindings({nowMs:SCHEDULED_FOR_MS}).length,1);
+      database.prepare("INSERT INTO league_freezes(id,league_id,status) VALUES(?,?,'active')").run(uuid(900),IDS.league);
+      const before=database.serialize();assert.deepEqual(repository.listDueRolloverBindings({nowMs:SCHEDULED_FOR_MS}),[]);
+      assert.equal(repository.claimRun(claimInput()).acquired,false);assert.deepEqual(database.serialize(),before);
+      database.prepare("UPDATE league_freezes SET status='ended' WHERE id=?").run(uuid(900));
+      assert.equal(repository.claimRun(claimInput()).acquired,true);
+    });
     test("lists, claims, and succeeds the one persisted due occurrence", (t) => {
       const { database, repository } =
         runtime(t);

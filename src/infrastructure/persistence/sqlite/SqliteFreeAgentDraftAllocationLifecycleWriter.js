@@ -671,7 +671,8 @@ function createSqliteFreeAgentDraftAllocationLifecycleWriter({
         ON generation.league_id = draft.league_id
        AND generation.season_id = draft.season_id
        AND generation.status = 'current'
-      WHERE draft.league_id = @leagueId
+      WHERE NOT EXISTS (SELECT 1 FROM league_freezes pause WHERE pause.league_id=draft.league_id AND pause.status='active')
+        AND draft.league_id = @leagueId
         AND draft.season_id = @seasonId
         AND draft.id = @fadId
       LIMIT 2

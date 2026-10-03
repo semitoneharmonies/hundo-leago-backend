@@ -67,6 +67,7 @@ const REPOSITORY_METHODS = Object.freeze([
   "validateScheduledRolloverJobLease",
   "beginSeasonRolloverAttempt",
   "readSeasonRolloverContext",
+  "readSeasonRolloverMatrix",
   "blockSeasonRolloverAttempt",
   "commitSeasonRolloverAndOpenDraft",
   "readInitialSeason2ExemptionContext",
@@ -8178,6 +8179,12 @@ function createSqliteLeagueLifecycleTransitionRepository({
     validateScheduledRolloverJobLease,
     beginSeasonRolloverAttempt,
     readSeasonRolloverContext,
+    readSeasonRolloverMatrix({leagueId,sourceSeasonId,targetSeasonId}) {
+      stableId(leagueId,'league ID');stableId(sourceSeasonId,'source season ID');stableId(targetSeasonId,'target season ID');
+      const seasons=database.prepare('SELECT id FROM seasons WHERE league_id=? AND id IN (?,?)').all(leagueId,sourceSeasonId,targetSeasonId);
+      if(seasons.length!==2)throw repositoryError(REPOSITORY_ERROR_CODES.argumentInvalid,'Two distinct seasons in the same league are required.');
+      return buildRolloverMatrix({leagueId,sourceSeasonId,targetSeasonId});
+    },
     blockSeasonRolloverAttempt,
     commitSeasonRolloverAndOpenDraft,
     readInitialSeason2ExemptionContext,

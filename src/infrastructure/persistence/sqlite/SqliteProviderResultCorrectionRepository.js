@@ -1,3 +1,4 @@
+const {assertCurrentScoringRule} = require('./leagueScoringRules');
 const { deriveMatchupOutcome } = require("../../../domain/matchups/matchupResultPolicy");
 const { PROVIDER_CORRECTION_REASON } = require("../../../domain/matchups/resultCorrectionSourcePolicy");
 const { repositoryError, REPOSITORY_ERROR_CODES } = require("./SqliteRepositoryError");
@@ -41,6 +42,7 @@ function createSqliteProviderResultCorrectionRepository({ database, leagueIds = 
     if (finalizedStandings.get(row.league_id, row.season_id)) return { status: "requires_playoff_review" };
     const refresh = latest.get();
     if (!refresh || refresh.id !== command.refreshId || refresh.completed_at_ms < row.ends_at_ms || refresh.completed_at_ms > command.nowMs || command.nowMs - refresh.completed_at_ms > 6 * 60 * 60_000) conflict();
+    assertCurrentScoringRule(database, command);
     const outcome = deriveMatchupOutcome(command.homeScoreHundredths, command.awayScoreHundredths);
     database.prepare(`INSERT INTO stat_snapshots (id, stat_source_id, source_refresh_id, league_id, season_id, matchup_week_id,
       intended_use, completeness_status, freshness_status, captured_at_ms, committed, created_at_ms)

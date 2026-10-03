@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { CURRENT_SCHEMA_VERSION } = require("../helpers/currentSchemaVersion");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -144,7 +145,7 @@ test("release-QA fixture creates two isolated leagues and a repeatable safe sema
 
   assert.deepEqual(first.manifest, second.manifest);
   assert.deepEqual(first.manifest, verifyReleaseQaFixture({ databasePath: firstPath }));
-  assert.equal(first.manifest.schemaVersion, 57);
+  assert.equal(first.manifest.schemaVersion, CURRENT_SCHEMA_VERSION);
   assert.equal(first.manifest.manifestChecksum, checksumManifest(first.manifest));
   assert.match(first.manifest.manifestChecksum, /^[0-9a-f]{64}$/);
   assert.equal(first.manifest.global.leagueCount, 2);

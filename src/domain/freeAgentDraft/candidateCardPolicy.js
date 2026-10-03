@@ -1386,10 +1386,12 @@ function evaluateCandidateCardHelpAuthority(
     "currentTeamManager",
     "currentCommissionerAuthority",
     "activeHelpRequest",
+    ...(input != null && Object.hasOwn(input, "softDeadline") ? ["softDeadline"] : []),
     "nowMs",
     "helpOpensAtMs",
     "candidateDeadlineAtMs",
   ]);
+  if (Object.hasOwn(input, "softDeadline")) safeBoolean(input.softDeadline, "soft_deadline_invalid");
   const actorAuthority = enumValue(
     input.actorAuthority,
     CANDIDATE_CARD_EDITOR_AUTHORITIES,
@@ -1442,7 +1444,7 @@ function evaluateCandidateCardHelpAuthority(
     activeLeagueMembership &&
     currentTeamManager;
   const managerEditAccess =
-    managerReadAccess && beforeDeadline;
+    managerReadAccess && (beforeDeadline || input.softDeadline === true);
   const commissionerAuthoritySelected =
     actorAuthority === "commissioner" ||
     actorAuthority ===

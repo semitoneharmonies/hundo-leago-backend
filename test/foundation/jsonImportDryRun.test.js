@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { CURRENT_SCHEMA_VERSION } = require("../helpers/currentSchemaVersion");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -429,7 +430,7 @@ describe("M2-09 JSON import dry-run", () => {
             "SELECT COUNT(*) AS count FROM schema_migrations"
           )
           .get().count,
-          57
+          CURRENT_SCHEMA_VERSION
       );
       assert.equal(
         database.pragma("integrity_check", {

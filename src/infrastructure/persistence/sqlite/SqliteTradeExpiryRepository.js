@@ -144,7 +144,8 @@ function createSqliteTradeExpiryRepository({
         effective_deadline_at_ms,
         version
       FROM trades
-      WHERE status = 'proposed'
+      WHERE NOT EXISTS (SELECT 1 FROM league_freezes pause WHERE pause.league_id=trades.league_id AND pause.status='active')
+        AND status = 'proposed'
         AND proposal_model_version = 2
         AND effective_deadline_at_ms IS NOT NULL
         AND effective_deadline_at_ms <= @nowMs
@@ -168,7 +169,8 @@ function createSqliteTradeExpiryRepository({
         effective_deadline_at_ms,
         version AS trade_version
       FROM trades
-      WHERE league_id = @leagueId
+      WHERE NOT EXISTS (SELECT 1 FROM league_freezes pause WHERE pause.league_id=trades.league_id AND pause.status='active')
+        AND league_id = @leagueId
         AND id = @tradeId
       LIMIT 2
     `);
