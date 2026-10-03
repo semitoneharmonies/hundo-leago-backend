@@ -1,3 +1,10 @@
+const { createQuoteService } = require("../application/services/activity/createQuoteService");
+const { createSqliteQuoteRepository } = require("../infrastructure/persistence/sqlite/SqliteQuoteRepository");
+const { createQuoteRouter } = require("../transport/http/createQuoteRouter");
+const { createLeagueAnnouncementService } = require("../application/services/activity/createLeagueAnnouncementService");
+const { createSqliteLeagueAnnouncementRepository } = require("../infrastructure/persistence/sqlite/SqliteLeagueAnnouncementRepository");
+const { createLeagueAnnouncementRouter } = require("../transport/http/createLeagueAnnouncementRouter");
+const {createCalendarWorkspaceService}=require('../application/services/leagues/createCalendarWorkspaceService');
 const {createPlayerCatalogueControlService}=require('../application/services/players/createPlayerCatalogueControlService');
 const {createCorrectionReversalService}=require('../application/services/leagues/createCorrectionReversalService');
 const {createSqliteCorrectionReversalRepository}=require('../infrastructure/persistence/sqlite/SqliteCorrectionReversalRepository');
@@ -803,6 +810,14 @@ const SPORTSDATAIO_LIVE_UUID_V4_PATTERN =
 const SPORTSDATAIO_LIVE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const TARGET_ENDPOINTS = Object.freeze([
+  ["GET", "/api/v1/leagues/:leagueId/announcements", "leagueAnnouncement"],
+  ["GET", "/api/v1/leagues/:leagueId/quotes", "quote"],
+  ["POST", "/api/v1/leagues/:leagueId/quotes", "quote"],
+  ["GET", "/api/v1/leagues/:leagueId/quote-submissions", "quote"],
+  ["POST", "/api/v1/leagues/:leagueId/quote-submissions/:quoteId/review", "quote"],
+  ["GET", "/api/v1/admin/quote-submissions", "quote"],
+  ["POST", "/api/v1/admin/quote-submissions/:quoteId/review", "quote"],
+  ["POST", "/api/v1/leagues/:leagueId/announcements", "leagueAnnouncement"],
   ['GET', '/api/v1/leagues/:leagueId/scoring', 'leagueScoring'],
   ['GET', '/api/v1/leagues/:leagueId/help', 'leagueHelp'],
   ['GET', '/api/v1/leagues/:leagueId/help/targets', 'leagueHelp'],
@@ -828,6 +843,9 @@ const TARGET_ENDPOINTS = Object.freeze([
   ['POST', '/api/v1/leagues/:leagueId/calendar/auction-schedule/preview', 'leagueAuctionSchedule'],
   ['POST', '/api/v1/leagues/:leagueId/calendar/auction-schedule/apply', 'leagueAuctionSchedule'],
   ['GET', '/api/v1/leagues/:leagueId/calendar/season', 'leagueCalendar'],
+  ['GET', '/api/v1/leagues/:leagueId/calendar/workspace', 'leagueCalendar'],
+  ['POST', '/api/v1/leagues/:leagueId/calendar/workspace/preview', 'leagueCalendar'],
+  ['POST', '/api/v1/leagues/:leagueId/calendar/workspace/apply', 'leagueCalendar'],
   ['POST', '/api/v1/leagues/:leagueId/calendar/season/preview', 'leagueCalendar'],
   ['POST', '/api/v1/leagues/:leagueId/calendar/season/apply', 'leagueCalendar'],
   ['GET', '/api/v1/leagues/:leagueId/calendar/trade-deadline', 'tradeDeadlineChange'],
@@ -1864,6 +1882,8 @@ function createTargetRepositories({
     freeAgentDraftTransitionWriter,
     restrictedNoImprovementFallbackWriter,
     leagueActivity: createSqliteLeagueActivityRepository({ database }),
+    leagueAnnouncements: createSqliteLeagueAnnouncementRepository({ database }),
+    quotes: createSqliteQuoteRepository({ database }),
     leagueAccess: createSqliteLeagueAccessRepository({
       database,
       leagueOutboxWriter,
@@ -2861,6 +2881,16 @@ function createTargetServices({
       leagueAuthorization,
       repository: repositories.leagueActivity,
     }),
+    announcements: createLeagueAnnouncementService({
+      repositoryContext: repositories.context,
+      repository: repositories.leagueAnnouncements,
+      leagueAuthorization,
+      auditRepository: repositories.audit,
+      clock,
+      secureRandom,
+    }),
+    quotes: createQuoteService({ repositoryContext: repositories.context, repository: repositories.quotes,
+      leagueAuthorization, platformAuthorization, auditRepository: repositories.audit, clock, secureRandom }),
     auction: createAuctionService({
       leagueAuthorization,
       teamAuthorization,
@@ -3169,6 +3199,7 @@ function createTargetServices({
     accountEmail,
     actionTokenService,
     auditPrivacyDigest,
+    calendarWorkspace: createCalendarWorkspaceService({repositories,services:league,leagueAuthorization,clock}),
     league,
     leaguePlayers,
     playerCards: createPlayerCardService({
@@ -3215,6 +3246,12 @@ function createTargetRouters({
     networkSourceResolver,
   };
   const routers = Object.freeze({
+    quote: createQuoteRouter({ requestSecurity, quoteService: services.league.quotes }),
+    leagueAnnouncement: createLeagueAnnouncementRouter({
+      requestSecurity,
+      announcementService: services.league.announcements,
+    }),
+
     playerCatalogue:createPlayerCatalogueControlRouter({requestSecurity,service:services.playerCatalogue}),
     correctionReversal:createCorrectionReversalRouter({requestSecurity,service:services.league.correctionReversal}),
     guidedLeagueReset:createGuidedLeagueResetRouter({requestSecurity,service:services.league.guidedReset}),
@@ -3225,7 +3262,7 @@ function createTargetRouters({
     leaguePickRepair: createLeaguePickRepairRouter({ requestSecurity, service: services.league.leaguePickRepair }),
     leagueManagement: createLeagueManagementRouter({ requestSecurity, service: services.league.leagueManagement }),
     leagueAuctionSchedule: createLeagueAuctionScheduleRouter({ requestSecurity, service: services.league.leagueAuctionSchedule }),
-    leagueCalendar: createLeagueCalendarRouter({ requestSecurity, service: services.league.leagueCalendar }),
+    leagueCalendar: createLeagueCalendarRouter({ requestSecurity, service: services.league.leagueCalendar, workspaceService:services.calendarWorkspace }),
     tradeDeadlineChange: createTradeDeadlineChangeRouter({ requestSecurity, service: services.league.tradeDeadlineChange }),
     auctionTiming: createAuctionTimingRouter({ requestSecurity, service: services.league.auctionTiming }),
     auctionReveal: createAuctionRevealRouter({requestSecurity,service:services.league.auctionReveal}),

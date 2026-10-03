@@ -2,6 +2,7 @@
 const assert=require('node:assert/strict');
 const {createHash}=require('node:crypto');
 const Database=require('better-sqlite3');
+// Reset archive format remains 84: schema 85 adds global quotes, which reset preserves.
 const SCHEMA_VERSION=84;
 const CLEAR_TABLES=Object.freeze([
  'auction_administration_command_results','auction_bids','auction_contexts','auction_events','auction_resolutions','auction_timing_changes','auctions',
@@ -29,7 +30,7 @@ const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex
 const encode=row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[key,Buffer.isBuffer(value)?{$binary:value.toString('base64')}:value]));
 const decode=row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[key,value&&typeof value==='object'&&Object.keys(value).join()==='$binary'?Buffer.from(value.$binary,'base64'):value]));
 function validateDatabase(db){
- if(db.pragma('user_version',{simple:true})!==SCHEMA_VERSION||db.pragma('foreign_keys',{simple:true})!==1)fail('This schema needs reset compatibility review.','LEAGUE_RESET_UNAVAILABLE');
+ if(![84,85].includes(db.pragma('user_version',{simple:true}))||db.pragma('foreign_keys',{simple:true})!==1)fail('This schema needs reset compatibility review.','LEAGUE_RESET_UNAVAILABLE');
 }
 function rows(db,table,leagueId){return db.prepare(`SELECT * FROM ${quote(table)} WHERE ${table==='leagues'?'id':'league_id'}=? ORDER BY rowid`).all(leagueId).map(encode);}
 function capture(db,leagueId){validateDatabase(db);return {schemaVersion:SCHEMA_VERSION,leagueId,tables:Object.fromEntries(CHANGED_TABLES.map(t=>[t,rows(db,t,leagueId)]))};}

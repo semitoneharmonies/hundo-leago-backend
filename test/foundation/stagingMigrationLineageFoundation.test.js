@@ -17,8 +17,8 @@ test('staging upgrade preserves its applied ledger and converges on the canonica
   assert.equal(ledger[62].file_name,'0063_add_global_player_injuries.sql');
   assert.throws(()=>assertMigrationCompatibility(db,canonical),{code:'MIGRATION_FILE_NAME_MISMATCH'});
   migrate(db,staging);migrate(comparison,canonical);
-  assert.equal(db.pragma('user_version',{simple:true}),84);
-  assert.equal(db.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key='data_model_version'").get().metadata_value,'84');
+  assert.equal(db.pragma('user_version',{simple:true}),85);
+  assert.equal(db.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key='data_model_version'").get().metadata_value,'85');
   assert.deepEqual(db.prepare('SELECT * FROM schema_migrations WHERE migration_id<=63 ORDER BY migration_id').all(),ledger);
   const schema=d=>d.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all();
   assert.deepEqual(schema(db),schema(comparison));

@@ -29,6 +29,11 @@ function createSqliteLeagueCalendarRepository({database,leagueOutboxWriter,stagi
    };
   },
   events:(leagueId,nowMs)=>leagueCalendarEvents(database,leagueId,{nowMs,stagingDailyAuctionsEnabled}),
+  workspaceMetadata(leagueId){
+   const seasonId=database.prepare('SELECT current_season_id FROM leagues WHERE id=?').get(leagueId)?.current_season_id??null;
+   return {drafts:database.prepare('SELECT id,status,opened_at_ms AS openedAtMs FROM free_agent_drafts WHERE league_id=? AND season_id=? ORDER BY opened_at_ms').all(leagueId,seasonId),
+    auctions:database.prepare("SELECT a.id,p.full_name AS playerName FROM auctions a JOIN players p ON p.id=a.player_id JOIN auction_contexts c ON c.league_id=a.league_id AND c.auction_id=a.id WHERE a.league_id=? AND a.season_id=? AND a.status='open' AND c.source_kind='ordinary_weekly' ORDER BY a.resolves_at_ms,a.id").all(leagueId,seasonId)};
+  },
   history:leagueId=>database.prepare(`SELECT c.id,c.season_id AS seasonId,c.reason,c.created_at_ms AS createdAtMs,u.display_name AS actorName,
    c.before_json,c.after_json FROM league_calendar_changes c JOIN users u ON u.id=c.actor_user_id
    WHERE c.league_id=? ORDER BY c.created_at_ms DESC,c.id DESC LIMIT 25`).all(leagueId).map(({before_json,after_json,...row})=>({...row,before:JSON.parse(before_json),after:JSON.parse(after_json)})),

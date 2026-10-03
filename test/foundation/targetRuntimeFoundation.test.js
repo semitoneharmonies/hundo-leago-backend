@@ -1284,12 +1284,12 @@ function installedTargetEndpoints(routers) {
 }
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 193 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 193);
+  test("declares 204 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 204);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      193
+      204
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -1307,6 +1307,7 @@ describe("M3-19 exact target endpoint dispatch", () => {
       "fadDeadlineControl",
       "freeAgentDraft",
       "guidedLeagueReset",
+      "leagueAnnouncement",
       "leagueAuctionSchedule",
       "leagueCalendar",
       "leagueCommunication",
@@ -1325,6 +1326,7 @@ describe("M3-19 exact target endpoint dispatch", () => {
       "playerCatalogue",
       "playerInjury",
       "publicRoster",
+      "quote",
       "rosterAction",
       "standingsFinalization",
       "statisticsOperations",
@@ -1592,7 +1594,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const options = runtimeOptions(database);
     const runtime = createTargetRuntime(options);
     assert.equal(runtime.migrationState.status, "exact");
-    assert.equal(runtime.migrationState.userVersion, 84);
+    assert.equal(runtime.migrationState.userVersion, 85);
     assert.equal(
       typeof runtime.services.league.auctionResolution.resolveDue,
       "function"
@@ -2527,7 +2529,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 193);
+    assert.equal(TARGET_ENDPOINTS.length, 204);
   });
 
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {

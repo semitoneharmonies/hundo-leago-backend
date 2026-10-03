@@ -1,5 +1,5 @@
 const express=require('express');
-function createLeagueCalendarRouter({requestSecurity:security,service}) {
+function createLeagueCalendarRouter({requestSecurity:security,service,workspaceService}) {
  const router=express.Router();
  router.use(security.assignRequestId,security.securityHeaders,security.credentialedCors,security.requireAllowedOrigin,
   security.requireJson,security.requireCompatibleFetchMetadata,express.json({limit:'64kb',strict:true}));
@@ -13,15 +13,17 @@ function createLeagueCalendarRouter({requestSecurity:security,service}) {
   else {code='LEAGUE_CALENDAR_FAILED';status=500;message='The calendar change could not be completed.';}
   res.set('Cache-Control','private, no-store').status(status).json({error:{code,message,requestId:security.getRequestId(req)}});
  }
- const base='/api/v1/leagues/:leagueId/calendar/season';
+ for(const [path,selectedService] of [['season',service],['workspace',workspaceService]]){
+ if(!selectedService)continue;
+ const base='/api/v1/leagues/:leagueId/calendar/'+path;
  for(const [method,suffix,operation]of[['get','','read'],['post','/preview','preview'],['post','/apply','apply']])router[method](base+suffix,
   method==='get'?security.authenticateBootstrap:security.authenticateUnsafe,(req,res)=>{
-   try {const data=service[operation]({leagueId:req.params.leagueId,authenticated:method==='get'?security.getSessionBootstrap(req):security.getAuthenticatedSession(req),input:req.body,idempotencyKey:req.get('Idempotency-Key')});
+   try {const data=selectedService[operation]({leagueId:req.params.leagueId,authenticated:method==='get'?security.getSessionBootstrap(req):security.getAuthenticatedSession(req),input:req.body,idempotencyKey:req.get('Idempotency-Key')});
     res.set('Cache-Control','private, no-store').json({data,meta:{requestId:security.getRequestId(req)}});
    }catch(error){failed(req,res,error);}
   });
+ }
  router.use((error,req,res,next)=>res.headersSent?next(error):failed(req,res,{code:'LEAGUE_CALENDAR_INVALID',message:'Enter a valid calendar request.'}));
  return router;
 }
 module.exports={createLeagueCalendarRouter};
-

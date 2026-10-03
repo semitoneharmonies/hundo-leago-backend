@@ -13,7 +13,7 @@ const {createScryptPasswordHasher}=require('../../src/infrastructure/security/cr
 const ROOT=path.resolve(__dirname,'../..'),MIGRATIONS=path.join(ROOT,'database/migrations');
 const hash=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 
-test('commissioner schema 66 to 84 preserves populated leagues and rehearses encrypted rollback without replacing the source',async t=>{
+test('commissioner schema 66 to 85 preserves populated leagues and rehearses encrypted rollback without replacing the source',async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'hundo-controls-migration-'));
  assert.ok(path.relative(os.tmpdir(),root).startsWith('hundo-controls-migration-'));
  const databasePath=path.join(root,'source.sqlite3'),database=new Database(databasePath);
@@ -39,7 +39,7 @@ test('commissioner schema 66 to 84 preserves populated leagues and rehearses enc
  const restoredPlaintext=await decryptAndDecompressBackup({...encrypted,key,aad});
  assert.equal(hash(restoredPlaintext),backup.plaintextSha256);
  await assert.rejects(decryptAndDecompressBackup({...encrypted,key:crypto.randomBytes(32),aad}));
- migrate(migrations);assert.equal(database.pragma('user_version',{simple:true}),84);
+ migrate(migrations);assert.equal(database.pragma('user_version',{simple:true}),85);
  assert.deepEqual(snapshot(database),original);
  assert.deepEqual(database.prepare("SELECT * FROM application_metadata WHERE metadata_key<>'data_model_version' ORDER BY metadata_key").all(),metadata);
  assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
@@ -51,6 +51,6 @@ test('commissioner schema 66 to 84 preserves populated leagues and rehearses enc
   assert.deepEqual(restored.pragma('foreign_key_check'),[]);assert.equal(restored.pragma('integrity_check',{simple:true}),'ok');}
  finally{restored.close();}
  assert.deepEqual(database.serialize(),migrated);
- fs.writeFileSync(path.join(root,'preservation-evidence.json'),JSON.stringify({fromSchema:66,toSchema:84,tableCount:tables.length,
+ fs.writeFileSync(path.join(root,'preservation-evidence.json'),JSON.stringify({fromSchema:66,toSchema:85,tableCount:tables.length,
   sourcePreserved:true,encryptedRoundTrip:true,isolatedRollback:true,tableHashes:original},null,2));
 });

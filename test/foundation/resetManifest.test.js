@@ -193,6 +193,7 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
     assert.deepEqual(
       RESET_V1_POST_RESET_TABLE_POLICY,
       [
+        { tableName: "quote_submissions", introducedByMigrationId: 85, treatment: "require_empty" },
         { tableName: "fad_deadline_controls", introducedByMigrationId: 68, treatment: "require_empty" },
         { tableName: "fad_deadline_commands", introducedByMigrationId: 68, treatment: "require_empty" },
         { tableName: "fad_timing_changes", introducedByMigrationId: 69, treatment: "require_empty" },
@@ -505,9 +506,9 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
         },
       ]
     );
-    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 77);
-    assert.equal(classifiedTables.length, 159);
-    assert.equal(new Set(classifiedTables).size, 159);
+    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 78);
+    assert.equal(classifiedTables.length, 160);
+    assert.equal(new Set(classifiedTables).size, 160);
     assert.deepEqual(
       [...classifiedTables].sort(),
       [...catalogTables].sort()

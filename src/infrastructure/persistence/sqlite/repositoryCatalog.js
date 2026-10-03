@@ -28,6 +28,7 @@ function repositoryDefinition(
 }
 
 const DEFINITIONS = [
+  repositoryDefinition("quote_submissions", REPOSITORY_SCOPES.global, { versioned: true }),
   repositoryDefinition('league_reset_archives', REPOSITORY_SCOPES.requiredLeague),
   repositoryDefinition('league_reset_actions', REPOSITORY_SCOPES.requiredLeague),
   repositoryDefinition('league_help_requests', REPOSITORY_SCOPES.requiredLeague, {versioned:true}),
@@ -721,7 +722,7 @@ validateRepositoryCatalog(DEFINITIONS);
 const REPOSITORY_CATALOG = Object.freeze([...DEFINITIONS]);
 // Retired reset/restore protocols remain pinned to their original table set.
 const SCHEMA_54_REPOSITORY_CATALOG = Object.freeze(REPOSITORY_CATALOG.filter(
-  ({ tableName }) => !tableName.startsWith('league_reset_') && !tableName.startsWith('league_help_') && tableName !== 'league_management_actions' && tableName !== 'league_scoring_rules' && tableName !== 'league_auction_schedule_changes' && tableName !== 'league_calendar_changes' && tableName !== 'league_private_reveals' && tableName !== 'fad_auction_clock_changes' && tableName !== 'auction_timing_changes' && tableName !== 'league_trade_deadline_changes' && !tableName.startsWith('fad_auction_cutoff_') && tableName !== "fad_timing_changes" && !tableName.startsWith("fad_deadline_") && !tableName.startsWith("player_injury_") && !["league_communications", "trade_participants", "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats"].includes(tableName)
+  ({ tableName }) => tableName !== "quote_submissions" && !tableName.startsWith('league_reset_') && !tableName.startsWith('league_help_') && tableName !== 'league_management_actions' && tableName !== 'league_scoring_rules' && tableName !== 'league_auction_schedule_changes' && tableName !== 'league_calendar_changes' && tableName !== 'league_private_reveals' && tableName !== 'fad_auction_clock_changes' && tableName !== 'auction_timing_changes' && tableName !== 'league_trade_deadline_changes' && !tableName.startsWith('fad_auction_cutoff_') && tableName !== "fad_timing_changes" && !tableName.startsWith("fad_deadline_") && !tableName.startsWith("player_injury_") && !["league_communications", "trade_participants", "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats"].includes(tableName)
 ));
 
 function getRepositoryCatalogForSchemaVersion(schemaVersion) {
@@ -742,7 +743,8 @@ function getRepositoryCatalogForSchemaVersion(schemaVersion) {
     (schemaVersion >= 78 || tableName !== 'league_scoring_rules') &&
     (schemaVersion >= 79 || tableName !== 'league_management_actions') &&
     (schemaVersion >= 81 || !tableName.startsWith('league_help_')) &&
-    (schemaVersion >= 83 || !tableName.startsWith('league_reset_'))
+    (schemaVersion >= 83 || !tableName.startsWith('league_reset_')) &&
+    (schemaVersion >= 85 || tableName !== "quote_submissions")
   );
 }
 const REPOSITORY_CATALOG_BY_TABLE = Object.freeze(
