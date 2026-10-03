@@ -3758,8 +3758,11 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.deepEqual(database.serialize(),beforeFailure);database.exec('DROP TRIGGER test_calendar_failure');
     const beforeApply=rows(),applied=await fetch(url+'/apply',{method:'POST',headers:applyHeaders,body:JSON.stringify(body)});
     assert.equal(applied.status,200,JSON.stringify(await applied.clone().json()));const receipt=(await applied.json()).data;
-    const allowed=new Set(['leagues','seasons','matchup_weeks','job_runs','league_activity','notifications','outbox_events','outbox_event_audiences']);
+    const allowed=new Set(['leagues','seasons','matchup_weeks','job_runs','league_activity','league_communications','notifications','outbox_events','outbox_event_audiences']);
     const afterApply=rows();for(const name of tables)if(!allowed.has(name))assert.deepEqual(afterApply[name],beforeApply[name],name);
+    assert.equal(afterApply.league_communications.length,beforeApply.league_communications.length+1);
+    assert.equal(afterApply.league_communications.at(-1).kind,'announcement');
+    assert.deepEqual(afterApply.league_communications.slice(0,-1),beforeApply.league_communications);
     assert.equal(database.prepare('SELECT locks_at_ms FROM matchup_weeks WHERE id=?').get(week.id).locks_at_ms,oldLock+3600000);
     const jobs=runtime.repositories.leagueCalendar.state(scenario.leagueId).jobs;
     const job=jobs.find(j=>j.weekId===week.id&&j.job_type==='matchup:lock');
@@ -3929,7 +3932,11 @@ describe("M3-19 exact-schema target dependency composition", () => {
     database.exec('DROP TRIGGER active_timing_outbox_failure');assert.deepEqual(database.serialize(),before);
     const applied=await fetch(url+'/apply',{method:'POST',headers:{...headers,'Idempotency-Key':command.idempotencyKey},body:JSON.stringify(command.input)});
     const result=await applied.json();assert.equal(applied.status,200,JSON.stringify(result));assert.equal(result.data.accepted,true);
-    assert.deepEqual(rows(),preserved);
+    const afterRows=rows();
+    assert.equal(afterRows.league_communications.length,preserved.league_communications.length+1);
+    assert.equal(afterRows.league_communications.at(-1).kind,'announcement');
+    afterRows.league_communications=afterRows.league_communications.slice(0,-1);
+    assert.deepEqual(afterRows,preserved);
     const updateSignal=database.prepare("SELECT * FROM outbox_events WHERE aggregate_id=? AND event_type='auction.changed' ORDER BY rowid DESC LIMIT 1").get(auctionId);
     const signal=JSON.parse(updateSignal.payload_json);
     assert.equal(signal.related.auctionId,auctionId);assert.equal(signal.related.fadId,draft.id);
@@ -4068,7 +4075,11 @@ describe("M3-19 exact-schema target dependency composition", () => {
     database.exec('DROP TRIGGER rapid_timing_failure');assert.deepEqual(database.serialize(),beforeRead);
     const applied=await fetch(url+'/apply',{method:'POST',headers:{...headers,'Idempotency-Key':command.idempotencyKey},body:JSON.stringify(command.input)});
     const result=await applied.json();assert.equal(applied.status,200,JSON.stringify(result));
-    assert.deepEqual(preserved(),prior);
+    const afterRows=preserved();
+    assert.equal(afterRows.league_communications.length,prior.league_communications.length+1);
+    assert.equal(afterRows.league_communications.at(-1).kind,'announcement');
+    afterRows.league_communications=afterRows.league_communications.slice(0,-1);
+    assert.deepEqual(afterRows,prior);
     const after=database.serialize();assert.equal(timing.apply(command).replayed,true);assert.deepEqual(database.serialize(),after);
     const newRounds=database.prepare('SELECT * FROM free_agent_draft_rollovers WHERE fad_id=? ORDER BY sequence').all(draft.id);
     for(const i of [0,1,2,5,6])assert.deepEqual(newRounds[i],oldRounds[i]);
