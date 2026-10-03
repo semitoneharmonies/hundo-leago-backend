@@ -536,7 +536,7 @@ test('auction timing edits preserve sealed bids through migration, rollback, ext
   const service = createAuctionTimingService({ repository, clock: { nowMs: () => now },
     leagueAuthorization: { requireCommissioner() { return { actorUserId: IDS.commissioner, authority: 'commissioner' }; } } });
   const args = { leagueId: IDS.league, auctionId: IDS.auction, authenticated: {} };
-  const protectedTables = tables.filter(name => !['auctions','league_activity','notifications','outbox_events','outbox_event_audiences'].includes(name));
+  const protectedTables = tables.filter(name => !['auctions','league_activity','league_communications','notifications','outbox_events','outbox_event_audiences'].includes(name));
   const protectedRows = snapshot(protectedTables);
   const beforeRead = database.serialize();
   const status = service.read(args);
@@ -557,6 +557,7 @@ test('auction timing edits preserve sealed bids through migration, rollback, ext
   assert.equal(service.apply(command).replayed, true);
   assert.deepEqual(database.serialize(), afterApply);
   assert.deepEqual(snapshot(protectedTables), protectedRows);
+  assert.equal(database.prepare("SELECT COUNT(*) n FROM league_communications WHERE league_id=? AND kind='announcement'").get(IDS.league).n,1);
   assert.throws(() => database.prepare('UPDATE auction_timing_changes SET reason=? WHERE id=?').run('replacement',applied.id));
   assert.throws(() => database.prepare('DELETE FROM auction_timing_changes WHERE id=?').run(applied.id));
   const notices = database.prepare("SELECT message_data_json FROM notifications WHERE event_type='league_auction_timing_changed'").all();

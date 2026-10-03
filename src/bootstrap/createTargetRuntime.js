@@ -1882,8 +1882,8 @@ function createTargetRepositories({
     freeAgentDraftTransitionWriter,
     restrictedNoImprovementFallbackWriter,
     leagueActivity: createSqliteLeagueActivityRepository({ database }),
-    leagueAnnouncements: createSqliteLeagueAnnouncementRepository({ database }),
-    quotes: createSqliteQuoteRepository({ database }),
+    leagueAnnouncements: database.pragma("user_version", { simple: true }) >= 67 ? createSqliteLeagueAnnouncementRepository({ database }) : null,
+    quotes: database.pragma("user_version", { simple: true }) >= 85 ? createSqliteQuoteRepository({ database }) : null,
     leagueAccess: createSqliteLeagueAccessRepository({
       database,
       leagueOutboxWriter,

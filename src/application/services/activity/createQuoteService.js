@@ -21,6 +21,7 @@ function createQuoteService({ repositoryContext, repository, leagueAuthorization
     if (scope === "global") platformAuthorization.requireAdministrator(authenticated);
     else if (scope === "league") leagueAuthorization.requireCommissioner(authenticated, leagueId);
     else leagueAuthorization.requireActiveMembership(authenticated, leagueId);
+    if (!repository) fail("QUOTE_UNAVAILABLE");
     const options = validatePageInput(query);
     const result = repository.listPage({ scope, leagueId, ...options });
     const last = result.rows.at(-1);
@@ -36,6 +37,7 @@ function createQuoteService({ repositoryContext, repository, leagueAuthorization
         const authority = scope === "submit" ? leagueAuthorization.requireActiveMembership(authenticated, leagueId)
           : scope === "global" ? platformAuthorization.requireAdministrator(authenticated)
             : leagueAuthorization.requireCommissioner(authenticated, leagueId);
+        if (!repository) fail("QUOTE_UNAVAILABLE");
         const previous = repository.findReceipt({ leagueId, actorUserId: authority.actorUserId, operation, clientKey });
         if (previous) {
           if (previous.request_hash !== digest) fail("IDEMPOTENCY_KEY_REUSED");

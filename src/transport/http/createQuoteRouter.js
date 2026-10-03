@@ -6,7 +6,7 @@ function createQuoteRouter({ requestSecurity, quoteService } = {}) {
   router.use(express.json({ limit: "8kb", strict: true }));
   function failure(request, response, error) {
     const code = error?.code || "";
-    const status = ["QUOTE_NOT_FOUND", "LEAGUE_NOT_FOUND"].includes(code) ? 404
+    const status = code === "QUOTE_UNAVAILABLE" ? 503 : ["QUOTE_NOT_FOUND", "LEAGUE_NOT_FOUND"].includes(code) ? 404
       : ["LEAGUE_COMMISSIONER_REQUIRED", "PLATFORM_ADMINISTRATOR_REQUIRED"].includes(code) ? 403
         : ["QUOTE_REVIEW_CONFLICT", "IDEMPOTENCY_KEY_REUSED"].includes(code) ? 409
           : /^(QUOTE_INPUT_INVALID|TEAM_INPUT_INVALID|LEAGUE_ID_INVALID|ACTIVITY_INPUT_INVALID|ACTIVITY_CURSOR_INVALID)$/.test(code) ? 400

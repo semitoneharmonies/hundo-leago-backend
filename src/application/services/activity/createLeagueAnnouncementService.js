@@ -13,6 +13,7 @@ function announcement(row) {
 function createLeagueAnnouncementService({ repositoryContext, repository, leagueAuthorization, auditRepository, clock, secureRandom } = {}) {
   function list({ leagueId, query, authenticated } = {}) {
     const authority = leagueAuthorization.requireActiveMembership(authenticated, leagueId);
+    if (!repository) fail("ANNOUNCEMENT_UNAVAILABLE");
     const page = validatePageInput(query || {});
     const result = repository.listPage({ leagueId: authority.leagueId, nowMs: clock.nowMs(), ...page });
     const last = result.rows.at(-1);
@@ -30,6 +31,7 @@ function createLeagueAnnouncementService({ repositoryContext, repository, league
     try {
       return repositoryContext.transaction(() => {
         const authority = leagueAuthorization.requireCommissioner(authenticated, leagueId);
+        if (!repository) fail("ANNOUNCEMENT_UNAVAILABLE");
         const previous = repository.findIdempotency({ leagueId: authority.leagueId, actorUserId: authority.actorUserId, operation: OPERATION, clientKey });
         if (previous) {
           if (previous.request_hash !== digest) fail("IDEMPOTENCY_KEY_REUSED");
@@ -61,7 +63,7 @@ function createLeagueAnnouncementService({ repositoryContext, repository, league
         return { code: "LEAGUE_ANNOUNCEMENT_POSTED", announcement: announcement(repository.find({ leagueId: authority.leagueId, id })) };
       });
     } catch (error) {
-      const domain = [error, error?.cause].find((item) => ["LEAGUE_ID_INVALID", "LEAGUE_NOT_FOUND", "LEAGUE_COMMISSIONER_REQUIRED", "IDEMPOTENCY_KEY_REUSED", "ANNOUNCEMENT_RESULT_UNAVAILABLE"].includes(item?.code));
+      const domain = [error, error?.cause].find((item) => ["ANNOUNCEMENT_UNAVAILABLE", "LEAGUE_ID_INVALID", "LEAGUE_NOT_FOUND", "LEAGUE_COMMISSIONER_REQUIRED", "IDEMPOTENCY_KEY_REUSED", "ANNOUNCEMENT_RESULT_UNAVAILABLE"].includes(item?.code));
       throw domain || error;
     }
   }

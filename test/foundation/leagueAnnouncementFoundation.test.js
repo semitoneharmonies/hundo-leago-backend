@@ -50,6 +50,16 @@ function setup(t) {
   return { database, context, dependencies, service, post };
 }
 
+test("announcements fail without writes when the historical schema has no announcement repository", (t) => {
+  const r = setup(t);
+  const service = createLeagueAnnouncementService({ ...r.dependencies, repository: null });
+  const before = r.database.serialize();
+  assert.throws(() => service.list({ leagueId: LEAGUE, authenticated: authenticated(MANAGER) }), { code: "ANNOUNCEMENT_UNAVAILABLE" });
+  assert.throws(() => service.post({ leagueId: LEAGUE, input: { body: "Reminder" }, authenticated: authenticated(COMMISSIONER), idempotencyKey: crypto.randomUUID() }), { code: "ANNOUNCEMENT_UNAVAILABLE" });
+  assert.throws(() => service.list({ leagueId: OTHER, authenticated: authenticated(MANAGER) }), { code: "LEAGUE_NOT_FOUND" });
+  assert(before.equals(r.database.serialize()));
+});
+
 test("announcements persist with atomic audit, preserve all existing records, and manager reads are byte-for-byte read-only", (t) => {
   const r = setup(t);
   const tables = r.context.schemaTables.filter((table) => !["league_communications", "league_activity", "security_audit", "security_audit_events", "idempotency_requests"].includes(table));

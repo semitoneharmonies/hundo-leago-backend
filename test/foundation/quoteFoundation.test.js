@@ -25,6 +25,16 @@ const submit = (r, overrides = {}) => r.service.submit({ leagueId: LEAGUE, authe
 const review = (r, item, overrides = {}) => r.service.review({ leagueId: LEAGUE, authenticated: authenticated(COMMISSIONER), quoteId: item.id, input: { decision: "approve", version: item.version }, idempotencyKey: crypto.randomUUID(), ...overrides });
 const rotation = (r, leagueId = LEAGUE, userId = MANAGER, query) => r.service.rotation({ leagueId, authenticated: authenticated(userId), query });
 
+test("quotes fail without writes when the historical schema has no quote repository", (t) => {
+  const r = setup(t);
+  r.service = createQuoteService({ ...r.dependencies, repository: null });
+  const before = r.database.serialize();
+  assert.throws(() => rotation(r), { code: "QUOTE_UNAVAILABLE" });
+  assert.throws(() => submit(r), { code: "QUOTE_UNAVAILABLE" });
+  assert.throws(() => rotation(r, OTHER), { code: "LEAGUE_NOT_FOUND" });
+  assert(before.equals(r.database.serialize()));
+});
+
 test("additive migration preserves populated existing records and repeat migration is a no-op", (t) => {
   const database = new Database(":memory:");
   t.after(() => database.close());
