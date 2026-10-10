@@ -79,8 +79,9 @@ function createSqliteTradeVisibility(database) {
       ...participants.projection(input),
     };
     const involvedTeams = proposal ? teams(proposal) : [];
+    const recipients = proposal ? involvedTeams.filter(team => team.id !== proposal.proposingTeam.id).map(team => team.name).join(' and ') : '';
     const proposalSummary = proposal && row.event_type === 'trade_proposal_created'
-      ? `${proposal.proposingTeam.name} sent a trade proposal to ${involvedTeams.filter(team => team.id !== proposal.proposingTeam.id).map(team => team.name).join(' and ')}.`
+      ? `${proposal.proposingTeam.name} sent a trade proposal to ${recipients}.`
       : null;
     if (proposal && canViewDetails(proposal, viewer)) {
       return proposalSummary ? Object.freeze({ ...row, display_summary: proposalSummary }) : row;
@@ -88,9 +89,22 @@ function createSqliteTradeVisibility(database) {
     // Preserve durable historical completion announcements whose original trade
     // was imported separately; a pending or unknown event never gets this bypass.
     if (!proposal && ['trade_completed', 'trade_reversed', 'trade_correction_required'].includes(row.event_type)) return row;
+    // Older status entries pass through this same read-only privacy projection.
+    // Describe the event, rather than making a declined offer sound newly sent.
+    const outcome = {
+      trade_proposal_rejected: ' was declined',
+      trade_proposal_cancelled: ' was cancelled',
+      trade_proposal_automatically_cancelled: ' was automatically cancelled',
+      trade_proposal_expired: ' expired',
+      trade_participant_accepted: ' was accepted by a participating team',
+      trade_awaiting_commissioner_approval: ' is awaiting commissioner approval',
+    }[row.event_type] || '';
+    const privateSummary = proposal
+      ? `Trade proposal from ${proposal.proposingTeam.name} to ${recipients}${outcome}.`
+      : 'Trade details are private until execution.';
     return Object.freeze({ ...row, actor_user_id: null, actor_authority: null, actor_display_name: null,
       team_id: null, team_name: null, player_id: null, player_full_name: null, reason: null,
-      display_summary: proposalSummary || (involvedTeams.length ? `Trade involving ${involvedTeams.map(team => team.name).join(' ↔ ')}. Details are private until execution.` : 'Trade details are private until execution.'),
+      display_summary: proposalSummary || privateSummary,
       metadata_json: JSON.stringify({ proposalId: row.related_id, detailsVisible: false, teams: involvedTeams }),
     });
   }

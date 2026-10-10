@@ -69,6 +69,7 @@ async function runTradeVisibilityFlow(t, { createRuntime, IDS, NOW_MS, authentic
     assert.equal(summary.detailsVisible, false);
     const feed = (await get('/activity?category=trade', user)).activity.filter(item => item.related.id === id);
     assert(feed.length); assert(feed.every(item => item.metadata.detailsVisible === false && item.reason === null && item.player === null));
+    assert(feed.every(item => !item.summary.includes('Trade involving') && !item.summary.includes('Details are private until execution.')));
     assert.equal(feed.find(item => item.type === 'trade_proposal_created').summary,
       detail.participants ? 'Alpha sent a trade proposal to Bravo and Charlie.' : 'Alpha sent a trade proposal to Bravo.');
     const serialized = JSON.stringify({ detail, summary, feed });
@@ -104,7 +105,18 @@ async function runTradeVisibilityFlow(t, { createRuntime, IDS, NOW_MS, authentic
         assert.equal(db.prepare('SELECT status FROM trades WHERE id = ?').get(id).status, 'expired');
       }
       else assert.equal((await request(`/trades/${id}/${closure}`, closure === 'decline' ? IDS.receivingManager : IDS.manager, {})).status, 200);
+      // Reproduce already-saved generic history, without rewriting it on reads.
+      const oldSummary = 'Trade involving Alpha ↔ Bravo. Details are private until execution.';
+      db.prepare('UPDATE league_activity SET display_summary = ? WHERE related_type = ? AND related_id = ?').run(oldSummary, 'trade', id);
       await hidden(id); await hidden(id, IDS.commissioner); await visible(id, IDS.manager);
+      const before = db.serialize();
+      const eventType = { decline: 'trade_proposal_rejected', cancel: 'trade_proposal_cancelled', expire: 'trade_proposal_expired' }[closure];
+      const expectedOutcome = { decline: ' was declined.', cancel: ' was cancelled.', expire: ' expired.' }[closure];
+      const feed = (await get('/activity?category=trade')).activity;
+      assert.equal(feed.find(item => item.related.id === id && item.type === eventType).summary,
+        `Trade proposal from Alpha to ${three ? 'Bravo and Charlie' : 'Bravo'}${expectedOutcome}`);
+      assert(db.prepare('SELECT display_summary FROM league_activity WHERE related_type = ? AND related_id = ?').all('trade', id).every(row => row.display_summary === oldSummary));
+      assert(before.equals(db.serialize()), 'legacy wording is projected without changing saved history');
     });
     await scenario(`${three ? 'three' : 'two'} teams: commissioner sees only accepted future-considerations review`, async () => {
       const id = create(three, true); await hidden(id, IDS.commissioner);
