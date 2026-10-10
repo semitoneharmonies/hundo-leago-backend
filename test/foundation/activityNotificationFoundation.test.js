@@ -397,6 +397,8 @@ describe("M5-09 authenticated League Activity", () => {
 
   test("classifies saved contract buyouts before pagination without writes or league leakage", (t) => {
     const runtime = createRuntime(t);
+    runtime.database.prepare("INSERT INTO teams (id, league_id, name, name_normalized, status, created_at_ms, updated_at_ms, version) VALUES (?, ?, 'Guelph Storm', 'guelph storm', 'active', 1, 1, 1)").run(uuid(240), LEAGUE_A);
+    runtime.database.prepare("INSERT INTO players (id, first_name, last_name, full_name, status, created_at_ms, updated_at_ms, version) VALUES (?, 'Example', 'Player', 'Example Player', 'active', 1, 1, 1)").run(uuid(241));
     for (const [id, leagueId, eventType] of [
       [230, LEAGUE_A, "contract_bought_out"],
       [231, LEAGUE_A, "contract_bought_out"],
@@ -407,7 +409,8 @@ describe("M5-09 authenticated League Activity", () => {
       runtime.context.repositories.league_activity.insert({
         id: uuid(id), league_id: leagueId, season_id: null,
         event_type: eventType, actor_user_id: null, actor_authority: "system",
-        team_id: null, player_id: null, related_type: null, related_id: null,
+        team_id: [230, 232].includes(id) ? uuid(240) : null,
+        player_id: [230, 232].includes(id) ? uuid(241) : null, related_type: null, related_id: null,
         display_summary: "Saved history.", reason: null, metadata_json: "{}",
         occurred_at_ms: NOW_MS + id,
       });
@@ -422,6 +425,10 @@ describe("M5-09 authenticated League Activity", () => {
           query: { category, limit: 1, ...(cursor ? { cursor } : {}) },
           authenticated: authenticated(USER_A) });
         ids.push(...page.activity.map(item => item.id));
+        for (const item of page.activity) {
+          if ([uuid(230), uuid(232)].includes(item.id)) assert.equal(item.summary, "Guelph Storm bought out Example Player's contract.");
+          if (item.id === uuid(231)) assert.equal(item.summary, "Saved history.");
+        }
         cursor = page.page.nextCursor;
       } while (cursor);
       assert.deepEqual(ids.filter(id => [230, 231, 232, 233, 234].some(n => uuid(n) === id)),

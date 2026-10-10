@@ -209,6 +209,10 @@ function integrationFixture({
       calls.push({ method: "readSchedule", input });
       return schedule;
     },
+    readCurrentWeek(input) {
+      calls.push({ method: "readCurrentWeek", input });
+      return { season: schedule.season, health: schedule.health, week: schedule.weeks[0], matchups: [matchupRow], byes: [] };
+    },
     readWeek(input) {
       calls.push({ method: "readWeek", input });
       return { week: rawWeek(), matchups: [matchupRow], byes: [] };
@@ -801,6 +805,8 @@ describe("M6-12 matchup HTTP integration service", () => {
       assert.equal(result.weeks[0].locksAtMs, locksAtMs);
       assert.match(result.weeks[0].locksAtDisplay, expected);
       assert.deepEqual(calls.map(({ method }) => method), ["member", "readSchedule"]);
+      const current = service.readCurrentWeek({ leagueId: LEAGUE_ID, seasonId: SEASON_ID, authenticated: { valid: true } });
+      assert.equal(current.week.locksAtDisplay, result.weeks[0].locksAtDisplay);
     }
   });
   test("projects schedule, current week, week detail, matchup detail, health, and standings safely", () => {
@@ -820,6 +826,8 @@ describe("M6-12 matchup HTTP integration service", () => {
       ageMs: 1_000,
     });
     assert.equal(current.week.id, WEEK_ID);
+    assert.equal(calls.filter(({ method }) => method === "readSchedule").length, 2);
+    assert.equal(calls.find(({ method }) => method === "readCurrentWeek").input.nowMs, NOW_MS);
     assert.equal(week.week.version, 4);
     assert.equal(matchup.matchup.liveScore, null);
     assert.deepEqual(matchup.matchup.health.scoring, { status: "not_live" });

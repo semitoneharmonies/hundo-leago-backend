@@ -91,8 +91,7 @@ function calculateStandings({ participants, results } = {}) {
           );
   }
   sorted.sort((left, right) =>
-    right.standingsPoints - left.standingsPoints ||
-    right.fantasyPointsDifferentialHundredths - left.fantasyPointsDifferentialHundredths ||
+    right.wins - left.wins ||
     right.fantasyPointsForHundredths - left.fantasyPointsForHundredths ||
     left.teamDisplayName.localeCompare(right.teamDisplayName) ||
     left.teamId.localeCompare(right.teamId)
@@ -100,8 +99,7 @@ function calculateStandings({ participants, results } = {}) {
   let prior = null;
   sorted.forEach((row, index) => {
     const tied = prior &&
-      prior.standingsPoints === row.standingsPoints &&
-      prior.fantasyPointsDifferentialHundredths === row.fantasyPointsDifferentialHundredths &&
+      prior.wins === row.wins &&
       prior.fantasyPointsForHundredths === row.fantasyPointsForHundredths;
     row.rank = tied ? prior.rank : index + 1;
     prior = row;

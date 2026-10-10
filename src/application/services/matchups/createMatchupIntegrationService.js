@@ -201,7 +201,7 @@ function createMatchupIntegrationService({
       throw new TypeError("matchup integration requires league authorization");
     }
   }
-  for (const method of ["readSchedule", "readWeek", "readMatchup", "readResultScope"]) {
+  for (const method of ["readSchedule", "readCurrentWeek", "readWeek", "readMatchup", "readResultScope"]) {
     if (!readRepository || typeof readRepository[method] !== "function") {
       throw new TypeError("matchup integration requires a read repository");
     }
@@ -319,22 +319,15 @@ function createMatchupIntegrationService({
   }
 
   function readCurrentWeek(input) {
-    const result = listWeeks(input);
-    const nowMs = clock.nowMs();
-    const current =
-      result.weeks.find(
-        (week) => week.startsAtMs <= nowMs && nowMs < week.rollsOverAtMs && week.status !== "cancelled"
-      ) ||
-      result.weeks.find(
-        (week) => !["final", "cancelled"].includes(week.status)
-      ) ||
-      null;
+    member(input);
+    const context = readRepository.readCurrentWeek({ ...input, nowMs: clock.nowMs() });
+    if (!context) fail(MATCHUP_INTEGRATION_CODES.seasonMissing, "The season was not found.");
     return Object.freeze({
       code: "CURRENT_MATCHUP_WEEK_FOUND",
       leagueId: input.leagueId,
       seasonId: input.seasonId,
-      health: result.health,
-      week: current,
+      health: Object.freeze({ statistics: sourceHealth(context.health) }),
+      week: context.week ? scheduleProjection({ ...context, weeks: [context.week] })[0] : null,
     });
   }
 

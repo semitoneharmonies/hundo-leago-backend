@@ -26,7 +26,7 @@ function calculateExpandedTeamScore({ lock, lockedPlayers, currentPlayerGames, e
     const calculation = calculateExpandedScore(total.stats, player.position_group, scoringRule);
     const goalDelta = total.stats.evenStrengthGoals + total.stats.powerPlayGoals + total.stats.shortHandedGoals;
     const assistDelta = total.stats.primaryAssists + total.stats.secondaryAssists;
-    return Object.freeze({ playerId: player.player_id, fullName: player.player_full_name, positionGroup: player.position_group, slotNumber: player.slot_number,
+    return Object.freeze({ playerId: player.player_id, fullName: player.player_full_name, nhlTeamAbbreviation: player.nhl_team_abbreviation || null, positionGroup: player.position_group, slotNumber: player.slot_number,
       gamesPlayedDelta: total.gamesPlayed, goalDelta, assistDelta, pointDelta: goalDelta + assistDelta,
       scoreHundredths: calculation.fantasyPointsHundredths, dataStatus: "available", scoringRuleVersion: scoringRule?.version || EXPANDED_SCORING_VERSION, ...(scoringRule ? {scoringWeights: scoringRule.weights} : {}),
       scoringStats: calculation.scoringStats, scoringBreakdown: calculation.breakdown });

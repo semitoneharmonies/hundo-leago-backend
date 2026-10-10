@@ -40,7 +40,10 @@ function projectRow(row) {
     related: row.related_type
       ? Object.freeze({ type: row.related_type, id: row.related_id })
       : null,
-    summary: row.display_summary,
+    summary: ["contract_bought_out", "player_released_by_buyout"].includes(row.event_type) &&
+      row.player_full_name && row.team_name
+      ? `${row.team_name} bought out ${row.player_full_name}'s contract.`
+      : row.display_summary,
     reason: row.reason,
     metadata: parseMetadata(row.metadata_json),
     occurredAtMs: row.occurred_at_ms,

@@ -97,6 +97,11 @@ function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled 
           ) AS recency
         FROM player_stat_totals AS totals
         WHERE totals.nhl_season_key = @nhlSeasonKey
+          AND totals.player_id IN (
+            SELECT player_id FROM player_ownerships
+            WHERE league_id = @leagueId AND season_id = @seasonId
+              AND team_id = @teamId
+          )
       ),
       latest_source AS (
         SELECT
@@ -112,6 +117,11 @@ function createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled 
           ) AS recency
         FROM player_source_state AS source
         WHERE source.ended_at_ms IS NULL
+          AND source.player_id IN (
+            SELECT player_id FROM player_ownerships
+            WHERE league_id = @leagueId AND season_id = @seasonId
+              AND team_id = @teamId
+          )
       )
       SELECT
         ownership.id AS ownership_id,

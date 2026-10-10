@@ -78,14 +78,19 @@ function createSqliteTradeVisibility(database) {
       receivingTeam: { id: trade.receiving_team_id, name: trade.receiving_team_name },
       ...participants.projection(input),
     };
-    if (proposal && canViewDetails(proposal, viewer)) return row;
+    const involvedTeams = proposal ? teams(proposal) : [];
+    const proposalSummary = proposal && row.event_type === 'trade_proposal_created'
+      ? `${proposal.proposingTeam.name} sent a trade proposal to ${involvedTeams.filter(team => team.id !== proposal.proposingTeam.id).map(team => team.name).join(' and ')}.`
+      : null;
+    if (proposal && canViewDetails(proposal, viewer)) {
+      return proposalSummary ? Object.freeze({ ...row, display_summary: proposalSummary }) : row;
+    }
     // Preserve durable historical completion announcements whose original trade
     // was imported separately; a pending or unknown event never gets this bypass.
     if (!proposal && ['trade_completed', 'trade_reversed', 'trade_correction_required'].includes(row.event_type)) return row;
-    const involvedTeams = proposal ? teams(proposal) : [];
     return Object.freeze({ ...row, actor_user_id: null, actor_authority: null, actor_display_name: null,
       team_id: null, team_name: null, player_id: null, player_full_name: null, reason: null,
-      display_summary: involvedTeams.length ? `Trade involving ${involvedTeams.map(team => team.name).join(' ↔ ')}. Details are private until execution.` : 'Trade details are private until execution.',
+      display_summary: proposalSummary || (involvedTeams.length ? `Trade involving ${involvedTeams.map(team => team.name).join(' ↔ ')}. Details are private until execution.` : 'Trade details are private until execution.'),
       metadata_json: JSON.stringify({ proposalId: row.related_id, detailsVisible: false, teams: involvedTeams }),
     });
   }

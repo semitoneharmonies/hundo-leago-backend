@@ -379,8 +379,8 @@ describe("M6-08 SELECT-only authoritative standings", () => {
         ["Bravo", 2, 200, 1],
         ["Charlie", 1, 0, 2],
         ["Delta", 1, 0, 2],
-        ["Echo", 0, 0, 4],
-        ["Alpha", 0, -200, 5],
+        ["Alpha", 0, -200, 4],
+        ["Echo", 0, 0, 5],
       ]
     );
     assert.equal(standings.rows.find(({ teamDisplayName }) => teamDisplayName === "Alpha").fantasyPointsForHundredths, 100);
@@ -399,6 +399,8 @@ describe("M6-08 SELECT-only authoritative standings", () => {
     assert.deepEqual(preview.changedTeamIds, [
       IDS.teamA,
       IDS.teamB,
+      IDS.teamC,
+      IDS.teamD,
     ]);
     assert.deepEqual(
       preview.projectedRows.map(
@@ -410,10 +412,10 @@ describe("M6-08 SELECT-only authoritative standings", () => {
       ),
       [
         ["Alpha", 2, 1],
-        ["Charlie", 1, 2],
-        ["Delta", 1, 2],
-        ["Echo", 0, 4],
-        ["Bravo", 0, 5],
+        ["Bravo", 0, 2],
+        ["Charlie", 1, 3],
+        ["Delta", 1, 3],
+        ["Echo", 0, 5],
       ]
     );
     assert.equal(after, before);

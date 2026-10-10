@@ -1491,3 +1491,38 @@ describe("M6-06 SELECT-only live scoring", () => {
     });
   });
 });
+
+for (const provider of ['sportsdataio-live', 'nhl-completed-games']) test(`${provider} displays current NHL team on live and final rows without writing or changing scores`, t => {
+  const { database, service } = createRuntime(t, { provider });
+  if (provider === 'nhl-completed-games') {
+    database.prepare("INSERT INTO player_external_ids (id, player_id, provider, external_value, created_at_ms) VALUES (?, ?, 'nhl-catalog', '8', 1)").run(uuid(100), IDS.player);
+    const stats = { ...emptyScoringStats(), evenStrengthGoals: 1, primaryAssists: 1 };
+    persistExpandedStatistics(database, { refreshId: IDS.liveRefresh, nhlSeasonKey: '20262027', playerIdentityProvider: 'nhl-catalog',
+      rows: [{ externalPlayerId: '8', gamesPlayed: 12, goals: 2, assists: 3 }],
+      playerGameRows: [{ externalPlayerId: '8', nhlGameId: '2026020001', observedGameState: 'final', goals: 1, assists: 1 }],
+      expandedScoring: { scoringRuleVersion: EXPANDED_SCORING_VERSION,
+        totalsRows: [{ playerId: '8', scoringStats: { ...stats, evenStrengthGoals: 2, primaryAssists: 3 } }],
+        playerGameRows: [{ playerId: '8', nhlGameId: '2026020001', gamesPlayed: 1, scoringStats: stats }] } });
+  }
+  const scope = input(NOW_MS, provider);
+  const original = service.readLive(scope);
+  assert.equal(original.home.players[0].nhlTeamAbbreviation, null);
+  const insert = database.prepare(`INSERT INTO player_source_state
+    (id, player_id, provider, source_position, normalized_position, nhl_team_abbreviation,
+     active, source_version, effective_at_ms, ended_at_ms, created_at_ms)
+    VALUES (?, ?, 'nhl', 'C', 'F', ?, 1, 'test', ?, ?, ?)`);
+  insert.run(uuid(9801), IDS.player, 'ARI', 1, 2, 1);
+  insert.run(uuid(9800), IDS.player, 'UTA', 2, null, 2);
+  const before = database.prepare('SELECT total_changes() AS count').get().count;
+  const live = service.readLive(scope);
+  assert.equal(live.home.players[0].nhlTeamAbbreviation, 'UTA');
+  assert.equal(live.home.scoreHundredths, original.home.scoreHundredths);
+  assert.equal(live.home.players.length, original.home.players.length);
+  assert.equal(database.prepare('SELECT total_changes() AS count').get().count, before);
+  persistFinalResult(database, live.home.scoreHundredths);
+  const finalBefore = database.prepare('SELECT total_changes() AS count').get().count;
+  const final = service.readAtRefresh({ ...scope, refreshId: IDS.liveRefresh });
+  assert.equal(final.home.players[0].nhlTeamAbbreviation, 'UTA');
+  assert.equal(final.home.scoreHundredths, live.home.scoreHundredths);
+  assert.equal(database.prepare('SELECT total_changes() AS count').get().count, finalBefore);
+});

@@ -69,6 +69,8 @@ async function runTradeVisibilityFlow(t, { createRuntime, IDS, NOW_MS, authentic
     assert.equal(summary.detailsVisible, false);
     const feed = (await get('/activity?category=trade', user)).activity.filter(item => item.related.id === id);
     assert(feed.length); assert(feed.every(item => item.metadata.detailsVisible === false && item.reason === null && item.player === null));
+    assert.equal(feed.find(item => item.type === 'trade_proposal_created').summary,
+      detail.participants ? 'Alpha sent a trade proposal to Bravo and Charlie.' : 'Alpha sent a trade proposal to Bravo.');
     const serialized = JSON.stringify({ detail, summary, feed });
     for (const secret of [IDS.contract, IDS.contractPlayer, IDS.prospectPlayer, IDS.buyout, IDS.draftPick, 'Secret future agreement', 'proposalSnapshot', 'assetIds', 'assetCount', 'usageCents']) assert(!serialized.includes(secret), secret);
     assert.equal(bytes.equals(db.serialize()), true, 'all privacy reads are byte-for-byte read-only');
@@ -78,6 +80,8 @@ async function runTradeVisibilityFlow(t, { createRuntime, IDS, NOW_MS, authentic
     assert.equal(detail.detailsVisible, true); assert(detail.assets.length > 0); assert(detail.history.length > 0);
     const feed = (await get('/activity?category=trade', user)).activity.filter(item => item.related.id === id);
     assert(feed.some(item => item.metadata?.assets?.length));
+    const creation = feed.find(item => item.type === 'trade_proposal_created');
+    if (creation) assert(creation.summary.startsWith(`${detail.proposingTeam.name} sent a trade proposal to `));
   }
   async function scenario(name, run) { await t.test(name, async () => { db.exec('SAVEPOINT privacy'); runtime.setNow(NOW_MS); try { await run(); assert.deepEqual(db.pragma('foreign_key_check'), []); } finally { db.exec('ROLLBACK TO privacy; RELEASE privacy'); } }); }
   for (const three of [false, true]) {

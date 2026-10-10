@@ -42,7 +42,10 @@ function createSqliteMatchupScoringRepository({ database } = {}) {
       "AND team_id IN (@homeTeamId, @awayTeamId) ORDER BY team_id"
   );
   const playersStatement = database.prepare(
-    "SELECT matchup_roster_players.*, players.full_name AS player_full_name " +
+    "SELECT matchup_roster_players.*, players.full_name AS player_full_name, " +
+      "(SELECT source.nhl_team_abbreviation FROM player_source_state AS source " +
+      "WHERE source.player_id = players.id AND source.ended_at_ms IS NULL " +
+      "ORDER BY source.id DESC LIMIT 1) AS nhl_team_abbreviation " +
       "FROM matchup_roster_players " +
       "JOIN matchup_roster_locks ON matchup_roster_locks.league_id = matchup_roster_players.league_id " +
       "AND matchup_roster_locks.id = matchup_roster_players.matchup_roster_lock_id " +

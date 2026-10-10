@@ -232,6 +232,7 @@ function calculateTeamLiveScore({
     return Object.freeze({
       playerId: player.player_id,
       fullName: player.player_full_name,
+      nhlTeamAbbreviation: player.nhl_team_abbreviation || null,
       positionGroup: player.position_group,
       slotNumber: player.slot_number,
       gamesPlayedDelta: current.games_played - baselines.gamesPlayed,

@@ -36,7 +36,7 @@ function createSqliteMatchupReadRepository({ database } = {}) {
     "SELECT * FROM matchup_weeks WHERE league_id = @leagueId " +
       "AND season_id = @seasonId ORDER BY sequence"
   );
-  const matchupsStatement = database.prepare(
+  const matchupRowsSql =
     "SELECT matchups.*, home_team.name AS current_home_team_name, " +
       "away_team.name AS current_away_team_name FROM matchups " +
       "LEFT JOIN teams AS home_team ON home_team.league_id = matchups.league_id " +
@@ -44,9 +44,14 @@ function createSqliteMatchupReadRepository({ database } = {}) {
       "LEFT JOIN teams AS away_team ON away_team.league_id = matchups.league_id " +
       "AND away_team.id = matchups.away_team_id " +
       "WHERE matchups.league_id = @leagueId " +
-      "AND matchups.season_id = @seasonId ORDER BY matchups.matchup_week_id, matchups.id"
+      "AND matchups.season_id = @seasonId ";
+  const matchupsStatement = database.prepare(
+    matchupRowsSql + "ORDER BY matchups.matchup_week_id, matchups.id"
   );
-  const byesStatement = database.prepare(
+  const weekMatchupsStatement = database.prepare(
+    matchupRowsSql + "AND matchups.matchup_week_id = @weekId ORDER BY matchups.id"
+  );
+  const byeRowsSql =
     "SELECT matchup_byes.*, teams.name AS current_team_name, " +
       "matchup_weeks.status AS week_status FROM matchup_byes " +
       "LEFT JOIN teams ON teams.league_id = matchup_byes.league_id " +
@@ -54,8 +59,19 @@ function createSqliteMatchupReadRepository({ database } = {}) {
       "JOIN matchup_weeks ON matchup_weeks.league_id = matchup_byes.league_id " +
       "AND matchup_weeks.id = matchup_byes.matchup_week_id " +
       "WHERE matchup_byes.league_id = @leagueId " +
-      "AND matchup_byes.season_id = @seasonId " +
-      "ORDER BY matchup_byes.matchup_week_id, matchup_byes.team_id"
+      "AND matchup_byes.season_id = @seasonId ";
+  const byesStatement = database.prepare(
+    byeRowsSql + "ORDER BY matchup_byes.matchup_week_id, matchup_byes.team_id"
+  );
+  const weekByesStatement = database.prepare(
+    byeRowsSql + "AND matchup_byes.matchup_week_id = @weekId ORDER BY matchup_byes.team_id"
+  );
+  const currentWeekStatement = database.prepare(
+    "SELECT * FROM matchup_weeks WHERE league_id = @leagueId " +
+      "AND season_id = @seasonId AND status <> 'cancelled' " +
+      "AND ((starts_at_ms <= @nowMs AND @nowMs < rolls_over_at_ms) OR status <> 'final') " +
+      "ORDER BY CASE WHEN starts_at_ms <= @nowMs AND @nowMs < rolls_over_at_ms " +
+      "THEN 0 ELSE 1 END, sequence LIMIT 1"
   );
   const weekStatement = database.prepare(
     "SELECT * FROM matchup_weeks WHERE league_id = @leagueId " +
@@ -201,20 +217,37 @@ function createSqliteMatchupReadRepository({ database } = {}) {
       if (!week) return null;
       return Object.freeze({
         week,
-        matchups: freezeRows(
-          matchupsStatement
-            .all(scope)
-            .filter((row) => row.matchup_week_id === scope.weekId)
-        ),
-        byes: freezeRows(
-          byesStatement
-            .all(scope)
-            .filter((row) => row.matchup_week_id === scope.weekId)
-        ),
+        matchups: freezeRows(weekMatchupsStatement.all(scope)),
+        byes: freezeRows(weekByesStatement.all(scope)),
       });
     } catch (error) {
       throw mapRepositoryError(error, {
         operation: "readMatchupWeekProjection",
+        tableName: "matchup_weeks",
+      });
+    }
+  }
+
+  function readCurrentWeek(input) {
+    try {
+      const scope = seasonScope(input);
+      const season = readSeason(scope);
+      if (!season) return null;
+      if (!Number.isSafeInteger(input.nowMs) || input.nowMs < 0) {
+        throw repositoryError(REPOSITORY_ERROR_CODES.argumentInvalid, "A valid current time is required.");
+      }
+      const row = currentWeekStatement.get({ ...scope, nowMs: input.nowMs });
+      const weekScope = row ? { ...scope, weekId: row.id } : null;
+      return Object.freeze({
+        season,
+        health: readHealth(season),
+        week: row ? Object.freeze({ ...row }) : null,
+        matchups: freezeRows(weekScope ? weekMatchupsStatement.all(weekScope) : []),
+        byes: freezeRows(weekScope ? weekByesStatement.all(weekScope) : []),
+      });
+    } catch (error) {
+      throw mapRepositoryError(error, {
+        operation: "readCurrentMatchupWeekProjection",
         tableName: "matchup_weeks",
       });
     }
@@ -264,6 +297,7 @@ function createSqliteMatchupReadRepository({ database } = {}) {
   }
 
   return Object.freeze({
+    readCurrentWeek,
     readMatchup,
     readResultScope,
     readSchedule,
