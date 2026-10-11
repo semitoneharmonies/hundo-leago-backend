@@ -416,6 +416,7 @@ const {
 } = require("../infrastructure/sportsdataio/SportsDataIoLiveNhlAdapter");
 const { createNhlCompletedGameAdapter, PROVIDER_NAME: NHL_COMPLETED_PROVIDER, PLAYER_IDENTITY_PROVIDER: NHL_IDENTITY_PROVIDER } = require("../infrastructure/nhl/NhlCompletedGameAdapter");
 const { createNhlScheduleAdapter } = require("../infrastructure/nhl/NhlScheduleAdapter");
+const { createMatchupGameProgressService } = require("../application/services/matchups/createMatchupGameProgressService");
 const { createSqliteRosterScheduleRepository } = require("../infrastructure/persistence/sqlite/SqliteRosterScheduleRepository");
 const { createRosterScheduleService } = require("../application/services/leagues/createRosterScheduleService");
 const { createNhlPlayerAppearanceAdapter } = require("../infrastructure/nhl/NhlPlayerAppearanceAdapter");
@@ -1216,6 +1217,11 @@ const TARGET_ENDPOINTS = Object.freeze([
   [
     "GET",
     "/api/v1/leagues/:leagueId/seasons/:seasonId/matchup-weeks/:weekId/nhl-schedule",
+    "matchup",
+  ],
+  [
+    "GET",
+    "/api/v1/leagues/:leagueId/seasons/:seasonId/matchup-weeks/:weekId/matchups/:matchupId/game-progress",
     "matchup",
   ],
   [
@@ -2643,6 +2649,7 @@ function createTargetServices({
     leaseOwner: secureRandom.id(),
     logger,
   });
+  const nhlSchedule = createNhlScheduleAdapter({ fetchImpl: nhlFetchImplementation, nowMs: () => clock.nowMs() });
   const matchupScoring = createMatchupScoringService({
     expandedScoringEnabled,
     repository: repositories.matchupScoring,
@@ -2889,7 +2896,17 @@ function createTargetServices({
     rosterSchedule: createRosterScheduleService({
       leagueAuthorization,
       repository: repositories.rosterSchedule,
-      scheduleAdapter: createNhlScheduleAdapter({ fetchImpl: nhlFetchImplementation, nowMs: () => clock.nowMs() }),
+      scheduleAdapter: nhlSchedule,
+    }),
+    matchupGameProgress: createMatchupGameProgressService({
+      leagueAuthorization,
+      readRepository: repositories.matchupRead,
+      scoringRepository: repositories.matchupScoring,
+      scheduleRepository: repositories.rosterSchedule,
+      scheduleAdapter: nhlSchedule,
+      statisticsProviders: [statisticsProviderName, "release_qa_fixture"],
+      clock,
+      expandedScoringEnabled,
     }),
     lateLockCoordinator,
     matchupLegality,
@@ -3414,6 +3431,7 @@ function createTargetRouters({
       ...sharedAudit,
       matchupService: services.league.matchup,
       rosterScheduleService: services.league.rosterSchedule,
+      matchupGameProgressService: services.league.matchupGameProgress,
     }),
     standingsFinalization:
       createStandingsFinalizationRouter({

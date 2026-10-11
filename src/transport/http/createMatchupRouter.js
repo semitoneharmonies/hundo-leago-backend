@@ -45,6 +45,7 @@ function createMatchupRouter({
   requestSecurity,
   matchupService,
   rosterScheduleService,
+  matchupGameProgressService,
   auditPrivacyDigest,
   networkSourceResolver = (request) => request.ip,
 } = {}) {
@@ -271,6 +272,17 @@ function createMatchupRouter({
   }
 
   const base = "/api/v1/leagues/:leagueId/seasons/:seasonId";
+  router.get(`${base}/matchup-weeks/:weekId/matchups/:matchupId/game-progress`, requestSecurity.authenticateBootstrap, async (request, response) => {
+    try {
+      if (!matchupGameProgressService) return failure(request, response, 503, "NHL_SCHEDULE_UNAVAILABLE");
+      const data = await matchupGameProgressService.read({
+        leagueId: request.params.leagueId, seasonId: request.params.seasonId,
+        weekId: request.params.weekId, matchupId: request.params.matchupId,
+        authenticated: requestSecurity.getSessionBootstrap(request),
+      });
+      return success(request, response, 200, data);
+    } catch (error) { return mapError(request, response, error); }
+  });
   router.get(`${base}/matchup-weeks/:weekId/nhl-schedule`, requestSecurity.authenticateBootstrap, async (request, response) => {
     try {
       if (!rosterScheduleService) return failure(request, response, 503, "NHL_SCHEDULE_UNAVAILABLE");

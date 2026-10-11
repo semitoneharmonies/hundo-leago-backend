@@ -1492,6 +1492,62 @@ describe("M6-06 SELECT-only live scoring", () => {
   });
 });
 
+test('game progress uses canonical accepted scoring, original final refresh and scoped read-only repositories', async t => {
+  const { createMatchupGameProgressService } = require('../../src/application/services/matchups/createMatchupGameProgressService');
+  const { createSqliteMatchupReadRepository } = require('../../src/infrastructure/persistence/sqlite/SqliteMatchupReadRepository');
+  const { database } = createRuntime(t, { provider: 'nhl-completed-games', currentGameGoals: 0, currentGameAssists: 0 });
+  database.prepare("INSERT INTO player_external_ids (id, player_id, provider, external_value, created_at_ms) VALUES (?, ?, 'nhl-catalog', '8', 1)").run(uuid(100), IDS.player);
+  database.prepare("INSERT INTO player_source_state (id,player_id,provider,source_position,normalized_position,nhl_team_abbreviation,active,source_version,effective_at_ms,created_at_ms) VALUES (?,?,'nhl','C','F','VAN',1,'test',1,1)").run(uuid(101), IDS.player);
+  const stats = emptyScoringStats(); // A real appearance with zero fantasy points still counts.
+  persistExpandedStatistics(database, { refreshId: IDS.liveRefresh, nhlSeasonKey: '20262027', playerIdentityProvider: 'nhl-catalog',
+    rows: [{ externalPlayerId: '8', gamesPlayed: 12, goals: 2, assists: 3 }],
+    playerGameRows: [{ externalPlayerId: '8', nhlGameId: '2026020001', observedGameState: 'final', goals: 0, assists: 0 }],
+    expandedScoring: { scoringRuleVersion: EXPANDED_SCORING_VERSION, totalsRows: [{ playerId: '8', scoringStats: { ...stats, evenStrengthGoals: 2, primaryAssists: 3 } }],
+      playerGameRows: [{ playerId: '8', nhlGameId: '2026020001', gamesPlayed: 1, scoringStats: stats }] } });
+  let scheduleReads = 0, scheduleFails = false;
+  const dependencies = {
+    leagueAuthorization: { requireActiveMembership() {} },
+    readRepository: createSqliteMatchupReadRepository({ database }),
+    scoringRepository: createSqliteMatchupScoringRepository({ database }),
+    scheduleRepository: { readWeek: () => ({ timezone: 'America/Vancouver' }) },
+    statisticsProviders: ['nhl-completed-games'], expandedScoringEnabled: true, clock: { nowMs: () => NOW_MS },
+    scheduleAdapter: { async readSchedule(range) {
+      scheduleReads++;
+      assert.deepEqual(range, { startsAtMs: NOW_MS - 20 * HOUR_MS, endsAtMs: NOW_MS + 4 * HOUR_MS, nhlSeasonKey: '20262027' });
+      if (scheduleFails) throw Object.assign(new Error('offline'), { code: 'NHL_SCHEDULE_UNAVAILABLE' });
+      return { games: [
+        { id: '2026020001', homeTeam: 'VAN', awayTeam: 'SEA', startsAtMs: NOW_MS - 5 * HOUR_MS, status: 'final' },
+        { id: '2026020002', homeTeam: 'VAN', awayTeam: 'SEA', startsAtMs: NOW_MS + HOUR_MS, status: 'scheduled' },
+      ] };
+    } },
+  };
+  const progress = createMatchupGameProgressService(dependencies), scope = input(NOW_MS, 'nhl-completed-games');
+  const before = database.serialize();
+  const live = await progress.read(scope);
+  const { details, ...liveCounts } = live.home;
+  assert.deepEqual(liveCounts, { teamId: IDS.home, status: 'available', tallied: 1, remaining: 1, total: 2 });
+  assert.equal(details.timeZone, 'America/Vancouver');
+  assert.equal(details.asOfMs, NOW_MS);
+  assert.deepEqual(details.games.map(game => game.status), ['collected', 'scheduled']);
+  assert.ok(details.games.every(game => game.playerId === IDS.player && game.opponent === 'SEA'));
+  assert.equal(live.sourceRefreshId, IDS.liveRefresh);
+  scheduleFails = true;
+  assert.deepEqual((await progress.read(scope)).home, { teamId: IDS.home, status: 'schedule_unavailable', tallied: 1, remaining: null, total: null });
+  await assert.rejects(progress.read({ ...scope, leagueId: IDS.otherLeague }), { code: 'MATCHUP_INTEGRATION_MATCHUP_MISSING' });
+  await assert.rejects(progress.read({ ...scope, weekId: uuid(9000) }), { code: 'MATCHUP_INTEGRATION_MATCHUP_MISSING' });
+  assert.deepEqual(database.serialize(), before);
+  persistFinalResult(database, 0);
+  const finalBefore = database.serialize(), readsBefore = scheduleReads;
+  const final = await progress.read(scope);
+  assert.deepEqual(final.home, { teamId: IDS.home, status: 'complete', tallied: 1, remaining: 0, total: 1 });
+  assert.equal(final.sourceRefreshId, IDS.liveRefresh);
+  assert.equal(scheduleReads, readsBefore + 1);
+  assert.deepEqual(database.serialize(), finalBefore);
+  // Canonical sealed-evidence failures cannot leak plausible but unverified counts.
+  const bad = createMatchupGameProgressService({ ...dependencies, scoringRepository: { readContext() { const c = dependencies.scoringRepository.readContext({ ...scope, refreshId: IDS.liveRefresh }); return { ...c, playerGameSet: null }; } } });
+  assert.equal((await bad.read(scope)).home.status, 'scoring_unavailable');
+});
+
 for (const provider of ['sportsdataio-live', 'nhl-completed-games']) test(`${provider} displays current NHL team on live and final rows without writing or changing scores`, t => {
   const { database, service } = createRuntime(t, { provider });
   if (provider === 'nhl-completed-games') {
