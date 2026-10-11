@@ -415,6 +415,9 @@ const {
   createSportsDataIoLiveNhlAdapter,
 } = require("../infrastructure/sportsdataio/SportsDataIoLiveNhlAdapter");
 const { createNhlCompletedGameAdapter, PROVIDER_NAME: NHL_COMPLETED_PROVIDER, PLAYER_IDENTITY_PROVIDER: NHL_IDENTITY_PROVIDER } = require("../infrastructure/nhl/NhlCompletedGameAdapter");
+const { createNhlScheduleAdapter } = require("../infrastructure/nhl/NhlScheduleAdapter");
+const { createSqliteRosterScheduleRepository } = require("../infrastructure/persistence/sqlite/SqliteRosterScheduleRepository");
+const { createRosterScheduleService } = require("../application/services/leagues/createRosterScheduleService");
 const { createNhlPlayerAppearanceAdapter } = require("../infrastructure/nhl/NhlPlayerAppearanceAdapter");
 const { createSqliteStatisticsScheduleRepository } = require("../infrastructure/persistence/sqlite/SqliteStatisticsScheduleRepository");
 const { createSqliteCompletedGameCacheRepository } = require("../infrastructure/persistence/sqlite/SqliteCompletedGameCacheRepository");
@@ -1208,6 +1211,11 @@ const TARGET_ENDPOINTS = Object.freeze([
   [
     "GET",
     "/api/v1/leagues/:leagueId/seasons/:seasonId/matchup-weeks/:weekId",
+    "matchup",
+  ],
+  [
+    "GET",
+    "/api/v1/leagues/:leagueId/seasons/:seasonId/matchup-weeks/:weekId/nhl-schedule",
     "matchup",
   ],
   [
@@ -2009,6 +2017,7 @@ function createTargetRepositories({
     teamProfiles: createSqliteTeamProfileRepository({ database }),
     teamRead: createSqliteTeamReadRepository({ database }),
     teamWorkspace: createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled, nowMs }),
+    rosterSchedule: createSqliteRosterScheduleRepository({ database }),
     playerInjuries: database.pragma('user_version', { simple: true }) >= 65
       ? createSqlitePlayerInjuryRepository({ database }) : null,
     communications: database.pragma("user_version", { simple: true }) >= 71
@@ -2877,6 +2886,11 @@ function createTargetServices({
     entryDraftSchedule,
     lifecycleTransition,
     matchup,
+    rosterSchedule: createRosterScheduleService({
+      leagueAuthorization,
+      repository: repositories.rosterSchedule,
+      scheduleAdapter: createNhlScheduleAdapter({ fetchImpl: nhlFetchImplementation, nowMs: () => clock.nowMs() }),
+    }),
     lateLockCoordinator,
     matchupLegality,
     matchupLock,
@@ -3399,6 +3413,7 @@ function createTargetRouters({
     matchup: createMatchupRouter({
       ...sharedAudit,
       matchupService: services.league.matchup,
+      rosterScheduleService: services.league.rosterSchedule,
     }),
     standingsFinalization:
       createStandingsFinalizationRouter({

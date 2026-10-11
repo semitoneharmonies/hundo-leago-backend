@@ -6,6 +6,7 @@ const PUBLIC_CALENDAR_ISSUES = new Set([
 ]);
 
 const SAFE_MESSAGES = Object.freeze({
+  NHL_SCHEDULE_UNAVAILABLE: "The NHL schedule is temporarily unavailable. Please try again shortly.",
   FAD_DEADLINE_NOT_FUTURE:
     "Choose a Candidate Card deadline in the future, before Week 1.",
   FAD_TIMING_INVALID:
@@ -43,6 +44,7 @@ function optionalIfMatch(request) {
 function createMatchupRouter({
   requestSecurity,
   matchupService,
+  rosterScheduleService,
   auditPrivacyDigest,
   networkSourceResolver = (request) => request.ip,
 } = {}) {
@@ -137,6 +139,7 @@ function createMatchupRouter({
 
   function mapError(request, response, error) {
     const code = error?.code || error?.reasonCode || "";
+    if (code === "NHL_SCHEDULE_UNAVAILABLE") return failure(request, response, 503, code);
     if (code === "MATCHUP_SCHEDULE_CALENDAR_INVALID" && PUBLIC_CALENDAR_ISSUES.has(error.calendarIssue)) {
       return failure(request, response, 400, "MATCHUP_INPUT_INVALID", { calendarIssue: error.calendarIssue });
     }
@@ -268,6 +271,16 @@ function createMatchupRouter({
   }
 
   const base = "/api/v1/leagues/:leagueId/seasons/:seasonId";
+  router.get(`${base}/matchup-weeks/:weekId/nhl-schedule`, requestSecurity.authenticateBootstrap, async (request, response) => {
+    try {
+      if (!rosterScheduleService) return failure(request, response, 503, "NHL_SCHEDULE_UNAVAILABLE");
+      const data = await rosterScheduleService.readWeek({
+        leagueId: request.params.leagueId, seasonId: request.params.seasonId, weekId: request.params.weekId,
+        authenticated: requestSecurity.getSessionBootstrap(request),
+      });
+      return success(request, response, 200, data);
+    } catch (error) { return mapError(request, response, error); }
+  });
   router.get(`${base}/matchup-weeks`, requestSecurity.authenticateBootstrap, read("listWeeks"));
   router.get(`${base}/matchup-weeks/current`, requestSecurity.authenticateBootstrap, read("readCurrentWeek"));
   router.get(`${base}/matchup-weeks/:weekId`, requestSecurity.authenticateBootstrap, read("readWeek"));
