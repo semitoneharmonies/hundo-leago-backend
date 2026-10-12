@@ -5,7 +5,9 @@ const HOUR = 3_600_000;
 
 function createSqlitePushRepository({ database, notificationWriter, configuredSeasonsOnly = false }) {
   const db = database;
-  const fadReminders = createSqliteFadPushReminders({ database, configuredSeasonsOnly });
+  // Disabled push must not prepare newer-schema queries in historical QA runtimes.
+  let fadReminders;
+  const getFadReminders = () => fadReminders ||= createSqliteFadPushReminders({ database, configuredSeasonsOnly });
   const get = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
@@ -104,7 +106,7 @@ function createSqlitePushRepository({ database, notificationWriter, configuredSe
     });
   }
   function collectTimers(now, rosterDecision) {
-    fadReminders.collect(now,forTeam);
+    getFadReminders().collect(now,forTeam);
     for(const auction of all("SELECT a.* FROM auctions a JOIN leagues l ON l.id=a.league_id WHERE a.status='open' AND a.resolves_at_ms>? AND a.resolves_at_ms<=? AND l.status='active' AND NOT EXISTS(SELECT 1 FROM auction_contexts c WHERE c.league_id=a.league_id AND c.auction_id=a.id AND c.source_kind<>'ordinary_weekly')",now,now+2*HOUR)) {
       for(const bid of all("SELECT DISTINCT team_id FROM auction_bids WHERE auction_id=? AND league_id=? AND status='active'",auction.id,auction.league_id)) {
         forTeam({leagueId:auction.league_id,category:'auction_closing',title:'Auction closes soon',url:`/leagues/${auction.league_id}/auctions/${auction.id}`,
@@ -133,7 +135,7 @@ function createSqlitePushRepository({ database, notificationWriter, configuredSe
   }
   function validGuard(delivery, now, rosterDecision) {
     const guard=JSON.parse(delivery.guard_json);
-    const fadAllowed=fadReminders.authorize(delivery,guard,now);
+    const fadAllowed=getFadReminders().authorize(delivery,guard,now);
     if (fadAllowed!==null) return fadAllowed;
     if(guard.kind==='auction_open') { const row=get('SELECT status,resolves_at_ms FROM auctions WHERE id=? AND league_id=?',guard.id,delivery.league_id); return row?.status==='open' && row.resolves_at_ms===guard.deadline && row.resolves_at_ms>now; }
     if(guard.kind==='auction_failed') return get('SELECT status FROM auctions WHERE id=?',guard.id)?.status==='failed';
