@@ -3,7 +3,7 @@ function createPlayerInjuryRouter({ requestSecurity: security, service }) {
   const router = express.Router();
   router.use(security.assignRequestId, security.securityHeaders, security.credentialedCors,
     security.requireAllowedOrigin, security.requireJson, security.requireCompatibleFetchMetadata,
-    express.json({ limit: '8kb', strict: true }));
+    express.json({ limit: '160kb', strict: true }));
   function handler(action, read = false) {
     return async (request, response) => {
       try {
@@ -12,15 +12,18 @@ function createPlayerInjuryRouter({ requestSecurity: security, service }) {
         response.json({ data: result, meta: { requestId: security.getRequestId(request) } });
       } catch (error) {
         const allowed = ['PLATFORM_ADMINISTRATOR_REQUIRED','INJURY_INPUT_INVALID','INJURY_PLAYER_NOT_FOUND','INJURY_VERSION_CONFLICT','INJURY_FEED_UNAVAILABLE','INJURY_FEED_INVALID','INJURY_FEED_STALE','INJURY_FEED_INCOMPLETE','INJURY_REFRESH_CONFLICT','INJURY_REFRESH_FAILED'];
+        allowed.push('INJURY_LIST_INVALID');
         const code = allowed.includes(error.code) ? error.code : 'INJURY_REQUEST_FAILED';
-        const status = code === 'PLATFORM_ADMINISTRATOR_REQUIRED' ? 403 : code === 'INJURY_INPUT_INVALID' ? 400 : code === 'INJURY_PLAYER_NOT_FOUND' ? 404 : /CONFLICT/.test(code) ? 409 : 503;
+        const status = code === 'PLATFORM_ADMINISTRATOR_REQUIRED' ? 403 : ['INJURY_INPUT_INVALID','INJURY_LIST_INVALID'].includes(code) ? 400 : code === 'INJURY_PLAYER_NOT_FOUND' ? 404 : /CONFLICT/.test(code) ? 409 : 503;
         const message = status === 403 ? 'Administrator access is required.' : status === 409 ? 'This status changed. Refresh the list before saving again.' : status === 400 ? 'Check the player, status, and reason.' : 'The injury request could not be completed. Existing statuses were preserved.';
-        response.status(status).json({ error: { code, message, requestId: security.getRequestId(request) } });
+        response.status(status).json({ error: { code, message: code === 'INJURY_LIST_INVALID' ? error.message : message, requestId: security.getRequestId(request) } });
       }
     };
   }
   router.get('/api/v1/admin/injuries', security.authenticateBootstrap, handler('list', true));
   router.post('/api/v1/admin/injuries/decide', security.authenticateUnsafe, handler('decide'));
+  router.post('/api/v1/admin/injuries/preview-list', security.authenticateUnsafe, handler('previewList'));
+  router.post('/api/v1/admin/injuries/apply-list', security.authenticateUnsafe, handler('applyList'));
   router.use((error, request, response, next) => {
     if (!['entity.parse.failed', 'entity.too.large'].includes(error.type)) return next(error);
     return response.status(error.type === 'entity.too.large' ? 413 : 400).json({ error: {

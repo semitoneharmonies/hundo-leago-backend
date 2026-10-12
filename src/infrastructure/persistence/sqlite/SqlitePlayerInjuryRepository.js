@@ -1,4 +1,5 @@
 const { randomUUID } = require('node:crypto');
+const { createSqliteInjuryListOperations } = require('./SqliteInjuryListOperations');
 const { normalizedName, injuryProjection, STALE_AFTER_MS } = require('../../../domain/players/injuryStatusPolicy');
 
 function failure(code) { throw Object.assign(new Error(code), { code }); }
@@ -17,11 +18,12 @@ function createSqlitePlayerInjuryRepository({ database, nowMs = Date.now } = {})
   const catalog = database.prepare("SELECT id, full_name, birth_date FROM players WHERE status = 'active'");
   const person = database.prepare('SELECT id, full_name FROM players WHERE id = ?');
   const writeState = database.prepare(`INSERT INTO player_injury_status
-    (id,status,source,evidence_at_ms,observed_at_ms,review_reason,updated_at_ms,version)
-    VALUES (@id,@status,@source,@evidence_at_ms,@observed_at_ms,@review_reason,@updated_at_ms,1)
+    (id,status,source,evidence_at_ms,observed_at_ms,review_reason,updated_at_ms,version,timeline,designation,injury_reason)
+    VALUES (@id,@status,@source,@evidence_at_ms,@observed_at_ms,@review_reason,@updated_at_ms,1,@timeline,@designation,@injury_reason)
     ON CONFLICT(id) DO UPDATE SET status=excluded.status,source=excluded.source,
       evidence_at_ms=excluded.evidence_at_ms,observed_at_ms=excluded.observed_at_ms,
-      review_reason=excluded.review_reason,updated_at_ms=excluded.updated_at_ms,version=version+1`);
+      review_reason=excluded.review_reason,updated_at_ms=excluded.updated_at_ms,version=version+1,
+      timeline=excluded.timeline,designation=excluded.designation,injury_reason=excluded.injury_reason`);
   const audit = database.prepare(`INSERT INTO player_injury_events
     (id,player_id,actor_user_id,action,reason,before_json,after_json,created_at_ms) VALUES (?,?,?,?,?,?,?,?)`);
   function event(playerId, actorId, action, reason, before, after, at) {
@@ -29,8 +31,9 @@ function createSqlitePlayerInjuryRepository({ database, nowMs = Date.now } = {})
   }
   function saveState(id, next, at, actorId = null, reason = 'Verified injury report') {
     const before = read.get(id);
-    const value = { id, ...next, updated_at_ms: at };
-    const changed = !before || ['status','source','evidence_at_ms','review_reason'].some(key => before[key] !== value[key]);
+    const value = { timeline: null, designation: null, injury_reason: null, id, ...next, updated_at_ms: at };
+    if (value.status !== 'injured') Object.assign(value, { timeline: null, designation: null, injury_reason: null });
+    const changed = !before || ['status','source','evidence_at_ms','review_reason','timeline','designation','injury_reason'].some(key => before[key] !== value[key]);
     writeState.run(value);
     if (changed) event(id, actorId, actorId ? 'admin_decision' : 'feed_update', reason, before, read.get(id), at);
   }
@@ -81,6 +84,7 @@ function createSqlitePlayerInjuryRepository({ database, nowMs = Date.now } = {})
     return { imported: snapshot.rows.length, unresolved: database.prepare('SELECT count(*) AS n FROM player_injury_feed WHERE player_id IS NULL AND present=1').get().n };
   });
   return {
+    ...createSqliteInjuryListOperations({ database, nowMs, saveState }),
     read: id => read.get(id) || null,
     mappedIds: () => database.prepare('SELECT id FROM player_injury_feed WHERE player_id IS NOT NULL').all().map(row => row.id),
     syncState: () => syncState(),

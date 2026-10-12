@@ -6,6 +6,10 @@ function injuryProjection(row, nowMs = Date.now()) {
     status: row.status, source: row.source, observedAtMs: row.observed_at_ms,
     needsReview: Boolean(row.review_reason),
     stale: row.source === 'espn' && nowMs - row.observed_at_ms > STALE_AFTER_MS,
+    ...(row.status === 'injured' && row.timeline ? { details: {
+      timeline: row.timeline, designation: row.designation ?? null,
+      reason: row.injury_reason ?? null,
+    } } : {}),
   };
 }
 

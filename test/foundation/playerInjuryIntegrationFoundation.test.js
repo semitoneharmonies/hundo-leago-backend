@@ -72,9 +72,20 @@ test('global admin decisions, HTTP security, cross-league IR legality and preser
   assert.equal((await fetch(url + '/decide', { method: 'POST', headers: { ...headers, 'X-CSRF-Token': '' }, body })).status, 403);
   assert.equal(repository.read(playerId).status, 'injured');
   actor = as('leagueACommissioner');
+  const listBody = JSON.stringify({ text: 'Staal, Jordan\tDay to Day\tOUT\tLower Body' });
+  for (const route of ['/preview-list', '/apply-list']) {
+    assert.equal((await fetch(url + route, { method: 'POST', headers, body: listBody })).status, 403);
+  }
   assert.equal((await fetch(url, { headers })).status, 403);
   assert.equal((await fetch(url + '/decide', { method: 'POST', headers, body })).status, 403);
   actor = admin;
+  for (const route of ['/preview-list', '/apply-list']) {
+    assert.equal((await fetch(url + route, { method: 'POST', headers: { ...headers, 'X-CSRF-Token': '' }, body: listBody })).status, 403);
+  }
+  const beforePreview = db.prepare('SELECT total_changes() n').get().n;
+  assert.equal((await fetch(url + '/preview-list', { method: 'POST', headers, body: listBody })).status, 200);
+  assert.equal(db.prepare('SELECT total_changes() n').get().n, beforePreview);
+  assert.equal((await fetch(url + '/apply-list', { method: 'POST', headers, body: listBody })).status, 400);
   assert.equal((await fetch(url + '/decide', { method: 'POST', headers, body })).status, 200);
   assert.equal((await fetch(url + '/decide', { method: 'POST', headers, body })).status, 409, 'stale/repeated save cannot overwrite');
   for (const record of records()) {
@@ -92,7 +103,7 @@ test('global admin decisions, HTTP security, cross-league IR legality and preser
 });
 
 test('confirmed healthy IR blocks a future lineup; unknown status does not', () => {
-  const lineup = [...Array.from({ length: 12 }, (_, i) => ({ position_group: 'F', slot_number: i + 1 })), ...Array.from({ length: 6 }, (_, i) => ({ position_group: 'D', slot_number: i + 1 }))];
+  const lineup = [...Array.from({ length: 12 }, (_, i) => ({ player_id: `f${i}`, position_group: 'F', slot_number: i + 1 })), ...Array.from({ length: 6 }, (_, i) => ({ player_id: `d${i}`, position_group: 'D', slot_number: i + 1 }))];
   assert.equal(evaluateMatchupLineupLegality(lineup).legal, true);
   assert.deepEqual(evaluateMatchupLineupLegality(lineup.map(row => ({ ...row, healthy_ir_count: 1 }))).reasonCodes, ['HEALTHY_PLAYER_ON_IR']);
 });

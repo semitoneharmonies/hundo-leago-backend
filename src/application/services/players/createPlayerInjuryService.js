@@ -1,3 +1,4 @@
+const { parseInjuryList } = require('../../../domain/players/injuryListPolicy');
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 function invalid() { throw Object.assign(new Error('Check the injury update and try again.'), { code: 'INJURY_INPUT_INVALID' }); }
 function createPlayerInjuryService({ repository, platformAuthorization, adapter = null } = {}) {
@@ -27,6 +28,8 @@ function createPlayerInjuryService({ repository, platformAuthorization, adapter 
     return repository[mapping ? 'map' : 'decide']({ ...input, reason: input.reason.trim(), actorId });
   }
   return {
+    previewList: ({ input, authenticated }) => listDecision(input, authenticated, false),
+    applyList: ({ input, authenticated }) => listDecision(input, authenticated, true),
     list({ authenticated, search = '' }) {
       platformAuthorization.requireAdministrator(authenticated);
       if (typeof search !== 'string' || search.length > 100) invalid();
@@ -43,5 +46,16 @@ function createPlayerInjuryService({ repository, platformAuthorization, adapter 
     refresh: ({ authenticated }) => refresh({ authenticated }),
     runScheduled: () => refresh({ scheduled: true }),
   };
+  function listDecision(input, authenticated, apply) {
+    const actorId = platformAuthorization.requireAdministrator(authenticated).actorUserId;
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+      Object.keys(input).some(key => !['text', 'resolutions', ...(apply ? ['expectedRevision', 'confirmReplacement'] : [])].includes(key))) invalid();
+    const rows = parseInjuryList(input.text);
+    const resolutions = input.resolutions ?? {};
+    if (!resolutions || typeof resolutions !== 'object' || Array.isArray(resolutions) ||
+      Object.entries(resolutions).some(([key, value]) => !rows.some(row => row.key === key) || (value !== 'skip' && !ID.test(value)))) invalid();
+    if (apply && (!/^[a-f0-9]{64}$/.test(input.expectedRevision || '') || input.confirmReplacement !== true)) invalid();
+    return repository[apply ? 'applyList' : 'previewList']({ rows, resolutions, actorId, expectedRevision: input.expectedRevision });
+  }
 }
 module.exports = { createPlayerInjuryService };
