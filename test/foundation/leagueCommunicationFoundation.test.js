@@ -95,6 +95,27 @@ test("additive migration preserves existing records except exact schema metadata
   assert.equal(f.db.pragma("integrity_check", { simple: true }), "ok");
 });
 
+test("historical announcements remain writable and push fails without writes until migration", t => {
+  const f = fixture(t, { migrated: false });
+  f.migrate(f.migrations.filter(m => m.id <= 67));
+  const before = f.db.serialize();
+  const legacy = createSqliteLeagueCommunicationRepository({ database: f.db });
+  assert.deepEqual(f.db.serialize(), before, "Column detection is read-only");
+  const record = { ...announcement, id: id(500), leagueId: id(10), actorUserId: id(1),
+    recipientCount: 0, clientKey: "legacy-message-001", requestHash: "a".repeat(64), nowMs: NOW };
+  legacy.insert(record);
+  assert.equal(legacy.find(id(10), id(500)).title, announcement.title);
+  const preserved = f.db.serialize();
+  const pushed = { ...record, id: id(501), clientKey: "push-message-001", pushNotify: true };
+  assert.throws(() => legacy.insert(pushed), { code: "COMMUNICATION_UNAVAILABLE" });
+  assert.deepEqual(f.db.serialize(), preserved, "Unsupported push does not write an announcement");
+  f.migrate(f.migrations);
+  const current = createSqliteLeagueCommunicationRepository({ database: f.db });
+  current.insert(pushed);
+  assert.equal(current.find(id(10), id(500)).push_notify, 0);
+  assert.equal(current.find(id(10), id(501)).push_notify, 1);
+});
+
 test("preview is read-only; send preserves all protected tables and retries exactly once", t => {
   const f = fixture(t);
   const before = snapshot(f.db);
