@@ -19,10 +19,22 @@ function calculateMatchupGameProgress({ context, scoring, schedule, timeZone, as
     const exclusions = new Set(context.exclusions.filter(item => item.team_id === teamId).map(item => `${item.player_id}:${item.nhl_game_id}`));
     let remaining = 0;
     const details = { timeZone, asOfMs, games: [] };
+    const teamNames = new Map();
+    for (const game of schedule.games) {
+      if (game.homeTeamId) teamNames.set(game.homeTeamId, game.homeTeam);
+      if (game.awayTeamId) teamNames.set(game.awayTeamId, game.awayTeam);
+    }
     const appearances = new Set((context.expandedScoring?.playerGames || []).filter(game => game.gamesPlayed === 1).map(game => `${game.playerId}:${game.nhlGameId}`));
     for (const player of players) {
-      const team = normalizeTeam(player.nhl_team_abbreviation);
+      const coverage = (context.playerGameCoverage || []).filter(item => item.player_id === player.player_id);
+      const latest = coverage.toSorted((a, b) => (b.nhl_game_scheduled_starts_at_ms ?? -1) - (a.nhl_game_scheduled_starts_at_ms ?? -1))[0];
+      // The locked label can predate an NHL trade. Use accepted provider bindings
+      // for scheduled games, while retaining each observed game's historical team.
+      const team = latest?.provider_team_id
+        ? teamNames.get(String(latest.provider_team_id))
+        : normalizeTeam(player.nhl_team_abbreviation);
       if (!TEAM.has(team)) return unknown('team_unavailable');
+      const coverageByGame = new Map(coverage.map(item => [String(item.nhl_game_id), item]));
       const observed = new Map(context.playerGameObservations.filter(item => item.player_id === player.player_id).map(item => [String(item.nhl_game_id), item]));
       const games = new Map(schedule.games.map(game => [String(game.id), game]));
       for (const [id, game] of games) {
@@ -35,10 +47,11 @@ function calculateMatchupGameProgress({ context, scoring, schedule, timeZone, as
         if (collected && !appearances.has(`${player.player_id}:${id}`)) continue;
         if (final && !collected) continue;
         if (!collected) remaining += 1;
+        const gameTeam = teamNames.get(String(coverageByGame.get(id)?.provider_team_id)) || team;
         details.games.push({ playerId: player.player_id, playerName: player.player_full_name,
           gameId: id, startsAtMs: game.startsAtMs, timeTbd: Boolean(game.timeTbd),
-          opponent: game.homeTeam === team ? game.awayTeam : game.awayTeam === team ? game.homeTeam : null,
-          isHome: game.homeTeam === team ? true : game.awayTeam === team ? false : null,
+          opponent: game.homeTeam === gameTeam ? game.awayTeam : game.awayTeam === gameTeam ? game.homeTeam : null,
+          isHome: game.homeTeam === gameTeam ? true : game.awayTeam === gameTeam ? false : null,
           status: collected ? 'collected' : game.status === 'final' ? 'awaiting_scoring' : game.status,
         });
       }

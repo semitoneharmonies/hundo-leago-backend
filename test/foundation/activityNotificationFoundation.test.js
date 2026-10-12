@@ -347,6 +347,42 @@ describe("M5-09 activity and notification policy", () => {
 });
 
 describe("M5-09 authenticated League Activity", () => {
+  test("auction summaries name the signing team and final contract without changing saved history", (t) => {
+    const runtime = createRuntime(t);
+    runtime.database.prepare("INSERT INTO teams (id, league_id, name, name_normalized, status, created_at_ms, updated_at_ms, version) VALUES (?, ?, 'Team B', 'team b', 'active', 1, 1, 1)").run(uuid(240), LEAGUE_A);
+    runtime.database.prepare("INSERT INTO players (id, first_name, last_name, full_name, status, created_at_ms, updated_at_ms, version) VALUES (?, 'Player', 'A', 'Player A', 'active', 1, 1, 1)").run(uuid(241));
+    const cases = [
+      [250, "auction_signing_completed", { finalAavCents: 375, contractTermYears: 2, submittedWinningAavCents: 500 }, " at $3.75 x 2 years"],
+      [251, "free_agent_draft_player_awarded", { winner: { finalAavCents: 101, finalTotalValueCents: 302, finalTermYears: 3, submittedTermYears: 2 } }, " at $1.01 x 3 years"],
+      [252, "free_agent_draft_player_awarded", { winner: { finalAavCents: 375, finalTotalValueCents: 750 } }, " at $3.75 x 2 years"],
+      [253, "auction_signing_completed", { finalAavCents: 50, contractTermYears: 1 }, " at $0.50 x 1 year"],
+      [254, "auction_signing_completed", { submittedWinningAavCents: 500, submittedWinningTermYears: 3 }, ""],
+      [255, "auction_signing_completed", { finalAavCents: -1, contractTermYears: 2 }, ""],
+    ];
+    for (const [id, eventType, metadata] of cases) {
+      runtime.context.repositories.league_activity.insert({
+        id: uuid(id), league_id: LEAGUE_A, season_id: null,
+        event_type: eventType, actor_user_id: null, actor_authority: "system",
+        team_id: uuid(240), player_id: uuid(241), related_type: "auction_resolution",
+        related_id: uuid(id + 100), display_summary: "Player A signed through auction.",
+        reason: null, metadata_json: JSON.stringify(metadata), occurred_at_ms: NOW_MS + id,
+      });
+    }
+    const before = runtime.database.serialize();
+    const changes = runtime.database.prepare("SELECT total_changes() n").get().n;
+    for (const category of ["all", "auction"]) {
+      const page = runtime.activity.list({ leagueId: LEAGUE_A, query: { category }, authenticated: authenticated(USER_A) });
+      for (const [id, , , terms] of cases) {
+        assert.equal(page.activity.find(item => item.id === uuid(id)).summary,
+          `Player A was signed by Team B in auction${terms}.`);
+      }
+    }
+    const other = runtime.activity.list({ leagueId: LEAGUE_B, query: {}, authenticated: authenticated(USER_B) });
+    assert.ok(other.activity.every(item => !cases.some(([id]) => item.id === uuid(id))));
+    assert.equal(runtime.database.prepare("SELECT total_changes() n").get().n, changes);
+    assert.deepEqual(runtime.database.serialize(), before);
+  });
+
   test("includes saved FAD auction wins in all and auction pages without exposing direct allocations or writing", (t) => {
     const runtime = createRuntime(t);
     const winner = {

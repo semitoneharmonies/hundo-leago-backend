@@ -76,6 +76,36 @@ test('known non-final observations remain pending and accepted historical-team g
   assert.equal(calculateMatchupGameProgress(data).home.remaining, 3);
 });
 
+test('accepted NHL team bindings prevent phantom games from stale locked team labels', () => {
+  const data = fixture();
+  data.timeZone = 'America/Vancouver'; data.asOfMs = 600;
+  data.context.lockedPlayers = [data.context.lockedPlayers[0]];
+  data.context.playerGameCoverage = [
+    { player_id: 'h1', provider_team_id: '23', nhl_game_id: 'accepted', nhl_game_scheduled_starts_at_ms: 100 },
+    { player_id: 'h1', provider_team_id: '55', nhl_game_id: 'new-team-final', nhl_game_scheduled_starts_at_ms: 300 },
+  ];
+  data.schedule.games = [
+    { id: 'accepted', startsAtMs: 100, status: 'final', homeTeam: 'VAN', homeTeamId: '23', awayTeam: 'SEA', awayTeamId: '55' },
+    { id: 'phantom-old-team', startsAtMs: 200, status: 'final', homeTeam: 'VAN', homeTeamId: '23', awayTeam: 'BOS', awayTeamId: '6' },
+    { id: 'new-team-final', startsAtMs: 300, status: 'final', homeTeam: 'BOS', homeTeamId: '6', awayTeam: 'SEA', awayTeamId: '55' },
+    { id: 'old-team-future', startsAtMs: 700, status: 'scheduled', homeTeam: 'VAN', homeTeamId: '23', awayTeam: 'BOS', awayTeamId: '6' },
+    { id: 'new-team-future', startsAtMs: 750, status: 'scheduled', homeTeam: 'SEA', homeTeamId: '55', awayTeam: 'BOS', awayTeamId: '6' },
+  ];
+  data.context.playerGameObservations.push({ player_id: 'h1', nhl_game_id: 'new-team-final', observed_game_state: 'final' });
+  data.context.expandedScoring = { playerGames: ['accepted', 'new-team-final'].map(nhlGameId => ({ playerId: 'h1', nhlGameId, gamesPlayed: 1 })) };
+  data.scoring.home.players = [{ gamesPlayedDelta: 2 }];
+  const before = structuredClone(data);
+  const result = calculateMatchupGameProgress(data).home;
+  assert.equal(result.tallied, 2);
+  assert.equal(result.remaining, 1);
+  assert.deepEqual(result.details.games.map(g => [g.gameId, g.opponent, g.isHome]), [
+    ['accepted', 'SEA', true], ['new-team-final', 'BOS', false], ['new-team-future', 'BOS', true],
+  ]);
+  assert.deepEqual(data, before);
+  data.context.playerGameCoverage[1].provider_team_id = 'unknown';
+  assert.equal(calculateMatchupGameProgress(data).home.status, 'team_unavailable');
+});
+
 test('unavailable schedule or team preserves tallied count without claiming zero remaining', () => {
   const data = fixture();
   data.schedule = null;

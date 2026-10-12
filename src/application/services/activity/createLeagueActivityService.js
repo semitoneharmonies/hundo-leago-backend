@@ -19,6 +19,25 @@ function parseMetadata(value) {
 }
 
 function projectRow(row) {
+  const metadata = parseMetadata(row.metadata_json);
+  let summary = row.display_summary;
+  const auctionAward = row.event_type === "auction_signing_completed" ||
+    (row.event_type === "free_agent_draft_player_awarded" &&
+      row.related_type === "auction_resolution");
+  if (auctionAward && row.player_full_name && row.team_name) {
+    const winner = metadata?.winner;
+    const aav = winner?.finalAavCents ?? metadata?.finalAavCents;
+    const total = winner?.finalTotalValueCents ?? metadata?.finalTotalValueCents;
+    const term = winner?.finalTermYears ?? metadata?.finalTermYears ??
+      metadata?.contractTermYears ??
+      (Number.isSafeInteger(total) && Number.isSafeInteger(aav) && aav > 0
+        ? total / aav : null);
+    const terms = Number.isSafeInteger(aav) && aav > 0 &&
+      Number.isSafeInteger(term) && term >= 1 && term <= 3
+      ? ` at $${(aav / 100).toFixed(2)} x ${term} ${term === 1 ? "year" : "years"}`
+      : "";
+    summary = `${row.player_full_name} was signed by ${row.team_name} in auction${terms}.`;
+  }
   return Object.freeze({
     id: row.id,
     leagueId: row.league_id,
@@ -43,9 +62,9 @@ function projectRow(row) {
     summary: ["contract_bought_out", "player_released_by_buyout"].includes(row.event_type) &&
       row.player_full_name && row.team_name
       ? `${row.team_name} bought out ${row.player_full_name}'s contract.`
-      : row.display_summary,
+      : summary,
     reason: row.reason,
-    metadata: parseMetadata(row.metadata_json),
+    metadata,
     occurredAtMs: row.occurred_at_ms,
   });
 }

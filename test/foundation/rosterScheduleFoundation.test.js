@@ -13,7 +13,7 @@ const DAY = 86_400_000;
 const startsAtMs = Date.parse("2026-10-12T07:00:00Z");
 const endsAtMs = Date.parse("2026-10-26T07:00:00Z");
 const range = { startsAtMs, endsAtMs, nhlSeasonKey: "20262027" };
-const rawGame = (n, time, extra = {}) => ({ id: n, season: 20262027, gameType: 2, startTimeUTC: new Date(time).toISOString(), homeTeam: { abbrev: "VAN" }, awayTeam: { abbrev: "SEA" }, gameState: "FUT", gameScheduleState: "OK", ...extra });
+const rawGame = (n, time, extra = {}) => ({ id: n, season: 20262027, gameType: 2, startTimeUTC: new Date(time).toISOString(), homeTeam: { id: 23, abbrev: "VAN" }, awayTeam: { id: 55, abbrev: "SEA" }, gameState: "FUT", gameScheduleState: "OK", ...extra });
 function responseFor(url, games = []) {
   const first = Date.parse(`${url.split("/").at(-1)}T00:00:00Z`);
   return { ok: true, json: async () => ({ gameWeek: Array.from({ length: 7 }, (_, i) => {
@@ -29,6 +29,8 @@ test("schedule uses half-open matchup dates, covers long weeks, filters preseaso
   assert.deepEqual(result.games.map((game) => game.id), ["2", "3", "4"]);
   assert.deepEqual(result.games.map((game) => game.status), ["scheduled", "postponed", "final"]);
   assert.equal(result.fetchedAtMs, 123);
+  assert.equal(result.games[0].homeTeamId, "23");
+  assert.equal(result.games[0].awayTeamId, "55");
 });
 
 test("cache shares concurrent reads, expires, and provider failure never becomes an empty schedule", async () => {

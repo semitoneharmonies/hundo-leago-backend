@@ -46,7 +46,10 @@ function createNhlScheduleAdapter({ fetchImpl = fetch, nowMs = Date.now, timeout
             const status = raw.gameScheduleState === "PPD" ? "postponed"
               : ["CNCL", "CANC"].includes(raw.gameScheduleState) ? "cancelled" : STATES[raw.gameState];
             if (!Number.isSafeInteger(startsAtMs) || !TEAM.test(homeTeam) || !TEAM.test(awayTeam) || homeTeam === awayTeam || !status || !/^\d{8}$/.test(String(raw.season))) throw unavailable();
-            games.push(Object.freeze({ id: String(raw.id), nhlSeasonKey: String(raw.season), startsAtMs, homeTeam, awayTeam, status, timeTbd: raw.gameScheduleState === "TBD" }));
+            const teamIds = [raw.homeTeam.id, raw.awayTeam.id];
+            if (teamIds.some(id => !Number.isSafeInteger(id) || id <= 0) || teamIds[0] === teamIds[1]) throw unavailable();
+            games.push(Object.freeze({ id: String(raw.id), nhlSeasonKey: String(raw.season), startsAtMs, homeTeam, awayTeam,
+              homeTeamId: String(raw.homeTeam.id), awayTeamId: String(raw.awayTeam.id), status, timeTbd: raw.gameScheduleState === "TBD" }));
           }
         }
         const result = { games: Object.freeze(games), fetchedAtMs: nowMs(), expiresAtMs: nowMs() + ttlMs };
