@@ -1284,12 +1284,12 @@ function installedTargetEndpoints(routers) {
 }
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 204 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 204);
+  test("declares 208 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 208);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      204
+      208
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -1326,6 +1326,7 @@ describe("M3-19 exact target endpoint dispatch", () => {
       "playerCatalogue",
       "playerInjury",
       "publicRoster",
+      "push",
       "quote",
       "rosterAction",
       "standingsFinalization",
@@ -1594,7 +1595,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const options = runtimeOptions(database);
     const runtime = createTargetRuntime(options);
     assert.equal(runtime.migrationState.status, "exact");
-    assert.equal(runtime.migrationState.userVersion, 85);
+    assert.equal(runtime.migrationState.userVersion, 86);
     assert.equal(
       typeof runtime.services.league.auctionResolution.resolveDue,
       "function"
@@ -2159,6 +2160,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
         "free_agent_draft_completion",
         "trade_expiry",
         "league_outbox",
+        "web_push",
       ]
     );
     assert.equal(
@@ -2529,7 +2531,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 204);
+    assert.equal(TARGET_ENDPOINTS.length, 208);
   });
 
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {
@@ -8232,6 +8234,82 @@ test('calendar recovery moves an unattempted overdue Week 1 lock and its actual 
  assert.equal((await runtime.services.league.matchupOccurrenceJob.run()).due,0);time=scope.locksAtMs+7200000;
  const ran=await runtime.services.league.matchupOccurrenceJob.run();assert.equal(ran.succeeded,1,JSON.stringify({ran,job:database.prepare('SELECT * FROM job_runs WHERE id=?').get(runId)}));assert.equal((await runtime.services.league.matchupOccurrenceJob.run()).due,0);
  assert.equal(database.prepare('SELECT status FROM job_runs WHERE id=?').get(runId).status,'succeeded');assert.deepEqual(database.pragma('foreign_key_check'),[]);
+});
+
+for(const previousCursor of [0,2]) test(`guided reset preserves two-league push delivery and suppresses restored events (cursor ${previousCursor})`,async t=>{
+ const core=require('../../src/operations/guidedLeagueReset');
+ const database=createDatabase(t),runtime=createTargetRuntime(runtimeOptions(database)),s=seedComposedLeagueStartScenario(runtime);
+ const authenticated=runtime.services.sessionService.resolveWithoutActivity(s.session.rawSessionToken);
+ const started=runtime.services.league.start.start({leagueId:s.leagueId,input:{},expectedLeagueVersion:s.expectedLeagueVersion,idempotencyKey:'push-reset-start',authenticated});
+ runtime.services.league.matchupSchedule.generate({leagueId:s.leagueId,seasonId:s.seasonId,expectedSeasonVersion:started.league.currentSeason.version,input:{
+  nhlRegularSeasonStartsAtMs:Date.parse('2026-10-06T07:00:00Z'),nhlRegularSeasonEndsAtMs:Date.parse('2027-04-12T07:00:00Z'),fantasyPlayoffsStartAtMs:Date.parse('2027-03-15T07:00:00Z'),fantasyPlayoffsEndAtMs:Date.parse('2027-04-12T07:00:00Z'),firstWeekStartsAtMs:Date.parse('2026-10-12T07:00:00Z'),confirmed:true},idempotencyKey:'push-reset-dates',authenticated});
+ await runtime.services.league.freeAgentDraftReadinessJob.run();
+ const insert=(table,row)=>{const columns=Object.keys(row);database.prepare('INSERT INTO '+table+' ('+columns.join(',')+') VALUES('+columns.map(()=>'?').join(',')+')').run(...columns.map(k=>row[k]));};
+ const other=uuid(982000),otherSeason=uuid(982001),otherTeams=[uuid(982002),uuid(982003)];
+ const league=database.prepare('SELECT * FROM leagues WHERE id=?').get(s.leagueId);
+ insert('leagues',{...league,id:other,name:'Push preserved league',name_normalized:'push preserved league',status:'setup',commissioner_membership_id:null,current_season_id:null});
+ insert('seasons',{...database.prepare('SELECT * FROM seasons WHERE id=?').get(s.seasonId),id:otherSeason,league_id:other});
+ database.prepare('UPDATE leagues SET current_season_id=? WHERE id=?').run(otherSeason,other);
+ const managers=s.teamIds.slice(0,2).map(team=>database.prepare('SELECT * FROM team_manager_assignments WHERE team_id=?').get(team));
+ for(let i=0;i<2;i++){
+  insert('teams',{...database.prepare('SELECT * FROM teams WHERE id=?').get(s.teamIds[i]),id:otherTeams[i],league_id:other});
+  insert('league_memberships',{...database.prepare('SELECT * FROM league_memberships WHERE id=?').get(managers[i].membership_id),id:uuid(982010+i),league_id:other});
+  insert('team_manager_assignments',{...managers[i],id:uuid(982020+i),league_id:other,team_id:otherTeams[i],membership_id:uuid(982010+i)});
+ }
+ const trade=(leagueId,seasonId,teams,tradeId,membershipId)=>insert('trades',{id:tradeId,league_id:leagueId,season_id:seasonId,proposing_team_id:teams[0],receiving_team_id:teams[1],proposing_user_id:managers[0].user_id,creating_membership_id:membershipId,creating_authority:'manager',status:'proposed',proposal_model_version:2,created_at_ms:NOW_MS-500,expires_at_ms:NOW_MS+3600000,effective_deadline_at_ms:NOW_MS+3600000,updated_at_ms:NOW_MS-500});
+ const originalTrade=uuid(982030),otherTrade=uuid(982031),originalEvent=uuid(982040),otherEvent=uuid(982041),otherNewEvent=uuid(982042),newEvent=uuid(982043);
+ trade(other,otherSeason,otherTeams,otherTrade,uuid(982010));trade(s.leagueId,s.seasonId,s.teamIds,originalTrade,managers[0].membership_id);
+ const event=(id,leagueId,seasonId,tradeId)=>insert('trade_events',{id,league_id:leagueId,season_id:seasonId,trade_id:tradeId,actor_user_id:s.commissionerUserId,event_type:'proposal_cancelled',occurred_at_ms:NOW_MS});
+ event(otherEvent,other,otherSeason,otherTrade);event(originalEvent,s.leagueId,s.seasonId,originalTrade);
+ database.prepare("UPDATE push_event_cursors SET last_rowid=? WHERE source='trade_events'").run(previousCursor);
+ const manager=managers[0].user_id;runtime.services.sessionService.issueForUser({userId:manager});
+ const session=database.prepare('SELECT id FROM sessions WHERE user_id=?').get(manager);
+ runtime.repositories.push.subscribe(manager,session.id,{endpoint:'https://fcm.googleapis.com/fcm/send/reset-fixture',keys:{p256dh:'fixture',auth:'fixture'}},NOW_MS-1000);
+ runtime.repositories.push.savePreferences(manager,{trade_closed:true},NOW_MS);
+ const subscription=database.prepare('SELECT id FROM push_subscriptions WHERE user_id=?').get(manager);
+ for(const leagueId of [s.leagueId,other]){
+  insert('push_deliveries',{id:uuid(leagueId===other?982051:982050),subscription_id:subscription.id,user_id:manager,league_id:leagueId,category:'trade_closed',event_key:'existing:'+leagueId,payload_json:'{}',guard_json:'{}',created_at_ms:NOW_MS,expires_at_ms:NOW_MS+3600000,next_attempt_at_ms:NOW_MS});
+  insert('push_roster_state',{league_id:leagueId,team_id:leagueId===other?otherTeams[0]:s.teamIds[0],week_id:uuid(982060),last_reason:'fixture',last_sent_at_ms:NOW_MS});
+ }
+ const globalBefore=['push_preferences','push_subscriptions'].map(table=>database.prepare('SELECT * FROM '+table+' ORDER BY rowid').all());
+ const otherBefore=['push_deliveries','push_roster_state'].map(table=>database.prepare('SELECT * FROM '+table+' WHERE league_id=? ORDER BY rowid').all(other));
+ const oldNotices=database.prepare('SELECT id FROM notifications WHERE league_id=?').all(s.leagueId).map(row=>row.id),otherNotice=uuid(982070);
+ insert('notifications',{...database.prepare('SELECT * FROM notifications WHERE league_id=? LIMIT 1').get(s.leagueId),id:otherNotice,user_id:manager,league_id:other,event_type:'league_calendar_changed',message_data_json:'{}',deduplication_key:'other-push-calendar'});
+ const input={action:'pause',reason:'Review push reset compatibility'},pause=runtime.services.league.leaguePause.preview({leagueId:s.leagueId,authenticated,input});
+ runtime.services.league.leaguePause.apply({leagueId:s.leagueId,authenticated,input:{...input,confirmed:true,previewHash:pause.previewHash},idempotencyKey:'push-reset-pause'});
+ database.prepare("UPDATE outbox_events SET status='published',published_at_ms=?,updated_at_ms=?,version=version+1 WHERE league_id=? AND status='pending'").run(NOW_MS,NOW_MS,s.leagueId);
+ database.prepare("UPDATE push_deliveries SET status='sending',next_attempt_at_ms=? WHERE league_id=?").run(NOW_MS+60000,s.leagueId);
+ const sendingBefore=database.serialize();
+ assert.throws(()=>core.rehearse(database,s.leagueId,s.commissionerUserId,NOW_MS),/Phone notification deliveries must finish/);
+ assert.deepEqual(database.serialize(),sendingBefore);
+ database.prepare("UPDATE push_deliveries SET status='pending' WHERE league_id=?").run(s.leagueId);
+ const archive=core.capture(database,s.leagueId);assert.equal(archive.schemaVersion,84);
+ const before=database.serialize();assert.equal(core.rehearse(database,s.leagueId,s.commissionerUserId,NOW_MS).recoveryVerified,true);assert.deepEqual(database.serialize(),before);
+ const afterHash=database.transaction(()=>core.reset(database,s.leagueId,s.commissionerUserId,NOW_MS)).immediate();
+ for(const table of ['push_deliveries','push_roster_state'])assert.equal(database.prepare('SELECT COUNT(*) n FROM '+table+' WHERE league_id=?').get(s.leagueId).n,0);
+ assert.deepEqual(['push_preferences','push_subscriptions'].map(table=>database.prepare('SELECT * FROM '+table+' ORDER BY rowid').all()),globalBefore);
+ assert.deepEqual(['push_deliveries','push_roster_state'].map(table=>database.prepare('SELECT * FROM '+table+' WHERE league_id=? ORDER BY rowid').all(other)),otherBefore);
+ assert.equal(database.prepare("SELECT last_rowid FROM push_event_cursors WHERE source='trade_events'").get().last_rowid,Math.min(previousCursor,1));
+ event(otherNewEvent,other,otherSeason,otherTrade);assert.equal(database.prepare('SELECT rowid FROM trade_events WHERE id=?').get(otherNewEvent).rowid,2,'Deleted high rowid must be reused');
+ insert('push_deliveries',{...otherBefore[0][0],id:uuid(982080),league_id:s.leagueId,event_key:'during-restore',status:'sending',next_attempt_at_ms:NOW_MS-1});
+ const restoreSendingBefore=database.serialize();
+ assert.throws(()=>core.rehearseRestore(database,archive,afterHash),/Phone notification deliveries must finish/);
+ assert.throws(()=>database.transaction(()=>core.restore(database,archive)).immediate(),/Phone notification deliveries must finish/);
+ assert.deepEqual(database.serialize(),restoreSendingBefore);
+ database.prepare("UPDATE push_deliveries SET status='pending' WHERE id=?").run(uuid(982080));
+ assert.equal(core.rehearseRestore(database,archive,afterHash).recoveryVerified,true);
+ database.transaction(()=>core.restore(database,archive)).immediate();
+ assert.equal(database.prepare('SELECT last_rowid FROM push_event_cursors WHERE source=?').get('restored:trade_events:'+originalEvent).last_rowid,0);
+ const resume={action:'resume',reason:'Continue after verified restoration'},review=runtime.services.league.leaguePause.preview({leagueId:s.leagueId,authenticated,input:resume});
+ runtime.services.league.leaguePause.apply({leagueId:s.leagueId,authenticated,input:{...resume,confirmed:true,previewHash:review.previewHash},idempotencyKey:'push-reset-resume'});
+ event(newEvent,s.leagueId,s.seasonId,originalTrade);
+ runtime.repositories.push.collect(NOW_MS,()=>({legal:true,reasonCodes:[]}));
+ const keys=database.prepare("SELECT event_key FROM push_deliveries WHERE user_id=? AND event_key LIKE 'trade:%' ORDER BY event_key").all(manager).map(row=>row.event_key);
+ assert.deepEqual(keys,[...(previousCursor===0?['trade:'+otherEvent]:[]),'trade:'+otherNewEvent,'trade:'+newEvent].sort());
+ assert.equal(database.prepare('SELECT COUNT(*) n FROM push_deliveries WHERE event_key=?').get('trade:'+originalEvent).n,0);
+ for(const id of oldNotices)assert.equal(database.prepare('SELECT COUNT(*) n FROM push_deliveries WHERE event_key=?').get('notification:'+id).n,0,'Old source notices must not replay after restore');
+ assert.equal(database.prepare('SELECT COUNT(*) n FROM push_deliveries WHERE event_key=?').get('notification:'+otherNotice).n,1,'Another league retains its unread notice');
+ assert.deepEqual(database.pragma('foreign_key_check'),[]);
 });
 
 test('Week 1 website preview stays read-only and confirms only the reviewed pre-card schedule through HTTP',async t=>{

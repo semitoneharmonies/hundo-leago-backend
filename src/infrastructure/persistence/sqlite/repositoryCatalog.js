@@ -28,6 +28,11 @@ function repositoryDefinition(
 }
 
 const DEFINITIONS = [
+  repositoryDefinition("push_preferences", REPOSITORY_SCOPES.global, { keyColumn: "user_id" }),
+  repositoryDefinition("push_subscriptions", REPOSITORY_SCOPES.global),
+  repositoryDefinition("push_deliveries", REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition("push_event_cursors", REPOSITORY_SCOPES.global, { keyColumn: "source" }),
+  repositoryDefinition("push_roster_state", REPOSITORY_SCOPES.requiredLeague, { keyColumn: "team_id" }),
   repositoryDefinition("quote_submissions", REPOSITORY_SCOPES.global, { versioned: true }),
   repositoryDefinition('league_reset_archives', REPOSITORY_SCOPES.requiredLeague),
   repositoryDefinition('league_reset_actions', REPOSITORY_SCOPES.requiredLeague),
@@ -721,7 +726,7 @@ validateRepositoryCatalog(DEFINITIONS);
 
 const REPOSITORY_CATALOG = Object.freeze([...DEFINITIONS]);
 // Retired reset/restore protocols remain pinned to their original table set.
-const SCHEMA_54_REPOSITORY_CATALOG = Object.freeze(REPOSITORY_CATALOG.filter(
+const SCHEMA_54_REPOSITORY_CATALOG = Object.freeze(REPOSITORY_CATALOG.filter(({ tableName }) => !tableName.startsWith("push_")).filter(
   ({ tableName }) => tableName !== "quote_submissions" && !tableName.startsWith('league_reset_') && !tableName.startsWith('league_help_') && tableName !== 'league_management_actions' && tableName !== 'league_scoring_rules' && tableName !== 'league_auction_schedule_changes' && tableName !== 'league_calendar_changes' && tableName !== 'league_private_reveals' && tableName !== 'fad_auction_clock_changes' && tableName !== 'auction_timing_changes' && tableName !== 'league_trade_deadline_changes' && !tableName.startsWith('fad_auction_cutoff_') && tableName !== "fad_timing_changes" && !tableName.startsWith("fad_deadline_") && !tableName.startsWith("player_injury_") && !["league_communications", "trade_participants", "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats"].includes(tableName)
 ));
 
@@ -730,6 +735,7 @@ function getRepositoryCatalogForSchemaVersion(schemaVersion) {
     throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible, "A migrated database schema is required.");
   }
   return [54, 55, 56].includes(schemaVersion) ? SCHEMA_54_REPOSITORY_CATALOG : REPOSITORY_CATALOG.filter(({ tableName }) =>
+    (schemaVersion >= 86 || !tableName.startsWith("push_")) &&
     (schemaVersion >= 64 || tableName !== "trade_participants") && (schemaVersion >= 65 || !tableName.startsWith("player_injury_")) &&
     (schemaVersion >= 67 || tableName !== "league_communications") &&
     (schemaVersion >= 68 || !tableName.startsWith("fad_deadline_")) && (schemaVersion >= 69 || tableName !== "fad_timing_changes") &&

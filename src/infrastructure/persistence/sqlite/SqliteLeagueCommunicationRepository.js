@@ -47,9 +47,9 @@ function createSqliteLeagueCommunicationRepository({ database, notificationWrite
     ORDER BY c.pinned DESC, c.created_at_ms DESC, c.id LIMIT 100`);
   const insert = database.prepare(`INSERT INTO league_communications
     (id, league_id, created_by_user_id, kind, title, body, audience, pinned, expires_at_ms,
-      notify, recipient_count, client_key, request_hash, created_at_ms)
+      notify, recipient_count, client_key, request_hash, created_at_ms, push_notify)
     VALUES (@id, @leagueId, @actorUserId, @kind, @title, @body, @audience, @pinned, @expiresAtMs,
-      @notify, @recipientCount, @clientKey, @requestHash, @nowMs)`);
+      @notify, @recipientCount, @clientKey, @requestHash, @nowMs, @pushNotify)`);
   const archive = database.prepare(`UPDATE league_communications SET archived_at_ms = @nowMs,
     archived_by_user_id = @actorUserId, version = version + 1
     WHERE league_id = @leagueId AND id = @id AND version = @version
@@ -76,7 +76,7 @@ function createSqliteLeagueCommunicationRepository({ database, notificationWrite
     list: (leagueId, history, nowMs) => list.all(leagueId, Number(history), nowMs),
     find: (leagueId, id) => findOne.get(leagueId, id),
     replay: (leagueId, userId, key) => findReplay.get(leagueId, userId, key),
-    insert(record) { insert.run({ ...record, pinned: Number(record.pinned), notify: Number(record.notify) }); },
+    insert(record) { insert.run({ ...record, pinned: Number(record.pinned), notify: Number(record.notify), pushNotify: Number(record.pushNotify === true) }); },
     archive: record => archive.run(record).changes,
     notify: record => notifications.insert(record),
   };

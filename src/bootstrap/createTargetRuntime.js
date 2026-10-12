@@ -1,3 +1,9 @@
+const { createSqlitePushRepository } = require('../infrastructure/persistence/sqlite/SqlitePushRepository');
+const { createPushService } = require('../application/services/push/createPushService');
+const { createPushRouter } = require('../transport/http/createPushRouter');
+const { createWebPushAdapter } = require('../infrastructure/push/createWebPushAdapter');
+const { rosterLegality } = require('../domain/activity/pushPolicy');
+const { createJobRunner } = require('../jobs/runJob');
 const { createQuoteService } = require("../application/services/activity/createQuoteService");
 const { createSqliteQuoteRepository } = require("../infrastructure/persistence/sqlite/SqliteQuoteRepository");
 const { createQuoteRouter } = require("../transport/http/createQuoteRouter");
@@ -810,6 +816,10 @@ const SPORTSDATAIO_LIVE_UUID_V4_PATTERN =
 const SPORTSDATAIO_LIVE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const TARGET_ENDPOINTS = Object.freeze([
+  ['GET', '/api/v1/push/settings', 'push'],
+  ['POST', '/api/v1/push/settings', 'push'],
+  ['POST', '/api/v1/push/subscriptions', 'push'],
+  ['POST', '/api/v1/push/subscriptions/remove', 'push'],
   ["GET", "/api/v1/leagues/:leagueId/announcements", "leagueAnnouncement"],
   ["GET", "/api/v1/leagues/:leagueId/quotes", "quote"],
   ["POST", "/api/v1/leagues/:leagueId/quotes", "quote"],
@@ -1950,6 +1960,7 @@ function createTargetRepositories({
         matchupOccurrenceExecutionGuard,
     }),
     notifications: createSqliteNotificationRepository({ database }),
+    push: createSqlitePushRepository({ database, notificationWriter, configuredSeasonsOnly:stagingDailyAuctionsEnabled }),
     notificationWriter,
     outbox: createSqliteOutboxEventRepository({ database }),
     leaguePlayers: createSqliteLeaguePlayerReadRepository({ database }),
@@ -2044,6 +2055,8 @@ function createTargetRepositories({
 }
 
 function createTargetServices({
+  pushConfig = { enabled:false },
+  pushAdapter,
   repositories,
   canCompleteAdministratorSetup,
   securityFoundations,
@@ -2826,6 +2839,15 @@ function createTargetServices({
     }),
   });
 
+  const push = createPushService({ repository:repositories.push, leagueAuthorization, clock, config:pushConfig,
+    adapter:pushAdapter || createWebPushAdapter({config:pushConfig}),
+    rosterDecision(scope) {
+      const context=repositories.matchupLocks.readRosterContext(scope);
+      return context ? rosterLegality(context.activePlayers,context.cap) : null;
+    },
+  });
+  const pushJob=createJobRunner({name:'web-push:deliver:target',logger,execute:()=>push.deliverDue()});
+
   const league = Object.freeze({
     candidateAllocation,
     candidateAllocationJob,
@@ -3050,6 +3072,7 @@ function createTargetServices({
           ]
         : []),
       Object.freeze({ name: "league_outbox", runner: outboxPublicationJob }),
+      Object.freeze({ name: "web_push", runner: pushJob }),
     ]),
     deletion: createLeagueDeletionService({ repositoryContext: repositories.context, repository: repositories.leagueDeletion, platformAuthorization, auditRepository: repositories.audit, clock, secureRandom }),
     creation: createAdministrativeLeagueService({
@@ -3193,6 +3216,7 @@ function createTargetServices({
   });
 
   return Object.freeze({
+    push,
     account,
     playerInjuries: createPlayerInjuryService({ repository: repositories.playerInjuries, platformAuthorization }),
     playerCatalogue: createPlayerCatalogueControlService({repository:repositories.playerCatalogue,platformAuthorization,provider:createNhlCatalogueLookup({fetchImpl:nhlFetchImplementation})}),
@@ -3274,6 +3298,7 @@ function createTargetRouters({
       requestSecurity,
       statisticsOperationsService: services.league.statisticsOperations,
     }),
+    push: createPushRouter({requestSecurity,service:services.push}),
     activityNotification: createActivityNotificationRouter({
       requestSecurity,
       leagueActivityService: services.league.activity,
@@ -3435,6 +3460,8 @@ function createTargetRouters({
 }
 
 function createTargetRuntime({
+  pushConfig,
+  pushAdapter,
   database,
   firstAdministratorSetup = null,
   migrationsDirectory,
@@ -3493,6 +3520,8 @@ function createTargetRuntime({
       getSocketReauthorizer: () => socketRooms?.reauthorize,
     });
   const services = createTargetServices({
+    pushConfig,
+    pushAdapter,
     repositories,
     canCompleteAdministratorSetup: firstAdministratorSetupPolicy?.allows,
     securityFoundations,

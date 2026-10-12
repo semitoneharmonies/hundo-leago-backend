@@ -427,6 +427,7 @@ function openDeployedTargetRuntime({
     const stagingAccountAutoVerificationEnabled =
       isStagingAccountAutoVerificationEnabled(config);
     const runtime = createRuntimeFunction({
+      pushConfig: config.webPush,
       database: connection.database,
       migrationsDirectory: config.migrationsDirectory,
       securityFoundations,
@@ -464,6 +465,7 @@ function openDeployedTargetRuntime({
         ? runtime.services.league.scheduledJobs.filter(({ name }) => name.startsWith("free_agent_draft_") || [
             "auction_resolution",
             "league_outbox",
+            "web_push",
             ...(config.nhlCompletedStatisticsEnabled ? ["nhl_completed_statistics"] : []),
             ...(config.matchupProcessingEnabled ? ["matchup_occurrences"] : []),
           ].includes(name))

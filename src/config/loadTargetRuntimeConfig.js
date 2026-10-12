@@ -1,4 +1,5 @@
 const path = require("node:path");
+const { loadWebPushConfig } = require('./loadWebPushConfig');
 const { loadBackupConfig } = require("./loadBackupConfig");
 const { loadFirstAdministratorSetupConfig } = require("./loadFirstAdministratorSetupConfig");
 
@@ -468,6 +469,7 @@ function loadTargetRuntimeConfig({
     fail("STAGING_MIGRATION_LINEAGE", "the alternate migration lineage is restricted to staging");
   }
   const runtimeConfig = {
+    webPush: loadWebPushConfig(env),
     nhlCompletedStatisticsEnabled,
     expandedScoringEnabled,
     matchupProcessingEnabled,

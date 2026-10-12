@@ -1387,6 +1387,7 @@ describe("M7-01 deployed target runtime configuration", () => {
         "free_agent_draft_completion",
         "trade_expiry",
         "league_outbox",
+        "web_push",
       ]
     );
     assert.equal(runtime.scheduler.getState(), "running");
@@ -1413,7 +1414,7 @@ describe("M7-01 deployed target runtime configuration", () => {
       "free_agent_draft_allocation_cycle", "free_agent_draft_auction_resolution",
       "free_agent_draft_restricted_activation", "free_agent_draft_fallback_activation",
       "free_agent_draft_queued_nomination_activation", "free_agent_draft_rollover_finalization",
-      "auction_resolution", "free_agent_draft_completion", "league_outbox",
+      "auction_resolution", "free_agent_draft_completion", "league_outbox", "web_push",
     ]);
     assert.equal(before.equals(runtime.database.serialize()), true);
   });
@@ -1520,7 +1521,7 @@ describe("M7-01 deployed target runtime configuration", () => {
       inspect.database
         .prepare("SELECT COUNT(*) AS count FROM schema_migrations")
         .get().count,
-      85
+      86
     );
     assert.equal(
       inspect.database
@@ -1661,7 +1662,7 @@ describe("M7-01 deployed target runtime configuration", () => {
       ].sort()
     );
     assert.equal(body.data.environment, "staging");
-    assert.equal(body.data.schemaVersion, 85);
+    assert.equal(body.data.schemaVersion, 86);
     assert.equal(body.data.scheduler.state, "disabled");
     assert.deepEqual(body.data.accountEmailDelivery, { enabled: false,pending:0,publishing:0,failed:1,lastDeliveredAtMs:null });
     assert.deepEqual(body.data.jobs,{pending:0,running:0,failed:1,interrupted:0});
