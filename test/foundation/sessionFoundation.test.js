@@ -105,7 +105,7 @@ function digest(value) {
     .digest("hex");
 }
 
-function createTemporaryDatabase(t, prefix) {
+function createTemporaryDatabase(t, prefix, migrationsDirectory = MIGRATIONS_DIRECTORY) {
   const temporaryRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), prefix)
   );
@@ -118,7 +118,7 @@ function createTemporaryDatabase(t, prefix) {
   });
   migrateDatabase({
     database: connection.database,
-    migrationsDirectory: MIGRATIONS_DIRECTORY,
+    migrationsDirectory,
     applicationBuildId: "m3-04-test",
     now: () => CREATED_AT_MS,
   });
@@ -504,7 +504,62 @@ describe("M3-05 derived session-bound CSRF secrets", () => {
 });
 
 describe("M3-04 sensitive SQLite session repository", () => {
-  test("enforces one active session, unique digest, and atomic replacement", (t) => {
+  test("revokes all devices atomically within one account and rejects stale authority", (t) => {
+    const runtime = createTemporaryDatabase(t, "hundo-session-revoke-all-");
+    const user = runtime.users.insert(userRecord(1));
+    const otherUser = runtime.users.insert(userRecord(2));
+    const first = runtime.sessions.insertActive(sessionRecord(10, user.id));
+    const second = runtime.sessions.insertActive(sessionRecord(11, user.id));
+    const other = runtime.sessions.insertActive(sessionRecord(12, otherUser.id));
+    const revoke = (expectedVersion = first.version) => runtime.sessions.revokeAllActive({
+      userId: user.id, requiredSessionId: first.id, expectedVersion,
+      changedAtMs: CREATED_AT_MS + 1, reason: "password_change",
+    });
+    const assertUnchanged = () => {
+      for (const session of [first, second, other]) {
+        assert.deepEqual(runtime.sessions.findById(session.id), session);
+      }
+    };
+    assert.throws(() => revoke(first.version + 1), assertRepositoryError(REPOSITORY_ERROR_CODES.versionConflict));
+    assertUnchanged();
+    assert.throws(() => runtime.database.transaction(() => {
+      revoke();
+      throw new Error("surrounding account operation failed");
+    })(), /surrounding account operation failed/);
+    assertUnchanged();
+    assert.equal(revoke().length, 2);
+    for (const session of [first, second]) {
+      assert.equal(runtime.sessions.findById(session.id).status, "revoked");
+    }
+    assert.deepEqual(runtime.sessions.findById(other.id), other);
+  });
+
+  test("migration 90 preserves existing sessions and every unrelated row", (t) => {
+    const priorMigrations = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-session-migration-"));
+    t.after(() => fs.rmSync(priorMigrations, { recursive: true, force: true }));
+    for (const name of fs.readdirSync(MIGRATIONS_DIRECTORY).filter((name) => name.endsWith(".sql") && !name.startsWith("0090_"))) {
+      fs.copyFileSync(path.join(MIGRATIONS_DIRECTORY, name), path.join(priorMigrations, name));
+    }
+    const runtime = createTemporaryDatabase(t, "hundo-session-preserve-", priorMigrations);
+    const user = runtime.users.insert(userRecord(1));
+    const first = runtime.sessions.insertActive(sessionRecord(10, user.id));
+    assert.throws(() => runtime.sessions.insertActive(sessionRecord(11, user.id)));
+    const tables = runtime.database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all()
+      .map(({ name }) => name).filter((name) => !["schema_migrations", "application_metadata"].includes(name));
+    const snapshot = () => Object.fromEntries(tables.map((name) => [name, runtime.database.prepare('SELECT * FROM "' + name.replaceAll('"', '""') + '"').all()]));
+    const before = snapshot();
+    const ledger = runtime.database.prepare("SELECT * FROM schema_migrations ORDER BY migration_id").all();
+    migrateDatabase({ database: runtime.database, migrationsDirectory: MIGRATIONS_DIRECTORY, applicationBuildId: "multiple-device-test", now: () => CREATED_AT_MS + 1 });
+    assert.deepEqual(snapshot(), before);
+    assert.deepEqual(runtime.database.prepare("SELECT * FROM schema_migrations WHERE migration_id < 90 ORDER BY migration_id").all(), ledger);
+    assert.deepEqual(runtime.sessions.findById(first.id), first);
+    assert.equal(runtime.sessions.insertActive(sessionRecord(11, user.id)).status, "active");
+    assert.equal(runtime.database.pragma("user_version", { simple: true }), 90);
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+    assert.equal(runtime.database.pragma("integrity_check", { simple: true }), "ok");
+  });
+
+  test("allows independent sessions, keeps unique digests, and supports explicit replacement", (t) => {
     const runtime = createTemporaryDatabase(
       t,
       "hundo-m3-04-session-repo-"
@@ -542,15 +597,7 @@ describe("M3-04 sensitive SQLite session repository", () => {
       Object.hasOwn(runtime.sessions, "delete"),
       false
     );
-    assert.throws(
-      () =>
-        runtime.sessions.insertActive(
-          sessionRecord(11, firstUser.id)
-        ),
-      assertRepositoryError(
-        REPOSITORY_ERROR_CODES.constraint
-      )
-    );
+    assert.equal(runtime.sessions.insertActive(sessionRecord(11, firstUser.id)).status, "active");
     assert.throws(
       () =>
         runtime.sessions.insertActive(
@@ -779,7 +826,7 @@ function createServiceRuntime(t, prefix) {
 }
 
 describe("M3-04 internal session lifecycle service", () => {
-  test("issues digest-only storage, resolves active identity, and invalidates a replaced token", (t) => {
+  test("issues digest-only storage and keeps independent device tokens valid", (t) => {
     const runtime = createServiceRuntime(
       t,
       "hundo-m3-04-session-service-"
@@ -867,16 +914,13 @@ describe("M3-04 internal session lifecycle service", () => {
       });
     assert.equal(
       second.previousSessionId,
-      first.session.id
+      null
     );
-    assert.deepEqual(
+    assert.equal(
       runtime.service.resolve(
         first.rawSessionToken
-      ),
-      {
-        valid: false,
-        code: "SESSION_INVALID",
-      }
+      ).valid,
+      true
     );
     assert.equal(
       runtime.service.resolve(

@@ -656,89 +656,36 @@ describe("M3-08 sign-in and sign-out lifecycle", () => {
     assert.equal(count(runtime.database, "outbox_events"), 0);
   });
 
-  test("new login atomically replaces the old session and queues an idempotent notification", async (t) => {
+  test("new logins preserve other devices and never queue a login email", async (t) => {
     const runtime = await createRuntime(t);
-    const service = runtime.signInService();
-    const first = await service.signIn(credentials());
-    const second = await service.signIn(credentials());
-
-    assert.equal(
-      runtime.sessionService.resolve(
-        first.rawSessionToken
-      ).valid,
-      false
-    );
-    assert.equal(
-      runtime.sessionService.resolve(
-        second.rawSessionToken
-      ).valid,
-      true
-    );
+    const first = await runtime.signInService().signIn(credentials());
+    const before = runtime.sessions.findById(first.session.id);
+    const second = await runtime.signInService({ outboxRepository: {
+      insertPending() { throw new Error("Login must not queue email"); },
+    } }).signIn(credentials());
+    assert.equal(runtime.sessionService.resolve(first.rawSessionToken).valid, true);
+    assert.equal(runtime.sessionService.resolve(second.rawSessionToken).valid, true);
+    assert.deepEqual(runtime.sessions.findById(first.session.id), before);
     assert.equal(count(runtime.database, "sessions"), 2);
-    assert.equal(
-      runtime.database
-        .prepare(
-          "SELECT COUNT(*) AS count FROM sessions WHERE status = 'active'"
-        )
-        .get().count,
-      1
-    );
-    assert.equal(count(runtime.database, "outbox_events"), 1);
-    const pending = runtime.outbox.findDue({
-      nowMs: NOW_MS,
-      limit: 10,
-    })[0];
-    assert.deepEqual(JSON.parse(pending.payload_json), {
-      deliveryKind: "security_notification",
-      notificationKind: "session_replaced",
-      occurredAtMs: NOW_MS,
-      recipientUserId: runtime.created.user.id,
-      schemaVersion: 1,
-    });
-    assert.doesNotMatch(
-      pending.payload_json,
-      /token|password|sessionId|Manager@Example/
-    );
-
-    const adapter = createCaptureEmailAdapter();
-    const delivery = createAccountEmailDeliveryService({
-      outboxRepository: runtime.outbox,
-      userRepository: runtime.users,
-      deliveryEnvelope: {
-        open() {
-          throw new Error(
-            "notification delivery must not open an envelope"
-          );
-        },
-      },
-      emailAdapter: adapter,
-      clock: runtime.clock,
-      publicFrontendOrigin: PUBLIC_FRONTEND_ORIGIN,
-    });
-    assert.deepEqual(await delivery.deliverDue(), [
-      { eventId: pending.id, outcome: "published" },
-    ]);
-    const captured = adapter.listCaptured();
-    assert.equal(captured.length, 1);
-    assert.equal(
-      captured[0].notificationKind,
-      "session_replaced"
-    );
-    assert.equal(
-      runtime.outbox.findById(pending.id).payload_json,
-      CLEARED_PAYLOAD_JSON
-    );
-    const duplicate =
-      await adapter.sendSecurityNotification({
-        idempotencyKey: pending.id,
-        notificationKind: "session_replaced",
-        occurredAtMs: NOW_MS,
-        to: "Manager@Example.Test",
-      });
-    assert.equal(duplicate.duplicate, true);
+    assert.equal(count(runtime.database, "outbox_events"), 0);
+    assert.equal(runtime.sessionService.resolveWithCsrf({ rawSessionToken: first.rawSessionToken, rawCsrfToken: second.rawCsrfToken }).code, "CSRF_INVALID");
+    runtime.sessionService.revoke({ sessionId: second.session.id, expectedVersion: second.session.version, reason: "sign_out" });
+    assert.equal(runtime.sessionService.resolve(first.rawSessionToken).valid, true);
+    assert.equal(runtime.sessionService.resolve(second.rawSessionToken).valid, false);
   });
 
-  test("notification or audit failure rolls back session replacement", async (t) => {
+  test("queued legacy login emails are discarded without contacting the email provider", async (t) => {
+    const runtime = await createRuntime(t);
+    const { createSecurityNotificationOutboxRecord } = require("../../src/application/services/accounts/accountEmailOutbox");
+    const pending = runtime.outbox.insertPending(createSecurityNotificationOutboxRecord({ id: runtime.secureRandom.id(), userId: runtime.created.user.id, notificationKind: "session_replaced", nowMs: NOW_MS }));
+    const adapter = createCaptureEmailAdapter();
+    const delivery = createAccountEmailDeliveryService({ outboxRepository: runtime.outbox, userRepository: runtime.users, deliveryEnvelope: runtime.deliveryEnvelope, emailAdapter: adapter, clock: runtime.clock, publicFrontendOrigin: PUBLIC_FRONTEND_ORIGIN });
+    assert.deepEqual(await delivery.deliverDue(), [{ eventId: pending.id, outcome: "discarded" }]);
+    assert.equal(adapter.listCaptured().length, 0);
+    assert.equal(runtime.outbox.findById(pending.id).payload_json, CLEARED_PAYLOAD_JSON);
+  });
+
+  test("audit failure rolls back the new session without affecting another device", async (t) => {
     const runtime = await createRuntime(t);
     const first = await runtime
       .signInService()
@@ -751,16 +698,16 @@ describe("M3-08 sign-in and sign-out lifecycle", () => {
     await assert.rejects(
       runtime
         .signInService({
-          outboxRepository: {
-            insertPending() {
-              throw new Error("outbox unavailable");
+          auditRepository: {
+            append() {
+              throw new Error("audit unavailable");
             },
           },
         })
         .signIn(credentials()),
       (error) =>
         error?.code === "REPOSITORY_OPERATION_FAILED" &&
-        error?.cause?.message === "outbox unavailable"
+        error?.cause?.message === "audit unavailable"
     );
     assert.equal(
       runtime.sessionService.resolve(
@@ -875,6 +822,7 @@ describe("M3-08 password change lifecycle", () => {
 
   test("replaces the credential, revokes the session, audits, and queues notification atomically", async (t) => {
     const runtime = await createRuntime(t);
+    const otherDevice = await runtime.signInService().signIn(credentials());
     const signedIn = await runtime
       .signInService()
       .signIn(credentials());
@@ -942,6 +890,8 @@ describe("M3-08 password change lifecycle", () => {
         pending[0].payload_json,
       /new secure password|correct horse/
     );
+    assert.equal(runtime.sessionService.resolve(otherDevice.rawSessionToken).valid, false);
+    assert.equal(runtime.sessions.findById(otherDevice.session.id).status, "revoked");
   });
 
   test("wrong current password is audited but changes no credential or session state", async (t) => {
@@ -1264,6 +1214,7 @@ describe("M3-08 password reset lifecycle", () => {
 
   test("completion consumes once, replaces the credential, revokes the session, and creates no new session", async (t) => {
     const runtime = await createRuntime(t);
+    const otherDevice = await runtime.signInService().signIn(credentials());
     resetRequestService(runtime).request({
       email: "manager@example.test",
     });
@@ -1330,6 +1281,8 @@ describe("M3-08 password reset lifecycle", () => {
         code: "PASSWORD_RESET_INVALID",
       }
     );
+    assert.equal(runtime.sessionService.resolve(otherDevice.rawSessionToken).valid, false);
+    assert.equal(runtime.sessions.findById(otherDevice.session.id).status, "revoked");
   });
 
   test("expired and concurrent submissions permit no reset or only one reset", async (t) => {
@@ -1587,6 +1540,7 @@ describe("M3-08 deactivation and reactivation lifecycle", () => {
 
   test("deactivation changes only account eligibility, revokes the session, and preserves records", async (t) => {
     const runtime = await createRuntime(t);
+    const otherDevice = await runtime.signInService().signIn(credentials());
     createAccountActionLinkRequestService({
       purpose: "password_reset",
       userRepository: runtime.users,
@@ -1666,6 +1620,8 @@ describe("M3-08 deactivation and reactivation lifecycle", () => {
         .notificationKind,
       "account_deactivated"
     );
+    assert.equal(runtime.sessionService.resolve(otherDevice.rawSessionToken).valid, false);
+    assert.equal(runtime.sessions.findById(otherDevice.session.id).status, "revoked");
   });
 
   test("deactivation notification failure rolls back status, session, and audit", async (t) => {

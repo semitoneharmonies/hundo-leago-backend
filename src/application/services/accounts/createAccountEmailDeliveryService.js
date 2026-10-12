@@ -183,6 +183,10 @@ function createAccountEmailDeliveryService({
         "EMAIL_PAYLOAD_INVALID"
       );
     }
+    // Retire pending/retrying notices created by the previous login policy.
+    if (payload.deliveryKind === "security_notification" && payload.notificationKind === "session_replaced") {
+      return discard(claimed, nowMs, "LOGIN_NOTIFICATION_DISABLED");
+    }
     if (
       payload.deliveryKind !== "security_notification" &&
       nowMs >= payload.expiresAtMs

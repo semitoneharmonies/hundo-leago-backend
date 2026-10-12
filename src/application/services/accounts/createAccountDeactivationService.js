@@ -130,7 +130,7 @@ function createAccountDeactivationService({
   );
   assertMethod(
     sessionService,
-    "revoke",
+    "revokeAllForUser",
     "a session service"
   );
   assertMethod(
@@ -232,8 +232,9 @@ function createAccountDeactivationService({
           updated_at_ms: nowMs,
         },
       });
-      sessionService.revoke({
-        sessionId: authenticated.session.id,
+      sessionService.revokeAllForUser({
+        userId: user.id,
+        requiredSessionId: authenticated.session.id,
         expectedVersion:
           authenticated.session.version,
         reason: "account_deactivation",

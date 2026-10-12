@@ -2,9 +2,6 @@ const GENERIC_SIGN_IN_FAILURE = Object.freeze({
   signedIn: false,
   code: "SIGN_IN_FAILED",
 });
-const {
-  createSecurityNotificationOutboxRecord,
-} = require("./accountEmailOutbox");
 
 function assertMethod(value, method, description) {
   if (!value || typeof value[method] !== "function") {
@@ -111,7 +108,6 @@ function createSignInService({
   credentialAuthenticationService,
   sessionService,
   auditRepository,
-  outboxRepository,
   rateLimiter,
   clock,
   secureRandom,
@@ -130,11 +126,6 @@ function createSignInService({
     auditRepository,
     "append",
     "a Security Audit repository"
-  );
-  assertMethod(
-    outboxRepository,
-    "insertPending",
-    "an outbox repository"
   );
   assertMethod(
     rateLimiter,
@@ -191,17 +182,6 @@ function createSignInService({
             user,
           })
         );
-        if (context.previousSessionId) {
-          const outboxId = secureRandom.id();
-          outboxRepository.insertPending(
-            createSecurityNotificationOutboxRecord({
-              id: outboxId,
-              userId: user.id,
-              notificationKind: "session_replaced",
-              nowMs,
-            })
-          );
-        }
         cleared =
           rateLimiter.clearSignInAccountFailures({
             canonicalIdentifier:

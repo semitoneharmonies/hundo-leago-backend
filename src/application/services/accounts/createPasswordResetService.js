@@ -105,7 +105,7 @@ function createPasswordResetService({
   );
   assertMethod(
     sessionService,
-    "revoke",
+    "revokeAllForUser",
     "a session service"
   );
   assertMethod(
@@ -215,9 +215,8 @@ function createPasswordResetService({
               currentUser.id
             );
           if (activeSession) {
-            sessionService.revoke({
-              sessionId: activeSession.id,
-              expectedVersion: activeSession.version,
+            sessionService.revokeAllForUser({
+              userId: currentUser.id,
               reason: "password_reset",
             });
           }

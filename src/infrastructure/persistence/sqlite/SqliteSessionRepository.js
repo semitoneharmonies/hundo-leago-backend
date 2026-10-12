@@ -453,6 +453,48 @@ function createSqliteSessionRepository({
       assertActiveSession(record);
       return freezeRow(records.insert(record));
     },
+    createActive({ session, transactionHook = null }) {
+      assertActiveSession(session);
+      try {
+        return database.transaction(() => {
+          const active = records.insert(session);
+          runTransactionHook(transactionHook, {
+            userId: active.user_id,
+            previousSessionId: null,
+            activeSessionId: active.id,
+          });
+          return Object.freeze({ active: freezeRow(active), previous: null });
+        }).immediate();
+      } catch (error) {
+        throw mapRepositoryError(error, { operation: "createActive", tableName: "sessions" });
+      }
+    },
+    revokeAllActive({ userId, changedAtMs, reason, requiredSessionId = null, expectedVersion = null }) {
+      assertStableId(userId, "userId");
+      assertTimestamp(changedAtMs, "changedAtMs");
+      if (!REVOCATION_REASONS.includes(reason)) {
+        throw repositoryError(REPOSITORY_ERROR_CODES.argumentInvalid, "An approved session revocation reason is required.");
+      }
+      try {
+        const revoked = database.transaction(() => {
+          if (requiredSessionId !== null) {
+            const required = records.requireByKey({ key: requiredSessionId });
+            if (required.user_id !== userId || required.status !== "active" || required.version !== expectedVersion) {
+              throw repositoryError(REPOSITORY_ERROR_CODES.versionConflict, "The authenticated session has changed.");
+            }
+          }
+          return findActiveByUserStatement.all({ userId }).map((session) => freezeRow(records.updateVersioned({
+            key: session.id,
+            expectedVersion: session.version,
+            changes: { status: "revoked", revoked_at_ms: changedAtMs, revocation_reason: reason },
+          })));
+        }).immediate();
+        if (revoked.length) notifySessionChanged(userId);
+        return Object.freeze(revoked);
+      } catch (error) {
+        throw mapRepositoryError(error, { operation: "revokeAllActive", tableName: "sessions" });
+      }
+    },
     replaceActive(options) {
       assertExactOptions(options, [
         "replacement",

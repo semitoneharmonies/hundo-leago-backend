@@ -7647,7 +7647,7 @@ describe("M3-19 composed target Socket.IO authorization", () => {
     assert.equal(runtime.socketRooms.getAuthority(socket), null);
   });
 
-  test("disconnects revoked and replaced sessions without another request, preserving other users", async (t) => {
+  test("keeps other devices connected on login and disconnects only revoked sessions", async (t) => {
     const database = createDatabase(t);
     const runtime = createTargetRuntime(runtimeOptions(database));
     const scenario = seedTwoLeagueProfileScenario(runtime);
@@ -7666,8 +7666,8 @@ describe("M3-19 composed target Socket.IO authorization", () => {
     const replacement = runtime.services.sessionService.issueForUser({ userId: scenario.managerUserId });
     const afterReplacement = database.serialize();
     await new Promise(setImmediate);
-    assert.equal(socket.disconnected, true);
-    assert.equal(runtime.socketRooms.getAuthority(socket), null);
+    assert.equal(socket.disconnected, false);
+    assert.notEqual(runtime.socketRooms.getAuthority(socket), null);
     assert.equal(afterReplacement.equals(database.serialize()), true);
     assert.equal(otherSocket.disconnected, false);
     current = replacement;

@@ -222,7 +222,8 @@ function createSessionService({
   }
   for (const method of [
     "findByTokenDigest",
-    "replaceActive",
+    "createActive",
+    "revokeAllActive",
     "refreshActive",
     "revokeActive",
     "expireActive",
@@ -311,9 +312,8 @@ function createSessionService({
       client_metadata_json: metadataJson,
       version: 1,
     };
-    const stored = sessionRepository.replaceActive({
-      replacement,
-      replacedAtMs: nowMs,
+    const stored = sessionRepository.createActive({
+      session: replacement,
       transactionHook,
     });
 
@@ -563,6 +563,11 @@ function createSessionService({
     resolveWithoutActivity,
     resolveWithCsrf,
     revoke,
+    revokeAllForUser({ userId, reason, requiredSessionId = null, expectedVersion = null }) {
+      return sessionRepository.revokeAllActive({
+        userId, reason, requiredSessionId, expectedVersion, changedAtMs: clock.nowMs(),
+      }).map(safeSession);
+    },
   });
 }
 

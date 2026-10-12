@@ -159,7 +159,7 @@ function createPasswordChangeService({
   }
   assertMethod(
     sessionService,
-    "revoke",
+    "revokeAllForUser",
     "a session service"
   );
   for (const method of ["hash", "verify"]) {
@@ -288,8 +288,9 @@ function createPasswordChangeService({
           version: 1,
         },
       });
-      sessionService.revoke({
-        sessionId: authenticated.session.id,
+      sessionService.revokeAllForUser({
+        userId: user.id,
+        requiredSessionId: authenticated.session.id,
         expectedVersion:
           authenticated.session.version,
         reason: "password_change",
