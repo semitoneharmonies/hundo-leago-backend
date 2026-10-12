@@ -86,6 +86,13 @@ test("preview is read-only; populated deletion preserves every unrelated row and
       .run(crypto.randomUUID(), season.league_id, archiveId, r.authenticated.user.id, "c".repeat(64));
   }
   const backupId = crypto.randomUUID();
+  const pushSubscriptionId=crypto.randomUUID();
+  r.db.prepare('INSERT INTO push_preferences VALUES(?,?,?)').run(r.authenticated.user.id,'{}',1);
+  r.db.prepare('INSERT INTO push_subscriptions VALUES(?,?,?,?,?,?,?)').run(pushSubscriptionId,r.authenticated.user.id,r.authenticated.session.id,'https://fcm.googleapis.com/fcm/send/deletion-fixture','{}',1,1);
+  for(const {id:leagueId} of r.db.prepare('SELECT id FROM leagues').all()) {
+    r.db.prepare('INSERT INTO push_deliveries(id,subscription_id,user_id,league_id,category,event_key,payload_json,guard_json,created_at_ms,expires_at_ms,next_attempt_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(crypto.randomUUID(),pushSubscriptionId,r.authenticated.user.id,leagueId,'schedule_changed','fixture:'+leagueId,'{}','{}',1,2,1);
+    r.db.prepare('INSERT INTO push_roster_state VALUES(?,?,?,?,?)').run(leagueId,crypto.randomUUID(),crypto.randomUUID(),'fixture',1);
+  }
   const migrationId = crypto.randomUUID();
   r.context.repositories.backup_catalog.insert({
     id: backupId, league_id: r.leagueId, environment_identity: "test", backup_kind: "manual",

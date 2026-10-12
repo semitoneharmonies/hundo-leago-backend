@@ -18,7 +18,10 @@ function text(value, maximum) {
 }
 
 function validateMessage(value) {
-  exact(value, ["kind", "title", "body", "audience", "pinned", "expiresAtMs", "notify"]);
+  const pushNotify = value?.pushNotify ?? false;
+  const base = { ...value }; delete base.pushNotify;
+  exact(base, ["kind", "title", "body", "audience", "pinned", "expiresAtMs", "notify"]);
+  if (typeof pushNotify !== "boolean" || (pushNotify && (value.kind !== "announcement" || !value.notify))) fail();
   if (!["announcement", "reminder"].includes(value.kind) ||
       !["members", "managers", "unfinished_cards", "pending_invitations"].includes(value.audience) ||
       typeof value.pinned !== "boolean" || typeof value.notify !== "boolean" ||
@@ -27,7 +30,7 @@ function validateMessage(value) {
   if (value.kind === "announcement" && value.audience !== "members") fail();
   if (value.kind === "reminder" && (value.pinned || value.expiresAtMs !== null || !value.notify)) fail();
   return { kind: value.kind, title: text(value.title, 120), body: text(value.body, 3000),
-    audience: value.audience, pinned: value.pinned, expiresAtMs: value.expiresAtMs, notify: value.notify };
+    audience: value.audience, pinned: value.pinned, expiresAtMs: value.expiresAtMs, notify: value.notify, ...(Object.hasOwn(value, "pushNotify") ? { pushNotify } : {}) };
 }
 
 function digest(value) {

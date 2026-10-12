@@ -15,7 +15,7 @@ const { injuryProjection, canUseInjuredReserve } = require('../../src/domain/pla
 
 test('schema 90 upgrade preserves existing injury records and adds empty detail fields', t => {
   const Database = require('better-sqlite3');
-  const { migrateDatabase } = require('../../src/infrastructure/database/migrate');
+  const { migrateDatabase, discoverMigrations, applyMigrations } = require('../../src/infrastructure/database/migrate');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'injury-migration-'));
   const db = new Database(':memory:');
   t.after(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
@@ -29,7 +29,7 @@ test('schema 90 upgrade preserves existing injury records and adds empty detail 
   db.prepare("INSERT INTO player_injury_status(id,status,source,evidence_at_ms,observed_at_ms,updated_at_ms,version) VALUES(?,'injured','admin',1,1,1,7)").run(id);
   const before = db.prepare('SELECT * FROM player_injury_status').get();
   const players = db.prepare('SELECT * FROM players').all();
-  migrateDatabase({ database: db, migrationsDirectory, applicationBuildId: 'injury-upgrade-test' });
+  applyMigrations({ database: db, migrations: discoverMigrations({ migrationsDirectory }).filter(m => m.id <= 91), applicationBuildId: 'injury-upgrade-test' });
   assert.deepEqual(db.prepare('SELECT * FROM player_injury_status').get(), { ...before, timeline: null, designation: null, injury_reason: null });
   assert.deepEqual(db.prepare('SELECT * FROM players').all(), players);
   assert.equal(db.pragma('user_version', { simple: true }), 91);

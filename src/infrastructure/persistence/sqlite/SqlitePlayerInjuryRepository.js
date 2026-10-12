@@ -17,7 +17,10 @@ function createSqlitePlayerInjuryRepository({ database, nowMs = Date.now } = {})
   const initializeSync = () => database.prepare("INSERT OR IGNORE INTO player_injury_sync(id) VALUES ('espn')").run();
   const catalog = database.prepare("SELECT id, full_name, birth_date FROM players WHERE status = 'active'");
   const person = database.prepare('SELECT id, full_name FROM players WHERE id = ?');
-  const writeState = database.prepare(`INSERT INTO player_injury_status
+  // Historical read-only runtimes predate manual injury details. Prepare the
+  // unchanged current-schema write only when an injury update is requested.
+  let writeState;
+  const getWriteState = () => writeState ||= database.prepare(`INSERT INTO player_injury_status
     (id,status,source,evidence_at_ms,observed_at_ms,review_reason,updated_at_ms,version,timeline,designation,injury_reason)
     VALUES (@id,@status,@source,@evidence_at_ms,@observed_at_ms,@review_reason,@updated_at_ms,1,@timeline,@designation,@injury_reason)
     ON CONFLICT(id) DO UPDATE SET status=excluded.status,source=excluded.source,
@@ -34,7 +37,7 @@ function createSqlitePlayerInjuryRepository({ database, nowMs = Date.now } = {})
     const value = { timeline: null, designation: null, injury_reason: null, id, ...next, updated_at_ms: at };
     if (value.status !== 'injured') Object.assign(value, { timeline: null, designation: null, injury_reason: null });
     const changed = !before || ['status','source','evidence_at_ms','review_reason','timeline','designation','injury_reason'].some(key => before[key] !== value[key]);
-    writeState.run(value);
+    getWriteState().run(value);
     if (changed) event(id, actorId, actorId ? 'admin_decision' : 'feed_update', reason, before, read.get(id), at);
   }
   const apply = database.transaction((snapshot, token, at) => {

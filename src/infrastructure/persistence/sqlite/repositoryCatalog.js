@@ -28,6 +28,11 @@ function repositoryDefinition(
 }
 
 const DEFINITIONS = [
+  repositoryDefinition("push_preferences", REPOSITORY_SCOPES.global, { keyColumn: "user_id" }),
+  repositoryDefinition("push_subscriptions", REPOSITORY_SCOPES.global),
+  repositoryDefinition("push_deliveries", REPOSITORY_SCOPES.requiredLeague),
+  repositoryDefinition("push_event_cursors", REPOSITORY_SCOPES.global, { keyColumn: "source" }),
+  repositoryDefinition("push_roster_state", REPOSITORY_SCOPES.requiredLeague, { keyColumn: "team_id" }),
   repositoryDefinition("compact_stat_refreshes", REPOSITORY_SCOPES.global, { keyColumn: "refresh_id" }),
   repositoryDefinition("shared_stat_total_changes", REPOSITORY_SCOPES.global),
   repositoryDefinition("shared_empty_coverage_sets", REPOSITORY_SCOPES.global, { keyColumn: "sha256" }),
@@ -728,7 +733,7 @@ validateRepositoryCatalog(DEFINITIONS);
 
 const REPOSITORY_CATALOG = Object.freeze([...DEFINITIONS]);
 // Retired reset/restore protocols remain pinned to their original table set.
-const SCHEMA_54_REPOSITORY_CATALOG = Object.freeze(REPOSITORY_CATALOG.filter(
+const SCHEMA_54_REPOSITORY_CATALOG = Object.freeze(REPOSITORY_CATALOG.filter(({ tableName }) => !tableName.startsWith("push_")).filter(
   ({ tableName }) => tableName !== "quote_submissions" && !tableName.startsWith('league_reset_') && !tableName.startsWith('league_help_') && tableName !== 'league_management_actions' && tableName !== 'league_scoring_rules' && tableName !== 'league_auction_schedule_changes' && tableName !== 'league_calendar_changes' && tableName !== 'league_private_reveals' && tableName !== 'fad_auction_clock_changes' && tableName !== 'auction_timing_changes' && tableName !== 'league_trade_deadline_changes' && !tableName.startsWith('fad_auction_cutoff_') && tableName !== "fad_timing_changes" && !tableName.startsWith("fad_deadline_") && !tableName.startsWith("player_injury_") && !["league_communications", "trade_participants", "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats"].includes(tableName) && !tableName.startsWith("player_injury_") && !tableName.startsWith("shared_game_evidence_") && !["compact_stat_refreshes", "shared_stat_total_changes", "shared_empty_coverage_sets", "nhl_completed_game_cache", "stat_refresh_payload_retirements", "trade_participants", "expanded_stat_refreshes", "expanded_stat_totals", "expanded_player_game_stats"].includes(tableName)
 ));
 
@@ -737,6 +742,7 @@ function getRepositoryCatalogForSchemaVersion(schemaVersion) {
     throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible, "A migrated database schema is required.");
   }
   return [54, 55, 56].includes(schemaVersion) ? SCHEMA_54_REPOSITORY_CATALOG : REPOSITORY_CATALOG.filter(({ tableName }) =>
+    (schemaVersion >= 92 || !tableName.startsWith("push_")) &&
     (schemaVersion >= 70 || !["compact_stat_refreshes", "shared_stat_total_changes", "shared_empty_coverage_sets"].includes(tableName)) &&
     (schemaVersion >= 69 || !tableName.startsWith("shared_game_evidence_")) &&
     (schemaVersion >= 67 || tableName !== "nhl_completed_game_cache") && (schemaVersion >= 68 || tableName !== "stat_refresh_payload_retirements") &&

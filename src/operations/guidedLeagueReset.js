@@ -2,7 +2,8 @@
 const assert=require('node:assert/strict');
 const {createHash}=require('node:crypto');
 const Database=require('better-sqlite3');
-// Reset archive format is 88: schema 89 adds global quotes, which reset preserves.
+// Archive format remains 88. Quotes and device preferences are preserved;
+// ephemeral push queues are cleared, never archived or replayed on restore.
 const SCHEMA_VERSION=88;
 const CLEAR_TABLES=Object.freeze([
  'auction_administration_command_results','auction_bids','auction_contexts','auction_events','auction_resolutions','auction_timing_changes','auctions',
@@ -24,13 +25,15 @@ const CLEAR_TABLES=Object.freeze([
 ]);
 const CHANGED_TABLES=Object.freeze([...CLEAR_TABLES,'league_freezes','league_settings','leagues','seasons','teams'].sort());
 const WITNESS_TABLES=Object.freeze(['league_invitations','league_memberships','league_player_positions','team_manager_assignments']);
+const PUSH_SCOPED_TABLES=Object.freeze(['push_deliveries','push_roster_state']);
+const PUSH_EVENT_SOURCES=Object.freeze(['trade_events','auction_events']);
 const quote=s=>'"'+s.replaceAll('"','""')+'"';
 const fail=(message,code='LEAGUE_RESET_CONFLICT')=>{throw Object.assign(new Error(message),{code});};
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const encode=row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[key,Buffer.isBuffer(value)?{$binary:value.toString('base64')}:value]));
 const decode=row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[key,value&&typeof value==='object'&&Object.keys(value).join()==='$binary'?Buffer.from(value.$binary,'base64'):value]));
 function validateDatabase(db){
- if(![88,89].includes(db.pragma('user_version',{simple:true}))||db.pragma('foreign_keys',{simple:true})!==1)fail('This schema needs reset compatibility review.','LEAGUE_RESET_UNAVAILABLE');
+ if(![88,89,90,91,92].includes(db.pragma('user_version',{simple:true}))||db.pragma('foreign_keys',{simple:true})!==1)fail('This schema needs reset compatibility review.','LEAGUE_RESET_UNAVAILABLE');
 }
 function rows(db,table,leagueId){return db.prepare(`SELECT * FROM ${quote(table)} WHERE ${table==='leagues'?'id':'league_id'}=? ORDER BY rowid`).all(leagueId).map(encode);}
 function capture(db,leagueId){validateDatabase(db);return {schemaVersion:SCHEMA_VERSION,leagueId,tables:Object.fromEntries(CHANGED_TABLES.map(t=>[t,rows(db,t,leagueId)]))};}
@@ -38,7 +41,9 @@ function scopeHash(db,leagueId){return hash({snapshot:capture(db,leagueId),witne
 function protectedFingerprint(db,leagueId){
  const result={};
  for(const {name}of db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()){
-  const changed=CHANGED_TABLES.includes(name),condition=changed?` WHERE ${name==='leagues'?'id':'league_id'} IS NOT ?`:'';
+  // Cursor changes have an exact, separate assertion in reconcilePushState.
+  if(name==='push_event_cursors')continue;
+  const changed=CHANGED_TABLES.includes(name)||PUSH_SCOPED_TABLES.includes(name),condition=changed?` WHERE ${name==='leagues'?'id':'league_id'} IS NOT ?`:'';
   const statement=db.prepare(`SELECT * FROM ${quote(name)}${condition} ORDER BY rowid`),digest=createHash('sha256');let count=0;
   for(const row of changed?statement.iterate(leagueId):statement.iterate()){digest.update(JSON.stringify(encode(row)));count++;}
   result[name]={count,hash:digest.digest('hex')};
@@ -46,6 +51,11 @@ function protectedFingerprint(db,leagueId){
  return result;
 }
 function schemaObjects(db){return db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY type,name').all();}
+function assertNoActivePushDelivery(db,leagueId){
+ // Both reset and restore wait for the worker to finish or reclaim a send.
+ // A stale lease is not evidence that the provider request has already ended.
+ if(db.pragma('user_version',{simple:true})>=92&&db.prepare("SELECT 1 FROM push_deliveries WHERE league_id=? AND status='sending' LIMIT 1").get(leagueId))fail('Phone notification deliveries must finish before resetting or restoring. Refresh after the delivery queue clears.');
+}
 function eligibility(db,leagueId,nowMs){
  validateDatabase(db);const league=db.prepare('SELECT * FROM leagues WHERE id=?').get(leagueId);
  if(!league)fail('The league was not found.','LEAGUE_RESET_NOT_FOUND');
@@ -58,6 +68,7 @@ function eligibility(db,leagueId,nowMs){
  for(const table of ['matchup_results','matchup_roster_locks','standings_snapshot_finalizations','entry_drafts','season_rollovers','season_rollover_occurrences','migration_reports'])if(db.prepare(`SELECT 1 FROM ${table} WHERE league_id=? LIMIT 1`).get(leagueId))fail('Played, locked, entry-draft or prior-season records prevent a preseason reset.');
  if(db.prepare("SELECT 1 FROM job_runs WHERE league_id=? AND status IN ('running','leased') LIMIT 1").get(leagueId))fail('A league job still holds a lease. Finish its supported recovery before resetting.');
  if(db.prepare("SELECT 1 FROM outbox_events WHERE league_id=? AND status IN ('pending','publishing','failed') LIMIT 1").get(leagueId))fail('League deliveries must finish before resetting. Refresh after the delivery queue clears.');
+ assertNoActivePushDelivery(db,leagueId);
  if(db.prepare("SELECT 1 FROM idempotency_requests WHERE league_id=? AND status='started' LIMIT 1").get(leagueId))fail('An unfinished league request needs recovery first.');
  if(db.prepare("SELECT 1 FROM teams WHERE league_id=? AND status NOT IN ('active','setup','erased') LIMIT 1").get(leagueId))fail('Review inactive teams before returning the league to setup.');
  if(!db.prepare('SELECT 1 FROM free_agent_drafts WHERE league_id=? LIMIT 1').get(leagueId))fail('There is no existing Free Agent Draft to restart.');
@@ -70,11 +81,37 @@ function manifest(snapshot,league){
   preparation:'League and teams return to setup. Current-season dates and the trade deadline become unset; unused future seasons are removed. Choose new dates through the existing setup controls, then start the league.',
   recovery:'An encrypted archive retains the cleared records. Restore is available only while the affected state and manager-access records still match the completed reset.'};
 }
-function rewrite(db,leagueId,operation){
+function reconcilePushState(db,leagueId,cursorsBefore,restoredSnapshot){
+ if(cursorsBefore===null)return;
+ for(const table of PUSH_SCOPED_TABLES)db.prepare(`DELETE FROM ${quote(table)} WHERE league_id=?`).run(leagueId);
+ const expected=new Map(cursorsBefore.map(row=>[row.source,row.last_rowid]));
+ for(const source of PUSH_EVENT_SOURCES){
+  // Only lower a watermark after deletion; never skip another league's backlog.
+  const last=Math.min(expected.get(source),db.prepare(`SELECT COALESCE(MAX(rowid),0) AS last FROM ${quote(source)}`).get().last);
+  expected.set(source,last);db.prepare('UPDATE push_event_cursors SET last_rowid=? WHERE source=?').run(last,source);
+  // Restored archive events acquire new rowids. Suppress those exact records,
+  // while leaving later real events and other leagues' unread events eligible.
+  for(const row of restoredSnapshot?.tables[source]||[]){
+   const marker=`restored:${source}:${row.id}`;
+   expected.set(marker,0);db.prepare('INSERT OR IGNORE INTO push_event_cursors(source,last_rowid) VALUES(?,0)').run(marker);
+  }
+ }
+ // In-app history stays intact, but unread old phone alerts must not become
+ // eligible again when the same draft/trade is restored and the league resumes.
+ for(const row of db.prepare('SELECT id FROM notifications WHERE league_id=?').all(leagueId)){
+  const marker=`restored:notifications:${row.id}`;
+  expected.set(marker,0);db.prepare('INSERT OR IGNORE INTO push_event_cursors(source,last_rowid) VALUES(?,0)').run(marker);
+ }
+ assert.deepEqual(db.prepare('SELECT source,last_rowid FROM push_event_cursors ORDER BY source').all(),
+  [...expected].sort(([a],[b])=>a<b?-1:a>b?1:0).map(([source,last_rowid])=>({source,last_rowid})), 'RESET_PUSH_CURSOR_CHANGED');
+}
+function rewrite(db,leagueId,operation,restoredSnapshot){
  assert.equal(db.inTransaction,true,'RESET_REQUIRES_ATOMIC_TRANSACTION');
+ assertNoActivePushDelivery(db,leagueId);
  const schema=schemaObjects(db),protectedBefore=protectedFingerprint(db,leagueId),guards=schema.filter(o=>o.type==='trigger'&&CHANGED_TABLES.includes(o.tbl_name));
+ const cursorsBefore=db.pragma('user_version',{simple:true})>=92?db.prepare('SELECT source,last_rowid FROM push_event_cursors ORDER BY source').all():null;
  db.pragma('defer_foreign_keys=ON');for(const guard of guards)db.exec('DROP TRIGGER '+quote(guard.name));
- operation();for(const guard of guards)db.exec(guard.sql);
+ operation();reconcilePushState(db,leagueId,cursorsBefore,restoredSnapshot);for(const guard of guards)db.exec(guard.sql);
  assert.deepEqual(schemaObjects(db),schema,'RESET_SCHEMA_CHANGED');assert.deepEqual(db.pragma('foreign_key_check'),[],'RESET_REFERENCE_CONFLICT');
  assert.deepEqual(protectedFingerprint(db,leagueId),protectedBefore,'RESET_PROTECTED_RECORD_CHANGED');
 }
@@ -101,7 +138,7 @@ function restore(db,snapshot){
     const updates=columns.filter(c=>c!==key);db.prepare(`UPDATE ${quote(table)} SET ${updates.map(c=>quote(c)+'=?').join(',')} WHERE ${quote(key)}=?`).run(...updates.map(c=>row[c]),row[key]);
    }else db.prepare(`INSERT INTO ${quote(table)} (${columns.map(quote).join(',')}) VALUES(${columns.map(()=>'?').join(',')})`).run(...columns.map(c=>row[c]));
   }
- });assert.deepEqual(capture(db,snapshot.leagueId),snapshot,'RESET_RESTORE_MISMATCH');
+ },snapshot);assert.deepEqual(capture(db,snapshot.leagueId),snapshot,'RESET_RESTORE_MISMATCH');
 }
 function withClone(db,fn){
  if(db.pragma('page_count',{simple:true})*db.pragma('page_size',{simple:true})>256*1024*1024)fail('This database requires an offline reset rehearsal.','LEAGUE_RESET_UNAVAILABLE');

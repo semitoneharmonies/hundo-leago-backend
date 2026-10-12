@@ -537,7 +537,7 @@ describe("M3-04 sensitive SQLite session repository", () => {
   test("migration 90 preserves existing sessions and every unrelated row", (t) => {
     const priorMigrations = fs.mkdtempSync(path.join(os.tmpdir(), "hundo-session-migration-"));
     t.after(() => fs.rmSync(priorMigrations, { recursive: true, force: true }));
-    for (const name of fs.readdirSync(MIGRATIONS_DIRECTORY).filter((name) => name.endsWith(".sql") && !name.startsWith("0090_"))) {
+    for (const name of fs.readdirSync(MIGRATIONS_DIRECTORY).filter((name) => /^\d{4}_.*\.sql$/.test(name) && Number(name.slice(0, 4)) < 90)) {
       fs.copyFileSync(path.join(MIGRATIONS_DIRECTORY, name), path.join(priorMigrations, name));
     }
     const runtime = createTemporaryDatabase(t, "hundo-session-preserve-", priorMigrations);
@@ -549,7 +549,8 @@ describe("M3-04 sensitive SQLite session repository", () => {
     const snapshot = () => Object.fromEntries(tables.map((name) => [name, runtime.database.prepare('SELECT * FROM "' + name.replaceAll('"', '""') + '"').all()]));
     const before = snapshot();
     const ledger = runtime.database.prepare("SELECT * FROM schema_migrations ORDER BY migration_id").all();
-    migrateDatabase({ database: runtime.database, migrationsDirectory: MIGRATIONS_DIRECTORY, applicationBuildId: "multiple-device-test", now: () => CREATED_AT_MS + 1 });
+    const { discoverMigrations, applyMigrations } = require("../../src/infrastructure/database/migrate");
+    applyMigrations({ database: runtime.database, migrations: discoverMigrations({ migrationsDirectory: MIGRATIONS_DIRECTORY }).filter(m => m.id <= 90), applicationBuildId: "multiple-device-test", now: () => CREATED_AT_MS + 1 });
     assert.deepEqual(snapshot(), before);
     assert.deepEqual(runtime.database.prepare("SELECT * FROM schema_migrations WHERE migration_id < 90 ORDER BY migration_id").all(), ledger);
     assert.deepEqual(runtime.sessions.findById(first.id), first);

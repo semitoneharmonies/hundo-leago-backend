@@ -157,6 +157,7 @@ function createSqliteMatchupLockRepository({
   const capReader = enforceCapLegality
     ? require("./SqliteCapReadRepository").createSqliteCapReadRepository({ database })
     : null;
+  const reminderCapReader = require('./SqliteCapReadRepository').createSqliteCapReadRepository({ database });
   if (
     occurrenceExecutionGuard !== undefined &&
     (
@@ -1002,6 +1003,21 @@ function createSqliteMatchupLockRepository({
 
   return Object.freeze({
     readContext,
+    readRosterContext(input) {
+      try {
+        const keys = scope(input);
+        const weeks = weekStatement.all(keys);
+        if (!weeks.length) return null;
+        if (weeks.length !== 1) throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible, "The matchup week is ambiguous.");
+        return Object.freeze({
+          week: Object.freeze({ ...weeks[0] }),
+          activePlayers: freezeRows(playersStatement.all(keys)),
+          cap: reminderCapReader.calculate({ leagueId: keys.leagueId, seasonId: keys.seasonId, teamId: keys.teamId }),
+        });
+      } catch (error) {
+        throw mapRepositoryError(error, { operation: "readRosterReminderContext", tableName: "player_ownerships" });
+      }
+    },
     persistNormalLock(command) {
       try {
         return persistTransaction.immediate({ ...command, ...scope(command) });

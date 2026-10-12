@@ -320,6 +320,11 @@ const EXPECTED_TABLES = [
   "player_source_state",
   "player_stat_totals",
   "players",
+  "push_deliveries",
+  "push_event_cursors",
+  "push_preferences",
+  "push_roster_state",
+  "push_subscriptions",
   "quote_submissions",
   "retention_obligations",
   "retention_years",
@@ -761,7 +766,7 @@ describe("M2-04 initial relational schema", () => {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     });
 
-    assert.equal(migrations.length, 90);
+    assert.equal(migrations.length, 92);
     assert.equal(migrations[0].id, 1);
     assert.equal(migrations[0].fileName, "0001_initial.sql");
     assert.equal(migrations[1].id, 2);
@@ -1224,12 +1229,12 @@ describe("M2-04 initial relational schema", () => {
       assert.equal(migration.checksum, expected.sha256);
     }
     assert.equal(migrationResult.status, "exact");
-    assert.equal(database.pragma("user_version", { simple: true }), 90);
+    assert.equal(database.pragma("user_version", { simple: true }), 92);
 
     const ledgerBefore = database
       .prepare("SELECT * FROM schema_migrations")
       .all();
-    assert.equal(ledgerBefore.length, 90);
+    assert.equal(ledgerBefore.length, 92);
     assert.equal(ledgerBefore[0].checksum, migrations[0].checksum);
     assert.equal(ledgerBefore[1].checksum, migrations[1].checksum);
     assert.equal(ledgerBefore[2].checksum, migrations[2].checksum);
@@ -1424,13 +1429,13 @@ describe("M2-04 initial relational schema", () => {
       )
       .all("table", "sqlite_%")
       .map(({ name }) => name);
-    assert.equal(EXPECTED_TABLES.length, 168);
+    assert.equal(EXPECTED_TABLES.length, 173);
     assert.equal(
       EXPECTED_TABLES.filter(
         (tableName) =>
           tableName !== "schema_migrations"
       ).length,
-      167
+      172
     );
     assert.deepEqual(tables, EXPECTED_TABLES);
 
@@ -1513,7 +1518,7 @@ describe("M2-04 initial relational schema", () => {
         },
       {
         metadata_key: "data_model_version",
-        metadata_value: "90",
+        metadata_value: "92",
       },
       ]
     );

@@ -11,6 +11,9 @@ const RETAINED_TABLES = new Set([
 // reviewed for erasure before this digest is advanced; unknown guards are never
 // silently suspended by the deletion endpoint.
 const REVIEWED_SCHEMA_SHA256 = new Set([
+  // Schema 92 adds league-scoped push deliveries/roster state. Erasure removes
+  // those rows explicitly; global device subscriptions and preferences survive.
+  "3446f429204767dc726a4b0ae640cb2ee386569921a052a92df9b19da4382ee8",
   // Schema 84: communications, timing, scoring, help and reset archives remain
   // league-scoped. Erasure keeps platform evidence and restores all 96 guards.
   "d75fd70c43da07c6d8fb4e5b43deb469ff8aaeb909710a2758df4c2379ecc031",

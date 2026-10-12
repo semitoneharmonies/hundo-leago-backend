@@ -21,7 +21,7 @@ test('card progress includes teams without a saved card and deduplicates unfinis
  CREATE TABLE league_invitations(league_id,invited_user_id,status,expires_at_ms);
  CREATE TABLE free_agent_drafts(id,league_id,season_id,status,deadline_locked_at_ms);
  CREATE TABLE candidate_cards(fad_id,league_id,team_id,status,filled_mandatory_count,filled_bench_count,completeness_code,allocation_eligibility,secret_offer);
- CREATE TABLE league_communications(id,league_id,created_by_user_id,kind,title,body,audience,pinned,expires_at_ms,notify,recipient_count,client_key,request_hash,created_at_ms,archived_at_ms,archived_by_user_id,version);
+ CREATE TABLE league_communications(id,league_id,created_by_user_id,kind,title,body,audience,pinned,expires_at_ms,notify,recipient_count,client_key,request_hash,created_at_ms,archived_at_ms,archived_by_user_id,version,push_notify INTEGER NOT NULL DEFAULT 0);
  INSERT INTO users VALUES('manager','Morgan','active');INSERT INTO leagues VALUES('league','season');
  INSERT INTO teams VALUES('empty','league','No saved card','active'),('partial','league','Partial card','active'),('complete','league','Complete card','active'),('old','league','Former team','erased');
  INSERT INTO league_memberships VALUES('membership','league','manager','active');

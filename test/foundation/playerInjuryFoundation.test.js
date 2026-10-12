@@ -22,7 +22,7 @@ function apply(repo,s){return repo.apply(s,repo.claim(true));}
 test('schema is additive, registered, and injury reads perform no writes',t=>{
  const {db,repo}=setup(t);const before=db.prepare('SELECT total_changes() AS n').get().n;
  repo.list();repo.read(id(1));assert.equal(db.prepare('SELECT total_changes() AS n').get().n,before);
- assert.equal(db.pragma('user_version',{simple:true}),91);
+ assert.equal(db.pragma('user_version',{simple:true}),92);
 });
 test('injury import matches unique name and birthdate without editing players',t=>{
  const {db,repo}=setup(t);const before=db.prepare('SELECT * FROM players').all();
@@ -57,4 +57,16 @@ test('feed timestamps, identities and empty snapshots must be verified',()=>{
  assert.throws(()=>normalizeInjurySnapshot(valid,NOW+86400000));
  assert.throws(()=>normalizeInjurySnapshot({...valid,injuries:[{...valid.injuries[0],injuries:[entry,entry]}]},NOW));
  assert.equal(normalizeInjurySnapshot({...valid,injuries:[{...valid.injuries[0],injuries:[{...entry,status:'Suspension'}]}]},NOW).rows[0].eligible,false);
+});
+
+
+test('historical injury repository construction is read-only before manual detail migration',t=>{
+ const db=new Database(':memory:');db.pragma('foreign_keys=ON');t.after(()=>db.close());
+ const {discoverMigrations,applyMigrations}=require('../../src/infrastructure/database/migrate');
+ const migrations=discoverMigrations({migrationsDirectory:path.resolve(__dirname,'../../database/migrations')}).filter(m=>m.id<=82);
+ applyMigrations({database:db,migrations,applicationBuildId:'historical-injury-read',now:()=>NOW});
+ const before=db.serialize(),changes=db.prepare('SELECT total_changes() n').get().n;
+ const repo=createSqlitePlayerInjuryRepository({database:db,nowMs:()=>NOW});
+ assert.equal(repo.read(id(1)),null);repo.list();
+ assert.deepEqual(db.serialize(),before);assert.equal(db.prepare('SELECT total_changes() n').get().n,changes);
 });
