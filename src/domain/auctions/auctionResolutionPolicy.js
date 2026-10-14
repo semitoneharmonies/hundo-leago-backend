@@ -108,12 +108,11 @@ function validateSubmittedValue(totalValueCents, termYears) {
   });
 }
 
-function minimumAuctionTotalCents(termYears, isStartingBid) {
-  if (![1, 2, 3].includes(termYears) || typeof isStartingBid !== "boolean") {
+function minimumAuctionAavCents(isStartingBid) {
+  if (typeof isStartingBid !== "boolean") {
     fail(AUCTION_RESOLUTION_CODES.valueInvalid);
   }
-  if (isStartingBid) return termYears * 100;
-  return Object.freeze({ 1: 150, 2: 300, 3: 500 })[termYears];
+  return isStartingBid ? 100 : 150;
 }
 
 function smallestValidTotalCents(requiredAavCents, termYears) {
@@ -221,8 +220,7 @@ function inspectBid(input, auction) {
       input.termYears
     );
     if (
-      offer.totalValueCents <
-      minimumAuctionTotalCents(offer.termYears, input.isStartingBid)
+      offer.aavCents < minimumAuctionAavCents(input.isStartingBid)
     ) {
       fail(AUCTION_RESOLUTION_CODES.valueInvalid);
     }

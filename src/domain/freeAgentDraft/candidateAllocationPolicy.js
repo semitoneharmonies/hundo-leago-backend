@@ -12,12 +12,7 @@ const CANDIDATE_ALLOCATION_CODES = Object.freeze({
     "FAD_CANDIDATE_ALLOCATION_BID_INVALID",
 });
 
-const FAD_RESTRICTED_JOINING_MINIMUM_TOTALS =
-  Object.freeze({
-    1: 150,
-    2: 300,
-    3: 500,
-  });
+const FAD_RESTRICTED_JOINING_MINIMUM_AAV_CENTS = 150;
 
 const OFFER_ELIGIBILITY_STATUSES = new Set([
   "valid",
@@ -635,10 +630,7 @@ function evaluateRestrictedCandidateImprovement(
     );
   const isStrictImprovement = comparison > 0;
   const meetsOrdinaryJoiningMinimum =
-    submittedBid.totalValueCents >=
-    FAD_RESTRICTED_JOINING_MINIMUM_TOTALS[
-      submittedBid.termYears
-    ];
+    submittedBid.aavCents >= FAD_RESTRICTED_JOINING_MINIMUM_AAV_CENTS;
   const reasonCodes = [];
   if (!isStrictImprovement) {
     reasonCodes.push(
@@ -716,7 +708,7 @@ module.exports = {
   CANDIDATE_ALLOCATION_CODES,
   CandidateAllocationPolicyError,
   FAD_BINDING_NO_RESERVATION_POLICY,
-  FAD_RESTRICTED_JOINING_MINIMUM_TOTALS,
+  FAD_RESTRICTED_JOINING_MINIMUM_AAV_CENTS,
   compareAavFirstLongestTermSecond,
   createRestrictedCandidateMinimum,
   decideCandidateAllocation,

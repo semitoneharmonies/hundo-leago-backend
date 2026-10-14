@@ -533,6 +533,29 @@ function directCompletion(overrides = {}) {
 }
 
 describe("M5-04 atomic SQLite auction completion", () => {
+  test("completes a $1.50 three-year joining winner with three annual cap charges and safe replay", async (t) => {
+    const runtime = createPersistenceRuntime(t, {
+      bidA: { totalValueCents: 300, termYears: 3, lowestOfferedAavCents: 100 },
+      bidB: { totalValueCents: 450, termYears: 3, lowestOfferedAavCents: 150 },
+    });
+    const result = await resolve(runtime.service);
+    assert.equal(result.completed, true);
+    assert.equal(result.outcomeCode, "winner");
+    const saved = runtime.database.prepare("SELECT * FROM auction_resolutions WHERE auction_id = ?").get(PERSISTED.auction);
+    assert.equal(saved.winning_bid_id, PERSISTED.bidB);
+    assert.equal(saved.final_aav_cents, 150);
+    assert.equal(saved.winning_term_years, 3);
+    const contract = runtime.database.prepare("SELECT * FROM contracts WHERE id = ?").get(result.contractId);
+    assert.equal(contract.aav_cents, 150);
+    assert.equal(contract.original_term_years, 3);
+    assert.equal(contract.original_total_value_cents, 450);
+    assert.deepEqual(runtime.database.prepare("SELECT aav_cents FROM contract_years WHERE contract_id = ? ORDER BY year_number").all(result.contractId),
+      [{ aav_cents: 150 }, { aav_cents: 150 }, { aav_cents: 150 }]);
+    const beforeReplay = runtime.database.serialize();
+    assert.equal((await resolve(runtime.service)).replayed, true);
+    assert.deepEqual(runtime.database.serialize(), beforeReplay);
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+  });
   test("requires exact current claim evidence for scheduled auction completion without falling back to direct completion", async t => {
     const runtime = createPersistenceRuntime(t);
     const initial = runtime.database.serialize();

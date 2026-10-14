@@ -612,7 +612,7 @@ describe(
           evaluateRestrictedCandidateImprovement(
             {
               candidateMinimum,
-              submittedBid: contract(150, 1),
+              submittedBid: contract(450, 3),
             }
           ).eligible,
           true

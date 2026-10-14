@@ -200,7 +200,7 @@ function insertAssignment(repositories, id, teamId, userId, membershipId) {
   });
 }
 
-function createPersistenceRuntime(t) {
+function createPersistenceRuntime(t, { openingAavCents = 350, joiningAavCents = 250, joiningTermYears = 2 } = {}) {
   const temporaryRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "hundo-m5-03-resolution-")
   );
@@ -320,7 +320,7 @@ function createPersistenceRuntime(t) {
     actorUserId: IDS.managerA,
     actorMembershipId: IDS.membershipA,
     actorAuthority: "manager",
-    aavCents: 350,
+    aavCents: openingAavCents,
     termYears: 3,
     idempotencyKey: "m5-03-open",
     occurredAtMs: OPEN_MS,
@@ -336,8 +336,8 @@ function createPersistenceRuntime(t) {
     actorUserId: IDS.managerB,
     actorMembershipId: IDS.membershipB,
     actorAuthority: "manager",
-    aavCents: 250,
-    termYears: 2,
+    aavCents: joiningAavCents,
+    termYears: joiningTermYears,
     expectedBidVersion: null,
     idempotencyKey: "m5-03-join",
     occurredAtMs: OPEN_MS + 1,
@@ -357,6 +357,18 @@ function createPersistenceRuntime(t) {
 }
 
 describe("M5-03 deterministic auction resolution policy", () => {
+  for (const termYears of [1, 2, 3]) {
+    test(`keeps a $1.50 joining bid eligible at resolution for ${termYears} years`, () => {
+      const result = evaluateAuctionResolution({
+        auction: auction(),
+        bids: [bid({ totalValueCents: 150 * termYears, termYears,
+          lowestOfferedAavCents: 150, isStartingBid: false })],
+      });
+      assert.equal(result.outcome, "winner");
+      assert.equal(result.winner.finalAavCents, 150);
+      assert.equal(result.winner.finalTotalValueCents, 150 * termYears);
+    });
+  }
   test("requires the transaction-bound Candidate Card summer synchronizer", () => {
     assert.throws(
       () => createSqliteAuctionResolutionRepository({ database: {} }),
@@ -562,6 +574,18 @@ describe("M5-03 deterministic auction resolution policy", () => {
 });
 
 describe("M5-03 read-only SQLite auction resolution candidates", () => {
+  test("a persisted $1.50 three-year joining bid wins without a read-side write", (t) => {
+    const { database, service } = createPersistenceRuntime(t, {
+      openingAavCents: 100, joiningAavCents: 150, joiningTermYears: 3,
+    });
+    const before = semanticHash(database);
+    const { decision } = service.decideDue({ leagueId: IDS.league, auctionId: IDS.auction, nowMs: NOW_MS });
+    assert.equal(decision.outcome, "winner");
+    assert.equal(decision.winner.bidId, IDS.bidB);
+    assert.equal(decision.winner.finalAavCents, 150);
+    assert.equal(decision.winner.finalTotalValueCents, 450);
+    assert.equal(semanticHash(database), before);
+  });
   test('paused leagues do not expose due auctions to resolution and retain all bids', t=>{
     const {database,repository}=createPersistenceRuntime(t);
     const bids=database.prepare('SELECT * FROM auction_bids ORDER BY id').all();

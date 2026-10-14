@@ -5,7 +5,7 @@ const UUID_PATTERN =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
 const ACTOR_AUTHORITIES = Object.freeze(["manager"]);
-const JOINING_MINIMUM_TOTALS = Object.freeze({ 1: 150, 2: 300, 3: 500 });
+const JOINING_MINIMUM_AAV_CENTS = 150;
 
 const AUCTION_BID_CODES = Object.freeze({
   inputInvalid: "AUCTION_BID_INPUT_INVALID",
@@ -102,20 +102,17 @@ function validateBidOffer(aavCents, termYears, { joining = false } = {}) {
   if (!Number.isSafeInteger(termYears) || termYears < 1 || termYears > 3) {
     fail(AUCTION_BID_CODES.termInvalid);
   }
-  const minimum = joining
-    ? JOINING_MINIMUM_TOTALS[termYears]
-    : termYears * 100;
+  const minimumAavCents = joining ? JOINING_MINIMUM_AAV_CENTS : 100;
   if (
     !Number.isSafeInteger(aavCents) ||
-    aavCents < 100 ||
+    aavCents < minimumAavCents ||
     aavCents % 25 !== 0
   ) {
     fail(AUCTION_BID_CODES.valueInvalid);
   }
   const totalValueCents = aavCents * termYears;
   if (
-    !Number.isSafeInteger(totalValueCents) ||
-    totalValueCents < minimum
+    !Number.isSafeInteger(totalValueCents)
   ) {
     fail(AUCTION_BID_CODES.valueInvalid);
   }
@@ -459,7 +456,7 @@ module.exports = {
   AUCTION_BID_CODES,
   AuctionBidPolicyError,
   COOLDOWN_MS,
-  JOINING_MINIMUM_TOTALS,
+  JOINING_MINIMUM_AAV_CENTS,
   assertAuctionBidState,
   calculateAavCents,
   validateAuctionBidCommand,

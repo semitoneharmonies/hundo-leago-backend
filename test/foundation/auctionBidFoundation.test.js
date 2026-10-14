@@ -727,6 +727,18 @@ function persistenceCommand(overrides = {}) {
 }
 
 describe("M5-02 auction bid policy", () => {
+  for (const termYears of [1, 2, 3]) {
+    test(`accepts the $1.50 joining AAV for ${termYears} years and rejects less`, () => {
+      assert.deepEqual(validateBidOffer(150, termYears, { joining: true }), {
+        totalValueCents: 150 * termYears, termYears, aavCents: 150,
+      });
+      assertPolicyError(
+        () => validateBidOffer(125, termYears, { joining: true }),
+        AUCTION_BID_CODES.valueInvalid
+      );
+      assert.equal(validateBidOffer(100, termYears).aavCents, 100);
+    });
+  }
   test("enforces joining minimums, term, and quarter-AAV precision", () => {
     assert.deepEqual(validateBidOffer(150, 1, { joining: true }), {
       totalValueCents: 150,
@@ -1049,6 +1061,46 @@ describe("M5-02 auction bid policy", () => {
 });
 
 describe("M5-02 atomic sealed-bid persistence", () => {
+  for (const kind of ["manager", "restricted", "fallback"]) {
+    test(`persists a $1.50 three-year ${kind} draft-auction join under current database guards`, (t) => {
+      const runtime = createPersistenceRuntime(t);
+      // This disposable fixture replaces hundreds of guards during setup only.
+      runtime.database.pragma("synchronous = OFF");
+      configureFadBidRuntime(runtime, { kind });
+      runtime.database.pragma("synchronous = FULL");
+      const result = runtime.repository.putBid(persistenceCommand({ aavCents: 150, termYears: 3 }));
+      assert.equal(result.action, "submitted");
+      assert.equal(result.bid.aavCents, 150);
+      assert.equal(result.bid.termYears, 3);
+      assert.equal(result.bid.totalValueCents, 450);
+      const beforeReplay = semanticHash(runtime.database);
+      assert.equal(runtime.repository.putBid(persistenceCommand({ aavCents: 150, termYears: 3 })).replayed, true);
+      assert.equal(semanticHash(runtime.database), beforeReplay);
+    });
+  }
+  test("persists and replays a $1.50 three-year join without changing the opening bid", (t) => {
+    const runtime = createPersistenceRuntime(t);
+    const openingBefore = runtime.database.prepare("SELECT * FROM auction_bids").all();
+    const beforeRejected = semanticHash(runtime.database);
+    assertPolicyError(
+      () => runtime.repository.putBid(persistenceCommand({ aavCents: 125, termYears: 3 })),
+      AUCTION_BID_CODES.valueInvalid
+    );
+    assert.equal(semanticHash(runtime.database), beforeRejected);
+    const input = persistenceCommand({ aavCents: 150, termYears: 3 });
+    const result = runtime.repository.putBid(input);
+    assert.equal(result.bid.aavCents, 150);
+    assert.equal(result.bid.termYears, 3);
+    assert.equal(result.bid.totalValueCents, 450);
+    for (const row of openingBefore) {
+      assert.deepEqual(runtime.database.prepare("SELECT * FROM auction_bids WHERE id = ?").get(row.id), row);
+    }
+    const beforeReplay = semanticHash(runtime.database);
+    assert.equal(runtime.repository.putBid(input).replayed, true);
+    assert.equal(semanticHash(runtime.database), beforeReplay);
+    assert.equal(runtime.database.pragma("integrity_check", { simple: true }), "ok");
+    assert.deepEqual(runtime.database.pragma("foreign_key_check"), []);
+  });
   test("joins once, replays the same request, and rejects changed key reuse", (t) => {
     const runtime = createPersistenceRuntime(t);
     const submitted = runtime.repository.putBid(persistenceCommand());
