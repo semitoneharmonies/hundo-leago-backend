@@ -184,7 +184,59 @@ test("a real compact late lock retains exact exclusions and rolls materializatio
   assert.deepEqual(db.pragma("foreign_key_check"), []);
 });
 
-for (const compact of [false, true]) for (const disposition of ["no_due_game", "no_team"]) test(`a complete ${disposition} capture retains known-zero totals without inventing game evidence (compact=${compact})`, async t => {
+for (const futureOnly of [false, true]) test(`compact late locks retain future game evidence without excluding it (futureOnly=${futureOnly})`, async t => {
+  const { db, repo, start } = fixture(t, { compact: true });
+  db.prepare("INSERT INTO teams (id,league_id,name,name_normalized,status,created_at_ms,updated_at_ms) VALUES (?,?,'Away','away','active',1,1)").run(uuid(9), uuid(4));
+  db.prepare(`INSERT INTO matchups (id,league_id,season_id,matchup_week_id,home_team_id,away_team_id,home_team_name,away_team_name,status,created_at_ms,updated_at_ms)
+    VALUES (?,?,?,?,?,?,'Test','Away','live',1,1)`).run(uuid(10), uuid(4), uuid(5), uuid(7), uuid(6), uuid(9));
+  db.prepare(`INSERT INTO matchup_roster_locks (id,league_id,season_id,matchup_week_id,team_id,lock_type,legal,legality_reason_code,locked_at_ms,source_freshness_status,created_at_ms)
+    VALUES (?,?,?,?,?,'normal',0,'SALARY_CAP_EXCEEDED',3,'unknown',3)`).run(uuid(11), uuid(4), uuid(5), uuid(7), uuid(6));
+  const c = command(100), futureGameId = "2026020002";
+  const futureRow = { ...c.playerGameRows[0], nhlGameId: futureGameId, nhlGameScheduledStartsAtMs: NOW + DAY,
+    observedGameState: "scheduled", goals: 0, assists: 0, nhlPoints: 0, fantasyPointsHundredths: 0 };
+  const futureCoverage = { ...c.playerGameCoverage[0], nhlGameId: futureGameId,
+    nhlGameScheduledStartsAtMs: NOW + DAY, observedGameState: "scheduled" };
+  const futureExpanded = { playerId: "101", nhlGameId: futureGameId, gamesPlayed: 0, scoringStats: emptyScoringStats() };
+  if (futureOnly) {
+    Object.assign(c.rows[0], { gamesPlayed: 0, goals: 0, assists: 0, nhlPoints: 0, fantasyPointsHundredths: 0 });
+    c.playerGameRows = [futureRow]; c.playerGameCoverage = [futureCoverage];
+    c.expandedScoring.totalsRows[0].scoringStats = emptyScoringStats();
+    c.expandedScoring.playerGameRows = [futureExpanded];
+  } else {
+    c.playerGameRows.push(futureRow); c.playerGameCoverage.push(futureCoverage);
+    c.expandedScoring.playerGameRows.push(futureExpanded);
+  }
+  start(c); repo.completeLiveRefresh(c, await repo.prepareLiveRefresh(c));
+  const beforeOwnership = db.prepare("SELECT * FROM player_ownerships ORDER BY id").all();
+  let injectFailure = true;
+  const locks = createSqliteMatchupLockRepository({ database: db,
+    beforeCommit() { if (injectFailure) throw new Error("future-evidence rollback"); } });
+  const legality = createMatchupLegalityService({ repository: locks,
+    normalLockService: createMatchupLockService({ repository: locks }), nowMs: () => NOW + 200,
+    gameStateProvider: { async fetchGameStates({ games }) {
+      return { provider: c.provider, sourceVersion: "fresh-games", observedAtMs: NOW + 200,
+        games: games.map(game => ({ ...game, observedGameState: game.nhlGameId === futureGameId ? "scheduled" : "final" })) };
+    } } });
+  const scope = { leagueId: uuid(4), seasonId: uuid(5), weekId: uuid(7), teamId: uuid(6),
+    lockId: uuid(11), provider: c.provider, nowMs: NOW + 200 };
+  await assert.rejects(legality.lockLate(scope), error => error.cause?.message === "future-evidence rollback");
+  for (const table of ["player_game_stat_observations", "stat_refresh_player_game_coverage_entries",
+    "matchup_roster_game_exclusions", "stat_snapshots", "nhl_game_state_observation_snapshots"]) {
+    assert.equal(db.prepare(`SELECT count(*) n FROM ${table}`).get().n, 0, table);
+  }
+  assert.equal(db.prepare("SELECT legal FROM matchup_roster_locks WHERE id=?").get(uuid(11)).legal, 0);
+  injectFailure = false;
+  const result = await legality.lockLate(scope);
+  assert.equal(result.lock.legal, 1);
+  assert.equal(result.lock.locked_at_ms, NOW + 200);
+  assert.equal(db.prepare("SELECT count(*) n FROM player_game_stat_observations").get().n, futureOnly ? 1 : 2);
+  const excluded = db.prepare("SELECT nhl_game_id FROM matchup_roster_game_exclusions ORDER BY nhl_game_id").all();
+  assert.deepEqual(excluded, futureOnly ? [] : [{ nhl_game_id: "2026020001" }]);
+  assert.deepEqual(db.prepare("SELECT * FROM player_ownerships ORDER BY id").all(), beforeOwnership);
+  assert.deepEqual(db.pragma("foreign_key_check"), []);
+});
+
+for (const compact of [false, true]) for (const disposition of ["no_due_game", "no_team"]) test(`a complete ${disposition} capture supports late locking without inventing game evidence (compact=${compact})`, async t => {
   const { db, repo, shared, start, counts } = fixture(t, { compact });
   const c = command();
   c.rows = [{ ...c.rows[0], gamesPlayed: 0, goals: 0, assists: 0, nhlPoints: 0, fantasyPointsHundredths: 0 }];
@@ -208,6 +260,23 @@ for (const compact of [false, true]) for (const disposition of ["no_due_game", "
     const cold = new Database(db.serialize());
     try { assert.deepEqual(readCompactStatistics(cold, c.refreshId).coverage, [coverage]); } finally { cold.close(); }
   }
+  db.prepare("INSERT INTO teams (id,league_id,name,name_normalized,status,created_at_ms,updated_at_ms) VALUES (?,?,'Away','away','active',1,1)").run(uuid(9), uuid(4));
+  db.prepare(`INSERT INTO matchups (id,league_id,season_id,matchup_week_id,home_team_id,away_team_id,home_team_name,away_team_name,status,created_at_ms,updated_at_ms)
+    VALUES (?,?,?,?,?,?,'Test','Away','live',1,1)`).run(uuid(10), uuid(4), uuid(5), uuid(7), uuid(6), uuid(9));
+  db.prepare(`INSERT INTO matchup_roster_locks (id,league_id,season_id,matchup_week_id,team_id,lock_type,legal,legality_reason_code,locked_at_ms,source_freshness_status,created_at_ms)
+    VALUES (?,?,?,?,?,'normal',0,'SALARY_CAP_EXCEEDED',3,'unknown',3)`).run(uuid(11), uuid(4), uuid(5), uuid(7), uuid(6));
+  const beforeOwnership = db.prepare("SELECT * FROM player_ownerships ORDER BY id").all();
+  const locks = createSqliteMatchupLockRepository({ database: db });
+  const legality = createMatchupLegalityService({ repository: locks,
+    normalLockService: createMatchupLockService({ repository: locks }), nowMs: () => NOW + 200,
+    gameStateProvider: { async fetchGameStates() { throw new Error("No game state is needed for empty coverage."); } } });
+  const result = await legality.lockLate({ leagueId: uuid(4), seasonId: uuid(5), weekId: uuid(7),
+    teamId: uuid(6), lockId: uuid(11), provider: c.provider, nowMs: NOW + 200 });
+  assert.equal(result.lock.legal, 1);
+  assert.equal(result.lock.locked_at_ms, NOW + 200);
+  assert.equal(db.prepare("SELECT count(*) n FROM matchup_roster_game_exclusions").get().n, 0);
+  assert.equal(db.prepare("SELECT count(*) n FROM player_game_stat_observations").get().n, 0);
+  assert.deepEqual(db.prepare("SELECT * FROM player_ownerships ORDER BY id").all(), beforeOwnership);
   assert.deepEqual(db.pragma("foreign_key_check"), []);
 });
 

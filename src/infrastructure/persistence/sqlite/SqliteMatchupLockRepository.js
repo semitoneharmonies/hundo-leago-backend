@@ -960,7 +960,13 @@ function createSqliteMatchupLockRepository({
     for (const player of command.players) {
       insertLockPlayer.run({ ...command, ...player });
     }
-    materializeCompactExclusions(database, command.refreshId, command.exclusions.map(row => row.baselinePlayerGameStatObservationId));
+    // The database seal verifies coverage for every selected player and observed
+    // game, including future games that are not excluded from scoring.
+    const selectedPlayerIds = new Set(command.players.map(row => row.playerId));
+    materializeCompactExclusions(database, command.refreshId,
+      current.playerGameObservations
+        .filter(row => selectedPlayerIds.has(row.player_id))
+        .map(row => row.id));
     for (const row of command.exclusions) {
       insertGameExclusion.run({ ...command, ...row });
     }

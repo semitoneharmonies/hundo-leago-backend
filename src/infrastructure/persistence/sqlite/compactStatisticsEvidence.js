@@ -159,6 +159,14 @@ function createCompactStatisticsStorage({ database }) {
           coverageEvidence.requiredPlayerCount, coverageEvidence.coverageEntryCount, coverageEvidence.coverageSha256,
           observationEvidence.evidenceSha256, plan.expandedHash);
       if (result.changes !== 1) throw new Error("Compact statistics were not sealed.");
+      // Late-lock SQL guards require affirmative coverage for every selected
+      // player, even when there is no game to materialize. Stage these small
+      // terminal records before the immutable player-game set is sealed.
+      for (const row of plan.result.coverage.filter(row => row.disposition !== "expected_game")) {
+        const columns = Object.keys(row);
+        const inserted = database.prepare(`INSERT INTO stat_refresh_player_game_coverage_entries (${columns.join(",")}) VALUES (${columns.map(key => `@${key}`).join(",")})`).run(row);
+        if (inserted.changes !== 1) throw new Error("Compact terminal coverage was not staged.");
+      }
     },
   });
 }
