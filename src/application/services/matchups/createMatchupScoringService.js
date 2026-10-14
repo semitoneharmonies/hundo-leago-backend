@@ -461,7 +461,9 @@ function createMatchupScoringService({ repository, expandedScoringEnabled = fals
         const totals = new Map(context.totals.map((row) => [row.player_id, { ...row }]));
         const selected = new Set(lockedPlayers.map((row) => row.player_id));
         const excluded = new Set(excludedPlayerGames.map((row) => `${row.player_id}\u0000${row.nhl_game_id}`));
-        const startsAtMs = lock.lock_type === "late" ? lock.locked_at_ms : context.matchup.week_starts_at_ms;
+        // The verified exclusions already decide late eligibility. A scheduled
+        // start before the lock does not prove the game had actually begun.
+        const startsAtMs = context.matchup.week_starts_at_ms;
         for (const player of lockedPlayers) {
           const total = totals.get(player.player_id);
           if (!total) continue; // The scoring policy rejects missing totals.

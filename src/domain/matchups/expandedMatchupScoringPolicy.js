@@ -4,7 +4,9 @@ function calculateExpandedTeamScore({ lock, lockedPlayers, currentPlayerGames, e
   if (!lock || ![0, 1].includes(lock.legal) || !Number.isSafeInteger(weekStartsAtMs) || !Number.isSafeInteger(weekEndsAtMs) || weekEndsAtMs <= weekStartsAtMs) throw new TypeError("A valid matchup scoring window and team lock are required.");
   if (lock.legal === 0) return Object.freeze({ teamId: lock.team_id, legal: false, scoreHundredths: 0, scoringRuleVersion: scoringRule?.version || EXPANDED_SCORING_VERSION, ...(scoringRule ? {scoringWeights: scoringRule.weights} : {}), players: Object.freeze([]) });
   const exclusions = new Set(excludedPlayerGames.map((row) => `${row.player_id}\u0000${row.nhl_game_id}`));
-  const startsAtMs = lock.lock_type === "late" ? lock.locked_at_ms : weekStartsAtMs;
+  // Sealed whole-game exclusions decide late eligibility from observed state.
+  // A game can still be pre-game after its advertised start time.
+  const startsAtMs = weekStartsAtMs;
   const totals = new Map();
   for (const player of lockedPlayers) {
     if (totals.has(player.player_id)) throw new TypeError("A locked roster repeats a player.");

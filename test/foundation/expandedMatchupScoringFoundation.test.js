@@ -39,13 +39,27 @@ test("late locks and whole-game exclusions preserve the original eligibility bou
   game("early", 149, { evenStrengthGoals: 1 });
   game("excluded", 160, { evenStrengthGoals: 1 });
   game("eligible", 170, { penaltiesTaken: 2, giveaways: 1 });
-  input.excludedPlayerGames.push({ player_id: "d", nhl_game_id: "excluded" });
+  input.excludedPlayerGames.push({ player_id: "d", nhl_game_id: "early" }, { player_id: "d", nhl_game_id: "excluded" });
   const result = calculateExpandedTeamScore(input);
   assert.equal(result.scoreHundredths, -50);
   assert.equal(result.players[0].gamesPlayedDelta, 1);
   assert.equal(result.players[0].goalDelta, 0);
   input.lock.legal = 0;
   assert.equal(calculateExpandedTeamScore(input).scoreHundredths, 0);
+});
+
+test("late locks count a game observed pre-game even when its scheduled start precedes the lock", () => {
+  const { input, game } = fixture();
+  input.lock.lock_type = "late";
+  input.lock.locked_at_ms = 150;
+  game("prior-week", 99, { evenStrengthGoals: 9 });
+  game("already-playing-at-lock", 120, { evenStrengthGoals: 9 });
+  game("pregame-at-lock", 149, { evenStrengthGoals: 1 });
+  game("next-week", 200, { evenStrengthGoals: 9 });
+  input.excludedPlayerGames.push({ player_id: "d", nhl_game_id: "already-playing-at-lock" });
+  const result = calculateExpandedTeamScore(input);
+  assert.equal(result.scoreHundredths, 300);
+  assert.equal(result.players[0].gamesPlayedDelta, 1);
 });
 
 test("eligible games without complete category evidence cannot silently score zero", () => {
