@@ -3376,9 +3376,9 @@ function createSqliteMatchupScheduleRepository({
       if (beforeCommit) {
         beforeCommit("after_command_result");
       }
-      applyCorrectiveReadinessRequeue(
-        parameters
-      );
+      const scheduledExistingDraft = require('./SqliteGoonDraftSchedulingWriter')
+        .scheduleExistingGoonDraft(database, parameters);
+      if (!scheduledExistingDraft) applyCorrectiveReadinessRequeue(parameters);
       if (
         completeIdempotency.run(parameters)
           .changes !== 1

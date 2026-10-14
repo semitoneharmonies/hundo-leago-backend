@@ -33,10 +33,13 @@ const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex
 const encode=row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[key,Buffer.isBuffer(value)?{$binary:value.toString('base64')}:value]));
 const decode=row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[key,value&&typeof value==='object'&&Object.keys(value).join()==='$binary'?Buffer.from(value.$binary,'base64'):value]));
 function validateDatabase(db){
- if(![88,89,90,91,92].includes(db.pragma('user_version',{simple:true}))||db.pragma('foreign_keys',{simple:true})!==1)fail('This schema needs reset compatibility review.','LEAGUE_RESET_UNAVAILABLE');
+ if(![88,89,90,91,92,93].includes(db.pragma('user_version',{simple:true}))||db.pragma('foreign_keys',{simple:true})!==1)fail('This schema needs reset compatibility review.','LEAGUE_RESET_UNAVAILABLE');
+}
+function assertSchedulingArchiveCompatible(db,leagueId){
+ if(db.pragma('user_version',{simple:true})>=93&&db.prepare('SELECT 1 FROM goon_draft_scheduling_receipts WHERE league_id=? LIMIT 1').get(leagueId))fail('This scheduled draft requires a reviewed recovery archive before a preseason reset.','LEAGUE_RESET_UNAVAILABLE');
 }
 function rows(db,table,leagueId){return db.prepare(`SELECT * FROM ${quote(table)} WHERE ${table==='leagues'?'id':'league_id'}=? ORDER BY rowid`).all(leagueId).map(encode);}
-function capture(db,leagueId){validateDatabase(db);return {schemaVersion:SCHEMA_VERSION,leagueId,tables:Object.fromEntries(CHANGED_TABLES.map(t=>[t,rows(db,t,leagueId)]))};}
+function capture(db,leagueId){validateDatabase(db);assertSchedulingArchiveCompatible(db,leagueId);return {schemaVersion:SCHEMA_VERSION,leagueId,tables:Object.fromEntries(CHANGED_TABLES.map(t=>[t,rows(db,t,leagueId)]))};}
 function scopeHash(db,leagueId){return hash({snapshot:capture(db,leagueId),witnesses:Object.fromEntries(WITNESS_TABLES.map(t=>[t,rows(db,t,leagueId)]))});}
 function protectedFingerprint(db,leagueId){
  const result={};
@@ -107,6 +110,7 @@ function reconcilePushState(db,leagueId,cursorsBefore,restoredSnapshot){
 }
 function rewrite(db,leagueId,operation,restoredSnapshot){
  assert.equal(db.inTransaction,true,'RESET_REQUIRES_ATOMIC_TRANSACTION');
+ assertSchedulingArchiveCompatible(db,leagueId);
  assertNoActivePushDelivery(db,leagueId);
  const schema=schemaObjects(db),protectedBefore=protectedFingerprint(db,leagueId),guards=schema.filter(o=>o.type==='trigger'&&CHANGED_TABLES.includes(o.tbl_name));
  const cursorsBefore=db.pragma('user_version',{simple:true})>=92?db.prepare('SELECT source,last_rowid FROM push_event_cursors ORDER BY source').all():null;

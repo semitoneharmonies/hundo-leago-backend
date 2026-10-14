@@ -184,7 +184,7 @@ function edge(fromStatus, toStatus) {
   return `${fromStatus}:${toStatus}`;
 }
 
-function deterministicUuid(namespace) {
+function baseDeterministicUuid(namespace) {
   const bytes = Buffer.from(
     crypto
       .createHash("sha256")
@@ -413,6 +413,8 @@ function createSqliteFreeAgentDraftAllocationLifecycleWriter({
   leagueOutboxWriter,
   beforeCommit,
 } = {}) {
+  const { uuid: deterministicUuid, contract: createFreeAgentDraftNotificationContract } =
+    require('./goonDraftPublicationIdentity').createGoonDraftPublicationIdentity(database, baseDeterministicUuid);
   if (
     !database ||
     typeof database.prepare !== "function" ||

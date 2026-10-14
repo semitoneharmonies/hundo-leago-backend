@@ -249,7 +249,7 @@ function assertSynchronous(value, description) {
   return value;
 }
 
-function deterministicUuid(namespace) {
+function baseDeterministicUuid(namespace) {
   const bytes = Buffer.from(
     crypto
       .createHash("sha256")
@@ -541,6 +541,8 @@ function createSqliteFreeAgentDraftCompletionWriter({
   beforeCommit,
   afterStep,
 } = {}) {
+  const { uuid: deterministicUuid, contract: createFreeAgentDraftNotificationContract } =
+    require('./goonDraftPublicationIdentity').createGoonDraftPublicationIdentity(database, baseDeterministicUuid);
   if (
     !database ||
     typeof database.prepare !== "function" ||
