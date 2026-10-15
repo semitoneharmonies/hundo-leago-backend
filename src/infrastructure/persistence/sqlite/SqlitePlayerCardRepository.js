@@ -22,6 +22,11 @@ function createSqlitePlayerCardRepository({ database }) {
       AND ar.contract_id = c.id AND ar.status IN ('resolved', 'recovered')
     LEFT JOIN auction_contexts ac ON ac.league_id = ar.league_id AND ac.auction_id = ar.auction_id
     WHERE c.league_id = @leagueId AND c.player_id = @playerId
+      -- Corrected allocations are private losing offers, not signing history.
+      -- Keep genuine past contracts, including ordinary commissioner removals.
+      AND NOT EXISTS (SELECT 1 FROM contract_events correction
+        WHERE correction.league_id = c.league_id AND correction.contract_id = c.id
+          AND correction.event_type = 'fad_allocation_correction_contract_cancelled')
     ORDER BY COALESCE(e.occurred_at_ms, c.created_at_ms) DESC, c.id`);
   // Original team/date survive penalty transfers and completion. Read one row
   // per obligation rather than duplicating its contract and ownership events.

@@ -41,7 +41,15 @@ test('player value handles retention, missing games and unsigned players without
 test('saved history is league-scoped, read-only, public after execution, and preserves full trade assets', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hundo-player-card-'));
   const databasePath = path.join(root, 'card-release-qa.sqlite3');
-  await createReleaseQaFixture({ databasePath, environment: 'test', migrationsDirectory: path.resolve(__dirname, '../../database/migrations'), password: 'hundo', temporaryRoot: root });
+  // The shared release-QA verifier supports schema 92; later schedule-only
+  // migrations are outside this player-card regression fixture.
+  const migrationsDirectory = path.join(root, 'migrations');
+  fs.mkdirSync(migrationsDirectory);
+  const sourceMigrations = path.resolve(__dirname, '../../database/migrations');
+  for (const name of fs.readdirSync(sourceMigrations).filter(name => /^\d+.*\.sql$/.test(name) && Number(name.slice(0, 4)) <= 92)) {
+    fs.copyFileSync(path.join(sourceMigrations, name), path.join(migrationsDirectory, name));
+  }
+  await createReleaseQaFixture({ databasePath, environment: 'test', migrationsDirectory, password: 'hundo', temporaryRoot: root });
   const { database } = openDatabase({ databasePath, environment: 'test' });
   t.after(() => { database.close(); fs.rmSync(root, { recursive: true, force: true }); });
   createSqliteRepositoryContext({ database });
@@ -105,6 +113,26 @@ test('saved history is league-scoped, read-only, public after execution, and pre
   assert.ok(otherBuyoutCard.history.buyouts.every(entry => entry.id !== boughtOut.id), 'buyouts never cross leagues');
   assert.equal(JSON.stringify(buyoutCard.history.buyouts).includes('actor_user_id'), false, 'private audit fields are omitted');
   assert.deepEqual(database.serialize(), before);
+
+  const signing = card.history.signings[0];
+  assert.ok(signing, 'fixture supplies a public signing');
+  const insertEvent = database.prepare(`INSERT INTO contract_events
+    (id,league_id,contract_id,player_id,event_type,occurred_at_ms)
+    VALUES (?,?,?,?,?,?)`);
+  insertEvent.run(fixtureId('card:commissioner-cancellation'), leagueId, signing.id,
+    completed.player_id, 'commissioner_contract_cancelled', 2000);
+  assert.ok(repository.read({ leagueId, playerId: completed.player_id }).signings.some(row => row.id === signing.id),
+    'ordinary commissioner cancellations do not erase genuine signing history');
+  insertEvent.run(fixtureId('card:invalidated-allocation'), leagueId, signing.id,
+    completed.player_id, 'fad_allocation_correction_contract_cancelled', 2001);
+  const correctedBefore = database.serialize();
+  database.pragma('query_only = ON');
+  const corrected = await service.read({ authenticated, leagueId, playerId: completed.player_id });
+  assert.equal(corrected.history.signings.some(row => row.id === signing.id), false,
+    'invalidated allocations must not expose the losing team, amount, or term in the API');
+  assert.deepEqual(corrected.history.trades, card.history.trades);
+  assert.deepEqual(corrected.contract, card.contract);
+  assert.deepEqual(database.serialize(), correctedBefore, 'history filtering never repairs or deletes stored data');
 });
 
 test('buyout history keeps original team and date after re-signing or the penalty ending', async () => {
