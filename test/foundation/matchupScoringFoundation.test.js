@@ -1516,8 +1516,8 @@ test('game progress uses canonical accepted scoring, original final refresh and 
       assert.deepEqual(range, { startsAtMs: NOW_MS - 20 * HOUR_MS, endsAtMs: NOW_MS + 4 * HOUR_MS, nhlSeasonKey: '20262027' });
       if (scheduleFails) throw Object.assign(new Error('offline'), { code: 'NHL_SCHEDULE_UNAVAILABLE' });
       return { games: [
-        { id: '2026020001', homeTeam: 'VAN', awayTeam: 'SEA', startsAtMs: NOW_MS - 5 * HOUR_MS, status: 'final' },
-        { id: '2026020002', homeTeam: 'VAN', awayTeam: 'SEA', startsAtMs: NOW_MS + HOUR_MS, status: 'scheduled' },
+        { id: '2026020001', homeTeam: 'VAN', homeTeamId: 'team-1', awayTeam: 'SEA', awayTeamId: 'team-2', startsAtMs: NOW_MS - 5 * HOUR_MS, status: 'final' },
+        { id: '2026020002', homeTeam: 'VAN', homeTeamId: 'team-1', awayTeam: 'SEA', awayTeamId: 'team-2', startsAtMs: NOW_MS + HOUR_MS, status: 'scheduled' },
       ] };
     } },
   };
@@ -1531,8 +1531,17 @@ test('game progress uses canonical accepted scoring, original final refresh and 
   assert.deepEqual(details.games.map(game => game.status), ['collected', 'scheduled']);
   assert.ok(details.games.every(game => game.playerId === IDS.player && game.opponent === 'SEA'));
   assert.equal(live.sourceRefreshId, IDS.liveRefresh);
+  assert.equal(live.day.timeZone, 'America/Vancouver');
+  assert.equal(live.day.home.status, 'available');
+  assert.equal(live.day.home.scoreHundredths, 0);
+  assert.deepEqual(live.day.home.players.map(player => player.playerId), [IDS.player]);
+  assert.equal(live.day.away.status, 'not_scoring');
+  assert.deepEqual(live.day.away.players, []);
   scheduleFails = true;
-  assert.deepEqual((await progress.read(scope)).home, { teamId: IDS.home, status: 'schedule_unavailable', tallied: 1, remaining: null, total: null });
+  const unavailable = await progress.read(scope);
+  assert.deepEqual(unavailable.home, { teamId: IDS.home, status: 'schedule_unavailable', tallied: 1, remaining: null, total: null });
+  assert.equal(unavailable.day.home.status, 'unavailable');
+  assert.equal(unavailable.day.home.scoreHundredths, null);
   await assert.rejects(progress.read({ ...scope, leagueId: IDS.otherLeague }), { code: 'MATCHUP_INTEGRATION_MATCHUP_MISSING' });
   await assert.rejects(progress.read({ ...scope, weekId: uuid(9000) }), { code: 'MATCHUP_INTEGRATION_MATCHUP_MISSING' });
   assert.deepEqual(database.serialize(), before);
