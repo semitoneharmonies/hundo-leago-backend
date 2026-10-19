@@ -85,6 +85,7 @@ function createRunMatchupOccurrencesJob({
       const due = repository.listDue({ nowMs, limit: batchSize });
       const summary = { status: "succeeded", due: due.length, acquired: 0, succeeded: 0, failed: 0, skipped: 0 };
       for (const occurrence of due) {
+        const nowMs = clock.nowMs();
         const leaseToken = secureRandom.id();
         const claim = repository.claim({
           leagueId: occurrence.league_id,
