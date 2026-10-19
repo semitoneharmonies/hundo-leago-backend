@@ -49,11 +49,12 @@ function normalizeExpandedReports({ summary, realtime, scoring, penalties, penal
       penaltiesDrawn: integer(infractions.penaltiesDrawn, "penalties drawn"),
       penaltiesTaken: integer(infractions.penalties, "penalties taken"),
     };
+    // Awarded goals can have no shot on goal; preserve both official counts.
     if (stats.evenStrengthGoals + stats.powerPlayGoals + stats.shortHandedGoals !== row.goals ||
         stats.primaryAssists + stats.secondaryAssists !== row.assists ||
         assists.goals !== row.goals || assists.assists !== row.assists ||
         infractions.goals !== row.goals || infractions.assists !== row.assists ||
-        stats.shotsOnGoal < row.goals || stats.gameWinningGoals > 1 || stats.gameWinningGoals > row.goals) fail("NHL category reports do not reconcile with goals and assists.");
+        stats.gameWinningGoals > 1 || stats.gameWinningGoals > row.goals) fail("NHL category reports do not reconcile with goals and assists.");
     result.set(key, stats);
   }
   // NHL summary can label a successful penalty shot SH/PP. The approved

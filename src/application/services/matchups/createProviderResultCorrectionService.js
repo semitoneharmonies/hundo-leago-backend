@@ -21,7 +21,7 @@ function createProviderResultCorrectionService({ repository, scoringService, clo
         const scope = { leagueId: candidate.league_id, seasonId: candidate.season_id,
           weekId: candidate.matchup_week_id, matchupId: candidate.matchup_id, providers: ["nhl-completed-games"], nowMs: clock.nowMs() };
         const current = scoringService.readForCorrection(scope);
-        if (current.source.pendingGameCount > 0 || current.source.freshnessStatus !== "fresh" ||
+        if (current.source.gameCollectionAvailable === false || current.source.pendingGameCount > 0 || current.source.pendingWeekGameCount > 0 || current.source.freshnessStatus !== "fresh" ||
             !current.home.scoringRuleVersion || current.home.scoringRuleVersion !== current.away.scoringRuleVersion ||
             !(current.home.scoringRuleVersion === EXPANDED_SCORING_VERSION || /^league-scoring-[a-f0-9-]{36}$/.test(current.home.scoringRuleVersion))) {
           report.awaitingData += 1;

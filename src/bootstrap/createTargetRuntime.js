@@ -2368,6 +2368,7 @@ function createTargetServices({
         afterRefresh: retryLateLocksAfterRefresh,
           frequentRefreshEnabled: nhlStatisticsEfficiencyEnabled,
           isGameRefreshWindow: completedNhlAdapter.isGameRefreshWindow,
+          hasPendingGames: repositories.statisticsSchedule.hasPendingGames,
           afterMaintenance: (nhlStatisticsEfficiencyEnabled || nhlStatisticsRetentionEnabled) ? () => ({
             compactProjectionsPruned: nhlStatisticsEfficiencyEnabled ? repositories.statisticsRetention.pruneCompactTotals() : 0,
             ...(nhlStatisticsRetentionEnabled ? repositories.statisticsRetention.retire(clock.nowMs()) : {}),

@@ -15,20 +15,23 @@ function latestEveningOccurrence(nowMs, times = EVENING_TIMES) {
   throw new Error("The previous statistics refresh slot could not be resolved.");
 }
 
-function createRunCompletedGameStatisticsJob({ repository, statisticsService, nhlSeasonKey, clock, frequentRefreshEnabled = false, isGameRefreshWindow, afterRefresh = async () => {}, afterMaintenance = async () => {}, logger = console, owner = randomUUID() } = {}) {
+function createRunCompletedGameStatisticsJob({ repository, statisticsService, nhlSeasonKey, clock, frequentRefreshEnabled = false, isGameRefreshWindow, hasPendingGames = () => false, afterRefresh = async () => {}, afterMaintenance = async () => {}, logger = console, owner = randomUUID() } = {}) {
   if (!repository?.claim || !repository?.assertLease || !repository?.complete || !statisticsService?.refresh || !clock?.nowMs || !/^\d{8}$/.test(nhlSeasonKey)) throw new TypeError("The completed-game scheduler requires durable storage, statistics and season context.");
-  if (frequentRefreshEnabled && typeof isGameRefreshWindow !== "function") throw new TypeError("Frequent statistics require a game schedule reader.");
+  if (frequentRefreshEnabled && (typeof isGameRefreshWindow !== "function" || typeof hasPendingGames !== "function")) throw new TypeError("Frequent statistics require game schedule and pending-statistics readers.");
   return createJobRunner({ name: "statistics:completed_games", logger, async execute() {
     const nowMs = clock.nowMs();
     let scheduledForMs = latestEveningOccurrence(nowMs);
     if (frequentRefreshEnabled) {
+      const halfHour = nowMs - nowMs % (30 * 60_000);
       try {
-        const halfHour = nowMs - nowMs % (30 * 60_000);
-        const inWindow = await isGameRefreshWindow({ nhlSeasonKey, scheduledForMs: halfHour });
+        const pending = await hasPendingGames({ nhlSeasonKey, nowMs });
+        if (typeof pending !== "boolean") throw new TypeError("Pending NHL statistics are unknown.");
+        const inWindow = pending || await isGameRefreshWindow({ nhlSeasonKey, scheduledForMs: halfHour });
         if (typeof inWindow !== "boolean") throw new TypeError("The NHL refresh window is unknown.");
         scheduledForMs = inWindow ? halfHour : latestEveningOccurrence(nowMs, [8 * 60]);
       } catch {
-        // Keep the proven four-slot service available during a schedule outage.
+        // Unknown readiness must not postpone missing Sunday stats until morning.
+        scheduledForMs = halfHour;
         logger.warn?.("statistics.schedule_fallback", {});
       }
     }

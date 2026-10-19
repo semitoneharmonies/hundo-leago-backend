@@ -204,6 +204,22 @@ for (const pendingBoxState of ["FINAL", "OFF"]) test(`NHL ${pendingBoxState} gam
   assert.deepEqual((await f.adapter.fetchLiveSnapshot(f.input)).totalsRows, finalized.totalsRows);
 });
 
+test("collection tracks pending games even without any rostered players, beyond eight days and after restart", async () => {
+  for (const state of ["FINAL", "OFF"]) {
+    const f = fixture({ change: ({ games, boxes }) => { games[1].gameStateId = 6; boxes.get(String(games[1].id)).gameState = state; } });
+    f.setNow(NOW + 10 * 86400000);
+    const snapshot = await f.adapter.fetchLiveSnapshot({ ...f.input, requiredPlayers: [] });
+    assert.equal(snapshot.playerGameRows.length, 0);
+    assert.deepEqual(snapshot.nhlGameCollection.pendingGames, [{ nhlGameId: "2025020002", startsAtMs: easternStart("2025-10-08T21:00:00") }]);
+  }
+});
+
+for (const disposition of ["PPD"]) test(`collection clears ${disposition} games without inventing results`, async () => {
+  const f = fixture({ change: ({ boxes }) => { boxes.get("2025020002").gameScheduleState = disposition; } });
+  const snapshot = await f.adapter.fetchLiveSnapshot({ ...f.input, requiredPlayers: [] });
+  assert.deepEqual(snapshot.nhlGameCollection.pendingGames, []);
+});
+
 test("completed-game captures overwrite the real SQLite cache without caching pending games", async t => {
   const database = new (require("better-sqlite3"))(":memory:");
   t.after(() => database.close());

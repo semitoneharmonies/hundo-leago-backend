@@ -72,7 +72,7 @@ test("retention failure cannot change a successful refresh into a failed or repl
   assert.equal((await job.run()).status, "skipped"); assert.equal(calls, 1);
 });
 
-test("game-aware scheduling uses half-hour slots, one morning correction and the evening outage fallback", async t => {
+test("game-aware scheduling uses half-hour slots, one morning correction and half-hour outage retries", async t => {
   const { repository: store } = repository(t);
   let now = Date.parse("2026-11-02T02:10:00Z"), inWindow = true, failed = false, calls = 0;
   const job = createRunCompletedGameStatisticsJob({ repository: store,
@@ -86,9 +86,40 @@ test("game-aware scheduling uses half-hour slots, one morning correction and the
   inWindow = false; now = Date.parse("2026-11-02T17:30:00Z");
   assert.equal((await job.run()).scheduledForMs, Date.parse("2026-11-02T16:00:00Z"));
   now += 30 * 60_000; assert.equal((await job.run()).status, "skipped");
-  failed = true; now = Date.parse("2026-11-03T02:01:00Z");
-  assert.equal((await job.run()).scheduledForMs, Date.parse("2026-11-03T02:00:00Z"));
+  failed = true; now = Date.parse("2026-11-03T12:31:00Z");
+  assert.equal((await job.run()).scheduledForMs, Date.parse("2026-11-03T12:30:00Z"));
   assert.equal(calls, 4);
+});
+
+test("pending Sunday statistics keep half-hour slots across midnight, restart and a failed collection", async t => {
+  const { repository: store } = repository(t);
+  let now = Date.parse("2026-10-19T06:30:00Z"), pending = true, failed = false, calls = 0;
+  const options = { repository: store, nhlSeasonKey: "20262027", clock: { nowMs: () => now }, frequentRefreshEnabled: true,
+    hasPendingGames: () => pending, isGameRefreshWindow: async () => false, logger: { error() {}, warn() {} },
+    statisticsService: { async refresh() { calls++; if (failed) throw new Error("collection failed"); return { refreshId: `capture-${calls}` }; } } };
+  for (const instant of ["2026-10-19T06:30:00Z", "2026-10-19T07:00:00Z", "2026-10-19T07:30:00Z", "2026-10-20T14:30:00Z"]) {
+    now = Date.parse(instant);
+    const result = await createRunCompletedGameStatisticsJob(options).run();
+    assert.equal(result.status, "succeeded"); assert.equal(result.scheduledForMs, now);
+    assert.equal((await createRunCompletedGameStatisticsJob(options).run()).status, "skipped");
+  }
+  now += 30 * 60_000; failed = true;
+  assert.equal((await createRunCompletedGameStatisticsJob(options).run()).status, "failed");
+  now += 30 * 60_000; failed = false;
+  assert.equal((await createRunCompletedGameStatisticsJob(options).run()).status, "succeeded");
+  pending = false; now += 30 * 60_000;
+  assert.equal((await createRunCompletedGameStatisticsJob(options).run()).scheduledForMs, Date.parse("2026-10-20T15:00:00Z"));
+  now += 30 * 60_000;
+  assert.equal((await createRunCompletedGameStatisticsJob(options).run()).status, "skipped");
+});
+
+for (const invalid of [null, undefined, "unavailable"]) test(`unknown pending evidence (${invalid}) retains half-hour collection`, async t => {
+  const { repository: store } = repository(t);
+  const now = Date.parse("2026-10-19T12:30:00Z");
+  const job = createRunCompletedGameStatisticsJob({ repository: store, nhlSeasonKey: "20262027", clock: { nowMs: () => now },
+    frequentRefreshEnabled: true, hasPendingGames: () => invalid, isGameRefreshWindow: async () => false,
+    statisticsService: { refresh: async () => ({ refreshId: "recovered" }) }, logger: { error() {}, warn() {} } });
+  assert.equal((await job.run()).scheduledForMs, now);
 });
 
 test("a running refresh prevents another occurrence from claiming the same source", t => {

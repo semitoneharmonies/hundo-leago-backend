@@ -3,6 +3,7 @@ const { assertNhlSeasonKey } = require("../../domain/statistics/statisticsPolicy
 const { EXPANDED_SCORING_VERSION, usesExpandedScoring, emptyScoringStats, addScoringStats } = require("../../domain/statistics/expandedScoringPolicy");
 const { normalizeExpandedReports } = require("./normalizeExpandedReports");
 const { canReuseCompletedGame, completedGameEntry } = require("../../domain/statistics/completedGameCachePolicy");
+const { normalizeNhlGameCollection } = require("../../domain/statistics/nhlGameCollectionPolicy");
 
 const PROVIDER_NAME = "nhl-completed-games";
 const PLAYER_IDENTITY_PROVIDER = "nhl";
@@ -283,6 +284,21 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
       }
       coverage.push({ playerId: player.playerId, providerPlayerId: player.providerPlayerId, providerTeamId: teamId, disposition: entries.length ? "expected_game" : teamId === null ? "no_team" : "no_due_game", games: entries });
     }
+    // Include every NHL game, even if no required player belongs to either team.
+    // A final scoreboard is not enough: state-7 games have had all reports
+    // validated above; other due games remain pending until a later capture.
+    const pendingGames = [];
+    const nextStartAtMs = Math.min(...[...games.values()].filter(game => !game.final && game.startsAtMs > startedAtMs).map(game => game.startsAtMs));
+    for (const game of games.values()) {
+      if (game.final) continue;
+      // Save due games plus the next day's schedule (or the next start on an
+      // off day), not the entire future season in every half-hour capture.
+      if (game.startsAtMs > startedAtMs + DAY_MS && game.startsAtMs !== nextStartAtMs) continue;
+      const state = game.startsAtMs > startedAtMs ? "scheduled" : (await getBox(game)).state;
+      if (state === "final") fail("The NHL game changed state during the snapshot.");
+      if (!["final", "postponed", "cancelled"].includes(state)) pendingGames.push({ nhlGameId: game.id, startsAtMs: game.startsAtMs });
+    }
+    const nhlGameCollection = normalizeNhlGameCollection({ schemaVersion: 1, pendingGames });
     const capturedAtMs = integer(nowMs(), "capture time");
     if (capturedAtMs < startedAtMs || capturedAtMs - startedAtMs > 5 * 60_000) fail("NHL snapshot capture exceeded its consistency window.");
     const expandedScoring = expanded ? {
@@ -292,10 +308,10 @@ function createNhlCompletedGameAdapter({ fetchImpl = fetch, nowMs = Date.now, re
         gamesPlayed: expandedGames.has(`${row.nhlGameId}:${row.playerId}`) ? 1 : 0,
         scoringStats: expandedGames.get(`${row.nhlGameId}:${row.playerId}`) || emptyScoringStats() })),
     } : undefined;
-    const sourceVersion = `nhl-completed-v1:${createHash("sha256").update(JSON.stringify({ season, completed: completed.map(({ id }) => id), totals: [...totals.values()], coverage, playerGameRows, ...(expanded ? { expandedScoring } : {}) })).digest("hex")}`;
+    const sourceVersion = `nhl-completed-v1:${createHash("sha256").update(JSON.stringify({ season, completed: completed.map(({ id }) => id), totals: [...totals.values()], coverage, playerGameRows, nhlGameCollection, ...(expanded ? { expandedScoring } : {}) })).digest("hex")}`;
     if (completedGameCache && cacheUpdates.length) completedGameCache.save(cacheUpdates);
     gameStateSnapshot = { season, observedAtMs: startedAtMs, sourceVersion, games: new Map([...boxscores].map(([id, box]) => [id, { nhlGameId: id, nhlGameScheduledStartsAtMs: box.game.startsAtMs, observedGameState: box.state }])) };
-    return { provider: PROVIDER_NAME, sourceVersion, capturedAtMs, totalsSourceUpdatedAtMs: startedAtMs, totalsRows: [...totals.values()], playerGameRows, playerGameCoverage: { schemaVersion: 1, throughAtMs: capturedAtMs, players: coverage }, ...(expanded ? { expandedScoring } : {}) };
+    return { provider: PROVIDER_NAME, sourceVersion, capturedAtMs, totalsSourceUpdatedAtMs: startedAtMs, totalsRows: [...totals.values()], playerGameRows, playerGameCoverage: { schemaVersion: 1, throughAtMs: capturedAtMs, players: coverage }, nhlGameCollection, ...(expanded ? { expandedScoring } : {}) };
   }
 
   async function fetchGameStates({ nhlSeasonKey, requestedAtMs, games }) {

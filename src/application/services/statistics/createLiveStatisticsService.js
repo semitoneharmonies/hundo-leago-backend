@@ -1,4 +1,5 @@
 const { randomUUID } = require("node:crypto");
+const { normalizeNhlGameCollection } = require("../../../domain/statistics/nhlGameCollectionPolicy");
 const { usesExpandedScoring } = require("../../../domain/statistics/expandedScoringPolicy");
 const { normalizeExpandedSnapshot } = require("../../../domain/statistics/expandedStatisticsSnapshotPolicy");
 
@@ -219,6 +220,7 @@ function createLiveStatisticsService({
     }
 
     let providerResult;
+    let nhlGameCollection;
     try {
       providerResult = await provider.fetchLiveSnapshot({
         nhlSeasonKey: seasonKey,
@@ -265,6 +267,7 @@ function createLiveStatisticsService({
         );
       }
       sourceVersion = canonicalSourceVersion(providerResult.sourceVersion);
+      nhlGameCollection = normalizeNhlGameCollection(providerResult.nhlGameCollection);
       capturedAtMs = providerResult.capturedAtMs;
       normalizedPlayerGames = normalizePlayerGameStatisticsRows({
         rows: providerResult.playerGameRows,
@@ -340,6 +343,7 @@ function createLiveStatisticsService({
       requiredPlayerGames,
       requirementsSha256: requirementSnapshot.requirementsSha256,
       playerGameCoverage: normalizedCoverage.coverage,
+      ...(nhlGameCollection === null ? {} : { nhlGameCollection }),
       ...(occurrenceExecution === undefined ? {} : { occurrenceExecution }),
     };
     let preparation;

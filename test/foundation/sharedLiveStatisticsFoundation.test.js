@@ -16,6 +16,7 @@ const { createMatchupLockService } = require("../../src/application/services/mat
 const { createMatchupLegalityService } = require("../../src/application/services/matchups/createMatchupLegalityService");
 const { emptyScoringStats, EXPANDED_SCORING_VERSION, calculateExpandedScore } = require("../../src/domain/statistics/expandedScoringPolicy");
 const { createSqlitePlayerRepository } = require("../../src/infrastructure/persistence/sqlite/SqlitePlayerRepository");
+const { createSqliteStatisticsScheduleRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteStatisticsScheduleRepository");
 const NOW = Date.parse("2026-12-20T12:00:00Z"), DAY = 86400000;
 const uuid = n => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
@@ -65,6 +66,60 @@ function assertEmptyRefresh(db, id) {
   }
   assert.equal(db.pragma("foreign_key_check").length, 0);
 }
+
+for (const compact of [false, true]) test(`pending-game reads survive restart and clear only after publication (compact=${compact})`, async t => {
+  const { db, repo, start } = fixture(t, { compact });
+  const pending = (nowMs = NOW + 1000) => createSqliteStatisticsScheduleRepository({ database: db }).hasPendingGames({ nhlSeasonKey: "20262027", nowMs });
+  assert.equal(pending(), true, "an absent initial capture needs collection");
+  const c = start(command(100));
+  c.rows[0] = { ...c.rows[0], gamesPlayed: 0, goals: 0, assists: 0, nhlPoints: 0, fantasyPointsHundredths: 0 };
+  c.playerGameRows[0] = { ...c.playerGameRows[0], observedGameState: "in_progress", goals: 0, assists: 0, nhlPoints: 0, fantasyPointsHundredths: 0 };
+  c.playerGameCoverage[0].observedGameState = "in_progress";
+  c.expandedScoring.totalsRows[0].scoringStats = emptyScoringStats();
+  c.expandedScoring.playerGameRows[0].scoringStats = emptyScoringStats();
+  c.expandedScoring.playerGameRows[0].gamesPlayed = 0;
+  repo.completeLiveRefresh(c, await repo.prepareLiveRefresh(c));
+  assert.equal(pending(), true);
+  assert.equal(pending(NOW + 10 * DAY), true, "no six-hour or lookback expiry");
+  const final = start(command(101)), prepared = await repo.prepareLiveRefresh(final);
+  const before = db.serialize();
+  assert.equal(pending(), true, "prepared statistics are not published statistics");
+  assert.deepEqual(db.serialize(), before, "pending reads must not write");
+  assert.throws(() => db.transaction(() => { repo.completeLiveRefresh(final, prepared); throw new Error("rollback"); })(), /rollback/);
+  assert.equal(pending(), true, "rolled-back statistics cannot clear pending games");
+  const committed = start(command(102)); committed.nhlGameCollection = {schemaVersion:1,pendingGames:[]};
+  repo.completeLiveRefresh(committed, await repo.prepareLiveRefresh(committed));
+  const saved = db.serialize();
+  assert.equal(pending(), false);
+  const reopened = new Database(saved); t.after(() => reopened.close());
+  assert.equal(createSqliteStatisticsScheduleRepository({ database: reopened }).hasPendingGames({ nhlSeasonKey: "20262027", nowMs: NOW + 2000 }), false);
+  assert.deepEqual(db.serialize(), saved);
+  assert.deepEqual(db.pragma("foreign_key_check"), []);
+});
+
+for (const compact of [false, true]) test(`all-game collection evidence is atomic, read-only and independent of rostered players (compact=${compact})`, async t => {
+  const { db, repo, start } = fixture(t, { compact });
+  const scope = { nhlSeasonKey: "20262027", nowMs: NOW + 1000 };
+  const pending = () => createSqliteStatisticsScheduleRepository({ database: db }).hasPendingGames(scope);
+  const c = start(command(100));
+  c.nhlGameCollection = { schemaVersion: 1, pendingGames: [{ nhlGameId: "2026020999", startsAtMs: NOW - 10 * DAY }] };
+  repo.completeLiveRefresh(c, await repo.prepareLiveRefresh(c));
+  assert.equal(pending(), true, "a different game's final player rows cannot clear this game");
+  const saved = db.serialize(), restarted = new Database(saved); t.after(() => restarted.close());
+  assert.equal(createSqliteStatisticsScheduleRepository({ database: restarted }).hasPendingGames(scope), true);
+  assert.deepEqual(db.serialize(), saved);
+  const failed = start(command(101)); failed.nhlGameCollection = { schemaVersion: 1, pendingGames: [] };
+  const prepared = await repo.prepareLiveRefresh(failed);
+  assert.throws(() => db.transaction(() => { repo.completeLiveRefresh(failed, prepared); throw new Error("rollback"); })(), /rollback/);
+  assert.equal(pending(), true);
+  const final = start(command(102));
+  final.nhlGameCollection = { schemaVersion: 1, pendingGames: [{ nhlGameId: "2026021000", startsAtMs: NOW + DAY }] };
+  repo.completeLiveRefresh(final, await repo.prepareLiveRefresh(final));
+  assert.equal(pending(), false, "future games do not keep overnight collection running");
+  scope.nowMs = NOW + DAY;
+  assert.equal(pending(), true, "a due game becomes pending even after restart");
+  assert.deepEqual(db.pragma("foreign_key_check"), []);
+});
 
 test("NHL capture conversion preserves identities, participation, observation time and scoring categories", () => {
   const c = command(), shared = buildSharedLiveCapture(c), game = shared.records[0];

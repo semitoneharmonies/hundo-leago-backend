@@ -1592,9 +1592,9 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const scheduled = await optimized.services.league.scheduledJobs.find(job => job.name === "nhl_completed_statistics").runner.run();
     assert.equal(scheduled.status, "succeeded", scheduled.error?.stack ?? JSON.stringify(scheduled));
     assert.equal(scheduled.maintenance.retiredRefreshCount, 0);
-    // This fixture deliberately has no schedule endpoint; retain the established fallback.
-    const { latestEveningOccurrence } = require("../../src/jobs/definitions/runCompletedGameStatistics");
-    assert.equal(scheduled.scheduledForMs, latestEveningOccurrence(options.securityFoundations.clock.nowMs()));
+    // Missing schedule evidence must retain half-hour collection, including overnight.
+    const observedAtMs = options.securityFoundations.clock.nowMs();
+    assert.equal(scheduled.scheduledForMs, observedAtMs - observedAtMs % (30 * 60_000));
     assert.equal(scheduled.maintenance.compactProjectionsPruned, 0);
     assert.equal(database.prepare("SELECT count(*) n FROM compact_stat_refreshes").get().n, 1);
   });

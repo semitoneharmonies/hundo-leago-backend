@@ -1,4 +1,5 @@
 const { usesExpandedScoring } = require("../../../domain/statistics/expandedScoringPolicy");
+const { readNhlGameCollection } = require("../../../domain/statistics/nhlGameCollectionPolicy");
 const { calculateExpandedTeamScore } = require("../../../domain/matchups/expandedMatchupScoringPolicy");
 const {
   calculateTeamLiveScore,
@@ -433,11 +434,19 @@ function createMatchupScoringService({ repository, expandedScoringEnabled = fals
       exclusionsByTeam.set(exclusion.team_id, teamExclusions);
     }
     let pendingGameCount = 0;
+    const pendingWeekGames = new Set();
+    let gameCollectionAvailable = false;
     if (context.refresh.provider === "nhl-completed-games") {
+      const collection = readNhlGameCollection(context.refresh.metadata_json);
+      gameCollectionAvailable = collection !== null;
+      for (const game of collection?.pendingGames ?? []) {
+        if (game.startsAtMs >= context.matchup.week_starts_at_ms && game.startsAtMs < context.matchup.week_ends_at_ms) pendingWeekGames.add(game.nhlGameId);
+      }
       const lockedIds = new Set(context.lockedPlayers.map((row) => row.player_id));
       for (const row of currentPlayerGames.values()) {
-        if (lockedIds.has(row.playerId) && row.nhlGameScheduledStartsAtMs >= context.matchup.week_starts_at_ms && row.nhlGameScheduledStartsAtMs < context.matchup.week_ends_at_ms && !["final", "postponed", "cancelled"].includes(row.observedGameState)) {
-          pendingGameCount += 1;
+        if (row.nhlGameScheduledStartsAtMs >= context.matchup.week_starts_at_ms && row.nhlGameScheduledStartsAtMs < context.matchup.week_ends_at_ms && !["final", "postponed", "cancelled"].includes(row.observedGameState)) {
+          pendingWeekGames.add(row.nhlGameId);
+          if (lockedIds.has(row.playerId)) pendingGameCount += 1;
         }
       }
     }
@@ -498,7 +507,7 @@ function createMatchupScoringService({ repository, expandedScoringEnabled = fals
         refreshId: context.refresh.id,
         completedAtMs: context.refresh.completed_at_ms,
         ...source,
-        ...(context.refresh.provider === "nhl-completed-games" ? { pendingGameCount } : {}),
+        ...(context.refresh.provider === "nhl-completed-games" ? { pendingGameCount, pendingWeekGameCount: pendingWeekGames.size, gameCollectionAvailable } : {}),
       }),
       home: score(context.matchup.home_team_id),
       away: score(context.matchup.away_team_id),

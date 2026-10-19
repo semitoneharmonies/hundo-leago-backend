@@ -37,6 +37,13 @@ test("provider corrections wait for final fresh evidence and preserve finalized 
   state.current.source.pendingGameCount = 1;
   assert.equal(service.reconcile().awaitingData, 1);
   state.current.source.pendingGameCount = 0;
+  state.current.source.pendingWeekGameCount = 1;
+  assert.equal(service.reconcile().awaitingData, 1);
+  assert.equal(state.committed.length, 0);
+  state.current.source.pendingWeekGameCount = 0;
+  state.current.source.gameCollectionAvailable = false;
+  assert.equal(service.reconcile().awaitingData, 1);
+  state.current.source.gameCollectionAvailable = true;
   state.current.source.freshnessStatus = "stale";
   assert.equal(service.reconcile().awaitingData, 1);
   assert.equal(state.committed.length, 0);

@@ -1,4 +1,5 @@
 const { randomUUID } = require("node:crypto");
+const { normalizeNhlGameCollection } = require("../../../domain/statistics/nhlGameCollectionPolicy");
 
 const { persistExpandedStatistics } = require("./expandedStatisticsPersistence");
 const {
@@ -574,7 +575,7 @@ function createSqliteStatisticsRepository({
   const succeedRefresh = database.prepare(
     "UPDATE stat_refreshes SET source_version = @sourceVersion, status = 'succeeded', " +
       "completed_at_ms = @completedAtMs, player_count = @playerCount, error_code = NULL, " +
-      "metadata_json = NULL, version = version + 1 " +
+      "metadata_json = @metadataJson, version = version + 1 " +
       "WHERE id = @refreshId AND status = 'started'"
   );
   const rejectRefresh = database.prepare(
@@ -788,6 +789,7 @@ function createSqliteStatisticsRepository({
       sourceVersion: command.sourceVersion,
       completedAtMs: command.completedAtMs,
       playerCount: command.rows.length,
+      metadataJson: null,
     });
     if (update.changes !== 1) {
       throw repositoryError(
@@ -1068,6 +1070,7 @@ function createSqliteStatisticsRepository({
       sourceVersion: command.sourceVersion,
       completedAtMs: command.completedAtMs,
       playerCount: command.rows.length,
+      metadataJson: command.nhlGameCollection == null ? null : JSON.stringify({ nhlGameCollection: normalizeNhlGameCollection(command.nhlGameCollection) }),
     });
     if (update.changes !== 1) {
       throw repositoryError(
@@ -1245,6 +1248,7 @@ function createSqliteStatisticsRepository({
           completedAtMs: safeTimestamp(command?.completedAtMs),
           rows: command?.rows,
           playerGameRows: command?.playerGameRows,
+          nhlGameCollection: normalizeNhlGameCollection(command?.nhlGameCollection),
           ...(command?.expandedScoring === undefined ? {} : { expandedScoring: command.expandedScoring }),
           requiredPlayers:
             declaredRequirements.requiredPlayers,

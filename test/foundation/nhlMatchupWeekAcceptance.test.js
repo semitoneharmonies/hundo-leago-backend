@@ -20,6 +20,8 @@ const { createSqliteMatchupResultRepository } = require("../../src/infrastructur
 const { createMatchupStandingsService } = require("../../src/application/services/matchups/createMatchupStandingsService");
 const { createSqliteMatchupStandingsRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteMatchupStandingsRepository");
 const { inspectNhlStatisticsReadiness } = require("../../src/operations/statistics/inspectNhlStatisticsReadiness");
+const { createSqliteStatisticsScheduleRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteStatisticsScheduleRepository");
+const { createRunCompletedGameStatisticsJob } = require("../../src/jobs/definitions/runCompletedGameStatistics");
 
 const uuid = (n) => `30000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const START = Date.parse("2026-10-12T07:00:00Z"), HOUR = 3_600_000, END = START + 168 * HOUR;
@@ -97,23 +99,26 @@ test("NHL completed-game source carries an accelerated week through locks, late 
     { id:2026020001,easternStartTime:"2026-10-11T19:00:00",goals:1,assists:0 },
     { id:2026020002,easternStartTime:"2026-10-12T19:30:00",goals:1,assists:0 },
     { id:2026020003,easternStartTime:"2026-10-14T19:00:00",goals:0,assists:1 },
-    { id:2026020004,easternStartTime:"2026-10-19T01:30:00",goals:0,assists:0 },
+    { id:2026020004,easternStartTime:"2026-10-18T16:00:00",goals:0,assists:0 },
     { id:2026020005,easternStartTime:"2026-10-19T19:00:00",goals:3,assists:0 },
     { id:2026020006,easternStartTime:"2026-10-12T02:30:00",goals:2,assists:0 },
   ].map((game)=>({...game,season:20262027,gameType:2,homeTeamId:13,visitingTeamId:16,startsAtMs:easternStart(game.easternStartTime)}));
-  const final=(game)=>now>=game.startsAtMs+3*HOUR;
-  const stats=(game)=>catalog.map((player,i)=>({ playerId:Number(player.providerPlayerId),gameId:game.id,homeRoad:i<18?"H":"R",gamesPlayed:1,goals:game.goals,assists:game.assists,points:game.goals+game.assists }));
+  const final=(game)=>now >= (game.id === 2026020004 ? END + 10 * HOUR : game.startsAtMs+3*HOUR);
+  const stats=(game)=>catalog.map((player,i)=>{
+    const goals = game.id === 2026020004 ? (i < 18 ? 0 : 2) : game.goals;
+    return { playerId:Number(player.providerPlayerId),gameId:game.id,homeRoad:i<18?"H":"R",gamesPlayed:1,goals,assists:game.assists,points:goals+game.assists };
+  });
   const fetchImpl=async(uri)=>{
     calls+=1;
     if(offline) return {ok:false,status:503};
     const url=new URL(uri);let data;
-    if(url.pathname.endsWith("/game")) data={data:games.map((game)=>({...game,gameStateId:final(game)?7:now>=game.startsAtMs?3:1})),total:games.length};
+    if(url.pathname.endsWith("/game")) data={data:games.map((game)=>({...game,gameStateId:final(game)?7:now>=game.startsAtMs+3*HOUR?6:now>=game.startsAtMs?3:1})),total:games.length};
     else if(url.pathname.endsWith("/summary")) {
       const selected=url.searchParams.get("cayenneExp").match(/\d{10}/g).map(Number);
       const rows=games.filter((game)=>selected.includes(game.id)).flatMap(stats).sort((a,b)=>a.playerId-b.playerId||a.gameId-b.gameId);
       const start=Number(url.searchParams.get("start"));data={data:rows.slice(start,start+100),total:rows.length};
     } else if(url.pathname.endsWith("/landing")) {const id=Number(url.pathname.split("/").at(-2));data={playerId:id,position:"D",currentTeamId:id<8478018?13:16,isActive:true};}
-    else {const game=games.find((row)=>String(row.id)===url.pathname.split("/").at(-2));const rows=stats(game);data={id:game.id,season:20262027,gameType:2,startTimeUTC:new Date(game.startsAtMs).toISOString(),homeTeam:{id:13},awayTeam:{id:16},gameState:final(game)?"OFF":now>=game.startsAtMs?"LIVE":"FUT",gameScheduleState:"OK",playerByGameStats:{homeTeam:{forwards:rows.slice(0,18),defense:[]},awayTeam:{forwards:rows.slice(18),defense:[]}}};}
+    else {const game=games.find((row)=>String(row.id)===url.pathname.split("/").at(-2));const rows=stats(game);data={id:game.id,season:20262027,gameType:2,startTimeUTC:new Date(game.startsAtMs).toISOString(),homeTeam:{id:13},awayTeam:{id:16},gameState:now>=game.startsAtMs+3*HOUR?"OFF":now>=game.startsAtMs?"LIVE":"FUT",gameScheduleState:"OK",playerByGameStats:{homeTeam:{forwards:rows.slice(0,18),defense:[]},awayTeam:{forwards:rows.slice(18),defense:[]}}};}
     return {ok:true,json:async()=>data};
   };
   const statsRepository=createSqliteStatisticsRepository({database});
@@ -151,14 +156,42 @@ test("NHL completed-game source carries an accelerated week through locks, late 
   assert.equal(statsRepository.readLatestSeason({provider:PROVIDER_NAME,nhlSeasonKey:"20262027"}).refresh.id,prior);
   offline=false;now=END;await statistics.refresh();weeks.advance(input());
   assert.equal(results.finalize({...input(),operationId:uuid(500)}).waiting.reasonCode,"NHL_GAMES_NOT_COMPLETE");
+  const waitWithoutResults = () => {
+    const before = database.serialize();
+    assert.equal(results.finalize({...input(),operationId:uuid(500)}).finalized, false);
+    assert.equal(database.prepare("SELECT count(*) n FROM matchup_results").get().n, 0);
+    const table = standings.read({leagueId:uuid(1),seasonId:uuid(2)});
+    assert.equal(table.finalizedResultCount, 0);
+    for (const row of table.rows) { assert.equal(row.wins, 0); assert.equal(row.losses, 0); }
+    assert.deepEqual(database.serialize(), before);
+  };
+  assert.ok(scoring.readLive(input()).home.scoreHundredths > scoring.readLive(input()).away.scoreHundredths);
+  const scheduled = () => {
+    const store = createSqliteStatisticsScheduleRepository({database});
+    return createRunCompletedGameStatisticsJob({ repository: store, statisticsService: statistics, nhlSeasonKey: "20262027",
+      clock: {nowMs:()=>now}, frequentRefreshEnabled: true, hasPendingGames: store.hasPendingGames,
+      isGameRefreshWindow: async()=>false, logger:{error(){},warn(){}} });
+  };
+  for (const hour of [0.5, 1, 8, 8.5, 9]) {
+    now = END + hour * HOUR; offline = hour === 8;
+    const collected = await scheduled().run();
+    assert.equal(collected.status, offline ? "failed" : "succeeded");
+    assert.equal(collected.scheduledForMs, now);
+    assert.equal(scoring.readLive(input()).source.pendingWeekGameCount, 1);
+    waitWithoutResults();
+  }
+  offline=false; now=END+10*HOUR;
+  assert.equal((await scheduled().run()).status, "succeeded");
+  assert.equal(scoring.readLive(input()).source.pendingWeekGameCount, 0);
   // Delay until the following Monday's game has also completed: it must not enter this week's result.
   now=END+23*HOUR;await statistics.refresh();
-  const score=scoring.readLive(input());assert.equal(score.home.scoreHundredths,4050);assert.equal(score.away.scoreHundredths,1800);
+  const score=scoring.readLive(input());assert.equal(score.home.scoreHundredths,4050);assert.equal(score.away.scoreHundredths,6300);
   const command={...input(),operationId:uuid(501)};
   assert.equal(results.finalize(command).finalized,true);
   assert.equal(results.finalize(command).replayed,true);
   assert.equal(database.prepare("SELECT status FROM matchup_weeks WHERE id=?").get(uuid(3)).status,"final");
   const table=standings.read({leagueId:uuid(1),seasonId:uuid(2)});
-  assert.equal(table.rows[0].teamId,uuid(30));assert.equal(table.rows[0].wins,1);
+  assert.equal(table.rows[0].teamId,uuid(31));assert.equal(table.rows[0].wins,1);
+  assert.equal(table.rows[1].losses,1);
   assert.deepEqual(database.pragma("foreign_key_check"),[]);
 });

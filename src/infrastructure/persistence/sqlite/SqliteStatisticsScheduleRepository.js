@@ -1,4 +1,6 @@
 const { randomUUID } = require("node:crypto");
+const { assertNhlSeasonKey } = require("../../../domain/statistics/statisticsPolicy");
+const { readNhlGameCollection } = require("../../../domain/statistics/nhlGameCollectionPolicy");
 const JOB_TYPE = "statistics:completed_games";
 const LEASE_MS = 10 * 60_000;
 const RETRY_MS = 15 * 60_000;
@@ -23,6 +25,20 @@ function createSqliteStatisticsScheduleRepository({ database, createId = randomU
     if (!current || current.id !== lease.id || current.version !== lease.version || current.lease_owner !== lease.lease_owner || current.lease_expires_at_ms <= nowMs || current.status !== "running") throw Object.assign(new Error("The statistics schedule lease expired or changed."), { code: "NHL_STATISTICS_LEASE_LOST" });
   }
   return Object.freeze({
+    hasPendingGames({ nhlSeasonKey, nowMs }) {
+      assertNhlSeasonKey(nhlSeasonKey);
+      if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new TypeError("A safe pending-statistics time is required.");
+      // Read the published capture, never the provider cache: downloading a game
+      // does not prove that its statistics were successfully committed.
+      const refresh = database.prepare(`SELECT r.id,r.metadata_json FROM stat_refreshes r
+        JOIN stat_sources s ON s.id=r.stat_source_id
+        WHERE s.provider='nhl-completed-games' AND r.nhl_season_key=? AND r.status='succeeded'
+        ORDER BY r.completed_at_ms DESC,r.started_at_ms DESC,r.id DESC LIMIT 1`).get(nhlSeasonKey);
+      if (!refresh) return true;
+      const collection = readNhlGameCollection(refresh.metadata_json);
+      // Older captures cannot prove completion for games without rostered players.
+      return collection === null || collection.pendingGames.some(game => game.startsAtMs <= nowMs);
+    },
     claim: (input) => claim.immediate(input),
     assertLease,
     complete({ lease, nowMs, result = null, errorCode = null }) {

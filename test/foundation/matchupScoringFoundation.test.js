@@ -768,6 +768,27 @@ function input(nowMs = NOW_MS, provider = "sportsdataio-live") {
   };
 }
 
+test("week readiness includes unrostered Sunday games but excludes Monday and older weeks", t => {
+  const { database } = createRuntime(t, { provider: "nhl-completed-games" });
+  const repository = createSqliteMatchupScoringRepository({ database });
+  const scope = input(NOW_MS, "nhl-completed-games"), context = repository.readContext(scope);
+  const end = context.matchup.week_ends_at_ms, start = context.matchup.week_starts_at_ms;
+  const pendingGames = [
+    { nhlGameId: "2026020997", startsAtMs: start - 1 },
+    { nhlGameId: "2026020998", startsAtMs: end - 1 },
+    { nhlGameId: "2026020999", startsAtMs: end },
+  ];
+  const service = createMatchupScoringService({ repository: {
+    readContext: () => ({ ...context, refresh: { ...context.refresh, metadata_json: JSON.stringify({ nhlGameCollection: { schemaVersion: 1, pendingGames } }) } }),
+  } });
+  const before = database.serialize(), score = service.readLive(scope);
+  assert.equal(score.source.pendingGameCount, 0);
+  assert.equal(score.source.pendingWeekGameCount, 1);
+  pendingGames.splice(1, 1);
+  assert.equal(service.readLive(scope).source.pendingWeekGameCount, 0);
+  assert.deepEqual(database.serialize(), before);
+});
+
 function persistFinalResult(database, homeScore = 325) {
   database.transaction(() => {
     database.prepare(
