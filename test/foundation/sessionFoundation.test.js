@@ -268,13 +268,15 @@ describe("M3-04 session timing policy", () => {
         SESSION_REFRESH_INTERVAL_MS,
       idleExpiresAtMs:
         CREATED_AT_MS +
-        SESSION_REFRESH_INTERVAL_MS +
-        SESSION_IDLE_LIFETIME_MS,
+        SESSION_ABSOLUTE_LIFETIME_MS,
     });
   });
 
   test("expires at exact idle and absolute boundaries and caps refresh at absolute expiry", () => {
-    const row = sessionRecord(1, uuid(1));
+    const row = sessionRecord(1, uuid(1), {
+      idle_expires_at_ms: CREATED_AT_MS + 12 * 60 * 60 * 1000,
+      absolute_expires_at_ms: CREATED_AT_MS + 7 * 24 * 60 * 60 * 1000,
+    });
     assert.deepEqual(
       evaluateSession(
         row,
@@ -331,6 +333,28 @@ describe("M3-04 session timing policy", () => {
       ).reasonCode,
       SESSION_POLICY_CODES.absoluteExpired
     );
+  });
+
+  test("keeps an inactive new device signed in until exactly 30 days without extending saved legacy deadlines", () => {
+    const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+    const row = sessionRecord(1, uuid(1));
+    assert.equal(SESSION_IDLE_LIFETIME_MS, thirtyDays);
+    assert.equal(SESSION_ABSOLUTE_LIFETIME_MS, thirtyDays);
+    for (const elapsed of [13 * 60 * 60 * 1000, 8 * 24 * 60 * 60 * 1000, thirtyDays - 1]) {
+      const result = evaluateSession(row, CREATED_AT_MS + elapsed);
+      assert.equal(result.valid, true);
+      assert.equal(result.refresh.idleExpiresAtMs, CREATED_AT_MS + thirtyDays);
+    }
+    assert.equal(evaluateSession(row, CREATED_AT_MS + thirtyDays).reasonCode,
+      SESSION_POLICY_CODES.absoluteExpired);
+    const legacy = sessionRecord(2, uuid(1), {
+      idle_expires_at_ms: CREATED_AT_MS + 12 * 60 * 60 * 1000,
+      absolute_expires_at_ms: CREATED_AT_MS + 7 * 24 * 60 * 60 * 1000,
+    });
+    const before = { ...legacy };
+    assert.equal(evaluateSession(legacy, CREATED_AT_MS + 13 * 60 * 60 * 1000).reasonCode,
+      SESSION_POLICY_CODES.idleExpired);
+    assert.deepEqual(legacy, before);
   });
 
   test("rejects revoked, expired, malformed, and backward-clock state safely", () => {
@@ -725,8 +749,7 @@ describe("M3-04 sensitive SQLite session repository", () => {
           SESSION_REFRESH_INTERVAL_MS,
         idleExpiresAtMs:
           CREATED_AT_MS +
-          SESSION_REFRESH_INTERVAL_MS +
-          SESSION_IDLE_LIFETIME_MS,
+          SESSION_ABSOLUTE_LIFETIME_MS,
       });
     assert.equal(refreshed.version, 2);
     assert.equal(
@@ -1297,6 +1320,11 @@ describe("M3-04 session cookie transport", () => {
   const rawToken = Buffer.alloc(32, 9).toString(
     "base64url"
   );
+
+  test("keeps the browser cookie aligned with the 30-day server limit", () => {
+    assert.equal(SESSION_COOKIE_MAX_AGE_SECONDS, 30 * 24 * 60 * 60);
+    assert.equal(SESSION_COOKIE_MAX_AGE_SECONDS * 1000, SESSION_ABSOLUTE_LIFETIME_MS);
+  });
 
   test("serializes and clears the exact insecure-local HttpOnly Lax cookie", () => {
     const cookie = createSessionCookie({

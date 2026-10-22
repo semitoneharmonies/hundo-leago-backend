@@ -1,6 +1,6 @@
 const { createMatchupScoringService } = require('./createMatchupScoringService');
 const { calculateMatchupGameProgress } = require('../../../domain/matchups/matchupGameProgressPolicy');
-const { calculateMatchupDay } = require('../../../domain/matchups/matchupDayPolicy');
+const { calculateMatchupDay, calculateMatchupDays } = require('../../../domain/matchups/matchupDayPolicy');
 
 function createMatchupGameProgressService({ leagueAuthorization, readRepository, scoringRepository, scheduleRepository, scheduleAdapter, statisticsProviders, clock, expandedScoringEnabled = false }) {
   return Object.freeze({
@@ -36,7 +36,8 @@ function createMatchupGameProgressService({ leagueAuthorization, readRepository,
       const timeZone = scheduleRepository?.readWeek(scope)?.timezone;
       const progress = calculateMatchupGameProgress({ context, scoring, schedule, timeZone, asOfMs: scoreInput.nowMs });
       const day = calculateMatchupDay({ context, scoring, progress, timeZone, asOfMs: scoreInput.nowMs });
-      return { ...base, sourceRefreshId: context.refresh.id, ...progress, day };
+      const days = calculateMatchupDays({ context, scoring, progress, timeZone, asOfMs: scoreInput.nowMs });
+      return { ...base, sourceRefreshId: context.refresh.id, ...progress, day, days };
     },
   });
 }

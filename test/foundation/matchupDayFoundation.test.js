@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { calculateMatchupDay } = require('../../src/domain/matchups/matchupDayPolicy');
+const { calculateMatchupDay, calculateMatchupDays } = require('../../src/domain/matchups/matchupDayPolicy');
 const { calculateMatchupGameProgress } = require('../../src/domain/matchups/matchupGameProgressPolicy');
 const { calculateExpandedTeamScore } = require('../../src/domain/matchups/expandedMatchupScoringPolicy');
 const { emptyScoringStats, defaultScoringWeights } = require('../../src/domain/statistics/expandedScoringPolicy');
@@ -40,7 +40,8 @@ function project(data) {
     weekStartsAtMs: context.matchup.week_starts_at_ms, weekEndsAtMs: context.matchup.week_ends_at_ms, scoringRule: context.scoringRule,
   })]));
   const progress = calculateMatchupGameProgress({ ...data, scoring });
-  return { weekly: scoring, day: calculateMatchupDay({ ...data, scoring, progress }) };
+  const input = { ...data, scoring, progress };
+  return { weekly: scoring, day: calculateMatchupDay(input), days: calculateMatchupDays(input) };
 }
 
 test('Day uses league-local game dates, accepted points, pending zeroes and no off-day players or scratches', () => {
@@ -101,4 +102,83 @@ test('postponements and half-open week boundaries never create Day points', () =
   data.context.matchup.week_ends_at_ms = ms('2026-10-16T02:00Z');
   assert.equal(project(data).day.home.scoreHundredths, 0);
   assert.deepEqual(project(data).day.home.players, []);
+});
+
+test('selectable past, current and future days use one actual observation clock and preserve weekly totals', () => {
+  const data = fixture(), before = structuredClone(data);
+  const { day, days, weekly } = project(data);
+  assert.deepEqual(days.map(item => item.date), ['2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18']);
+  assert.ok(days.every(item => item.asOfMs === data.asOfMs && item.timeZone === data.timeZone));
+  assert.deepEqual(days.find(item => item.date === day.date), day);
+  assert.equal(days[2].home.scoreHundredths, 1200);
+  assert.equal(days[3].home.scoreHundredths, 300);
+  assert.equal(days[4].home.scoreHundredths, 0);
+  assert.deepEqual(days[4].home.players.map(player => player.playerId), ['off']);
+  assert.equal(days.reduce((sum, item) => sum + item.home.scoreHundredths, 0), weekly.home.scoreHundredths);
+  assert.deepEqual(data, before);
+});
+
+test('completed weeks retain their selectable dates when today is outside the matchup', () => {
+  const data = fixture();
+  data.context.matchup.status = 'final';
+  data.asOfMs = ms('2026-10-25T04:00Z');
+  const { day, days } = project(data);
+  assert.equal(day.date, '2026-10-24');
+  assert.deepEqual(day.home.players, []);
+  assert.equal(days[2].home.scoreHundredths, 1200);
+  assert.equal(days[3].home.scoreHundredths, 300);
+  assert.deepEqual(days[4].home.players, []);
+});
+
+test('day choices cover partial calendar days, nine-day opening weeks and fourteen-day playoff weeks', () => {
+  for (const [start, end, count, first, last] of [
+    ['2026-10-14T19:00Z', '2026-10-20T19:00Z', 7, '2026-10-14', '2026-10-20'],
+    ['2026-10-12T07:00Z', '2026-10-21T07:00Z', 9, '2026-10-12', '2026-10-20'],
+    ['2026-10-12T07:00Z', '2026-10-26T07:00Z', 14, '2026-10-12', '2026-10-25'],
+  ]) {
+    const data = fixture();
+    Object.assign(data.context.matchup, { week_starts_at_ms: ms(start), week_ends_at_ms: ms(end) });
+    const { days } = project(data);
+    assert.equal(days.length, count);
+    assert.equal(days[0].date, first);
+    assert.equal(days.at(-1).date, last);
+  }
+});
+
+test('DST changes preserve every calendar date exactly once and respect exclusive week ends', () => {
+  for (const [start, end, first, last] of [
+    ['2026-03-02T08:00Z', '2026-03-09T07:00Z', '2026-03-02', '2026-03-08'],
+    ['2026-10-26T07:00Z', '2026-11-02T08:00Z', '2026-10-26', '2026-11-01'],
+  ]) {
+    const data = fixture();
+    Object.assign(data.context.matchup, { week_starts_at_ms: ms(start), week_ends_at_ms: ms(end) });
+    const dates = project(data).days.map(item => item.date);
+    assert.equal(dates.length, 7);
+    assert.equal(new Set(dates).size, 7);
+    assert.equal(dates[0], first);
+    assert.equal(dates.at(-1), last);
+  }
+});
+
+test('selected dates keep sealed late-lock exclusions and unavailable scoring isolated by date', () => {
+  const data = fixture();
+  Object.assign(data.context.locks[0], { lock_type: 'late', locked_at_ms: ms('2026-10-16T02:05Z') });
+  data.context.exclusions.push({ team_id: 'home', player_id: 'h1', nhl_game_id: 'today' });
+  assert.equal(project(data).days[3].home.scoreHundredths, 0);
+  data.schedule = null;
+  data.context.locks[1].legal = 0;
+  const { days } = project(data);
+  assert.ok(days.every(day => day.home.status === 'unavailable' && day.home.scoreHundredths === null));
+  assert.ok(days.every(day => day.away.status === 'not_scoring' && day.away.scoreHundredths === 0));
+});
+
+test('invalid or out-of-week date requests cannot invent a selectable day', () => {
+  const data = fixture();
+  for (const date of ['2026-10-11', '2026-10-19', '2026-02-30', 'invalid', null]) {
+    assert.equal(project({ ...data, date }).day, null);
+  }
+  for (const [start, end] of [[1, 1], [2, 1], [NaN, 3], [1, Infinity]]) {
+    assert.deepEqual(calculateMatchupDays({ ...data, context: { matchup: { week_starts_at_ms: start, week_ends_at_ms: end } } }), []);
+  }
+  assert.deepEqual(calculateMatchupDays({ ...data, timeZone: 'invalid-zone' }), []);
 });

@@ -1,5 +1,9 @@
+const {
+  SESSION_ABSOLUTE_LIFETIME_MS,
+} = require("../../domain/accounts/sessionPolicy");
+
 const SESSION_COOKIE_MAX_AGE_SECONDS =
-  7 * 24 * 60 * 60;
+  SESSION_ABSOLUTE_LIFETIME_MS / 1000;
 const LOCAL_SESSION_COOKIE_NAME = "hl_session";
 const HOST_SESSION_COOKIE_NAME =
   "__Host-hl_session";

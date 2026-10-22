@@ -1,12 +1,35 @@
 const { calculateExpandedTeamScore } = require('./expandedMatchupScoringPolicy');
 
+function matchupDates({ context, timeZone }) {
+  const startsAtMs = context?.matchup?.week_starts_at_ms;
+  const endsAtMs = context?.matchup?.week_ends_at_ms;
+  if (!timeZone || !Number.isSafeInteger(startsAtMs) || !Number.isSafeInteger(endsAtMs) || endsAtMs <= startsAtMs) return [];
+  let first, last;
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    first = formatter.format(new Date(startsAtMs));
+    last = formatter.format(new Date(endsAtMs - 1));
+  } catch { return []; }
+  // Advance calendar labels in UTC, not elapsed 24-hour periods in the league's
+  // timezone. A DST change must neither repeat nor omit a selectable day.
+  const cursor = new Date(`${first}T00:00:00.000Z`);
+  const end = Date.parse(`${last}T00:00:00.000Z`);
+  const dates = [];
+  while (cursor.getTime() <= end) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+}
+
 // Called only after the ordinary scorer has verified the complete sealed context.
 // Filtering that accepted evidence by local game date never changes saved scores.
-function calculateMatchupDay({ context, scoring, progress, timeZone, asOfMs }) {
+function calculateMatchupDay({ context, scoring, progress, timeZone, asOfMs, date: requestedDate }) {
   if (!timeZone || !Number.isSafeInteger(asOfMs)) return null;
+  if (requestedDate !== undefined && !matchupDates({ context, timeZone }).includes(requestedDate)) return null;
   const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
   const dateOf = ms => formatter.format(new Date(ms));
-  const date = dateOf(asOfMs);
+  const date = requestedDate ?? dateOf(asOfMs);
   const observations = context.playerGameObservations.filter(row => dateOf(row.nhl_game_scheduled_starts_at_ms) === date);
   const currentPlayerGames = new Map(observations.map(row => [`${row.player_id}\u0000${row.nhl_game_id}`, {
     playerId: row.player_id, nhlGameId: row.nhl_game_id,
@@ -35,4 +58,8 @@ function calculateMatchupDay({ context, scoring, progress, timeZone, asOfMs }) {
   return { date, timeZone, asOfMs, home: side('home'), away: side('away') };
 }
 
-module.exports = { calculateMatchupDay };
+function calculateMatchupDays(input) {
+  return matchupDates(input).map(date => calculateMatchupDay({ ...input, date })).filter(Boolean);
+}
+
+module.exports = { calculateMatchupDay, calculateMatchupDays };

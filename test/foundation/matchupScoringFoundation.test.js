@@ -1558,11 +1558,18 @@ test('game progress uses canonical accepted scoring, original final refresh and 
   assert.deepEqual(live.day.home.players.map(player => player.playerId), [IDS.player]);
   assert.equal(live.day.away.status, 'not_scoring');
   assert.deepEqual(live.day.away.players, []);
+  assert.deepEqual(live.days.map(day => day.date), ['1970-01-08', '1970-01-09']);
+  assert.ok(live.days.every(day => day.asOfMs === NOW_MS && day.timeZone === 'America/Vancouver'));
+  assert.deepEqual(live.days.find(day => day.date === live.day.date), live.day);
+  assert.equal(live.days[0].home.players[0].gamesPlayedDelta, 1);
+  assert.equal(live.days[1].home.players[0].gamesPlayedDelta, 0);
+  assert.equal(scheduleReads, 1);
   scheduleFails = true;
   const unavailable = await progress.read(scope);
   assert.deepEqual(unavailable.home, { teamId: IDS.home, status: 'schedule_unavailable', tallied: 1, remaining: null, total: null });
   assert.equal(unavailable.day.home.status, 'unavailable');
   assert.equal(unavailable.day.home.scoreHundredths, null);
+  assert.ok(unavailable.days.every(day => day.home.status === 'unavailable' && day.home.scoreHundredths === null));
   await assert.rejects(progress.read({ ...scope, leagueId: IDS.otherLeague }), { code: 'MATCHUP_INTEGRATION_MATCHUP_MISSING' });
   await assert.rejects(progress.read({ ...scope, weekId: uuid(9000) }), { code: 'MATCHUP_INTEGRATION_MATCHUP_MISSING' });
   assert.deepEqual(database.serialize(), before);
