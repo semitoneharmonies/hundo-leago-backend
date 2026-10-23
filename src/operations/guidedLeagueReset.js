@@ -33,7 +33,9 @@ const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex
 const encode=row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[key,Buffer.isBuffer(value)?{$binary:value.toString('base64')}:value]));
 const decode=row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[key,value&&typeof value==='object'&&Object.keys(value).join()==='$binary'?Buffer.from(value.$binary,'base64'):value]));
 function validateDatabase(db){
- if(![84,85,86].includes(db.pragma('user_version',{simple:true}))||db.pragma('foreign_keys',{simple:true})!==1)fail('This schema needs reset compatibility review.','LEAGUE_RESET_UNAVAILABLE');
+ // Schema 87 adds independent Tip Jar records. They remain outside the reset
+ // archive and changed tables, so protectedFingerprint preserves them in full.
+ if(![84,85,86,87].includes(db.pragma('user_version',{simple:true}))||db.pragma('foreign_keys',{simple:true})!==1)fail('This schema needs reset compatibility review.','LEAGUE_RESET_UNAVAILABLE');
 }
 function rows(db,table,leagueId){return db.prepare(`SELECT * FROM ${quote(table)} WHERE ${table==='leagues'?'id':'league_id'}=? ORDER BY rowid`).all(leagueId).map(encode);}
 function capture(db,leagueId){validateDatabase(db);return {schemaVersion:SCHEMA_VERSION,leagueId,tables:Object.fromEntries(CHANGED_TABLES.map(t=>[t,rows(db,t,leagueId)]))};}
