@@ -4,6 +4,9 @@ const { createPushRouter } = require('../transport/http/createPushRouter');
 const { createWebPushAdapter } = require('../infrastructure/push/createWebPushAdapter');
 const { rosterLegality } = require('../domain/activity/pushPolicy');
 const { createJobRunner } = require('../jobs/runJob');
+const { createTipJarService } = require("../application/services/games/createTipJarService");
+const { createSqliteTipJarRepository } = require("../infrastructure/persistence/sqlite/SqliteTipJarRepository");
+const { createTipJarRouter } = require("../transport/http/createTipJarRouter");
 const { createQuoteService } = require("../application/services/activity/createQuoteService");
 const { createSqliteQuoteRepository } = require("../infrastructure/persistence/sqlite/SqliteQuoteRepository");
 const { createQuoteRouter } = require("../transport/http/createQuoteRouter");
@@ -816,6 +819,9 @@ const SPORTSDATAIO_LIVE_UUID_V4_PATTERN =
 const SPORTSDATAIO_LIVE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const TARGET_ENDPOINTS = Object.freeze([
+  ["GET", "/api/v1/leagues/:leagueId/tip-jar/leaderboard", "tipJar"],
+  ["POST", "/api/v1/leagues/:leagueId/tip-jar/runs", "tipJar"],
+  ["POST", "/api/v1/leagues/:leagueId/tip-jar/runs/:runId/checkpoint", "tipJar"],
   ['GET', '/api/v1/push/settings', 'push'],
   ['POST', '/api/v1/push/settings', 'push'],
   ['POST', '/api/v1/push/subscriptions', 'push'],
@@ -1893,6 +1899,7 @@ function createTargetRepositories({
     restrictedNoImprovementFallbackWriter,
     leagueActivity: createSqliteLeagueActivityRepository({ database }),
     leagueAnnouncements: database.pragma("user_version", { simple: true }) >= 67 ? createSqliteLeagueAnnouncementRepository({ database }) : null,
+    tipJar: database.pragma("user_version", { simple: true }) >= 87 ? createSqliteTipJarRepository({ database }) : null,
     quotes: database.pragma("user_version", { simple: true }) >= 85 ? createSqliteQuoteRepository({ database }) : null,
     leagueAccess: createSqliteLeagueAccessRepository({
       database,
@@ -2911,6 +2918,8 @@ function createTargetServices({
       clock,
       secureRandom,
     }),
+    tipJar: createTipJarService({ repositoryContext: repositories.context, repository: repositories.tipJar,
+      leagueAuthorization, teamAuthorization, teamAuthorityRepository: repositories.teamAuthority, clock, secureRandom }),
     quotes: createQuoteService({ repositoryContext: repositories.context, repository: repositories.quotes,
       leagueAuthorization, platformAuthorization, auditRepository: repositories.audit, clock, secureRandom }),
     auction: createAuctionService({
@@ -3270,6 +3279,7 @@ function createTargetRouters({
     networkSourceResolver,
   };
   const routers = Object.freeze({
+    tipJar: createTipJarRouter({ requestSecurity, tipJarService: services.league.tipJar }),
     quote: createQuoteRouter({ requestSecurity, quoteService: services.league.quotes }),
     leagueAnnouncement: createLeagueAnnouncementRouter({
       requestSecurity,

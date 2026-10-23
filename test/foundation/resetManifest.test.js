@@ -193,6 +193,8 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
     assert.deepEqual(
       RESET_V1_POST_RESET_TABLE_POLICY,
       [
+        { tableName: "tip_jar_runs", introducedByMigrationId: 87, treatment: "require_empty" },
+        { tableName: "tip_jar_bests", introducedByMigrationId: 87, treatment: "require_empty" },
         { tableName: "push_preferences", introducedByMigrationId: 86, treatment: "require_empty" },
         { tableName: "push_subscriptions", introducedByMigrationId: 86, treatment: "require_empty" },
         { tableName: "push_deliveries", introducedByMigrationId: 86, treatment: "require_empty" },

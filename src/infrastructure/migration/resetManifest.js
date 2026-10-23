@@ -313,6 +313,7 @@ const RESET_NEVER_IMPORT_POLICY = deepFreeze([
 // migrate before importing. Shared environments apply migrations 0023 and
 // later only after the approved reset has completed.
 const RESET_V1_POST_RESET_TABLE_POLICY = deepFreeze([
+  ...["tip_jar_runs", "tip_jar_bests"].map(tableName => ({ tableName, introducedByMigrationId: 87, treatment: "require_empty" })),
   ...["push_preferences", "push_subscriptions", "push_deliveries", "push_event_cursors", "push_roster_state"].map(tableName => ({ tableName, introducedByMigrationId: 86, treatment: "require_empty" })),
   { tableName: "quote_submissions", introducedByMigrationId: 85, treatment: "require_empty" },
   { tableName: "fad_deadline_controls", introducedByMigrationId: 68, treatment: "require_empty" },

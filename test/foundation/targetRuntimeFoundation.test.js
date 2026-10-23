@@ -1595,7 +1595,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const options = runtimeOptions(database);
     const runtime = createTargetRuntime(options);
     assert.equal(runtime.migrationState.status, "exact");
-    assert.equal(runtime.migrationState.userVersion, 86);
+    assert.equal(runtime.migrationState.userVersion, 87);
     assert.equal(
       typeof runtime.services.league.auctionResolution.resolveDue,
       "function"

@@ -50,8 +50,8 @@ test("additive migration preserves populated existing records and repeat migrati
   const before = snapshot();
   applyMigrations({ database, migrations, applicationBuildId: "quote-upgrade", now: () => NOW });
   assert.deepEqual(snapshot(), before);
-  assert.equal(database.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key='data_model_version'").get().metadata_value, "86");
-  assert.equal(database.pragma("user_version", { simple: true }), 86);
+  assert.equal(database.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key='data_model_version'").get().metadata_value, "87");
+  assert.equal(database.pragma("user_version", { simple: true }), 87);
   assert.deepEqual(database.pragma("foreign_key_check"), []);
   const saved = database.serialize();
   applyMigrations({ database, migrations, applicationBuildId: "quote-upgrade", now: () => NOW });

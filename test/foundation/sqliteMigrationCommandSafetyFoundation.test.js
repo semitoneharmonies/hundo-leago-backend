@@ -49,7 +49,7 @@ function createSchema52Fixture(t, prefix) {
   const migrations = discoverMigrations({
     migrationsDirectory: MIGRATIONS_DIRECTORY,
   });
-  assert.equal(migrations.length, 86);
+  assert.equal(migrations.length, 87);
 
   const connection = openDatabase({
     databasePath,
@@ -190,7 +190,7 @@ function assertFailureWithoutWrite({
 }
 
 describe("staging SQLite migration command safety", () => {
-  test("binds the exact physical staging database and reports the full schema-86 ledger", (t) => {
+  test("binds the exact physical staging database and reports the full schema-87 ledger", (t) => {
     const fixture = createSchema52Fixture(
       t,
       "hundo-leago-m7-26-migrate-success-"
@@ -209,12 +209,12 @@ describe("staging SQLite migration command safety", () => {
     assert.equal(result.stderr, "");
     assert.deepEqual(JSON.parse(result.stdout.trim()), {
       status: "exact",
-      appliedCount: 86,
-      latestMigrationId: 86,
+      appliedCount: 87,
+      latestMigrationId: 87,
     });
     assert.deepEqual(readMigrationState(fixture.databasePath), {
-      appliedCount: 86,
-      userVersion: 86,
+      appliedCount: 87,
+      userVersion: 87,
     });
 
     const database = new Database(fixture.databasePath, {

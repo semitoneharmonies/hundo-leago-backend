@@ -1521,7 +1521,7 @@ describe("M7-01 deployed target runtime configuration", () => {
       inspect.database
         .prepare("SELECT COUNT(*) AS count FROM schema_migrations")
         .get().count,
-      86
+      87
     );
     assert.equal(
       inspect.database
@@ -1662,7 +1662,7 @@ describe("M7-01 deployed target runtime configuration", () => {
       ].sort()
     );
     assert.equal(body.data.environment, "staging");
-    assert.equal(body.data.schemaVersion, 86);
+    assert.equal(body.data.schemaVersion, 87);
     assert.equal(body.data.scheduler.state, "disabled");
     assert.deepEqual(body.data.accountEmailDelivery, { enabled: false,pending:0,publishing:0,failed:1,lastDeliveredAtMs:null });
     assert.deepEqual(body.data.jobs,{pending:0,running:0,failed:1,interrupted:0});
