@@ -273,7 +273,7 @@ describe("M2-05 SQLite repository foundation", () => {
       ({ tableName }) => tableName
     ).sort();
 
-    assert.equal(REPOSITORY_CATALOG.length, 165);
+    assert.equal(REPOSITORY_CATALOG.length, 167);
     assert.equal(Object.isFrozen(REPOSITORY_CATALOG), true);
     assert.equal(
       REPOSITORY_CATALOG.every(Object.isFrozen),
@@ -281,7 +281,7 @@ describe("M2-05 SQLite repository foundation", () => {
     );
     assert.deepEqual(catalogTables, actualTables);
     assert.deepEqual(context.schemaTables, actualTables);
-    assert.equal(Object.keys(context.repositories).length, 165);
+    assert.equal(Object.keys(context.repositories).length, 167);
     assert.equal(Object.isFrozen(context.repositories), true);
     assert.equal(Object.isFrozen(context), true);
 

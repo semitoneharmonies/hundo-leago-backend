@@ -513,9 +513,9 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
         },
       ]
     );
-    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 83);
-    assert.equal(classifiedTables.length, 165);
-    assert.equal(new Set(classifiedTables).size, 165);
+    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 85);
+    assert.equal(classifiedTables.length, 167);
+    assert.equal(new Set(classifiedTables).size, 167);
     assert.deepEqual(
       [...classifiedTables].sort(),
       [...catalogTables].sort()
