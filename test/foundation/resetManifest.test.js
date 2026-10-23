@@ -193,6 +193,7 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
     assert.deepEqual(
       RESET_V1_POST_RESET_TABLE_POLICY,
       [
+        ...["tip_jar_runs", "tip_jar_bests"].map(tableName => ({ tableName, introducedByMigrationId: 94, treatment: "require_empty" })),
         { tableName: "goon_draft_scheduling_receipts", introducedByMigrationId: 93, treatment: "require_empty" },
         ...["push_preferences", "push_subscriptions", "push_deliveries", "push_event_cursors", "push_roster_state"].map(tableName => ({ tableName, introducedByMigrationId: 92, treatment: "require_empty" })),
         { tableName: "compact_stat_refreshes", introducedByMigrationId: 70, treatment: "require_empty" },
@@ -515,9 +516,9 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
         },
       ]
     );
-    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 91);
-    assert.equal(classifiedTables.length, 173);
-    assert.equal(new Set(classifiedTables).size, 173);
+    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 93);
+    assert.equal(classifiedTables.length, 175);
+    assert.equal(new Set(classifiedTables).size, 175);
     assert.deepEqual(
       [...classifiedTables].sort(),
       [...catalogTables].sort()

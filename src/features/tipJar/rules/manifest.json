@@ -1,0 +1,14 @@
+{
+  "rulesetVersion": "campaign-v1",
+  "files": {
+    "tipper.js": "17219cb2a7792256f43ba3406aef909726a7d11a8a731bfea74ccad79eae7dba",
+    "goal-layout.js": "2951397e4f0ddb9feff31a31c9aff1339ced9ab576f96a71bbc58bb8ec9e0fb2",
+    "frame-objectives.js": "1ceec8561eafa3fc4f4aec07fac905d479c2b3d021e9c278eeab91183e33aa49",
+    "shot-flight.js": "cb42bcb41e66534dc5f5cd9ec8aa7bd2dca35897eb85fb28002c3b1bed220c76",
+    "goal-motion.js": "5ab705c798ef8a867e439c25e10d266e040489e46b02a459f2490fdc4aadc82a",
+    "goalie-motion.js": "0c69af357640a0a3128804e0f68cfefd26743cd7639c595efea588e3657cc42d",
+    "physics.js": "ed4645fb55ff33d297f9e6b3d8efed92480441a37f92d062d681382146c9b68b",
+    "campaign.js": "70e8d1a74a820eef6ffb7e18ebe38526e49563694f23edcf3866bb7f5b8e4aac",
+    "league-rules.js": "bb44bb84570e6027713a7409c0703087fa125dcbe1862dc46800fd6d4421fc8a"
+  }
+}

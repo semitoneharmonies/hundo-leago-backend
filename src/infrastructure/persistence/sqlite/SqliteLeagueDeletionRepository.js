@@ -11,6 +11,10 @@ const RETAINED_TABLES = new Set([
 // reviewed for erasure before this digest is advanced; unknown guards are never
 // silently suspended by the deletion endpoint.
 const REVIEWED_SCHEMA_SHA256 = new Set([
+  // Schema 94: Tip Jar runs and personal bests belong only to their league.
+  // The two new tables have no triggers or cascading deletes; erase removes
+  // their league-scoped rows explicitly in the existing atomic transaction.
+  "e18f1ef64344664f7621ce7d6b2cb72d25a7487e9f6175b2ed80c9e3f6341aeb",
   // Schema 92 adds league-scoped push deliveries/roster state. Erasure removes
   // those rows explicitly; global device subscriptions and preferences survive.
   "3446f429204767dc726a4b0ae640cb2ee386569921a052a92df9b19da4382ee8",

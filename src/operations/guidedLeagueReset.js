@@ -33,7 +33,9 @@ const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex
 const encode=row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[key,Buffer.isBuffer(value)?{$binary:value.toString('base64')}:value]));
 const decode=row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[key,value&&typeof value==='object'&&Object.keys(value).join()==='$binary'?Buffer.from(value.$binary,'base64'):value]));
 function validateDatabase(db){
- if(![88,89,90,91,92,93].includes(db.pragma('user_version',{simple:true}))||db.pragma('foreign_keys',{simple:true})!==1)fail('This schema needs reset compatibility review.','LEAGUE_RESET_UNAVAILABLE');
+ // Tip Jar rows remain outside the fantasy reset archive and changed-table lists.
+ // protectedFingerprint preserves those rows during reset and restore at schema94.
+ if(![88,89,90,91,92,93,94].includes(db.pragma('user_version',{simple:true}))||db.pragma('foreign_keys',{simple:true})!==1)fail('This schema needs reset compatibility review.','LEAGUE_RESET_UNAVAILABLE');
 }
 function assertSchedulingArchiveCompatible(db,leagueId){
  if(db.pragma('user_version',{simple:true})>=93&&db.prepare('SELECT 1 FROM goon_draft_scheduling_receipts WHERE league_id=? LIMIT 1').get(leagueId))fail('This scheduled draft requires a reviewed recovery archive before a preseason reset.','LEAGUE_RESET_UNAVAILABLE');
