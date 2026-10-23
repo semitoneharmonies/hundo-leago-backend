@@ -90,6 +90,11 @@ test("preview is read-only; populated deletion preserves every unrelated row and
   r.db.prepare('INSERT INTO push_preferences VALUES(?,?,?)').run(r.authenticated.user.id,'{}',1);
   r.db.prepare('INSERT INTO push_subscriptions VALUES(?,?,?,?,?,?,?)').run(pushSubscriptionId,r.authenticated.user.id,r.authenticated.session.id,'https://fcm.googleapis.com/fcm/send/deletion-fixture','{}',1,1);
   for(const {id:leagueId} of r.db.prepare('SELECT id FROM leagues').all()) {
+    const tipRun=crypto.randomUUID(),tipBest=crypto.randomUUID();
+    r.db.prepare(`INSERT INTO tip_jar_runs(id,league_id,user_id,client_run_id,ruleset_version,seed,shots_json,result_json,created_at_ms,updated_at_ms,version)
+      VALUES(?,?,?,?,'campaign-v1',42,'[]','{}',1,1,1)`).run(tipRun,leagueId,r.authenticated.user.id,crypto.randomUUID());
+    r.db.prepare(`INSERT INTO tip_jar_bests(id,league_id,user_id,run_id,ruleset_version,highest_level_completed,shots_to_completion,updated_at_ms)
+      VALUES(?,?,?,?,'campaign-v1',0,NULL,1)`).run(tipBest,leagueId,r.authenticated.user.id,tipRun);
     r.db.prepare('INSERT INTO push_deliveries(id,subscription_id,user_id,league_id,category,event_key,payload_json,guard_json,created_at_ms,expires_at_ms,next_attempt_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(crypto.randomUUID(),pushSubscriptionId,r.authenticated.user.id,leagueId,'schedule_changed','fixture:'+leagueId,'{}','{}',1,2,1);
     r.db.prepare('INSERT INTO push_roster_state VALUES(?,?,?,?,?)').run(leagueId,crypto.randomUUID(),crypto.randomUUID(),'fixture',1);
   }
