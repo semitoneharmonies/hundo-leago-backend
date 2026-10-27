@@ -192,6 +192,8 @@ const EXPECTED_TABLES = [
   "goon_draft_scheduling_receipts",
   "tip_jar_runs",
   "tip_jar_bests",
+  "tip_jar_guest_runs",
+  "tip_jar_guest_bests",
   "compact_stat_refreshes",
   "nhl_completed_game_cache",
   "shared_empty_coverage_sets",
@@ -769,7 +771,7 @@ describe("M2-04 initial relational schema", () => {
       migrationsDirectory: MIGRATIONS_DIRECTORY,
     });
 
-    assert.equal(migrations.length, 94);
+    assert.equal(migrations.length, 95);
     assert.equal(migrations[0].id, 1);
     assert.equal(migrations[0].fileName, "0001_initial.sql");
     assert.equal(migrations[1].id, 2);
@@ -1232,12 +1234,12 @@ describe("M2-04 initial relational schema", () => {
       assert.equal(migration.checksum, expected.sha256);
     }
     assert.equal(migrationResult.status, "exact");
-    assert.equal(database.pragma("user_version", { simple: true }), 94);
+    assert.equal(database.pragma("user_version", { simple: true }), 95);
 
     const ledgerBefore = database
       .prepare("SELECT * FROM schema_migrations")
       .all();
-    assert.equal(ledgerBefore.length, 94);
+    assert.equal(ledgerBefore.length, 95);
     assert.equal(ledgerBefore[0].checksum, migrations[0].checksum);
     assert.equal(ledgerBefore[1].checksum, migrations[1].checksum);
     assert.equal(ledgerBefore[2].checksum, migrations[2].checksum);
@@ -1432,13 +1434,13 @@ describe("M2-04 initial relational schema", () => {
       )
       .all("table", "sqlite_%")
       .map(({ name }) => name);
-    assert.equal(EXPECTED_TABLES.length, 176);
+    assert.equal(EXPECTED_TABLES.length, 178);
     assert.equal(
       EXPECTED_TABLES.filter(
         (tableName) =>
           tableName !== "schema_migrations"
       ).length,
-      175
+      177
     );
     assert.deepEqual(tables, EXPECTED_TABLES);
 
@@ -1521,7 +1523,7 @@ describe("M2-04 initial relational schema", () => {
         },
       {
         metadata_key: "data_model_version",
-        metadata_value: "94",
+        metadata_value: "95",
       },
       ]
     );

@@ -28,6 +28,8 @@ function repositoryDefinition(
 }
 
 const DEFINITIONS = [
+  repositoryDefinition("tip_jar_guest_runs", REPOSITORY_SCOPES.global, { versioned: true }),
+  repositoryDefinition("tip_jar_guest_bests", REPOSITORY_SCOPES.global),
   repositoryDefinition("tip_jar_runs", REPOSITORY_SCOPES.requiredLeague, { versioned: true }),
   repositoryDefinition("tip_jar_bests", REPOSITORY_SCOPES.requiredLeague),
   repositoryDefinition("goon_draft_scheduling_receipts", REPOSITORY_SCOPES.requiredLeague),
@@ -745,6 +747,7 @@ function getRepositoryCatalogForSchemaVersion(schemaVersion) {
     throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible, "A migrated database schema is required.");
   }
   return [54, 55, 56].includes(schemaVersion) ? SCHEMA_54_REPOSITORY_CATALOG : REPOSITORY_CATALOG.filter(({ tableName }) =>
+    (schemaVersion >= 95 || !tableName.startsWith("tip_jar_guest_")) &&
     (schemaVersion >= 94 || !tableName.startsWith("tip_jar_")) &&
     (schemaVersion >= 93 || tableName !== "goon_draft_scheduling_receipts") &&
     (schemaVersion >= 92 || !tableName.startsWith("push_")) &&

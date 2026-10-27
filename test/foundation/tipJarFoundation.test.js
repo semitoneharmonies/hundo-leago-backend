@@ -91,8 +91,8 @@ test('Tip Jar additive migration preserves populated pre-existing rows and histo
   const old=protectedRows(database).filter(([name])=>!['schema_migrations','application_metadata'].includes(name));
   applyMigrations({database,migrations,applicationBuildId:'tip-jar-after',now:()=>NOW});
   assert.deepEqual(protectedRows(database).filter(([name])=>!['schema_migrations','application_metadata'].includes(name)),old);
-  assert.equal(database.pragma('user_version',{simple:true}),94);
-  assert.equal(database.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key='data_model_version'").get().metadata_value,'94');
+  assert.equal(database.pragma('user_version',{simple:true}),95);
+  assert.equal(database.prepare("SELECT metadata_value FROM application_metadata WHERE metadata_key='data_model_version'").get().metadata_value,'95');
   assert.deepEqual(database.pragma('foreign_key_check'),[]);
   createSqliteRepositoryContext({database});
   const bytes=database.serialize();applyMigrations({database,migrations,applicationBuildId:'tip-jar-repeat',now:()=>NOW});assert(bytes.equals(database.serialize()));
