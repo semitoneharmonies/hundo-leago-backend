@@ -8,6 +8,8 @@ const { createQuoteService } = require("../application/services/activity/createQ
 const { createSqliteQuoteRepository } = require("../infrastructure/persistence/sqlite/SqliteQuoteRepository");
 const { createQuoteRouter } = require("../transport/http/createQuoteRouter");
 const { createTipJarService } = require("../application/services/games/createTipJarService");
+const { createTipJarPublicService } = require("../application/services/games/createTipJarPublicService");
+const { createSqliteTipJarPublicRepository } = require("../infrastructure/persistence/sqlite/SqliteTipJarPublicRepository");
 const { createSqliteTipJarRepository } = require("../infrastructure/persistence/sqlite/SqliteTipJarRepository");
 const { createTipJarRouter } = require("../transport/http/createTipJarRouter");
 const { createLeagueAnnouncementService } = require("../application/services/activity/createLeagueAnnouncementService");
@@ -827,6 +829,10 @@ const SPORTSDATAIO_LIVE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const TARGET_ENDPOINTS = Object.freeze([
   ["GET", "/api/v1/leagues/:leagueId/tip-jar/leaderboard", "tipJar"],
+  ["GET", "/api/v1/games/tip-jar/leaderboard", "tipJar"],
+  ["POST", "/api/v1/games/tip-jar/runs", "tipJar"],
+  ["POST", "/api/v1/games/tip-jar/runs/:runId/checkpoint", "tipJar"],
+  ["POST", "/api/v1/games/tip-jar/runs/:runId/name", "tipJar"],
   ["POST", "/api/v1/leagues/:leagueId/tip-jar/runs", "tipJar"],
   ["POST", "/api/v1/leagues/:leagueId/tip-jar/runs/:runId/checkpoint", "tipJar"],
   ['GET', '/api/v1/push/settings', 'push'],
@@ -1921,6 +1927,7 @@ function createTargetRepositories({
     leagueAnnouncements: database.pragma("user_version", { simple: true }) >= 71 ? createSqliteLeagueAnnouncementRepository({ database }) : null,
     quotes: database.pragma("user_version", { simple: true }) >= 89 ? createSqliteQuoteRepository({ database }) : null,
     tipJar: database.pragma("user_version", { simple: true }) >= 94 ? createSqliteTipJarRepository({ database }) : null,
+    tipJarPublic: database.pragma("user_version", { simple: true }) >= 95 ? createSqliteTipJarPublicRepository({ database }) : null,
     leagueAccess: createSqliteLeagueAccessRepository({
       database,
       leagueOutboxWriter,
@@ -2979,6 +2986,7 @@ function createTargetServices({
       leagueAuthorization, platformAuthorization, auditRepository: repositories.audit, clock, secureRandom }),
     tipJar: createTipJarService({ repositoryContext: repositories.context, repository: repositories.tipJar,
       leagueAuthorization, teamAuthorization, teamAuthorityRepository: repositories.teamAuthority, clock, secureRandom }),
+    tipJarPublic: createTipJarPublicService({ repositoryContext: repositories.context, repository: repositories.tipJarPublic, clock, secureRandom }),
     auction: createAuctionService({
       leagueAuthorization,
       teamAuthorization,
@@ -3337,7 +3345,8 @@ function createTargetRouters({
   };
   const routers = Object.freeze({
     quote: createQuoteRouter({ requestSecurity, quoteService: services.league.quotes }),
-    tipJar: createTipJarRouter({ requestSecurity, tipJarService: services.league.tipJar }),
+    tipJar: createTipJarRouter({ requestSecurity, tipJarService: services.league.tipJar,
+      publicService: services.league.tipJarPublic, rateLimiter: services.rateLimiter, networkSourceResolver }),
     leagueAnnouncement: createLeagueAnnouncementRouter({
       requestSecurity,
       announcementService: services.league.announcements,

@@ -131,4 +131,4 @@ function createTipJarService({ repositoryContext, repository, leagueAuthorizatio
   }
   return Object.freeze({ start, checkpoint, leaderboard });
 }
-module.exports = { createTipJarService, RULESET_VERSION, validatedShots };
+module.exports = { createTipJarService, RULESET_VERSION, validatedShots, exactObject, checkedResult, comparePrefix, startProjection, INITIAL, UUID };

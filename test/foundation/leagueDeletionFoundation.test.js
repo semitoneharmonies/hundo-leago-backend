@@ -99,6 +99,11 @@ test("preview is read-only; populated deletion preserves every unrelated row and
     r.db.prepare('INSERT INTO push_roster_state VALUES(?,?,?,?,?)').run(leagueId,crypto.randomUUID(),crypto.randomUUID(),'fixture',1);
   }
   const migrationId = crypto.randomUUID();
+  const guestRunId = crypto.randomUUID();
+  r.db.prepare(`INSERT INTO tip_jar_guest_runs(id,guest_hash,client_run_id,ruleset_version,seed,shots_json,result_json,created_at_ms,updated_at_ms,version)
+    VALUES(?,?,?,'campaign-v1',42,'[]','{}',1,1,1)`).run(guestRunId, 'a'.repeat(64), crypto.randomUUID());
+  r.db.prepare(`INSERT INTO tip_jar_guest_bests(id,guest_hash,run_id,ruleset_version,display_name,highest_level_completed,shots_to_completion,updated_at_ms)
+    VALUES(?,?,?,'campaign-v1','Preserved Guest',2,20,1)`).run(crypto.randomUUID(), 'a'.repeat(64), guestRunId);
   r.context.repositories.backup_catalog.insert({
     id: backupId, league_id: r.leagueId, environment_identity: "test", backup_kind: "manual",
     storage_reference: "test://existing-backup-no-file", database_checksum: "c".repeat(64), schema_version: 57,

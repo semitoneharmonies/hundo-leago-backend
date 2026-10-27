@@ -1284,12 +1284,12 @@ function installedTargetEndpoints(routers) {
 }
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 215 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 215);
+  test("declares 219 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 219);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      215
+      219
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -1605,7 +1605,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const options = runtimeOptions(database);
     const runtime = createTargetRuntime(options);
     assert.equal(runtime.migrationState.status, "exact");
-    assert.equal(runtime.migrationState.userVersion, 94);
+    assert.equal(runtime.migrationState.userVersion, 95);
     assert.equal(
       typeof runtime.services.league.auctionResolution.resolveDue,
       "function"
@@ -2541,7 +2541,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 215);
+    assert.equal(TARGET_ENDPOINTS.length, 219);
   });
 
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {
