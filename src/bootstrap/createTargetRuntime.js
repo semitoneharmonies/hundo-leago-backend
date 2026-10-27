@@ -8,10 +8,15 @@ const { createQuoteService } = require("../application/services/activity/createQ
 const { createSqliteQuoteRepository } = require("../infrastructure/persistence/sqlite/SqliteQuoteRepository");
 const { createQuoteRouter } = require("../transport/http/createQuoteRouter");
 const { createTipJarService } = require("../application/services/games/createTipJarService");
+const { createMrBoniService } = require("../application/services/games/createMrBoniService");
 const { createTipJarPublicService } = require("../application/services/games/createTipJarPublicService");
+const { createMrBoniPublicService } = require("../application/services/games/createMrBoniPublicService");
 const { createSqliteTipJarPublicRepository } = require("../infrastructure/persistence/sqlite/SqliteTipJarPublicRepository");
+const { createSqliteMrBoniPublicRepository } = require("../infrastructure/persistence/sqlite/SqliteMrBoniPublicRepository");
 const { createSqliteTipJarRepository } = require("../infrastructure/persistence/sqlite/SqliteTipJarRepository");
+const { createSqliteMrBoniRepository } = require("../infrastructure/persistence/sqlite/SqliteMrBoniRepository");
 const { createTipJarRouter } = require("../transport/http/createTipJarRouter");
+const { createMrBoniRouter } = require("../transport/http/createMrBoniRouter");
 const { createLeagueAnnouncementService } = require("../application/services/activity/createLeagueAnnouncementService");
 const { createSqliteLeagueAnnouncementRepository } = require("../infrastructure/persistence/sqlite/SqliteLeagueAnnouncementRepository");
 const { createLeagueAnnouncementRouter } = require("../transport/http/createLeagueAnnouncementRouter");
@@ -829,12 +834,19 @@ const SPORTSDATAIO_LIVE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const TARGET_ENDPOINTS = Object.freeze([
   ["GET", "/api/v1/leagues/:leagueId/tip-jar/leaderboard", "tipJar"],
+  ["GET", "/api/v1/leagues/:leagueId/mr-boni/leaderboard", "mrBoni"],
   ["GET", "/api/v1/games/tip-jar/leaderboard", "tipJar"],
+  ["GET", "/api/v1/games/mr-boni/leaderboard", "mrBoni"],
   ["POST", "/api/v1/games/tip-jar/runs", "tipJar"],
+  ["POST", "/api/v1/games/mr-boni/runs", "mrBoni"],
   ["POST", "/api/v1/games/tip-jar/runs/:runId/checkpoint", "tipJar"],
+  ["POST", "/api/v1/games/mr-boni/runs/:runId/checkpoint", "mrBoni"],
   ["POST", "/api/v1/games/tip-jar/runs/:runId/name", "tipJar"],
+  ["POST", "/api/v1/games/mr-boni/runs/:runId/name", "mrBoni"],
   ["POST", "/api/v1/leagues/:leagueId/tip-jar/runs", "tipJar"],
+  ["POST", "/api/v1/leagues/:leagueId/mr-boni/runs", "mrBoni"],
   ["POST", "/api/v1/leagues/:leagueId/tip-jar/runs/:runId/checkpoint", "tipJar"],
+  ["POST", "/api/v1/leagues/:leagueId/mr-boni/runs/:runId/checkpoint", "mrBoni"],
   ['GET', '/api/v1/push/settings', 'push'],
   ['POST', '/api/v1/push/settings', 'push'],
   ['POST', '/api/v1/push/subscriptions', 'push'],
@@ -1926,6 +1938,8 @@ function createTargetRepositories({
     leagueActivity: createSqliteLeagueActivityRepository({ database }),
     leagueAnnouncements: database.pragma("user_version", { simple: true }) >= 71 ? createSqliteLeagueAnnouncementRepository({ database }) : null,
     quotes: database.pragma("user_version", { simple: true }) >= 89 ? createSqliteQuoteRepository({ database }) : null,
+    mrBoni: database.pragma("user_version", { simple: true }) >= 96 ? createSqliteMrBoniRepository({ database }) : null,
+    mrBoniPublic: database.pragma("user_version", { simple: true }) >= 96 ? createSqliteMrBoniPublicRepository({ database }) : null,
     tipJar: database.pragma("user_version", { simple: true }) >= 94 ? createSqliteTipJarRepository({ database }) : null,
     tipJarPublic: database.pragma("user_version", { simple: true }) >= 95 ? createSqliteTipJarPublicRepository({ database }) : null,
     leagueAccess: createSqliteLeagueAccessRepository({
@@ -2984,6 +2998,9 @@ function createTargetServices({
     }),
     quotes: createQuoteService({ repositoryContext: repositories.context, repository: repositories.quotes,
       leagueAuthorization, platformAuthorization, auditRepository: repositories.audit, clock, secureRandom }),
+    mrBoni: createMrBoniService({ repositoryContext: repositories.context, repository: repositories.mrBoni,
+      leagueAuthorization, teamAuthorization, teamAuthorityRepository: repositories.teamAuthority, clock, secureRandom }),
+    mrBoniPublic: createMrBoniPublicService({ repositoryContext: repositories.context, repository: repositories.mrBoniPublic, clock, secureRandom }),
     tipJar: createTipJarService({ repositoryContext: repositories.context, repository: repositories.tipJar,
       leagueAuthorization, teamAuthorization, teamAuthorityRepository: repositories.teamAuthority, clock, secureRandom }),
     tipJarPublic: createTipJarPublicService({ repositoryContext: repositories.context, repository: repositories.tipJarPublic, clock, secureRandom }),
@@ -3345,6 +3362,8 @@ function createTargetRouters({
   };
   const routers = Object.freeze({
     quote: createQuoteRouter({ requestSecurity, quoteService: services.league.quotes }),
+    mrBoni: createMrBoniRouter({ requestSecurity, mrBoniService: services.league.mrBoni,
+      publicService: services.league.mrBoniPublic, rateLimiter: services.rateLimiter, networkSourceResolver }),
     tipJar: createTipJarRouter({ requestSecurity, tipJarService: services.league.tipJar,
       publicService: services.league.tipJarPublic, rateLimiter: services.rateLimiter, networkSourceResolver }),
     leagueAnnouncement: createLeagueAnnouncementRouter({

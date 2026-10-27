@@ -1,0 +1,17 @@
+{
+  "rulesetVersion": "resurface-v1",
+  "files": [
+    {
+      "path": "engine.js",
+      "sha256": "98bb86b295e9c95ccba7a8044c29d8e238cc84673d3e2865f8adc1e76bd13e08"
+    },
+    {
+      "path": "replay.js",
+      "sha256": "5770580e861f6849a067530ceca0e68397b1664001e31b79a5cc014a8ec7ad75"
+    },
+    {
+      "path": "package.json",
+      "sha256": "fa3ac709eef338aac9353079681f7636474fc8b05f2d750fdfa796b834510e2b"
+    }
+  ]
+}

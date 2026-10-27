@@ -21,6 +21,9 @@ function rule(limit, windowMs, counter) {
 
 const AUTHENTICATION_RATE_LIMITS =
   Object.freeze({
+    mr_boni_start: Object.freeze({ network: rule(60, HOUR_MS, ATTEMPTS), subject: rule(30, HOUR_MS, ATTEMPTS) }),
+    mr_boni_checkpoint: Object.freeze({ network: rule(90, 15 * MINUTE_MS, ATTEMPTS), subject: rule(18, 15 * MINUTE_MS, ATTEMPTS) }),
+    mr_boni_name: Object.freeze({ network: rule(60, 15 * MINUTE_MS, ATTEMPTS), subject: rule(12, 15 * MINUTE_MS, ATTEMPTS) }),
     tip_jar_guest_start: Object.freeze({
       network: rule(60, HOUR_MS, ATTEMPTS),
       subject: rule(30, HOUR_MS, ATTEMPTS),

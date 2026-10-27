@@ -352,6 +352,9 @@ describe("M3-06 account security policies", () => {
       ])
     );
     assert.deepEqual(summary, {
+      mr_boni_start: { network: [60, HOUR_MS, 'attempts'], subject: [30, HOUR_MS, 'attempts'] },
+      mr_boni_checkpoint: { network: [90, 15 * MINUTE_MS, 'attempts'], subject: [18, 15 * MINUTE_MS, 'attempts'] },
+      mr_boni_name: { network: [60, 15 * MINUTE_MS, 'attempts'], subject: [12, 15 * MINUTE_MS, 'attempts'] },
       tip_jar_guest_start: {
         network: [60, HOUR_MS, "attempts"],
         subject: [30, HOUR_MS, "attempts"],

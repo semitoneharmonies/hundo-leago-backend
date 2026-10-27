@@ -11,6 +11,9 @@ const RETAINED_TABLES = new Set([
 // reviewed for erasure before this digest is advanced; unknown guards are never
 // silently suspended by the deletion endpoint.
 const REVIEWED_SCHEMA_SHA256 = new Set([
+  // Schema 96: Mr. Boni league runs/bests follow their league; global guest
+  // scores survive. No new triggers or cascades; populated erasure is tested.
+  "5e7f21c563e1bdcef3c83ef2f42e95ec14d1a82a83e3a43fa33f55cd7ac1005e",
   // Schema 94: Tip Jar runs and personal bests belong only to their league.
   // The two new tables have no triggers or cascading deletes; erase removes
   // their league-scoped rows explicitly in the existing atomic transaction.

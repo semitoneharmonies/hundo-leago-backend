@@ -84,7 +84,7 @@ function protectedRows(database) {
 
 test('Tip Jar additive migration preserves populated pre-existing rows and historical catalogues',t=>{
   const database=new Database(':memory:');t.after(()=>database.close());database.pragma('foreign_keys=ON');
-  const migrations=discoverMigrations({migrationsDirectory:DIR});
+  const migrations=discoverMigrations({migrationsDirectory:DIR}).filter(m=>m.id<=95);
   applyMigrations({database,migrations:migrations.filter(m=>m.id<94),applicationBuildId:'tip-jar-before',now:()=>NOW});
   database.prepare(`INSERT INTO users (id,email_normalized,email_display,display_name,display_name_normalized,status,created_at_ms,updated_at_ms,version)
     VALUES (?,'preserved@example.test','preserved@example.test','Preserved','preserved','active',?,?,1)`).run(MANAGER,NOW,NOW);

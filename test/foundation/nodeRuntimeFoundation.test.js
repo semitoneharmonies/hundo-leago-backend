@@ -49,6 +49,7 @@ test("canonical M2 deployment inputs use platform-independent LF bytes", () => {
       "database/staging-environment.example.json text eol=lf",
       "render.yaml text eol=lf",
       "src/features/tipJar/rules/* -text",
+      "src/features/mrBoni/rules/* -text",
     ]
   );
 });

@@ -4,3 +4,4 @@ database/reset-manifests/*.json text eol=lf
 database/staging-environment.example.json text eol=lf
 render.yaml text eol=lf
 src/features/tipJar/rules/* -text
+src/features/mrBoni/rules/* -text
