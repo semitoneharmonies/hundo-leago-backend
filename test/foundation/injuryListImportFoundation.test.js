@@ -42,11 +42,16 @@ test('clipboard formats, absent status, aliases, ambiguity and malformed input f
   assert.equal(rows.length, 3); assert.equal(rows[2].designation, null);
   const players = [{ id: 'one', full_name: 'Chris Tanev' }, { id: 'two', full_name: 'Adam Sykora' }];
   let result = matchInjuryList(rows, players);
-  assert.equal(result.matches.length, 2); assert.equal(result.unresolved[0].name, 'Henry Mews');
+  assert.equal(result.matches.length, 2); assert.equal(result.unresolved.length, 0);
+  assert.equal(result.skipped[0].name, 'Henry Mews');
   assert.equal(matchInjuryList(rows, players, { henrymews: 'skip' }).skipped.length, 1);
   result = matchInjuryList(rows, [...players, { id: 'three', full_name: 'Chris Tanev' }]);
   assert.equal(result.unresolved[0].candidates.length, 2);
   assert.throws(() => matchInjuryList(rows, players, { christophertanev: 'skip' }), { code: 'INJURY_LIST_INVALID' });
+  assert.throws(() => matchInjuryList(rows, players, { henrymews: 'one' }), { code: 'INJURY_LIST_INVALID' });
+  const possibleMatch = matchInjuryList(rows, [...players, { id: 'three', full_name: 'Harry Mews' }]);
+  assert.equal(possibleMatch.unresolved[0].name, 'Henry Mews');
+  assert.equal(possibleMatch.unresolved[0].candidates[0].id, 'three');
   for (const bad of ['', 'garbage', text + '\nThis is not a player', 'Name, First\tDay to Day\tBOGUS\tLeg', text + '\nTanev, Christopher\tDay to Day\tIR\tHand']) {
     assert.throws(() => parseInjuryList(bad), { code: 'INJURY_LIST_INVALID' });
   }
@@ -72,7 +77,7 @@ test('review is read-only; apply is atomic, audited, exact, stale-safe and prese
     return crypto.createHash('sha256').update(JSON.stringify(db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'player_injury_%' ORDER BY name").all().map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()]))).digest('hex');
   }
   const before = protectedHash();
-  const input = { text: 'Staal, Jordan\nDay to Day\nOUT\tLower Body\nTanev, Christopher\tWeek to Week\tIR\tUpper Body' };
+  const input = { text: 'Staal, Jordan\nDay to Day\nOUT\tLower Body\nTanev, Christopher\tWeek to Week\tIR\tUpper Body\nAbsent, Player\tDay to Day\tOUT\tUndisclosed' };
   for (const authenticated of ['commissioner', 'manager', null]) {
     assert.throws(() => service.previewList({ input, authenticated }), { code: 'PLATFORM_ADMINISTRATOR_REQUIRED' });
     assert.throws(() => service.applyList({ input, authenticated }), { code: 'PLATFORM_ADMINISTRATOR_REQUIRED' });
@@ -81,6 +86,10 @@ test('review is read-only; apply is atomic, audited, exact, stale-safe and prese
   const preview = service.previewList({ input, authenticated: 'admin' });
   assert.equal(db.prepare('SELECT total_changes() n').get().n, writes);
   assert.equal(preview.counts.add, 2);
+  assert.equal(preview.canApply, true);
+  assert.equal(preview.matched, 2);
+  assert.equal(preview.unresolved.length, 0);
+  assert.deepEqual(preview.skipped.map(row => row.name), ['Player Absent']);
   const applyInput = { ...input, expectedRevision: preview.revision, confirmReplacement: true };
   assert.throws(() => service.applyList({ input: { ...applyInput, confirmReplacement: false }, authenticated: 'admin' }), { code: 'INJURY_INPUT_INVALID' });
   // A mid-batch failure must roll back the statuses and their audit events.
@@ -89,7 +98,9 @@ test('review is read-only; apply is atomic, audited, exact, stale-safe and prese
   assert.equal(db.prepare('SELECT count(*) n FROM player_injury_status').get().n, 0);
   assert.equal(db.prepare('SELECT count(*) n FROM player_injury_events').get().n, 0);
   db.exec('DROP TRIGGER fail_second_injury');
-  assert.equal(service.applyList({ input: applyInput, authenticated: 'admin' }).applied, 2);
+  const applied = service.applyList({ input: applyInput, authenticated: 'admin' });
+  assert.equal(applied.applied, 2);
+  assert.deepEqual(applied.skipped, ['Player Absent']);
   assert.throws(() => service.applyList({ input: applyInput, authenticated: 'admin' }), { code: 'INJURY_VERSION_CONFLICT' });
   const workspace = createSqliteTeamWorkspaceRepository({ database: db });
   for (const own of db.prepare('SELECT team_id,league_id FROM player_ownerships WHERE player_id=?').all(shared)) {
@@ -107,11 +118,20 @@ test('review is read-only; apply is atomic, audited, exact, stale-safe and prese
   assert.equal(canUseInjuredReserve({ injury: injuryProjection(repo.read(shared)), source_payload_json: '{"Status":"Injured Reserve"}' }), false);
   assert.equal(repo.read(shared).timeline, null); assert.equal(repo.read(other).injury_reason, 'Hand');
   assert.equal(db.prepare('SELECT count(*) n FROM player_injury_events WHERE action=? AND actor_user_id=?').get('admin_decision', actorId).n, 4);
-  const unresolvedInput = { text: recovery.text + '\nAbsent, Player\tDay to Day\tOUT\tUndisclosed' };
-  const unresolved = service.previewList({ input: unresolvedInput, authenticated: 'admin' });
-  assert.equal(unresolved.canApply, false);
-  assert.throws(() => service.applyList({ input: { ...unresolvedInput, expectedRevision: unresolved.revision, confirmReplacement: true }, authenticated: 'admin' }), { code: 'INJURY_LIST_INVALID' });
-  assert.equal(service.previewList({ input: { ...unresolvedInput, resolutions: { playerabsent: 'skip' } }, authenticated: 'admin' }).canApply, true);
+  const unknownOnlyInput = { text: 'Absent, Player\tDay to Day\tOUT\tUndisclosed' };
+  const beforeUnknown = db.prepare('SELECT total_changes() n').get().n;
+  const unknownOnly = service.previewList({ input: unknownOnlyInput, authenticated: 'admin' });
+  assert.equal(unknownOnly.canApply, false, 'an entirely unknown list must not clear existing injuries');
+  assert.equal(unknownOnly.skipped.length, 1);
+  assert.throws(() => service.applyList({ input: { ...unknownOnlyInput, expectedRevision: unknownOnly.revision, confirmReplacement: true }, authenticated: 'admin' }), { code: 'INJURY_LIST_INVALID' });
+  assert.equal(db.prepare('SELECT total_changes() n').get().n, beforeUnknown);
+  assert.equal(repo.read(other).status, 'injured');
+  const ambiguousInput = { text: 'Tanev, Christopher\tMonth to Month\tIR\tHand\nStaal, Jordyn\tDay to Day\tOUT\tUndisclosed' };
+  const ambiguous = service.previewList({ input: ambiguousInput, authenticated: 'admin' });
+  assert.equal(ambiguous.canApply, false);
+  assert.equal(ambiguous.unresolved[0].candidates[0].id, shared);
+  assert.throws(() => service.applyList({ input: { ...ambiguousInput, expectedRevision: ambiguous.revision, confirmReplacement: true }, authenticated: 'admin' }), { code: 'INJURY_LIST_INVALID' });
+  assert.equal(db.prepare('SELECT total_changes() n').get().n, beforeUnknown);
   assert.equal(protectedHash(), before, 'all other records including commissioner corrections and locked matchups preserved');
   assert.deepEqual(db.pragma('foreign_key_check'), []);
 });

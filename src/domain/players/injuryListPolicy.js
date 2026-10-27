@@ -52,7 +52,9 @@ function matchInjuryList(rows, players, resolutions = {}) {
     const candidates = exact.length ? exact : players.filter(p => normalizedName(p.full_name.split(' ').at(-1)) === lastName);
     const hasResolution = Object.hasOwn(resolutions, row.key);
     const resolved = resolutions[row.key];
-    if (hasResolution && resolved === 'skip' && candidates.length === 0) { skipped.push(row); continue; }
+    // Names outside the catalogue need no manual cleanup. Keep possible matches
+    // for review so a name variant cannot silently clear a known player's status.
+    if (candidates.length === 0 && (!hasResolution || resolved === 'skip')) { skipped.push(row); continue; }
     const player = hasResolution ? candidates.find(p => p.id === resolved) : exact.length === 1 ? exact[0] : null;
     if (hasResolution && !player) invalid(`Choose a listed match for ${row.name}, or correct the pasted name.`);
     if (!player) {
