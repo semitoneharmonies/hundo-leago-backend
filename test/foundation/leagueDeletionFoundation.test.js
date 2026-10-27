@@ -95,6 +95,10 @@ test("preview is read-only; populated deletion preserves every unrelated row and
       VALUES(?,?,?,?,'campaign-v1',42,'[]','{}',1,1,1)`).run(tipRun,leagueId,r.authenticated.user.id,crypto.randomUUID());
     r.db.prepare(`INSERT INTO tip_jar_bests(id,league_id,user_id,run_id,ruleset_version,highest_level_completed,shots_to_completion,updated_at_ms)
       VALUES(?,?,?,?,'campaign-v1',0,NULL,1)`).run(tipBest,leagueId,r.authenticated.user.id,tipRun);
+    r.db.prepare(`INSERT INTO mr_boni_runs(id,league_id,user_id,client_run_id,ruleset_version,seed,commands_json,result_json,created_at_ms,updated_at_ms,version)
+      VALUES(?,?,?,?,'resurface-v1',42,'[]','{}',1,1,1)`).run(tipRun,leagueId,r.authenticated.user.id,crypto.randomUUID());
+    r.db.prepare(`INSERT INTO mr_boni_bests(id,league_id,user_id,run_id,ruleset_version,highest_level_completed,cumulative_time_ms,updated_at_ms)
+      VALUES(?,?,?,?,'resurface-v1',0,NULL,1)`).run(tipBest,leagueId,r.authenticated.user.id,tipRun);
     r.db.prepare('INSERT INTO push_deliveries(id,subscription_id,user_id,league_id,category,event_key,payload_json,guard_json,created_at_ms,expires_at_ms,next_attempt_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(crypto.randomUUID(),pushSubscriptionId,r.authenticated.user.id,leagueId,'schedule_changed','fixture:'+leagueId,'{}','{}',1,2,1);
     r.db.prepare('INSERT INTO push_roster_state VALUES(?,?,?,?,?)').run(leagueId,crypto.randomUUID(),crypto.randomUUID(),'fixture',1);
   }
@@ -104,6 +108,10 @@ test("preview is read-only; populated deletion preserves every unrelated row and
     VALUES(?,?,?,'campaign-v1',42,'[]','{}',1,1,1)`).run(guestRunId, 'a'.repeat(64), crypto.randomUUID());
   r.db.prepare(`INSERT INTO tip_jar_guest_bests(id,guest_hash,run_id,ruleset_version,display_name,highest_level_completed,shots_to_completion,updated_at_ms)
     VALUES(?,?,?,'campaign-v1','Preserved Guest',2,20,1)`).run(crypto.randomUUID(), 'a'.repeat(64), guestRunId);
+  r.db.prepare(`INSERT INTO mr_boni_guest_runs(id,guest_hash,client_run_id,ruleset_version,seed,commands_json,result_json,created_at_ms,updated_at_ms,version)
+    VALUES(?,?,?,'resurface-v1',42,'[]','{}',1,1,1)`).run(guestRunId, 'a'.repeat(64), crypto.randomUUID());
+  r.db.prepare(`INSERT INTO mr_boni_guest_bests(id,guest_hash,run_id,ruleset_version,display_name,highest_level_completed,cumulative_time_ms,updated_at_ms)
+    VALUES(?,?,?,'resurface-v1','Preserved Guest',2,20,1)`).run(crypto.randomUUID(), 'a'.repeat(64), guestRunId);
   r.context.repositories.backup_catalog.insert({
     id: backupId, league_id: r.leagueId, environment_identity: "test", backup_kind: "manual",
     storage_reference: "test://existing-backup-no-file", database_checksum: "c".repeat(64), schema_version: 57,

@@ -40,7 +40,7 @@ function protectedRows(database,excluded=[]) {
 }
 test('schema95 is additive over populated league game storage and repeat migration is inert',t=>{
   const db=new Database(':memory:');t.after(()=>db.close());db.pragma('foreign_keys=ON');
-  const migrations=discoverMigrations({migrationsDirectory:DIR});
+  const migrations=discoverMigrations({migrationsDirectory:DIR}).filter(m=>m.id<=95);
   applyMigrations({database:db,migrations:migrations.filter(m=>m.id<=94),applicationBuildId:'before',now:()=>NOW});
   const user=crypto.randomUUID(),league=crypto.randomUUID(),run=crypto.randomUUID();
   db.prepare(`INSERT INTO users(id,email_normalized,email_display,display_name,display_name_normalized,status,created_at_ms,updated_at_ms,version)

@@ -11,7 +11,7 @@ const NOW = Date.parse('2026-07-22T12:00:00Z');
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const LEAGUE = id(1), SEASON = id(2), ACTOR = id(3), OTHER = id(4);
 const DIR = path.resolve(__dirname, '../../database/migrations');
-const tipRows = db => ['tip_jar_runs', 'tip_jar_bests', 'tip_jar_guest_runs', 'tip_jar_guest_bests'].map(table => db.prepare(`SELECT * FROM ${table} ORDER BY id`).all());
+const tipRows = db => ['tip_jar_runs', 'tip_jar_bests', 'tip_jar_guest_runs', 'tip_jar_guest_bests','mr_boni_runs','mr_boni_bests','mr_boni_guest_runs','mr_boni_guest_bests'].map(table => db.prepare(`SELECT * FROM ${table} ORDER BY id`).all());
 
 async function fixture(t) {
   const db = new Database(':memory:');
@@ -69,17 +69,26 @@ async function fixture(t) {
       JSON.stringify([{ time: 2, x: 0, height: .2, power: 30 }]), JSON.stringify({ highestLevelCompleted: 2, shotsToCompletion: 20 }), NOW, NOW);
     db.prepare(`INSERT INTO tip_jar_bests(id,league_id,user_id,run_id,ruleset_version,highest_level_completed,shots_to_completion,updated_at_ms)
       VALUES(?,?,?,?,'campaign-v1',2,20,?)`).run(id(600 + suffix), leagueId, id(10), id(400 + suffix), NOW);
+    db.prepare(`INSERT INTO mr_boni_runs(id,league_id,user_id,client_run_id,ruleset_version,seed,commands_json,result_json,created_at_ms,updated_at_ms,version)
+      VALUES(?,?,?,?,'resurface-v1',42,?,?,?, ?,1)`).run(id(400 + suffix), leagueId, id(10), id(500 + suffix),
+      JSON.stringify([{ time: 2, x: 0, height: .2, power: 30 }]), JSON.stringify({ highestLevelCompleted: 2, cumulativeTimeMs: 20 }), NOW, NOW);
+    db.prepare(`INSERT INTO mr_boni_bests(id,league_id,user_id,run_id,ruleset_version,highest_level_completed,cumulative_time_ms,updated_at_ms)
+      VALUES(?,?,?,?,'resurface-v1',2,20,?)`).run(id(600 + suffix), leagueId, id(10), id(400 + suffix), NOW);
   }
   db.prepare(`INSERT INTO tip_jar_guest_runs(id,guest_hash,client_run_id,ruleset_version,seed,shots_json,result_json,created_at_ms,updated_at_ms,version)
     VALUES(?,?,?,'campaign-v1',42,'[]','{}',?,?,1)`).run(id(701), 'a'.repeat(64), id(702), NOW, NOW);
   db.prepare(`INSERT INTO tip_jar_guest_bests(id,guest_hash,run_id,ruleset_version,display_name,highest_level_completed,shots_to_completion,updated_at_ms)
     VALUES(?,?,?,'campaign-v1','Snow Guest',2,20,?)`).run(id(703), 'a'.repeat(64), id(701), NOW);
+  db.prepare(`INSERT INTO mr_boni_guest_runs(id,guest_hash,client_run_id,ruleset_version,seed,commands_json,result_json,created_at_ms,updated_at_ms,version)
+    VALUES(?,?,?,'resurface-v1',42,'[]','{}',?,?,1)`).run(id(701), 'a'.repeat(64), id(702), NOW, NOW);
+  db.prepare(`INSERT INTO mr_boni_guest_bests(id,guest_hash,run_id,ruleset_version,display_name,highest_level_completed,cumulative_time_ms,updated_at_ms)
+    VALUES(?,?,?,'resurface-v1','Snow Guest',2,20,?)`).run(id(703), 'a'.repeat(64), id(701), NOW);
   return db;
 }
 
-test('schema 95 guided reset and restore preserve populated league and guest Tip Jar records, including later scores', async t => {
+test('schema 96 guided reset and restore preserve populated league and guest Tip Jar records, including later scores', async t => {
   const db = await fixture(t);
-  assert.equal(db.pragma('user_version', { simple: true }), 95);
+  assert.equal(db.pragma('user_version', { simple: true }), 96);
   const before = db.serialize(), originalScores = tipRows(db), snapshot = reset.capture(db, LEAGUE);
   assert.equal(snapshot.schemaVersion, 88, 'Existing encrypted archive format remains compatible');
   assert.equal(Object.keys(snapshot.tables).some(name => name.startsWith('tip_jar_')), false);
@@ -95,6 +104,8 @@ test('schema 95 guided reset and restore preserve populated league and guest Tip
   // A new game best after the fantasy reset must survive restoring its old archive.
   db.prepare('UPDATE tip_jar_bests SET shots_to_completion=19,updated_at_ms=? WHERE league_id=?').run(NOW + 1, LEAGUE);
   db.prepare('UPDATE tip_jar_guest_bests SET shots_to_completion=19,updated_at_ms=? WHERE id=?').run(NOW + 1, id(703));
+  db.prepare('UPDATE mr_boni_bests SET cumulative_time_ms=19,updated_at_ms=? WHERE league_id=?').run(NOW + 1, LEAGUE);
+  db.prepare('UPDATE mr_boni_guest_bests SET cumulative_time_ms=19,updated_at_ms=? WHERE id=?').run(NOW + 1, id(703));
   const laterScores = tipRows(db), resetBytes = db.serialize();
   assert.equal(reset.rehearseRestore(db, snapshot, afterHash).recoveryVerified, true);
   assert.deepEqual(db.serialize(), resetBytes);
@@ -108,12 +119,12 @@ test('schema 95 guided reset and restore preserve populated league and guest Tip
 
 test('guided reset still rejects unreviewed schema versions and disabled foreign keys', async t => {
   const db = await fixture(t);
-  for (const version of [87, 96, 101]) {
+  for (const version of [87, 97, 101]) {
     db.pragma(`user_version=${version}`);
     assert.throws(() => reset.capture(db, LEAGUE), { code: 'LEAGUE_RESET_UNAVAILABLE' });
     assert.throws(() => reset.rehearse(db, LEAGUE, ACTOR, NOW), { code: 'LEAGUE_RESET_UNAVAILABLE' });
   }
-  db.pragma('user_version=95');
+  db.pragma('user_version=96');
   db.pragma('foreign_keys=OFF');
   assert.throws(() => reset.capture(db, LEAGUE), { code: 'LEAGUE_RESET_UNAVAILABLE' });
 });
