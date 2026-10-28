@@ -1,6 +1,7 @@
 const { randomUUID, createHash } = require('node:crypto');
 const { DEFAULT_PREFERENCES, NOTIFICATION_COPY, TRADE_COPY } = require('../../../domain/activity/pushPolicy');
 const { createSqliteFadPushReminders } = require('./SqliteFadPushReminders');
+const { ANNOUNCEMENT_VISIBILITY_MS } = require('../../../domain/leagues/leagueCommunicationPolicy');
 const HOUR = 3_600_000;
 
 function createSqlitePushRepository({ database, notificationWriter, configuredSeasonsOnly = false }) {
@@ -61,7 +62,9 @@ function createSqlitePushRepository({ database, notificationWriter, configuredSe
       if(row.event_type==='trade_proposal_received') { const id=data.tradeId || data.proposalId || row.related_record_id; url=`/leagues/${row.league_id}/trades/${id}`; guard={kind:'trade_offer',id}; teamId=data.receivingTeamId; }
       if(row.event_type==='league_announcement') {
         const communication=get('SELECT * FROM league_communications WHERE id=? AND league_id=?',data.communicationId,row.league_id);
-        if(!communication?.push_notify || communication.archived_at_ms!==null) return;
+        if(!communication?.push_notify || communication.archived_at_ms!==null ||
+          communication.created_at_ms <= now-ANNOUNCEMENT_VISIBILITY_MS ||
+          (communication.expires_at_ms !== null && communication.expires_at_ms <= now)) return;
         guard={kind:'announcement',id:communication.id};
       }
       let title=copy[1];
@@ -141,7 +144,7 @@ function createSqlitePushRepository({ database, notificationWriter, configuredSe
     if(guard.kind==='auction_failed') return get('SELECT status FROM auctions WHERE id=?',guard.id)?.status==='failed';
     if(guard.kind==='trade_offer') return Boolean(get("SELECT id FROM trades t WHERE t.id=? AND t.status='proposed' AND t.effective_deadline_at_ms>? AND NOT EXISTS(SELECT 1 FROM trade_future_consideration_acceptances a WHERE a.trade_id=t.id)",guard.id,now));
     if(guard.kind==='trade_approval') return Boolean(get("SELECT t.id FROM trades t JOIN trade_future_consideration_acceptances a ON a.trade_id=t.id AND a.league_id=t.league_id WHERE t.id=? AND t.status='proposed'",guard.id));
-    if(guard.kind==='announcement') { const row=get('SELECT * FROM league_communications WHERE id=?',guard.id); return row?.push_notify===1 && row.archived_at_ms===null && (!row.expires_at_ms || row.expires_at_ms>now); }
+    if(guard.kind==='announcement') { const row=get('SELECT * FROM league_communications WHERE id=?',guard.id); return row?.push_notify===1 && row.archived_at_ms===null && row.created_at_ms>now-ANNOUNCEMENT_VISIBILITY_MS && (!row.expires_at_ms || row.expires_at_ms>now); }
     if(guard.kind==='roster') { const week=get('SELECT locks_at_ms FROM matchup_weeks WHERE id=? AND league_id=?',guard.weekId,delivery.league_id); if(week?.locks_at_ms!==guard.locksAtMs || week.locks_at_ms<=now) return false; if(guard.illegal) return rosterDecision(guard)?.legal===false; if(guard.combined && guard.announcedIllegal && rosterDecision(guard)?.legal===true) { const payload=JSON.parse(delivery.payload_json); payload.title='Roster locks soon'; delivery.payload_json=JSON.stringify(payload); } }
     if(guard.kind?.startsWith('fad_') && guard.id) {
       if(guard.auctionId && !get("SELECT id FROM auctions WHERE id=? AND status='open' AND resolves_at_ms>?",guard.auctionId,now)) return false;

@@ -415,6 +415,7 @@ const {
 const {
   createRosterActionService,
 } = require("../application/services/leagues/createRosterActionService");
+const { createRosterRepairService } = require("../application/services/leagues/createRosterRepairService");
 const {
   assertMigrationCompatibility,
   discoverMigrations,
@@ -699,6 +700,7 @@ const {
 const {
   createSqliteRosterMovementRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteRosterMovementRepository");
+const { createSqliteRosterRepairRepository } = require("../infrastructure/persistence/sqlite/SqliteRosterRepairRepository");
 const {
   createSqliteRetentionRepository,
 } = require("../infrastructure/persistence/sqlite/SqliteRetentionRepository");
@@ -795,6 +797,7 @@ const {
 const {
   createRosterActionRouter,
 } = require("../transport/http/createRosterActionRouter");
+const { createRosterRepairRouter } = require("../transport/http/createRosterRepairRouter");
 const {
   createTargetRequestSecurity,
 } = require("../transport/http/createTargetRequestSecurity");
@@ -1315,6 +1318,8 @@ const TARGET_ENDPOINTS = Object.freeze([
   ["POST", "/api/v1/leagues/:leagueId/teams", "team"],
   ["GET", "/api/v1/leagues/:leagueId/teams/:teamId", "team"],
   ["GET", "/api/v1/leagues/:leagueId/teams/:teamId/roster", "team"],
+  ["POST", "/api/v1/leagues/:leagueId/teams/:teamId/roster/repair-preview", "rosterRepair"],
+  ["POST", "/api/v1/leagues/:leagueId/teams/:teamId/roster/repair", "rosterRepair"],
   [
     "PUT",
     "/api/v1/leagues/:leagueId/teams/:teamId/roster-display-order",
@@ -2034,6 +2039,8 @@ function createTargetRepositories({
       candidateCardSummerSynchronizer,
       leagueOutboxWriter,
     }),
+    rosterRepair: database.pragma('user_version', { simple: true }) >= 91
+      ? createSqliteRosterRepairRepository({ database }) : null,
     retentions: createSqliteRetentionRepository({
       database,
       candidateCardSummerSynchronizer,
@@ -3247,6 +3254,17 @@ function createTargetServices({
       clock,
       secureRandom,
     }),
+    rosterRepair: createRosterRepairService({
+      repository: repositories.rosterRepair,
+      workspaceRepository: repositories.teamWorkspace,
+      rosterMovementRepository: repositories.rosterMovements,
+      teamAuthorization, leagueAuthorization, scheduleAdapter: nhlSchedule, lateLockCoordinator, clock, secureRandom,
+      assertCompetitionOpen(leagueId) {
+        if (repositories.leaguePause?.status(leagueId).paused) {
+          throw Object.assign(new Error('League competition is paused.'), { code: 'LEAGUE_COMPETITION_PAUSED' });
+        }
+      },
+    }),
     rosterAction: createRosterActionService({
       assertCompetitionOpen(leagueId) {
         if(repositories.leaguePause?.status(leagueId).paused) {
@@ -3521,6 +3539,7 @@ function createTargetRouters({
       requestSecurity,
       publicRosterService: services.league.publicRoster,
     }),
+    rosterRepair: createRosterRepairRouter({ requestSecurity, service: services.league.rosterRepair }),
     rosterAction: createRosterActionRouter({
       requestSecurity,
       rosterActionService: services.league.rosterAction,

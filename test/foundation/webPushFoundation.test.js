@@ -142,6 +142,36 @@ test('only explicitly important announcements send a phone alert; archived ones 
   f.db.prepare('UPDATE league_communications SET archived_at_ms=?,archived_by_user_id=? WHERE id=?').run(NOW,id(1),id(103));
   await f.service.deliverDue(); assert.equal(f.sent.length,1);
 });
+
+test('expired announcements never queue delayed phone alerts, including existing null-expiry announcements', async t => {
+  const f = fixture(t), week = 7 * 24 * HOUR;
+  for (const [n, createdAtMs, expiresAtMs] of [[1, NOW - week, null], [2, NOW - week - 1, NOW + HOUR], [3, NOW - 1000, NOW]]) {
+    f.insert('league_communications', { id: id(110 + n), league_id: id(20), created_by_user_id: id(1), kind: 'announcement', title: 'Expired notice', body: 'Preserve this announcement', audience: 'members', pinned: 0, notify: 1, push_notify: 1, recipient_count: 2, client_key: 'expired-' + n, request_hash: 'a'.repeat(64), created_at_ms: createdAtMs, expires_at_ms: expiresAtMs });
+    f.notify('league_announcement', 2, { communicationId: id(110 + n) });
+  }
+  const messages = f.db.prepare('SELECT * FROM league_communications ORDER BY id').all();
+  const notifications = f.db.prepare('SELECT * FROM notifications ORDER BY id').all();
+  await f.service.deliverDue();
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM push_deliveries').get().n, 0);
+  assert.deepEqual(f.db.prepare('SELECT * FROM league_communications ORDER BY id').all(), messages);
+  assert.deepEqual(f.db.prepare('SELECT * FROM notifications ORDER BY id').all(), notifications);
+});
+
+test('queued announcement phone alerts recheck the seven-day boundary and earlier explicit expiry before sending', async t => {
+  const f = fixture(t), week = 7 * 24 * HOUR;
+  for (const [n, createdAtMs, expiresAtMs] of [[1, NOW - week + 1, null], [2, NOW - week + 1, NOW + HOUR], [3, NOW - 1000, NOW + 1]]) {
+    f.insert('league_communications', { id: id(120 + n), league_id: id(20), created_by_user_id: id(1), kind: 'announcement', title: 'Soon expiring notice', body: 'Preserve this announcement', audience: 'members', pinned: 0, notify: 1, push_notify: 1, recipient_count: 2, client_key: 'queued-expiry-' + n, request_hash: 'a'.repeat(64), created_at_ms: createdAtMs, expires_at_ms: expiresAtMs });
+    f.notify('league_announcement', 2, { communicationId: id(120 + n) });
+  }
+  const messages = f.db.prepare('SELECT * FROM league_communications ORDER BY id').all();
+  f.repo.collect(NOW, f.rosterDecision);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM push_deliveries').get().n, 3);
+  f.setNow(NOW + 1);
+  await f.service.deliverDue();
+  assert.equal(f.sent.length, 0);
+  assert.deepEqual(f.db.prepare('SELECT * FROM league_communications ORDER BY id').all(), messages);
+});
 test('durable timer receipts prevent requeue after reset cleanup while a changed deadline sends once',async t=>{
  const f=fixture(t);auction(f,HOUR);await f.service.deliverDue();assert.equal(f.sent.length,2);
  f.db.prepare('DELETE FROM push_deliveries WHERE league_id=?').run(id(20));

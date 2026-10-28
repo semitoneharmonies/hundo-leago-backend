@@ -13,6 +13,9 @@ const { createSqliteSecurityAuditRepository } = require("../../src/infrastructur
 const { createLeagueAuthorizationService } = require("../../src/application/services/authorization/requireLeagueAuthority");
 const { createLeagueAnnouncementService } = require("../../src/application/services/activity/createLeagueAnnouncementService");
 const { createLeagueAnnouncementRouter } = require("../../src/transport/http/createLeagueAnnouncementRouter");
+const { createSqliteLeagueCommunicationRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteLeagueCommunicationRepository");
+const { createLeagueCommunicationService } = require("../../src/application/services/leagues/createLeagueCommunicationService");
+const { createLeagueCommunicationRouter } = require("../../src/transport/http/createLeagueCommunicationRouter");
 const { createTargetRequestSecurity } = require("../../src/transport/http/createTargetRequestSecurity");
 const { createSessionCookie } = require("../../src/transport/http/sessionCookie");
 const { selectTargetRouterKey } = require("../../src/bootstrap/createTargetRuntime");
@@ -66,11 +69,13 @@ test("announcements persist with atomic audit, preserve all existing records, an
   const before = tables.map((table) => [table, r.database.prepare(`SELECT * FROM "${table}"`).all()]);
   const posted = r.post();
   assert.equal(posted.announcement.authorName, "Commissioner");
+  assert.equal(posted.announcement.version, 1);
   assert.equal(posted.announcement.body, "Lineup reminder\nSet your roster by Monday.");
   assert.deepEqual(tables.map((table) => [table, r.database.prepare(`SELECT * FROM "${table}"`).all()]), before);
   const saved = r.database.serialize();
   const page = r.service.list({ leagueId: LEAGUE, authenticated: authenticated(MANAGER) });
   assert.equal(page.announcements[0].id, posted.announcement.id);
+  assert.equal(page.announcements[0].version, posted.announcement.version);
   assert(saved.equals(r.database.serialize()));
   const reopened = new Database(saved);
   t.after(() => reopened.close());
@@ -129,6 +134,8 @@ test("HTTP routes enforce origin, session, CSRF, membership and commissioner pos
   });
   const app = express();
   app.use(createLeagueAnnouncementRouter({ requestSecurity: security, announcementService: r.service }));
+  const communications = createLeagueCommunicationService({ repository: createSqliteLeagueCommunicationRepository({ database: r.database }), leagueAuthorization: r.dependencies.leagueAuthorization, clock: r.dependencies.clock });
+  app.use(createLeagueCommunicationRouter({ requestSecurity: security, service: communications }));
   const server = app.listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
@@ -144,15 +151,53 @@ test("HTTP routes enforce origin, session, CSRF, membership and commissioner pos
   const saved = r.database.serialize();
   const read = await fetch(url, { headers: headers(MANAGER) });
   assert.equal(read.status, 200);
-  assert.equal((await read.json()).data.announcements[0].body, "Welcome");
+  const visible = (await read.json()).data.announcements[0];
+  assert.equal(visible.body, "Welcome");
+  assert.equal(visible.version, 1);
   assert(saved.equals(r.database.serialize()));
   for (const method of ["GET", "POST"]) assert.equal(selectTargetRouterKey(method, new URL(url).pathname), "leagueAnnouncement");
+
+  const archiveUrl = url.replace(/announcements$/, `communications/${visible.id}/archive`);
+  const archiveHeaders = (userId) => { const result = headers(userId); delete result["Idempotency-Key"]; return result; };
+  const input = { version: visible.version, confirmed: true };
+  for (const [changes, status] of [
+    [{ headers: archiveHeaders(MANAGER) }, 403],
+    [{ headers: archiveHeaders(OUTSIDER) }, 404],
+    [{ headers: { ...archiveHeaders(COMMISSIONER), "X-CSRF-Token": "bad" } }, 403],
+    [{ headers: { ...archiveHeaders(COMMISSIONER), Origin: "https://invalid.example" } }, 403],
+    [{ headers: { Origin: origin, "Content-Type": "application/json" } }, 401],
+    [{ body: JSON.stringify({ ...input, version: visible.version + 1 }) }, 409],
+    [{ body: JSON.stringify({ confirmed: true }) }, 400],
+    [{ body: JSON.stringify({ ...input, confirmed: false }) }, 400],
+  ]) {
+    const response = await fetch(archiveUrl, { method: "POST", headers: archiveHeaders(COMMISSIONER), body: JSON.stringify(input), ...changes });
+    assert.equal(response.status, status);
+    assert(saved.equals(r.database.serialize()), "Denied removal must not change stored data");
+  }
+  const foreign = await fetch(archiveUrl.replace(LEAGUE, OTHER), { method: "POST", headers: archiveHeaders(OUTSIDER), body: JSON.stringify(input) });
+  assert.equal(foreign.status, 404);
+  assert(saved.equals(r.database.serialize()));
+  const tables = r.context.schemaTables.filter((table) => table !== "league_communications");
+  const otherRecords = tables.map((table) => [table, r.database.prepare(`SELECT * FROM "${table}"`).all()]);
+  const original = r.database.prepare("SELECT * FROM league_communications WHERE id=?").get(visible.id);
+  const removed = await fetch(archiveUrl, { method: "POST", headers: archiveHeaders(COMMISSIONER), body: JSON.stringify(input) });
+  assert.equal(removed.status, 200);
+  assert.equal((await removed.json()).data.archived, true);
+  assert.deepEqual(r.database.prepare("SELECT * FROM league_communications WHERE id=?").get(visible.id), {
+    ...original, archived_at_ms: NOW + 100, archived_by_user_id: COMMISSIONER, version: original.version + 1,
+  });
+  assert.deepEqual(tables.map((table) => [table, r.database.prepare(`SELECT * FROM "${table}"`).all()]), otherRecords);
+  const archived = r.database.serialize();
+  const repeated = await fetch(archiveUrl, { method: "POST", headers: archiveHeaders(COMMISSIONER), body: JSON.stringify(input) });
+  assert.equal(repeated.status, 200);
+  assert.deepEqual((await (await fetch(url, { headers: headers(MANAGER) })).json()).data.announcements, []);
+  assert.deepEqual(communications.list({ leagueId: LEAGUE, authenticated: authenticated(MANAGER) }).messages, []);
+  assert.equal(communications.list({ leagueId: LEAGUE, authenticated: authenticated(COMMISSIONER), history: true }).messages[0].body, "Welcome");
+  assert(archived.equals(r.database.serialize()), "Repeat removal and subsequent reads must not write");
 });
 
 test("sidebar and commissioner announcements share storage and honour archiving and expiry", t => {
   const r = setup(t);
-  const { createSqliteLeagueCommunicationRepository } = require('../../src/infrastructure/persistence/sqlite/SqliteLeagueCommunicationRepository');
-  const { createLeagueCommunicationService } = require('../../src/application/services/leagues/createLeagueCommunicationService');
   const communications = createLeagueCommunicationService({ repository:createSqliteLeagueCommunicationRepository({database:r.database}),leagueAuthorization:r.dependencies.leagueAuthorization,clock:r.dependencies.clock });
   const auth=authenticated(COMMISSIONER), manager=authenticated(MANAGER);
   const sidebar=r.post('Shared from sidebar');
@@ -162,8 +207,26 @@ test("sidebar and commissioner announcements share storage and honour archiving 
   const saved=communications.publish({leagueId:LEAGUE,authenticated:auth,input:{message,previewHash:preview.previewHash},idempotencyKey:crypto.randomUUID()});
   const page=()=>r.service.list({leagueId:LEAGUE,authenticated:manager}).announcements;
   assert(page().some(a=>a.id===saved.id&&a.body===message.body));
-  communications.archive({leagueId:LEAGUE,id:sidebar.announcement.id,authenticated:auth,input:{version:1,confirmed:true}});
+  communications.archive({leagueId:LEAGUE,id:sidebar.announcement.id,authenticated:auth,input:{version:sidebar.announcement.version,confirmed:true}});
   assert(!page().some(a=>a.id===sidebar.announcement.id));
   r.dependencies.clock.nowMs=()=>NOW+1001;
   assert.deepEqual(page(),[]);
+});
+
+test("sidebar hides existing null-expiry announcements exactly after seven days without rewriting them", t => {
+  const r = setup(t);
+  const week = 7 * 24 * 60 * 60 * 1000;
+  const first = r.post("Existing announcement without expiry").announcement;
+  r.post("Other league notice", { leagueId: OTHER, authenticated: authenticated(OUTSIDER) });
+  assert.equal(r.database.prepare("SELECT expires_at_ms FROM league_communications WHERE id=?").get(first.id).expires_at_ms, null);
+  r.dependencies.clock.nowMs = () => first.createdAtMs + week - 1;
+  const saved = r.database.serialize();
+  const page = () => r.service.list({ leagueId: LEAGUE, authenticated: authenticated(MANAGER), query: { limit: "1" } });
+  assert.deepEqual(page().announcements.map(row => row.id), [first.id]);
+  r.dependencies.clock.nowMs = () => first.createdAtMs + week;
+  assert.deepEqual(page().announcements, []);
+  assert.equal(page().page.nextCursor, null);
+  r.dependencies.clock.nowMs = () => first.createdAtMs + week + 1;
+  assert.deepEqual(page().announcements, []);
+  assert(saved.equals(r.database.serialize()));
 });

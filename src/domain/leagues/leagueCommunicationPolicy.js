@@ -1,4 +1,5 @@
 const { sha256Hex } = require("../shared/sha256");
+const ANNOUNCEMENT_VISIBILITY_MS = 7 * 24 * 60 * 60 * 1000;
 
 function fail(code = "COMMUNICATION_INVALID") {
   const error = new Error(code);
@@ -42,4 +43,4 @@ function clientKey(value) {
   return value;
 }
 
-module.exports = { fail, exact, validateMessage, digest, clientKey };
+module.exports = { ANNOUNCEMENT_VISIBILITY_MS, fail, exact, validateMessage, digest, clientKey };

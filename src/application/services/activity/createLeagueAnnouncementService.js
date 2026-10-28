@@ -7,7 +7,7 @@ function fail(code) { const error = new Error("The league announcement request c
 function announcement(row) {
   if (!row) fail("ANNOUNCEMENT_RESULT_UNAVAILABLE");
   const metadata = JSON.parse(row.metadata_json);
-  return Object.freeze({ id: row.id, leagueId: row.league_id, body: metadata.body, authorName: row.author_name || "Commissioner", createdAtMs: row.occurred_at_ms });
+  return Object.freeze({ id: row.id, leagueId: row.league_id, body: metadata.body, authorName: row.author_name || "Commissioner", createdAtMs: row.occurred_at_ms, version: row.version });
 }
 
 function createLeagueAnnouncementService({ repositoryContext, repository, leagueAuthorization, auditRepository, clock, secureRandom } = {}) {

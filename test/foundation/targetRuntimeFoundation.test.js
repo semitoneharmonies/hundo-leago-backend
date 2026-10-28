@@ -1284,12 +1284,12 @@ function installedTargetEndpoints(routers) {
 }
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 226 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 226);
+  test("declares 228 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 228);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      226
+      228
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -1330,6 +1330,7 @@ describe("M3-19 exact target endpoint dispatch", () => {
       "push",
       "quote",
       "rosterAction",
+      "rosterRepair",
       "standingsFinalization",
       "statisticsOperations",
       "team",
@@ -1343,6 +1344,11 @@ describe("M3-19 exact target endpoint dispatch", () => {
   });
 
   test("selects exactly one intended router for every endpoint and preflight", () => {
+    for (const suffix of ['repair-preview', 'repair']) {
+      const path = `/api/v1/leagues/:leagueId/teams/:teamId/roster/${suffix}`;
+      assert(TARGET_ENDPOINTS.some(endpoint => endpoint.method === 'POST' && endpoint.path === path && endpoint.routerKey === 'rosterRepair'));
+      assert.equal(selectTargetRouterKey('POST', concretePath(path)), 'rosterRepair');
+    }
     for (const endpoint of TARGET_ENDPOINTS) {
       const path = concretePath(endpoint.path);
       assert.equal(
@@ -2542,7 +2548,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 226);
+    assert.equal(TARGET_ENDPOINTS.length, 228);
   });
 
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {

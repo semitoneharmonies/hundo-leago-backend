@@ -1,4 +1,5 @@
 const { createSqliteNotificationWriter } = require("./SqliteNotificationWriter");
+const { ANNOUNCEMENT_VISIBILITY_MS } = require("../../../domain/leagues/leagueCommunicationPolicy");
 
 function createSqliteLeagueCommunicationRepository({ database, notificationWriter } = {}) {
   const notifications = notificationWriter || createSqliteNotificationWriter({ database });
@@ -43,7 +44,7 @@ function createSqliteLeagueCommunicationRepository({ database, notificationWrite
   const list = database.prepare(`SELECT c.*, u.display_name AS authorName FROM league_communications c
     JOIN users u ON u.id = c.created_by_user_id WHERE c.league_id = ?
       AND (? = 1 OR (c.kind = 'announcement' AND c.archived_at_ms IS NULL
-        AND (c.expires_at_ms IS NULL OR c.expires_at_ms > ?)))
+        AND (c.expires_at_ms IS NULL OR c.expires_at_ms > ?) AND c.created_at_ms > ?))
     ORDER BY c.pinned DESC, c.created_at_ms DESC, c.id LIMIT 100`);
   const supportsPush = Boolean(database.prepare(
     "SELECT 1 FROM pragma_table_info('league_communications') WHERE name = 'push_notify'"
@@ -76,7 +77,7 @@ function createSqliteLeagueCommunicationRepository({ database, notificationWrite
       return [...new Map(pending.map(row => [row.userId, { userId: row.userId, displayName: row.displayName }])).values()]
         .sort((a, b) => a.userId.localeCompare(b.userId));
     },
-    list: (leagueId, history, nowMs) => list.all(leagueId, Number(history), nowMs),
+    list: (leagueId, history, nowMs) => list.all(leagueId, Number(history), nowMs, nowMs - ANNOUNCEMENT_VISIBILITY_MS),
     find: (leagueId, id) => findOne.get(leagueId, id),
     replay: (leagueId, userId, key) => findReplay.get(leagueId, userId, key),
     insert(record) {

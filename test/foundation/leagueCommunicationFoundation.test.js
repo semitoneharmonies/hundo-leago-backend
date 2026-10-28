@@ -177,6 +177,38 @@ test("expiry and archive hide announcements while preserving audited history", t
   assert.equal(f.service.archive({ ...f.scope, id: first.id, input: { version: 1, confirmed: true } }).archived, true);
 });
 
+test("all visible announcement lists cap existing null and longer expiry at seven days while preserving earlier expiry and history", t => {
+  const f = fixture(t);
+  const week = 7 * 24 * 60 * 60 * 1000;
+  const { createSqliteLeagueAnnouncementRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteLeagueAnnouncementRepository");
+  const { publishLeagueChangeAnnouncement } = require("../../src/infrastructure/persistence/sqlite/leagueChangeAnnouncement");
+  const sidebar = createSqliteLeagueAnnouncementRepository({ database: f.db });
+  const noExpiry = f.publish({ ...announcement, expiresAtMs: null }, "no-expiry");
+  const longer = f.publish({ ...announcement, expiresAtMs: NOW + week + 60_000 }, "longer-expiry");
+  const earlier = f.publish(announcement, "earlier-expiry");
+  f.db.transaction(() => publishLeagueChangeAnnouncement(f.db, { id: id(800), leagueId: id(10), actorUserId: id(1), title: "Schedule changed", message: "A confirmed calendar change", reason: "Commissioner decision", nowMs: NOW }))();
+  const automatic = f.db.prepare("SELECT * FROM league_communications WHERE client_key=?").get(`automatic-change:${id(800)}`);
+  assert.equal(automatic.expires_at_ms, null);
+  const allIds = [noExpiry.id, longer.id, earlier.id, automatic.id].sort();
+  const preserved = f.db.serialize();
+  const readAt = (time) => {
+    f.setTime(time);
+    const messages = f.service.list({ ...f.scope, authenticated: auth(2) }).messages.map(row => row.id).sort();
+    const sidebarIds = sidebar.listPage({ leagueId: id(10), limit: 20, cursor: null, nowMs: time }).rows.map(row => row.id).sort();
+    assert.deepEqual(sidebarIds, messages);
+    return messages;
+  };
+  assert.deepEqual(readAt(NOW + 59_999), allIds);
+  assert.deepEqual(readAt(NOW + 60_000), [noExpiry.id, longer.id, automatic.id].sort());
+  assert.deepEqual(readAt(NOW + week - 1), [noExpiry.id, longer.id, automatic.id].sort());
+  assert.deepEqual(readAt(NOW + week), []);
+  assert.deepEqual(readAt(NOW + week + 1), []);
+  assert.deepEqual(f.service.list({ ...f.scope, history: true }).messages.map(row => row.id).sort(), allIds);
+  assert.deepEqual(f.service.list({ leagueId: id(20), authenticated: auth(3), history: true }).messages, []);
+  assert.throws(() => f.service.list({ ...f.scope, authenticated: auth(2), history: true }), { code: "LEAGUE_COMMISSIONER_REQUIRED" });
+  assert(preserved.equals(f.db.serialize()), "Expiry, history, sidebar and denied reads preserve every stored record");
+});
+
 test("invalid inputs and empty recipient groups cannot write", t => {
   const f = fixture(t);
   const before = snapshot(f.db);
