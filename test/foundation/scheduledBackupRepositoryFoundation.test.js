@@ -7,6 +7,7 @@ const test = require("node:test");
 const { openDatabase } = require("../../src/infrastructure/database/connection");
 const { migrateDatabase } = require("../../src/infrastructure/database/migrate");
 const { RECOVERY_HOLD_KEY } = require("../../src/infrastructure/database/recoveryHold");
+const { TWICE_WEEKLY_CADENCE, latestTwiceWeeklyOccurrence } = require("../../src/domain/backups/scheduledBackupContract");
 const { createSqliteScheduledBackupRepository, LEASE_MS, RETRY_MS, INTERVALS } = require("../../src/infrastructure/persistence/sqlite/SqliteScheduledBackupRepository");
 
 const identity = { environmentId: "test:backup-scheduler", databaseId: "scheduled-backup-test" };
@@ -35,6 +36,65 @@ function fixture(t) {
 }
 const rows = (db, table) => db.prepare(`SELECT * FROM ${table} ORDER BY id`).all();
 const changes = (db) => db.prepare("SELECT total_changes() AS count").get().count;
+
+test("the latest slot changes at Friday 08:00 and Sunday 20:00 Vancouver year-round", () => {
+  const pairs = [
+    ["2026-11-13T15:00:00Z", "2026-11-16T03:00:00Z"],
+    ["2027-07-09T15:00:00Z", "2027-07-12T03:00:00Z"],
+  ];
+  for (const pair of pairs) {
+    const [friday, sunday] = pair.map(Date.parse);
+    const week = 7 * INTERVALS.daily;
+    assert.equal(latestTwiceWeeklyOccurrence(friday - 1), sunday - week);
+    assert.equal(latestTwiceWeeklyOccurrence(friday), friday);
+    assert.equal(latestTwiceWeeklyOccurrence(sunday - 1), friday);
+    assert.equal(latestTwiceWeeklyOccurrence(sunday), sunday);
+    assert.equal(latestTwiceWeeklyOccurrence(friday + week - 1), sunday);
+    assert.equal(latestTwiceWeeklyOccurrence(friday + week), friday + week);
+  }
+});
+
+test("cutover honors an active old lease and the existing verified copy, then skips failed hourly backlog", (t) => {
+  const { a, b, database } = fixture(t);
+  const cutover = Date.parse("2026-11-11T15:00:00Z");
+  const friday = Date.parse("2026-11-13T15:00:00Z");
+  const claimWeekly = (worker, at) => worker.claim(claimInput(at, { cadence: TWICE_WEEKLY_CADENCE }));
+  const old = a.claim(claimInput(cutover, { cadence: "hourly" })).claim;
+  assert.deepEqual(claimWeekly(b, cutover + 1), { status: "skipped", reason: "already-running" });
+  a.complete({ claim: old, nowMs: cutover + 2, evidence: { ...evidence("hourly"), backupCreatedAtMs: cutover } });
+  const failedAt = cutover + INTERVALS.hourly;
+  const failed = a.claim(claimInput(failedAt, { cadence: "hourly" })).claim;
+  a.fail({ claim: failed, nowMs: failedAt + 1 });
+  const oldRows = rows(database, "job_runs");
+  assert.deepEqual(claimWeekly(b, friday - 1), { status: "skipped", reason: "not-due" });
+  assert.deepEqual(rows(database, "job_runs"), oldRows);
+  const fridayClaim = claimWeekly(a, friday).claim;
+  assert.equal(fridayClaim.occurrenceKey, `twice-weekly:${friday}`);
+  assert.deepEqual(claimWeekly(b, friday), { status: "skipped", reason: "already-running" });
+  assert.deepEqual(rows(database, "job_runs").filter(row => row.id !== fridayClaim.runId), oldRows);
+
+  const failure = a.fail({ claim: fridayClaim, nowMs: friday + 1 });
+  assert.deepEqual(claimWeekly(b, failure.retryAtMs - 1), { status: "skipped", reason: "not-due" });
+  const retry = claimWeekly(b, failure.retryAtMs).claim;
+  assert.equal(retry.runId, fridayClaim.runId);
+  assert.equal(retry.supersedesBackupId, fridayClaim.backupId);
+  b.complete({ claim: retry, nowMs: failure.retryAtMs + 1, evidence: { ...evidence("friday"), backupCreatedAtMs: failure.retryAtMs } });
+  const sunday = Date.parse("2026-11-16T03:00:00Z");
+  assert.deepEqual(claimWeekly(a, sunday - 1), { status: "skipped", reason: "not-due" });
+  assert.equal(claimWeekly(a, sunday).claim.scheduledForMs, sunday);
+});
+
+test("a restarted scheduler catches up only the latest due slot following an interruption", (t) => {
+  const { a, b, database } = fixture(t);
+  const friday = Date.parse("2026-11-13T15:00:00Z");
+  const old = a.claim(claimInput(friday, { cadence: TWICE_WEEKLY_CADENCE })).claim;
+  const laterSunday = Date.parse("2026-11-30T03:00:00Z");
+  const resumed = b.claim(claimInput(laterSunday + INTERVALS.hourly, { cadence: TWICE_WEEKLY_CADENCE })).claim;
+  assert.equal(resumed.scheduledForMs, laterSunday);
+  assert.notEqual(resumed.runId, old.runId);
+  assert.equal(rows(database, "job_runs").length, 2);
+  assert.throws(() => a.complete({ claim: old, nowMs: laterSunday, evidence: evidence("expired") }), { code: "BACKUP_JOB_LEASE_LOST" });
+});
 
 test("competing connections lease one occurrence, atomically catalog it, and replay without writes", (t) => {
   const { a, b, database, second } = fixture(t);

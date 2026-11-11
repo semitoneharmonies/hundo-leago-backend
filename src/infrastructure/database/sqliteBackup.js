@@ -15,6 +15,7 @@ const BACKUP_MANIFEST_FILE_NAME = "backup-manifest.json";
 const APPROVED_REASONS = Object.freeze([
   "scheduled-hourly",
   "scheduled-daily",
+  "scheduled-twice-weekly",
   "commissioner-request",
   "pre-deploy",
   "pre-migration",
@@ -227,6 +228,7 @@ async function createVerifiedBackup({
 } = {}) {
   if (!APPROVED_ENVIRONMENTS.includes(environment) ||
       !APPROVED_REASONS.includes(reason) ||
+      (reason === "scheduled-twice-weekly" && environment !== "production") ||
       !Number.isSafeInteger(capturedAtMs) || capturedAtMs < 0 ||
       typeof databasePath !== "string" ||
       !path.isAbsolute(databasePath) || !fs.existsSync(databasePath)) {

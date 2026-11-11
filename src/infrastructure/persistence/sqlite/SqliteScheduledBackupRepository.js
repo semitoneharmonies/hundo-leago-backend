@@ -1,7 +1,7 @@
 const { assertDatabaseIdentity } = require("../../database/databaseIdentity");
 const { assertRecoveryRuntimeAllowed } = require("../../database/recoveryHold");
 const { canonicalize } = require("../../migration/sourceInventory");
-const { JOB_TYPE } = require("../../../domain/backups/scheduledBackupContract");
+const { JOB_TYPE, TWICE_WEEKLY_CADENCE, latestTwiceWeeklyOccurrence } = require("../../../domain/backups/scheduledBackupContract");
 
 const INTERVALS = Object.freeze({ hourly: 3_600_000, daily: 86_400_000 });
 const LEASE_MS = 15 * 60_000;
@@ -29,6 +29,10 @@ function createSqliteScheduledBackupRepository({ database, environmentId, databa
   }
   guard();
   const byId = database.prepare("SELECT * FROM job_runs WHERE id=? AND league_id IS NULL AND job_type=?");
+  const verifiedSinceSlot = database.prepare(
+    "SELECT 1 FROM backup_catalog WHERE league_id IS NULL AND backup_kind='scheduled' AND status='verified' " +
+    "AND environment_identity=? AND source_database_id=? AND created_at_ms BETWEEN ? AND ? LIMIT 1"
+  );
   function attempt(row) {
     try {
       const value = JSON.parse(row.result_json);
@@ -53,16 +57,26 @@ function createSqliteScheduledBackupRepository({ database, environmentId, databa
       "AND status IN ('leased','running') AND lease_expires_at_ms>? LIMIT 1").get(JOB_TYPE, nowMs)) {
       return Object.freeze({ status: "skipped", reason: "already-running" });
     }
-    const scheduledForMs = Math.floor(nowMs / INTERVALS[cadence]) * INTERVALS[cadence];
+    const twiceWeekly = cadence === TWICE_WEEKLY_CADENCE;
+    const scheduledForMs = twiceWeekly
+      ? latestTwiceWeeklyOccurrence(nowMs)
+      : Math.floor(nowMs / INTERVALS[cadence]) * INTERVALS[cadence];
+    // A verified hourly or daily backup can already cover the slot at cutover.
+    if (twiceWeekly && (scheduledForMs < 0 || verifiedSinceSlot.get(environmentId, databaseId, scheduledForMs, nowMs))) {
+      return Object.freeze({ status: "skipped", reason: "not-due" });
+    }
     const occurrenceKey = `${cadence}:${scheduledForMs}`;
     if (!database.prepare("SELECT 1 FROM job_runs WHERE league_id IS NULL AND job_type=? AND occurrence_key=?")
       .get(JOB_TYPE, occurrenceKey)) {
       database.prepare("INSERT INTO job_runs (id,job_type,occurrence_key,scheduled_for_ms,status,created_at_ms,updated_at_ms,version,next_attempt_at_ms) " +
         "VALUES (?,?,?,?,'pending',?,?,1,?)").run(runId, JOB_TYPE, occurrenceKey, scheduledForMs, nowMs, nowMs, scheduledForMs);
     }
-    const row = database.prepare("SELECT * FROM job_runs WHERE league_id IS NULL AND job_type=? AND scheduled_for_ms<=? " +
-      "AND ((status IN ('pending','failed') AND next_attempt_at_ms<=?) OR (status IN ('leased','running') AND lease_expires_at_ms<=?)) " +
-      "ORDER BY scheduled_for_ms,id LIMIT 1").get(JOB_TYPE, nowMs, nowMs, nowMs);
+    // This policy catches up only the latest Friday or Sunday. Older failed
+    // hourly/daily attempts stay in the audit history and generate no uploads.
+    const row = database.prepare("SELECT * FROM job_runs WHERE league_id IS NULL AND job_type=@jobType AND scheduled_for_ms<=@nowMs " +
+      "AND (@slot IS NULL OR occurrence_key=@slot) " +
+      "AND ((status IN ('pending','failed') AND next_attempt_at_ms<=@nowMs) OR (status IN ('leased','running') AND lease_expires_at_ms<=@nowMs)) " +
+      "ORDER BY scheduled_for_ms,id LIMIT 1").get({ jobType: JOB_TYPE, nowMs, slot: twiceWeekly ? occurrenceKey : null });
     if (!row) return Object.freeze({ status: "skipped", reason: "not-due" });
     if (row.updated_at_ms > nowMs) fail("BACKUP_JOB_INPUT_INVALID");
     const supersedesBackupId = row.attempt_count > 0 ? attempt(row).backupId : null;
@@ -127,7 +141,7 @@ function createSqliteScheduledBackupRepository({ database, environmentId, databa
   return Object.freeze({
     claim({ cadence, nowMs, runId, backupId, leaseToken, leaseOwner } = {}) {
       timestamp(nowMs); id(runId); id(backupId); id(leaseToken);
-      if (!Object.hasOwn(INTERVALS, cadence) || typeof leaseOwner !== "string" ||
+      if ((!Object.hasOwn(INTERVALS, cadence) && cadence !== TWICE_WEEKLY_CADENCE) || typeof leaseOwner !== "string" ||
           !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(leaseOwner)) fail("BACKUP_JOB_INPUT_INVALID");
       return claimTransaction.immediate({ cadence, nowMs, runId, backupId, leaseToken, leaseOwner });
     },

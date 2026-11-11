@@ -2,12 +2,13 @@ const { createSqliteScheduledBackupRepository } = require("../infrastructure/per
 const { createObjectStorageAdapter } = require("../infrastructure/backups/createObjectStorageAdapter");
 const { createS3CompatibleClient } = require("../infrastructure/backups/createS3CompatibleClient");
 const { createScheduledBackupJob } = require("../operations/backups/createScheduledBackupJob");
+const { TWICE_WEEKLY_CADENCE } = require("../domain/backups/scheduledBackupContract");
 
-function selectBackupCadence({ appEnv, leagueWriteMode, hasActiveSeason }) {
-  if (!["staging", "production"].includes(appEnv) || !["open", "closed"].includes(leagueWriteMode) || typeof hasActiveSeason !== "boolean") {
+function selectBackupCadence({ appEnv }) {
+  if (!["staging", "production"].includes(appEnv)) {
     throw new TypeError("Backup cadence requires an explicit runtime state");
   }
-  return appEnv === "staging" ? "daily" : leagueWriteMode === "open" || hasActiveSeason ? "hourly" : "daily";
+  return appEnv === "staging" ? "daily" : TWICE_WEEKLY_CADENCE;
 }
 
 function createDeployedBackupJob({ database, config, logger, fetchImplementation, jobOptions } = {}) {
@@ -27,11 +28,10 @@ function createDeployedBackupJob({ database, config, logger, fetchImplementation
     accessKeyId: storage.accessKeyId.value, secretAccessKey: storage.secretAccessKey.value,
     fetchImplementation, requestTimeoutMs: 60_000,
   }) });
-  const activeSeason = database.prepare("SELECT 1 FROM seasons WHERE status='active' LIMIT 1");
+  const cadence = selectBackupCadence(config);
   return createScheduledBackupJob({ ...jobOptions, databasePath: config.databasePath, config: backup,
     repository, objectStorage, backendBuildId: config.buildId, logger,
-    cadence: () => selectBackupCadence({ appEnv: config.appEnv, leagueWriteMode: config.leagueWriteMode,
-      hasActiveSeason: Boolean(activeSeason.get()) }),
+    cadence: () => cadence,
   });
 }
 

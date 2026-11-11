@@ -3,6 +3,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
+  TWICE_WEEKLY_CADENCE,
+  latestTwiceWeeklyOccurrence,
+} = require("../../domain/backups/scheduledBackupContract");
+const {
   compressAndEncryptBackup,
 } = require("../../infrastructure/backups/backupArtifactCrypto");
 const {
@@ -18,6 +22,7 @@ const FORMAT_VERSION = 2;
 const RETENTION_CLASSES = Object.freeze([
   "hourly",
   "daily",
+  TWICE_WEEKLY_CADENCE,
   "weekly",
   "monthly",
   "pre-change",
@@ -75,6 +80,7 @@ function minimumRetentionExpiry(createdAtMs, retentionClass) {
   const durations = {
     hourly: 48 * 60 * 60 * 1000,
     daily: 14 * 24 * 60 * 60 * 1000,
+    [TWICE_WEEKLY_CADENCE]: 30 * 24 * 60 * 60 * 1000,
     weekly: 8 * 7 * 24 * 60 * 60 * 1000,
     monthly: 365 * 24 * 60 * 60 * 1000,
     "pre-change": 90 * 24 * 60 * 60 * 1000,
@@ -162,17 +168,32 @@ async function createEncryptedOffsiteBackup({
     fail("BACKUP_INPUT_INVALID", "A stable backup identifier is required.");
   }
   const createdAtMs = nowMs();
+  const twiceWeekly = retentionClass === TWICE_WEEKLY_CADENCE;
+  if (twiceWeekly || reason === "scheduled-twice-weekly") {
+    if (!twiceWeekly || reason !== "scheduled-twice-weekly" || config.appEnv !== "production" ||
+        !scheduledOccurrence || requestedByType !== "backup_scheduler" || requestedById !== scheduledOccurrence.jobRunId) {
+      fail("BACKUP_INPUT_INVALID", "A production scheduler occurrence is required for a twice-weekly backup.");
+    }
+  }
   let scheduleEvidence = null;
   if (scheduledOccurrence !== null) {
     const { jobRunId, occurrenceKey, supersedesBackupId, completionObjectKey } = scheduledOccurrence;
     if (!UUID_PATTERN.test(jobRunId || "") ||
-        !/^(hourly|daily):[0-9]{1,16}$/.test(occurrenceKey || "") ||
+        !/^(hourly|daily|twice-weekly):[0-9]{1,16}$/.test(occurrenceKey || "") ||
         reason !== `scheduled-${occurrenceKey.split(":")[0]}` ||
         retentionClass !== occurrenceKey.split(":")[0] ||
         (supersedesBackupId !== null && (!UUID_PATTERN.test(supersedesBackupId || "") || supersedesBackupId === backupId)) ||
         typeof completionObjectKey !== "string" || !completionObjectKey.startsWith(config.objectStorage.prefix) ||
         completionObjectKey.length > 512 || completionObjectKey.includes("..") || !/^[A-Za-z0-9/_:.-]+$/.test(completionObjectKey)) {
       fail("BACKUP_INPUT_INVALID", "The scheduled backup occurrence is invalid.");
+    }
+    if (twiceWeekly) {
+      const scheduledForMs = Number(occurrenceKey.split(":")[1]);
+      if (!Number.isSafeInteger(scheduledForMs) || scheduledForMs > createdAtMs ||
+          occurrenceKey !== `${TWICE_WEEKLY_CADENCE}:${scheduledForMs}` ||
+          latestTwiceWeeklyOccurrence(scheduledForMs) !== scheduledForMs) {
+        fail("BACKUP_INPUT_INVALID", "The twice-weekly backup must refer to a due scheduled time.");
+      }
     }
     scheduleEvidence = Object.freeze({ jobRunId, occurrenceKey, supersedesBackupId, completionObjectKey, completionReceiptRequired: true });
   }
@@ -184,6 +205,7 @@ async function createEncryptedOffsiteBackup({
   if (
     (expiresAt !== null &&
       (typeof expiresAt !== "string" || Number.isNaN(Date.parse(expiresAt)))) ||
+    (twiceWeekly && expiresAt !== null && Date.parse(expiresAt) !== Date.parse(minimumExpiry)) ||
     (["season-end", "incident-preservation"].includes(retentionClass) &&
       expiresAt !== null) ||
     (minimumExpiry !== null &&
@@ -198,7 +220,8 @@ async function createEncryptedOffsiteBackup({
   const verifiedDirectory = path.join(workDirectory, "verified");
   const baseName =
     `hundo-leago_${config.appEnv}_${backupTimestamp(createdAtMs)}_${backupId}`;
-  const storageObjectKey = `${config.objectStorage.prefix}${baseName}.sqlite3.gz.enc`;
+  const payloadPrefix = twiceWeekly ? `${config.objectStorage.prefix}routine-30d/` : config.objectStorage.prefix;
+  const storageObjectKey = `${payloadPrefix}${baseName}.sqlite3.gz.enc`;
   const manifestObjectKey = `${config.objectStorage.prefix}${baseName}.manifest.json`;
   let ownsWorkDirectory = false;
   try {
