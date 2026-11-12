@@ -13,17 +13,22 @@ function contentHash(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-// Recent games are always fetched. Older games are reusable only while their
-// identity, scoring mode, and correction-check deadline remain unchanged.
-function canReuseCompletedGame({ entry, game, season, expanded, nowMs }) {
-  return Boolean(entry && game.final && entry.version === CACHE_VERSION &&
+function matchesCompletedGame({ entry, game, season, expanded }) {
+  return Boolean(entry && entry.version === CACHE_VERSION &&
     entry.season === season && entry.expanded === expanded &&
     entry.identity === gameIdentity(game) &&
     entry.data && Array.isArray(entry.data.rows) && Array.isArray(entry.data.categories) &&
+    entry.sha256 === contentHash(entry.data));
+}
+
+// Recent games are always fetched. Older games are reusable only while their
+// identity, scoring mode, and correction-check deadline remain unchanged.
+function canReuseCompletedGame({ entry, game, season, expanded, nowMs }) {
+  return Boolean(game.final && entry &&
     Number.isSafeInteger(entry.checkedAtMs) && entry.checkedAtMs <= nowMs &&
     game.startsAtMs < nowMs - RECENT_GAME_WINDOW_MS &&
     nowMs - entry.checkedAtMs < HISTORICAL_RECHECK_MS &&
-    entry.sha256 === contentHash(entry.data));
+    matchesCompletedGame({ entry, game, season, expanded }));
 }
 
 function completedGameEntry({ game, season, expanded, checkedAtMs, data }) {
@@ -31,4 +36,4 @@ function completedGameEntry({ game, season, expanded, checkedAtMs, data }) {
     checkedAtMs, data, sha256: contentHash(data) };
 }
 
-module.exports = { RECENT_GAME_WINDOW_MS, HISTORICAL_RECHECK_MS, canReuseCompletedGame, completedGameEntry };
+module.exports = { RECENT_GAME_WINDOW_MS, HISTORICAL_RECHECK_MS, canReuseCompletedGame, matchesCompletedGame, completedGameEntry };

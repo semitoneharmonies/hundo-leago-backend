@@ -2071,7 +2071,7 @@ function createTargetRepositories({
     teamProfiles: createSqliteTeamProfileRepository({ database }),
     teamRead: createSqliteTeamReadRepository({ database }),
     teamWorkspace: createSqliteTeamWorkspaceRepository({ database, expandedScoringEnabled, nowMs }),
-    rosterSchedule: createSqliteRosterScheduleRepository({ database }),
+    rosterSchedule: createSqliteRosterScheduleRepository({ database, expandedScoringEnabled }),
     playerInjuries: database.pragma('user_version', { simple: true }) >= 65
       ? createSqlitePlayerInjuryRepository({ database }) : null,
     communications: database.pragma("user_version", { simple: true }) >= 71

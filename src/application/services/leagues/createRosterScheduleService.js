@@ -7,10 +7,13 @@ function createRosterScheduleService({ leagueAuthorization, repository, schedule
       const schedule = await scheduleAdapter.readSchedule({
         startsAtMs: week.starts_at_ms, endsAtMs: week.ends_at_ms, nhlSeasonKey: week.nhl_season_key,
       });
+      const points = repository.readPlayerPoints({ leagueId: input.leagueId, seasonId: input.seasonId, week, games: schedule.games });
       return Object.freeze({
         code: "ROSTER_SCHEDULE_FOUND", leagueId: input.leagueId, seasonId: input.seasonId, weekId: input.weekId,
         startsAtMs: week.starts_at_ms, endsAtMs: week.ends_at_ms, timeZone: week.timezone,
         ...schedule,
+        games: schedule.games.map(game => game.status === "final"
+          ? { ...game, playerPoints: points.get(game.id) || [] } : game),
       });
     },
   });
