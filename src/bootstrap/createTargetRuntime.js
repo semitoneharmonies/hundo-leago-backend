@@ -2391,7 +2391,7 @@ function createTargetServices({
     const lateLocks = matchupProcessingEnabled
       ? await lateLockCoordinator.retryAfterStatisticsRefresh({ nhlSeasonKey: currentSeason.nhlSeasonKey }) : undefined;
     if (!expandedScoringEnabled || !matchupProcessingEnabled) return lateLocks;
-    return { lateLocks, corrections: providerResultCorrections.reconcile() };
+    return { lateLocks, corrections: await providerResultCorrections.reconcile() };
   };
   const completedStatisticsJob = completedNhlAdapter
     ? createRunCompletedGameStatisticsJob({

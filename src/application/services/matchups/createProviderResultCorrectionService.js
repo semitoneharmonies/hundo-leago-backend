@@ -1,3 +1,4 @@
+const { setImmediate: yieldToEventLoop } = require("node:timers/promises");
 const { EXPANDED_SCORING_VERSION } = require("../../../domain/statistics/expandedScoringPolicy");
 
 function breakdownIdentity(score) {
@@ -13,9 +14,10 @@ function createProviderResultCorrectionService({ repository, scoringService, clo
   if (!repository?.listCandidates || !repository?.commit || !scoringService?.readForCorrection || !scoringService?.readAtRefresh || !clock?.nowMs || typeof createId !== "function") {
     throw new TypeError("Provider corrections require scoped storage, sealed scoring, a clock and IDs.");
   }
-  function reconcile() {
+  async function reconcile() {
     const report = { checked: 0, corrected: 0, unchanged: 0, awaitingData: 0, requiresPlayoffReview: 0 };
     for (const candidate of repository.listCandidates()) {
+      await yieldToEventLoop();
       report.checked += 1;
       try {
         const scope = { leagueId: candidate.league_id, seasonId: candidate.season_id,
