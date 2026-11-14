@@ -1,3 +1,4 @@
+const { runStatisticsWorker } = require("../jobs/runStatisticsWorker");
 const { createSqlitePushRepository } = require('../infrastructure/persistence/sqlite/SqlitePushRepository');
 const { createPushService } = require('../application/services/push/createPushService');
 const { createPushRouter } = require('../transport/http/createPushRouter');
@@ -2117,6 +2118,7 @@ function createTargetRepositories({
 }
 
 function createTargetServices({
+  statisticsWorkerOptions = null,
   pushConfig = { enabled:false },
   pushAdapter,
   repositories,
@@ -2387,11 +2389,24 @@ function createTargetServices({
     refreshOnRosterChange: !completedNhlAdapter,
     executionEnabled: !completedNhlAdapter || matchupProcessingEnabled,
   });
+  async function runPostRefresh(operation, fallback, options = {}) {
+    const start = Date.now();
+    try {
+      const report = statisticsWorkerOptions
+        ? await runStatisticsWorker({ ...statisticsWorkerOptions, operation, nowMs: clock.nowMs(), ...options })
+        : await fallback();
+      logger.info?.("statistics.post_refresh_completed", { operation, durationMs: Date.now() - start, ...report });
+      return report;
+    } catch (error) {
+      logger.error?.("statistics.post_refresh_failed", { operation, durationMs: Date.now() - start });
+      throw error;
+    }
+  }
   const retryLateLocksAfterRefresh = async () => {
     const lateLocks = matchupProcessingEnabled
       ? await lateLockCoordinator.retryAfterStatisticsRefresh({ nhlSeasonKey: currentSeason.nhlSeasonKey }) : undefined;
     if (!expandedScoringEnabled || !matchupProcessingEnabled) return lateLocks;
-    return { lateLocks, corrections: await providerResultCorrections.reconcile() };
+    return { lateLocks, corrections: await runPostRefresh("corrections", () => providerResultCorrections.reconcile()) };
   };
   const completedStatisticsJob = completedNhlAdapter
     ? createRunCompletedGameStatisticsJob({
@@ -2404,10 +2419,10 @@ function createTargetServices({
           frequentRefreshEnabled: nhlStatisticsEfficiencyEnabled,
           isGameRefreshWindow: completedNhlAdapter.isGameRefreshWindow,
           hasPendingGames: repositories.statisticsSchedule.hasPendingGames,
-          afterMaintenance: (nhlStatisticsEfficiencyEnabled || nhlStatisticsRetentionEnabled) ? () => ({
+          afterMaintenance: (nhlStatisticsEfficiencyEnabled || nhlStatisticsRetentionEnabled) ? () => runPostRefresh("maintenance", () => ({
             compactProjectionsPruned: nhlStatisticsEfficiencyEnabled ? repositories.statisticsRetention.pruneCompactTotals() : 0,
             ...(nhlStatisticsRetentionEnabled ? repositories.statisticsRetention.retire(clock.nowMs()) : {}),
-          }) : undefined,
+          }), { prune: nhlStatisticsEfficiencyEnabled, retire: nhlStatisticsRetentionEnabled }) : undefined,
       })
     : null;
   const lifecycleTransition =
@@ -3639,6 +3654,8 @@ function createTargetRuntime({
       getSocketReauthorizer: () => socketRooms?.reauthorize,
     });
   const services = createTargetServices({
+    statisticsWorkerOptions: database.name && !database.memory
+      ? { databasePath: require("node:path").resolve(database.name), leagueIds: matchupProcessingLeagueIds } : null,
     pushConfig,
     pushAdapter,
     repositories,
