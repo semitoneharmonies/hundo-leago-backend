@@ -1,13 +1,13 @@
 "use strict";
 
 const { createHash, randomUUID } = require("node:crypto");
-const { DatabaseSync } = require("node:sqlite");
 const { MINUTE, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom } = require("./dailyRoom");
 
 const DAILY_DATABASE_ID = 1212433457;
 const MEMBER_PHASES = new Set(["waiting", "auction"]);
 
 function createDailyStore({ filename, clock = Date.now, existingOnly = false } = {}) {
+  const { DatabaseSync } = require("node:sqlite");
   if (!filename) throw new TypeError("Daily needs its own SQLite filename.");
   if (existingOnly) {
     // A read that discovers a missing or empty sidecar must never initialize it.
