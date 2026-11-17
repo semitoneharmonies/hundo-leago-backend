@@ -75,6 +75,24 @@ test("tomorrow follows the Vancouver calendar across fall DST and stays selectab
   assert.equal(room.date, tomorrow.date);
 });
 
+test("winter lobby and practice creation roll to the next Vancouver date at 07:00 UTC from 2026 onward", async t => {
+  let now = Date.parse("2026-11-17T06:59:59.999Z");
+  const tomorrow = { ...slate, date: "2026-11-17", firstGameAt: Date.parse("2026-11-18T00:00:00Z") };
+  const get = async date => date === tomorrow.date ? tomorrow : date === slate.date ? slate : null;
+  const daily = createDailyService({ filename: ":memory:", clock: () => now, feed: { getSchedule: get, getSlate: get } });
+  t.after(() => daily.close());
+  assert.equal((await daily.lobby({ actor: host })).practiceSlate.date, slate.date);
+  now++;
+  const lobby = await daily.lobby({ actor: host });
+  assert.deepEqual(lobby.slateOptions.map(row => row.date), [tomorrow.date, "2026-11-18"]);
+  assert.equal(lobby.practiceSlate.date, tomorrow.date);
+  await assert.rejects(daily.create({ actor: host, input: { ...input, mode: "practice" } }), { code: "DAILY_SLATE_CHANGED" });
+  for (const mode of ["scheduled", "practice"]) {
+    const result = await daily.create({ actor: host, input: { ...input, mode, slateDate: tomorrow.date } });
+    assert.equal(result.room.date, tomorrow.date);
+  }
+});
+
 test("practice uses today's full NHL slate after puck drop with its own immediate auction and scoring deadline", async t => {
   let now = puckDrop + 75 * minute;
   let scoreCalls = 0, outage = false;

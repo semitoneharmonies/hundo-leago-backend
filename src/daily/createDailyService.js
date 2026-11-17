@@ -1,11 +1,9 @@
 const { existsSync } = require("node:fs");
 const { createDailyStore } = require("./createDailyStore");
+const { vancouverDate } = require("./vancouverDate");
 const { createHundoDailyFeed } = require("../infrastructure/nhl/HundoDailyFeed");
 
 const MINUTE = 60_000;
-const vancouver = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "America/Vancouver", year: "numeric", month: "2-digit", day: "2-digit",
-});
 
 function fail(status, code, message) {
   throw Object.assign(new Error(message), { status, code });
@@ -79,7 +77,7 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
   }
   async function lobby({ actor }) {
     const rooms = existing()?.listRooms({ actor }) || [];
-    const slateOptions = await roomDates(vancouver.format(clock()));
+    const slateOptions = await roomDates(vancouverDate(clock()));
     const selected = slateOptions.find(option => option.status === "open");
     const slate = selected ? { date: selected.date, firstGameAt: selected.firstGameAt, auctionStartsAt: selected.auctionStartsAt } : null;
     const today = slateOptions[0];
@@ -88,7 +86,7 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
     return { rooms, slate, slateOptions, practiceSlate, slateUnavailable: !slate && slateOptions.some(option => option.status === "unavailable") };
   }
   async function selectRoomDate(requested) {
-    const today = vancouver.format(clock());
+    const today = vancouverDate(clock());
     const tomorrow = dateAfter(today, 1);
     let option;
     if (requested === today || requested === tomorrow) {
@@ -120,12 +118,12 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
     const replay = requestId && existing()?.replayCreate(request);
     if (replay) return { room: replay };
     const practice = mode === "practice";
-    const date = practice ? vancouver.format(clock()) : await selectRoomDate(slateDate);
+    const date = practice ? vancouverDate(clock()) : await selectRoomDate(slateDate);
     if (practice && slateDate && slateDate !== date) {
       fail(409, "DAILY_SLATE_CHANGED", "Practice rooms use today's NHL games. Refresh the lobby.");
     }
     const slate = await feed.getSlate(date);
-    if (!slate || slate.date !== date || (practice && vancouver.format(clock()) !== date)) {
+    if (!slate || slate.date !== date || (practice && vancouverDate(clock()) !== date)) {
       fail(409, "DAILY_SLATE_CHANGED", "There is no available NHL slate for that date. Refresh the lobby.");
     }
     if (!practice && slate.firstGameAt <= clock()) fail(409, "DAILY_LOCKED", "The first game has already started.");

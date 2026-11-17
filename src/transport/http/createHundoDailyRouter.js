@@ -11,7 +11,7 @@ const endpoints = [
   ["POST", base + "/rooms/:roomId/close", "closeRoom"],
 ];
 
-function createHundoDailyRouter({ requestSecurity, service, getActor }) {
+function createHundoDailyRouter({ requestSecurity, service, getActor, nowMs }) {
   const router = express.Router();
   for (const name of ["assignRequestId", "securityHeaders", "credentialedCors",
     "requireAllowedOrigin", "requireJson", "requireCompatibleFetchMetadata"]) {
@@ -30,7 +30,9 @@ function createHundoDailyRouter({ requestSecurity, service, getActor }) {
             actor: getActor(session), roomId: request.params.roomId,
             input: request.body, requestId: request.get("idempotency-key"),
           });
-          response.set("Cache-Control", "private, no-store").json({ data, meta: { requestId: requestSecurity.getRequestId(request) } });
+          response.set("Cache-Control", "private, no-store").json({
+            data, meta: { requestId: requestSecurity.getRequestId(request), serverNowMs: nowMs() },
+          });
         } catch (error) { next(error); }
       });
   }

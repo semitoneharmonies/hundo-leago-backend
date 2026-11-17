@@ -1330,6 +1330,10 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
         body: input ? JSON.stringify(input) : undefined });
       const json = await response.json();
       assert.equal(response.status, status, JSON.stringify(json.error));
+      if (status === 200) {
+        assert.equal(json.meta.serverNowMs, now);
+        assert.ok(json.meta.requestId);
+      }
       return json.data;
     }
     await send("rooms", null, null, 401);

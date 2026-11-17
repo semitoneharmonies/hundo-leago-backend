@@ -1,4 +1,5 @@
 const { calculateExpandedScore } = require("../../domain/statistics/expandedScoringPolicy");
+const { vancouverDate } = require("../../daily/vancouverDate");
 const { normalizeExpandedReports } = require("./normalizeExpandedReports");
 const { easternStart } = require("./NhlCompletedGameAdapter");
 
@@ -6,9 +7,6 @@ const WEB = "https://api-web.nhle.com/v1";
 const STATS = "https://api.nhle.com/stats/rest/en";
 const MINUTE = 60_000;
 const DAY = 86_400_000;
-const localDate = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "America/Vancouver", year: "numeric", month: "2-digit", day: "2-digit",
-});
 const excluded = state => ["PPD", "CNCL", "CANC"].includes(state);
 const positions = { C: "C", L: "LW", R: "RW", D: "D" };
 
@@ -111,7 +109,7 @@ function createHundoDailyFeed({ fetchImpl = fetch, nowMs = Date.now, timeoutMs =
           if (![1, 2, 3].includes(raw.gameType)) continue;
           const startsAtMs = Date.parse(raw.startTimeUTC);
           check(Number.isSafeInteger(startsAtMs));
-          if (localDate.format(startsAtMs) !== date) continue;
+          if (vancouverDate(startsAtMs) !== date) continue;
           const id = nhlId(raw.id), season = String(raw.season);
           const homeTeam = raw.homeTeam?.abbrev, awayTeam = raw.awayTeam?.abbrev;
           check(!ids.has(id) && /^\d{8}$/.test(season) && /^[A-Z]{2,3}$/.test(homeTeam) &&
@@ -279,7 +277,7 @@ function createHundoDailyFeed({ fetchImpl = fetch, nowMs = Date.now, timeoutMs =
         const startsAtMs = easternStart(row.easternStartTime);
         if (!present.has(game.id)) {
           // A removed game is only a confirmed non-event if the NHL moved it off the room's date.
-          check(localDate.format(startsAtMs) !== slate.date);
+          check(vancouverDate(startsAtMs) !== slate.date);
           continue;
         }
         check(startsAtMs === game.startsAtMs);

@@ -57,6 +57,23 @@ test("Pacific schedule includes a late game from the next Eastern date, skips po
   assert.equal(calls.length, 1);
 });
 
+test("Vancouver game dates use the 07:00 UTC winter boundary, with the previous 08:00 boundary for historical slates", async () => {
+  for (const [date, midnight] of [["2026-11-16", "2026-11-17T07:00:00Z"], ["2025-11-16", "2025-11-17T08:00:00Z"]]) {
+    const { feed, day, next, landing } = fixture();
+    const cutoff = Date.parse(midnight);
+    day.date = date;
+    day.games = [];
+    next.date = midnight.slice(0, 10);
+    next.games = [
+      { ...landing, startTimeUTC: new Date(cutoff - 1).toISOString() },
+      { ...landing, id: landing.id + 1, startTimeUTC: midnight },
+    ];
+    const result = await feed.getSchedule(date);
+    assert.deepEqual(result.games.map(row => row.id), [String(landing.id)]);
+    assert.equal(result.firstGameAt, cutoff - 1);
+  }
+});
+
 test("empty days return no slate; incomplete dates and unknown starts cannot open a room", async () => {
   const { feed, day, landing, next, calls, advance } = fixture();
   day.games = [];

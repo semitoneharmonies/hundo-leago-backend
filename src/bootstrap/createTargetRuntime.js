@@ -3289,7 +3289,10 @@ function createTargetRouters({
     networkSourceResolver,
   };
   const routers = Object.freeze({
-    hundoDaily: createHundoDailyRouter({ requestSecurity: dailySecurity, service: daily, getActor: dailyActor }),
+    hundoDaily: createHundoDailyRouter({
+      requestSecurity: dailySecurity, service: daily, getActor: dailyActor,
+      nowMs: () => securityFoundations.clock.nowMs(),
+    }),
     tipJar: createTipJarRouter({ requestSecurity, tipJarService: services.league.tipJar }),
     quote: createQuoteRouter({ requestSecurity, quoteService: services.league.quotes }),
     leagueAnnouncement: createLeagueAnnouncementRouter({
