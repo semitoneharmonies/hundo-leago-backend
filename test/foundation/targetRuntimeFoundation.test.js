@@ -1283,13 +1283,99 @@ function installedTargetEndpoints(routers) {
   );
 }
 
+test("Hundo Daily plays a room through authenticated HTTP without changing season records", async (t) => {
+  const database = createDatabase(t);
+  seedComposedMatchupOccurrenceScope(database, 9000);
+  let now = NOW_MS;
+  const firstGameAt = now + 45 * 60_000;
+  const slate = { date: "2026-07-22", firstGameAt, games: [{ id: "1" }],
+    players: [{ id: "88", name: "Daily Skater", position: "C", team: "VAN", opponent: "EDM" }] };
+  let final = false;
+  const sent = [];
+  const runtime = createTargetRuntime(runtimeOptions(database, {
+    securityFoundations: createSecurityFoundations({ env: securityEnv(), now: () => now, loggerSink() {} }),
+    dailyFeed: {
+      getSchedule: async date => date === slate.date ? slate : null,
+      getSlate: async () => slate, getScores: async () => ({ final, pointsByPlayerId: { "88": 325 } }),
+    },
+    pushAdapter: { available: true, async send(_, payload) { sent.push(payload); } },
+  }));
+  try {
+    const base = await startRuntimeApp(t, runtime);
+    const insert = database.prepare(`INSERT INTO users
+      (id,email_normalized,email_display,display_name,display_name_normalized,status,created_at_ms,updated_at_ms,version)
+      VALUES (?,?,?,?,?,'active',1,1,1)`);
+    function actor(num, name) {
+      const id = uuid(num);
+      const mail = name.toLowerCase() + "@example.test";
+      insert.run(id, mail, mail, name, name.toLowerCase());
+      return runtime.services.sessionService.issueForUser({ userId: id });
+    }
+    const host = actor(8111, "Host"), guest = actor(8112, "Guest"), admin = actor(8113, "Admin");
+    database.prepare("INSERT INTO platform_roles VALUES (?,?,'platform_administrator','active',NULL,1,NULL,1)")
+      .run(uuid(8114), uuid(8113));
+    database.prepare("INSERT INTO push_subscriptions VALUES (?,?,?,?,?,1,1)")
+      .run(uuid(8115), uuid(8112), guest.session.id, "https://web.push.apple.com/example", '{"endpoint":"https://web.push.apple.com/example"}');
+    const snapshot = () => database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name<>'sessions' ORDER BY name").all()
+      .map(({ name }) => database.prepare('SELECT * FROM "' + name.replaceAll('"', '""') + '"').all());
+    const before = snapshot();
+    const sidecar = database.name + ".hundo-daily.sqlite3";
+    async function send(path, session, input, status = 200, extraHeaders = {}) {
+      const headers = browserHeaders(session ? {
+        Cookie: runtime.transport.sessionCookie.name + "=" + session.rawSessionToken,
+        "X-CSRF-Token": session.rawCsrfToken,
+        ...extraHeaders,
+      } : extraHeaders);
+      const response = await fetch(base + "/api/v1/daily/" + path, { method: input ? "POST" : "GET", headers,
+        body: input ? JSON.stringify(input) : undefined });
+      const json = await response.json();
+      assert.equal(response.status, status, JSON.stringify(json.error));
+      return json.data;
+    }
+    await send("rooms", null, null, 401);
+    assert.equal((await send("rooms", host)).slate.firstGameAt, firstGameAt);
+    await send("rooms", host, { name: "One", capacity: 2 }, 403, { "X-CSRF-Token": "bad" });
+    assert.equal(fs.existsSync(sidecar), false);
+    const create = { name: "One", capacity: 2, slateDate: slate.date };
+    const { room } = await send("rooms", host, create, 200, { "Idempotency-Key": "daily-create" });
+    const path = "rooms/" + room.id;
+    assert.equal((await send("rooms", host, create, 200, { "Idempotency-Key": "daily-create" })).room.id, room.id);
+    await send(path, guest, null, 403);
+    await send(path + "/join", guest, {});
+    await send(path + "/close", host, {}, 403);
+    now = firstGameAt - 40 * 60_000;
+    assert.equal((await send("reminders", guest)).reminders[0].roomId, room.id);
+    await runtime.daily.runMaintenance();
+    await runtime.daily.runMaintenance();
+    assert.deepEqual(sent.map(p => p.url), ["/daily/rooms/" + room.id]);
+    now = firstGameAt - 30 * 60_000;
+    await send(path + "/bids", guest, { playerId: "88", amount: 8 });
+    await send(path + "/bids", host, { playerId: "88", amount: 10 });
+    assert.equal((await send(path, guest)).room.auctions[0].bidCount, 2);
+    const another = (await send("rooms", guest, { name: "Two", capacity: 3 })).room;
+    await send("rooms/" + another.id + "/close", admin, {});
+    now = firstGameAt;
+    await send(path + "/bids", guest, { playerId: "88", amount: 25 }, 409);
+    await runtime.daily.runMaintenance();
+    assert.equal((await send(path, host)).room.phase, "locked");
+    now += 61_000;
+    final = true;
+    await runtime.daily.runMaintenance();
+    assert.deepEqual((await send("rooms", host)).rooms[0].winners, [{ id: uuid(8111), name: "Host", points: 3.25 }]);
+    await send(path + "/close", guest, {}, 403);
+    await send(path + "/close", host, {});
+    assert.deepEqual((await send("rooms", host)).rooms, []);
+    assert.deepEqual(snapshot(), before);
+  } finally { runtime.close(); }
+});
+
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 211 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 211);
+  test("declares 218 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 218);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      211
+      218
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -1307,6 +1393,7 @@ describe("M3-19 exact target endpoint dispatch", () => {
       "fadDeadlineControl",
       "freeAgentDraft",
       "guidedLeagueReset",
+      "hundoDaily",
       "leagueAnnouncement",
       "leagueAuctionSchedule",
       "leagueCalendar",
@@ -2532,7 +2619,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 211);
+    assert.equal(TARGET_ENDPOINTS.length, 218);
   });
 
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {

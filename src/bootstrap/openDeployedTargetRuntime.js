@@ -409,6 +409,7 @@ function openDeployedTargetRuntime({
     persistentRoot: config.persistentRoot,
     requirePersistentRoot: true,
   });
+  let runtime;
   try {
     const migrations = discoverMigrations({
       migrationsDirectory: config.migrationsDirectory,
@@ -426,7 +427,8 @@ function openDeployedTargetRuntime({
       logger: securityFoundations.logger, fetchImplementation: backupFetchImplementation, jobOptions: backupJobOptions });
     const stagingAccountAutoVerificationEnabled =
       isStagingAccountAutoVerificationEnabled(config);
-    const runtime = createRuntimeFunction({
+    runtime = createRuntimeFunction({
+      dailyBackgroundEnabled: config.scheduledJobsEnabled,
       pushConfig: config.webPush,
       database: connection.database,
       migrationsDirectory: config.migrationsDirectory,
@@ -648,6 +650,7 @@ function openDeployedTargetRuntime({
       scheduler,
     });
   } catch (error) {
+    runtime?.close?.();
     if (connection.database?.open) connection.database.close();
     throw error;
   }

@@ -1,3 +1,5 @@
+const { createDailyService } = require("../daily/createDailyService");
+const { createHundoDailyRouter, dailyEndpoints } = require("../transport/http/createHundoDailyRouter");
 const { createSqlitePushRepository } = require('../infrastructure/persistence/sqlite/SqlitePushRepository');
 const { createPushService } = require('../application/services/push/createPushService');
 const { createPushRouter } = require('../transport/http/createPushRouter');
@@ -819,6 +821,7 @@ const SPORTSDATAIO_LIVE_UUID_V4_PATTERN =
 const SPORTSDATAIO_LIVE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const TARGET_ENDPOINTS = Object.freeze([
+  ...dailyEndpoints.map(([method, path]) => [method, path, "hundoDaily"]),
   ["GET", "/api/v1/leagues/:leagueId/tip-jar/leaderboard", "tipJar"],
   ["POST", "/api/v1/leagues/:leagueId/tip-jar/runs", "tipJar"],
   ["POST", "/api/v1/leagues/:leagueId/tip-jar/runs/:runId/checkpoint", "tipJar"],
@@ -3252,6 +3255,8 @@ function createTargetServices({
 
 function createTargetRouters({
   services,
+  daily,
+  dailyActor,
   securityFoundations,
   networkSourceResolver,
   getRecoveryEpoch,
@@ -3266,12 +3271,17 @@ function createTargetRouters({
     publicFrontendOrigin: config.publicFrontendOrigin,
     sameSite: config.sessionCookieSameSite,
   });
-  const requestSecurity = createTargetRequestSecurity({
+  const securityOptions = {
     isAllowedOrigin: config.isAllowedFrontendOrigin,
     sessionCookie,
     sessionService: services.sessionService,
     requestIdFactory: () => secureRandom.id(),
     getRecoveryEpoch,
+  };
+  const requestSecurity = createTargetRequestSecurity(securityOptions);
+  const dailySecurity = createTargetRequestSecurity({
+    ...securityOptions,
+    sessionService: { ...services.sessionService, bootstrap: services.sessionService.resolveWithoutActivity },
   });
   const sharedAudit = {
     requestSecurity,
@@ -3279,6 +3289,7 @@ function createTargetRouters({
     networkSourceResolver,
   };
   const routers = Object.freeze({
+    hundoDaily: createHundoDailyRouter({ requestSecurity: dailySecurity, service: daily, getActor: dailyActor }),
     tipJar: createTipJarRouter({ requestSecurity, tipJarService: services.league.tipJar }),
     quote: createQuoteRouter({ requestSecurity, quoteService: services.league.quotes }),
     leagueAnnouncement: createLeagueAnnouncementRouter({
@@ -3470,6 +3481,8 @@ function createTargetRouters({
 }
 
 function createTargetRuntime({
+  dailyFeed,
+  dailyBackgroundEnabled = false,
   pushConfig,
   pushAdapter,
   database,
@@ -3551,7 +3564,27 @@ function createTargetRuntime({
     matchupProcessingEnabled,
     nhlFetchImplementation,
   });
+  const daily = createDailyService({
+    filename: database.name && !database.memory ? require("node:path").resolve(database.name) + ".hundo-daily.sqlite3" : ":memory:",
+    clock: () => securityFoundations.clock.nowMs(),
+    feed: dailyFeed,
+    backgroundEnabled: dailyBackgroundEnabled && leagueWriteMode === "open",
+    logger: securityFoundations.logger,
+    push: pushAdapter || createWebPushAdapter({ config: pushConfig }),
+    subscriptions(userId, now) {
+      const rows = database.prepare(`SELECT p.subscription_json FROM push_subscriptions p
+        JOIN sessions s ON s.id=p.session_id AND s.user_id=p.user_id JOIN users u ON u.id=p.user_id
+        WHERE p.user_id=? AND u.status='active' AND s.status='active'
+        AND s.idle_expires_at_ms>? AND s.absolute_expires_at_ms>?`).all(userId, now, now);
+      return rows.map(row => JSON.parse(row.subscription_json));
+    },
+  });
   const transport = createTargetRouters({
+    daily,
+    dailyActor(session) {
+      return { id: session.user.id, name: session.user.displayName,
+        isAdmin: Boolean(repositories.platformRoles.findActiveByUserId(session.user.id)) };
+    },
     services,
     securityFoundations,
     networkSourceResolver,
@@ -3585,8 +3618,11 @@ function createTargetRuntime({
   socketRooms = createAuthenticatedSocketRooms({
     authorizationService: socketAuthorization,
   });
+  daily.start();
   return Object.freeze({
     app,
+    daily,
+    close: () => daily.close(),
     migrationState,
     migrationsDirectory,
     repositories,
@@ -3654,6 +3690,7 @@ function openTargetRuntime({
     function close() {
       if (closed) return;
       closed = true;
+      runtime.close();
       if (connection.database.open) connection.database.close();
     }
     return Object.freeze({
