@@ -1289,7 +1289,8 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
   let now = NOW_MS;
   const firstGameAt = now + 45 * 60_000;
   const slate = { date: "2026-07-22", firstGameAt, games: [{ id: "1" }],
-    players: [{ id: "88", name: "Daily Skater", position: "C", team: "VAN", opponent: "EDM" }] };
+    players: [{ id: "88", name: "Daily Skater", position: "C", team: "VAN", opponent: "EDM" },
+      { id: "99", name: "Other Skater", position: "D", team: "EDM", opponent: "VAN" }] };
   let final = false;
   const sent = [];
   const runtime = createTargetRuntime(runtimeOptions(database, {
@@ -1297,6 +1298,10 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
     dailyFeed: {
       getSchedule: async date => date === slate.date ? slate : null,
       getSlate: async () => slate, getScores: async () => ({ final, pointsByPlayerId: { "88": 325 } }),
+      orderPlayerPool: async (date, players) => {
+        assert.equal(date, slate.date);
+        return [...players].reverse();
+      },
     },
     pushAdapter: { available: true, async send(_, payload) { sent.push(payload); } },
   }));
@@ -1343,6 +1348,9 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
     const create = { name: "One", capacity: 2, slateDate: slate.date };
     const { room } = await send("rooms", host, create, 200, { "Idempotency-Key": "daily-create" });
     const path = "rooms/" + room.id;
+    assert.deepEqual(room.availablePlayers, [slate.players[1], slate.players[0]]);
+    assert.deepEqual((await send(path, host)).room.availablePlayers, room.availablePlayers);
+    assert.equal((await send("rooms", guest)).rooms[0].commissionerName, "Host");
     assert.equal((await send("rooms", host, create, 200, { "Idempotency-Key": "daily-create" })).room.id, room.id);
     await send(path, guest, null, 403);
     await send(path + "/join", guest, {});

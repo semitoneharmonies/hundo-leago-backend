@@ -30,6 +30,11 @@ function createHundoDailyRouter({ requestSecurity, service, getActor, nowMs }) {
             actor: getActor(session), roomId: request.params.roomId,
             input: request.body, requestId: request.get("idempotency-key"),
           });
+          // Present new and previously saved rooms with the same current season
+          // ordering. Totals are private to the ranking feed, never stored in a room.
+          if (data.room?.availablePlayers?.length > 1 && service.orderPlayerPool) {
+            data.room.availablePlayers = await service.orderPlayerPool(data.room.date, data.room.availablePlayers);
+          }
           response.set("Cache-Control", "private, no-store").json({
             data, meta: { requestId: requestSecurity.getRequestId(request), serverNowMs: nowMs() },
           });

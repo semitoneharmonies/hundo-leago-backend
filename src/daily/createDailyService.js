@@ -208,7 +208,7 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
   // A fresh install opens its sidecar only on the first room creation. Existing rooms
   // resume after a restart even when no manager has the page open.
   return {
-    lobby, create, bid, runMaintenance,
+    lobby, create, bid, runMaintenance, orderPlayerPool: feed.orderPlayerPool,
     start() { if (backgroundEnabled && filename !== ":memory:" && existsSync(filename)) startTimer(); },
     room: ({ actor, roomId }) => ({ room: required().getRoom({ roomId, actor }) }),
     join: ({ actor, roomId }) => ({ room: required().joinRoom({ roomId, actor }) }),

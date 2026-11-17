@@ -31,7 +31,8 @@ function summary(room, actor, now) {
   return {
     id: room.id, name: room.name, capacity: room.capacity, memberCount: room.members.length,
     joined: room.members.some((member) => member.id === actor?.id),
-    commissionerId: room.commissionerId, date: room.date, firstGameAt: iso(room.firstGameAt),
+    commissionerId: room.commissionerId, commissionerName: room.members.find(member => member.id === room.commissionerId)?.name ?? null,
+    date: room.date, firstGameAt: iso(room.firstGameAt),
     mode: room.mode ?? "scheduled", auctionStartsAt: iso(auctionEnd(room) - 30 * MINUTE),
     auctionEndsAt: iso(auctionEnd(room)), phase: currentPhase, winners: room.winners,
     canClose: currentPhase !== "closed" && (actor?.isAdmin === true ||

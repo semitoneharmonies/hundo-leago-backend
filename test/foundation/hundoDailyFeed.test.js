@@ -164,3 +164,33 @@ test("a vanished game waits for an official move off the slate; an explicitly po
   advance(); day.games = [{ ...landing, gameScheduleState: "PPD" }];
   assert.deepEqual(await feed.getScores(slate), moved);
 });
+
+test("Daily season sorting follows Hundo F/D points with stable ties, zero for unplayed skaters and no exposed scores", async () => {
+  const { feed, reports, day, calls, advance } = fixture();
+  const base = [21, 22, 23].map(playerId => ({ playerId, gamesPlayed: 2, goals: 0, assists: 0 }));
+  reports.summary = base.map(row => ({ ...row, evGoals: 0, ppGoals: 0, shGoals: 0, shots: 0, gameWinningGoals: 0 }));
+  reports.realtime = base.map((row, i) => ({ ...row, hits: [4, 3, 0][i], blockedShots: 0, giveaways: [0, 0, 2][i], takeaways: 0 }));
+  reports.scoringpergame = base.map(row => ({ ...row, totalPrimaryAssists: 0, totalSecondaryAssists: 0 }));
+  reports.penalties = base.map(row => ({ ...row, penalties: 0, penaltiesDrawn: 0 }));
+  reports.penaltyShots = [];
+  const pool = [
+    { id: "21", name: "Aaron", position: "LW" }, { id: "23", name: "Bob", position: "C" },
+    { id: "99", name: "Chris", position: "D" }, { id: "98", name: "Chris", position: "RW" },
+    { id: "22", name: "Zane", position: "D" },
+  ];
+  const rank = () => feed.orderPlayerPool(day.date, pool);
+  // D's 3 hits earn 1.05 and LW's 4 hits earn 0.80. C's giveaways earn -0.20.
+  const expected = [pool[4], pool[0], pool[3], pool[2], pool[1]];
+  const [first, concurrent] = await Promise.all([rank(), rank()]);
+  assert.deepEqual(first, expected);
+  assert.deepEqual(concurrent, expected);
+  assert.equal(calls.filter(path => path.endsWith("/skater/summary")).length, 1);
+  assert.deepEqual(pool.map(player => player.id), ["21", "23", "99", "98", "22"]);
+  advance();
+  reports.penalties.pop();
+  assert.deepEqual(await rank(), expected, "Keep the previous complete ranking through a partial NHL refresh");
+  advance();
+  reports.penalties.push({ ...base[2], penalties: 0, penaltiesDrawn: 0 });
+  reports.realtime[0].hits = 9;
+  assert.equal((await rank())[0].id, "21", "Existing rooms see new season totals");
+});

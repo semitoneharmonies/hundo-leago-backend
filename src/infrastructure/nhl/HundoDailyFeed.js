@@ -1,4 +1,5 @@
 const { calculateExpandedScore } = require("../../domain/statistics/expandedScoringPolicy");
+const { createDailyPoolRanker } = require("./createDailyPoolRanker");
 const { vancouverDate } = require("../../daily/vancouverDate");
 const { normalizeExpandedReports } = require("./normalizeExpandedReports");
 const { easternStart } = require("./NhlCompletedGameAdapter");
@@ -295,7 +296,8 @@ function createHundoDailyFeed({ fetchImpl = fetch, nowMs = Date.now, timeoutMs =
     }
     return { final, pointsByPlayerId, voided: final && completed.length === 0 };
   }
-  return Object.freeze({ getSchedule, getSlate, getScores });
+  const orderPlayerPool = createDailyPoolRanker({ json, cached, getSchedule, statsBase: STATS, webBase: WEB });
+  return Object.freeze({ getSchedule, getSlate, getScores, orderPlayerPool });
 }
 
 module.exports = { createHundoDailyFeed };
