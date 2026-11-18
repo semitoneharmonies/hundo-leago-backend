@@ -1,4 +1,4 @@
-const { calculateExpandedScore } = require("../../domain/statistics/expandedScoringPolicy");
+const { calculateExpandedScore, emptyScoringStats, addScoringStats } = require("../../domain/statistics/expandedScoringPolicy");
 const { createDailyPoolRanker } = require("./createDailyPoolRanker");
 const { vancouverDate } = require("../../daily/vancouverDate");
 const { normalizeExpandedReports } = require("./normalizeExpandedReports");
@@ -265,6 +265,7 @@ function createHundoDailyFeed({ fetchImpl = fetch, nowMs = Date.now, timeoutMs =
     const games = [...byId.values()].filter(game => !game.excluded).sort((a, b) => a.id.localeCompare(b.id));
     const present = new Set(current.map(game => game.id));
     const completed = [];
+    const activeGames = [];
     let final = true;
     if (games.length) {
       const ids = games.map(game => game.id);
@@ -282,19 +283,32 @@ function createHundoDailyFeed({ fetchImpl = fetch, nowMs = Date.now, timeoutMs =
           continue;
         }
         check(startsAtMs === game.startsAtMs);
+        activeGames.push(game);
         if (row.gameStateId === 7 && startsAtMs <= nowMs()) completed.push(game);
         else final = false;
       }
     }
     const players = new Map(slate.players.map(player => [player.id, player]));
     const pointsByPlayerId = Object.fromEntries([...players.keys()].map(id => [id, 0]));
+    const collectedStats = Object.fromEntries([...players.keys()].map(id => [id, emptyScoringStats()]));
     for (let i = 0; i < completed.length; i += 2) {
       for (const { playerId, stats } of await completedStats(completed.slice(i, i + 2))) {
         const player = players.get(playerId);
-        if (player) pointsByPlayerId[playerId] += calculateExpandedScore(stats, player.position === "D" ? "D" : "F").fantasyPointsHundredths;
+        if (player) {
+          pointsByPlayerId[playerId] += calculateExpandedScore(stats, player.position === "D" ? "D" : "F").fantasyPointsHundredths;
+          addScoringStats(collectedStats[playerId], stats);
+        }
       }
     }
-    return { final, pointsByPlayerId, voided: final && completed.length === 0 };
+    const playerStatsById = Object.fromEntries([...players.values()].map(player => {
+      const playsFor = game => game.homeTeam === player.team || game.awayTeam === player.team;
+      const gamesExpected = activeGames.filter(playsFor).length;
+      const gamesCollected = completed.filter(playsFor).length;
+      const statsStatus = gamesCollected === gamesExpected ? "collected" : gamesCollected ? "partial" : "pending";
+      return [player.id, { scoringStats: statsStatus === "pending" ? null : collectedStats[player.id],
+        statsStatus, gamesCollected, gamesExpected }];
+    }));
+    return { final, pointsByPlayerId, playerStatsById, voided: final && completed.length === 0 };
   }
   const orderPlayerPool = createDailyPoolRanker({ json, cached, getSchedule, statsBase: STATS, webBase: WEB });
   return Object.freeze({ getSchedule, getSlate, getScores, orderPlayerPool });

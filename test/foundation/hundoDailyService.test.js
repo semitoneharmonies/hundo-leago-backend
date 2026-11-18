@@ -1,6 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { createDailyService } = require("../../src/daily/createDailyService");
+const { emptyScoringStats } = require("../../src/domain/statistics/expandedScoringPolicy");
 
 const minute = 60_000;
 const host = { id: "h", name: "Host" };
@@ -183,7 +184,10 @@ test("background maintenance retries a failed push and a missing score, then pre
     push: { available: true, async send() { if (++attempts === 1) throw Error("offline"); } },
     feed: { getSchedule: async () => slate, getSlate: async () => slate, async getScores() {
       if (++scoreCalls === 1) throw Error("incomplete");
-      return { final: true, pointsByPlayerId: { "12": -45 } };
+      return { final: true, pointsByPlayerId: { "12": -45 }, playerStatsById: { "12": {
+        scoringStats: { ...emptyScoringStats(), primaryAssists: 1, giveaways: 27 },
+        statsStatus: "collected", gamesCollected: 1, gamesExpected: 1,
+      } } };
     } },
   });
   t.after(() => daily.close());

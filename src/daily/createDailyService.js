@@ -164,12 +164,12 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
     if (clock() < nextScoring) return;
     nextScoring = clock() + MINUTE;
     const reports = new Map();
-    for (const room of current.listScoringRooms()) {
+    for (const room of [...current.listScoringRooms(), ...current.listStatsHydrationRooms()]) {
       if (stopped) return;
       try {
         if (!reports.has(room.slate)) reports.set(room.slate, await feed.getScores(room.slate));
         const report = reports.get(room.slate);
-        if (!stopped) current.updateScores({ roomId: room.id, ...report });
+        if (!stopped) current.updateScores({ roomId: room.id, ...report, hydrateStatsOnly: room.hydrateStatsOnly === true });
       } catch { logFailure("scoring"); }
     }
   }

@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { createHundoDailyFeed } = require("../../src/infrastructure/nhl/HundoDailyFeed");
 const { normalizeExpandedReports } = require("../../src/infrastructure/nhl/normalizeExpandedReports");
-const { calculateExpandedScore } = require("../../src/domain/statistics/expandedScoringPolicy");
+const { calculateExpandedScore, emptyScoringStats, CATEGORY_KEYS } = require("../../src/domain/statistics/expandedScoringPolicy");
 const captured = require("../fixtures/nhlExpandedScoringGames.json").games.find(game => game.gameId === 2025020477);
 
 function fixture() {
@@ -10,6 +10,8 @@ function fixture() {
   const landing = reports.penaltyShotLandings[0];
   const lineup = { ...landing, gameState: "FUT", rosterSpots: [] };
   const box = { ...landing, playerByGameStats: {} };
+  const boxes = new Map([[String(landing.id), box]]);
+  const landings = new Map([[String(landing.id), landing]]);
   const rosters = {};
   for (const side of ["homeTeam", "awayTeam"]) {
     const team = landing[side].abbrev;
@@ -34,15 +36,16 @@ function fixture() {
     if (url.pathname.includes("/schedule/")) data = { gameWeek: [day, next] };
     else if (url.pathname.includes("/roster/")) data = rosters[url.pathname.split("/").at(-2)];
     else if (last === "play-by-play") data = lineup;
-    else if (last === "boxscore") data = box;
-    else if (last === "landing") data = landing;
+    else if (last === "boxscore") data = boxes.get(url.pathname.split("/").at(-2));
+    else if (last === "landing") data = landings.get(url.pathname.split("/").at(-2));
     else {
       const rows = last === "game" ? states : reports[last];
       data = { data: rows, total: rows.length };
     }
     return { ok: true, json: async () => structuredClone(data) };
   } });
-  return { feed, day, next, landing, lineup, rosters, calls, reports, states, box, advance: () => { now += 600_000; } };
+  return { feed, day, next, landing, lineup, rosters, calls, reports, states, box, boxes, landings,
+    advance: () => { now += 600_000; } };
 }
 
 test("Pacific schedule includes a late game from the next Eastern date, skips postponements, and never reads rosters for a lobby check", async () => {
@@ -125,15 +128,87 @@ test("confirmed player-game evidence reproduces the season scores including sign
   assert.equal(calls.filter(path => path.endsWith("/boxscore")).length, 1);
   assert.equal(calls.filter(path => path.endsWith("/landing")).length, 1);
   assert.equal(result.pointsByPlayerId["999"], 0);
+  assert.deepEqual(result.playerStatsById["999"], { scoringStats: emptyScoringStats(), statsStatus: "collected",
+    gamesCollected: 1, gamesExpected: 1 }, "A verified scratch has collected zero categories, not pending data");
   assert.equal(Object.keys(result.pointsByPlayerId).length, 37);
+  assert.equal(Object.keys(result.playerStatsById).length, 37);
   let negative = false;
   for (const p of slate.players.filter(row => row.id !== "999")) {
     const stats = categories.get(reports.gameId + ":" + p.id);
     const target = calculateExpandedScore(stats, p.position === "D" ? "D" : "F").fantasyPointsHundredths;
     assert.equal(result.pointsByPlayerId[p.id], target);
+    const detail = result.playerStatsById[p.id];
+    assert.deepEqual(Object.keys(detail.scoringStats), CATEGORY_KEYS);
+    assert.deepEqual(detail, { scoringStats: stats, statsStatus: "collected", gamesCollected: 1, gamesExpected: 1 });
     if (target < 0) negative = true;
   }
   assert.equal(negative, true);
+});
+
+test("uncollected games expose pending null categories instead of collected zeroes", async () => {
+  const { feed, day, states, calls } = fixture();
+  states[0].gameStateId = 6;
+  const slate = await feed.getSlate(day.date);
+  const result = await feed.getScores(slate);
+  assert.equal(result.final, false);
+  for (const player of slate.players) {
+    assert.equal(result.pointsByPlayerId[player.id], 0);
+    assert.deepEqual(result.playerStatsById[player.id], { scoringStats: null, statsStatus: "pending",
+      gamesCollected: 0, gamesExpected: 1 });
+  }
+  assert.equal(calls.some(path => path.endsWith("/boxscore")), false);
+});
+
+test("player collection completes independently of unfinished games involving other clubs", async () => {
+  const { feed, day, landing, states, advance } = fixture();
+  const slate = await feed.getSlate(day.date);
+  day.games.push({ ...landing, id: landing.id + 1, startTimeUTC: "2025-12-11T03:30:00Z",
+    homeTeam: { id: 23, abbrev: "VAN" }, awayTeam: { id: 55, abbrev: "SEA" } });
+  states.push({ ...states[0], id: landing.id + 1, gameStateId: 6, homeTeamId: 23, visitingTeamId: 55,
+    easternStartTime: "2025-12-10T22:30:00" });
+  advance();
+  const result = await feed.getScores(slate);
+  assert.equal(result.final, false);
+  for (const detail of Object.values(result.playerStatsById)) {
+    assert.equal(detail.statsStatus, "collected");
+    assert.equal(detail.gamesCollected, 1);
+    assert.equal(detail.gamesExpected, 1);
+  }
+});
+
+test("two team games retain partial categories until both validate, then sum every category and authoritative points", async () => {
+  const { feed, day, reports, states, advance, landing, box, boxes, landings } = fixture();
+  const slate = await feed.getSlate(day.date);
+  const later = { ...landing, id: landing.id + 1, startTimeUTC: "2025-12-11T03:30:00Z" };
+  day.games.push(later);
+  states.push({ ...states[0], id: later.id, gameStateId: 6, easternStartTime: "2025-12-10T22:30:00" });
+  advance();
+  const partial = await feed.getScores(slate);
+  assert.equal(partial.final, false);
+  for (const detail of Object.values(partial.playerStatsById)) {
+    assert.equal(detail.statsStatus, "partial");
+    assert.equal(detail.gamesCollected, 1);
+    assert.equal(detail.gamesExpected, 2);
+    assert.deepEqual(Object.keys(detail.scoringStats), CATEGORY_KEYS);
+  }
+  for (const key of ["summary", "realtime", "scoringpergame", "penalties", "penaltyShots"]) {
+    reports[key].push(...reports[key].map(row => ({ ...row, gameId: later.id })));
+  }
+  boxes.set(String(later.id), { ...structuredClone(box), id: later.id, startTimeUTC: later.startTimeUTC });
+  landings.set(String(later.id), later);
+  states[1].gameStateId = 7;
+  advance();
+  const complete = await feed.getScores(slate);
+  assert.equal(complete.final, true);
+  for (const player of slate.players) {
+    const first = partial.playerStatsById[player.id].scoringStats;
+    const expected = Object.fromEntries(CATEGORY_KEYS.map(key => [key, first[key] * 2]));
+    assert.deepEqual(complete.playerStatsById[player.id], { scoringStats: expected, statsStatus: "collected",
+      gamesCollected: 2, gamesExpected: 2 });
+    assert.equal(complete.pointsByPlayerId[player.id], partial.pointsByPlayerId[player.id] * 2);
+    assert.equal(calculateExpandedScore(expected, player.position === "D" ? "D" : "F").fantasyPointsHundredths,
+      complete.pointsByPlayerId[player.id]);
+  }
 });
 
 test("an unofficial game elsewhere keeps the whole day provisional; missing statistics or box data never produce a winner", async () => {

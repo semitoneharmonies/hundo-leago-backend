@@ -2,6 +2,7 @@
 
 const { createHash, randomUUID } = require("node:crypto");
 const { MINUTE, ROSTER_SIZE, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom } = require("./dailyRoom");
+const { validatedScoringDetails } = require("./dailyScoring");
 
 const DAILY_DATABASE_ID = 1212433457;
 const MEMBER_PHASES = new Set(["waiting", "auction"]);
@@ -100,9 +101,9 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
     return Object.assign(JSON.parse(row.info), JSON.parse(row.play));
   }
   function save(row, room) {
-    const { lots, scores, ...info } = room;
+    const { lots, scores, scoringDetails, ...info } = room;
     const nextInfo = JSON.stringify(info);
-    const nextPlay = JSON.stringify({ lots, scores });
+    const nextPlay = JSON.stringify({ lots, scores, ...(scoringDetails ? { scoringDetails } : {}) });
     if (nextInfo !== row.info) saveInfo.run(nextInfo, auctionEnd(info), Number(info.finished || info.void), Number(info.closed), info.id);
     if (nextPlay !== row.play) savePlay.run(nextPlay, info.id);
   }
@@ -248,11 +249,29 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
       return { id: row.id, date: row.date, slate: slates.get(row.slate_id), playerIds: JSON.parse(row.play).lots.map((lot) => lot.playerId) };
     });
   }
-  function updateScores({ roomId, pointsByPlayerId, final, voided }) {
+  function listStatsHydrationRooms() {
+    return db.prepare(`SELECT * FROM rooms WHERE closed=0 AND ended=1
+      AND json_extract(info,'$.finished')=1 AND json_extract(info,'$.void')=0
+      AND json_type(play,'$.scoringDetails') IS NULL`).all().map(row => ({
+      id: row.id, date: row.date, slate: getSlate(row), hydrateStatsOnly: true,
+    }));
+  }
+  function updateScores({ roomId, pointsByPlayerId, playerStatsById, final, voided, hydrateStatsOnly = false }) {
     return transaction(() => {
       const row = findRoom(roomId);
       const room = fromRow(row);
+      if (room.closed || room.void) return;
+      if (room.finished || hydrateStatsOnly) {
+        if (!room.finished || !final || voided || room.scoringDetails) return;
+        // Backfill presentation evidence only when every signed total still agrees.
+        const details = validatedScoringDetails(room, getSlate(row), playerStatsById, pointsByPlayerId, true);
+        if (details) { room.scoringDetails = details; save(row, room); }
+        return;
+      }
+      if (phase(room, clock()) !== "locked") return;
+      const details = voided && final ? null : validatedScoringDetails(room, getSlate(row), playerStatsById, pointsByPlayerId, final === true);
       scoreRoom(room, pointsByPlayerId, final === true, voided === true, clock());
+      if (details) room.scoringDetails = details;
       save(row, room);
     });
   }
@@ -326,7 +345,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
 
   return {
     listRooms: ({ actor } = {}) => visibleRows.all().map(row => summary(fromRow(row), actor, clock())),
-    getRoom, getRoomDate, replayCreate, createRoom, joinRoom, bid, closeRoom, listScoringRooms, updateScores,
+    getRoom, getRoomDate, replayCreate, createRoom, joinRoom, bid, closeRoom, listScoringRooms, listStatsHydrationRooms, updateScores,
     listReminders: ({ actor }) => actor?.id ? reminders(actor.id, false) : [],
     listDueReminders: () => reminders(null, true), markReminderSent,
     listWaitingDates, listBiddingDates, syncRoomSchedule, syncBiddingSchedule, refreshWaitingSlate: (slate) => changeWaiting(slate.date, slate),

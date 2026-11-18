@@ -1,5 +1,7 @@
 "use strict";
 
+const { scoringCategories, playerScoringDetails, teamScoringDetails } = require("./dailyScoring");
+
 const MINUTE = 60_000;
 const RULES = Object.freeze({ cap: 100, minBid: 1, lotSeconds: 120, forwards: 3, defense: 2, extras: 2 });
 const ROSTER_SIZE = RULES.forwards + RULES.defense + RULES.extras;
@@ -69,7 +71,8 @@ function analyzeRoom(room, players, now) {
       const winner = winningBid(lot);
       const team = teams.get(winner.userId);
       const pointsHundredths = room.scores[lot.playerId] ?? 0;
-      team.roster.push({ ...player, price: winner.amount, points: pointsHundredths / 100 });
+      team.roster.push({ ...player, price: winner.amount, points: pointsHundredths / 100,
+        ...playerScoringDetails(room, lot.playerId) });
       team.spent += winner.amount;
       team.pointsHundredths += pointsHundredths;
     } else if (!room.void) {
@@ -98,7 +101,7 @@ function bidLimit(team, position) {
 }
 
 function roomView(room, slate, actor, now) {
-  const detail = { ...summary(room, actor, now), rules: RULES };
+  const detail = { ...summary(room, actor, now), rules: RULES, scoringCategories };
   const closed = { maxAmount: 0, reason: "Bidding is closed." };
   detail.bidLimits = { F: closed, D: closed };
   if (room.closed) return { ...detail, winners: [], members: [], availablePlayers: [], auctions: [] };
@@ -116,7 +119,7 @@ function roomView(room, slate, actor, now) {
       const { roster, spent, reserved, pointsHundredths } = teams.get(id);
       const mine = id === actor?.id;
       return { id, name, roster, spent, reserved: mine ? reserved : null, remainingCap: RULES.cap - spent,
-        availableCap: mine ? RULES.cap - spent - reserved : null, points: pointsHundredths / 100 };
+        availableCap: mine ? RULES.cap - spent - reserved : null, points: pointsHundredths / 100, ...teamScoringDetails(roster) };
     }),
     availablePlayers: ["waiting", "auction"].includes(detail.phase) ? slate.players.filter((player) => !nominated.has(player.id)) : [],
     auctions: room.lots.filter((lot) => !room.void && now < lot.endsAt).map((lot) => ({
