@@ -132,8 +132,70 @@ test("worst-case cap and position checks admit seven simultaneous binding bids",
   at(starts + 2 * MINUTE);
   assert.equal(view().members[0].roster.length, 7);
   assert.equal(view().members[0].remainingCap, 93);
-  hasCode(() => bid(host, 9, 1), "DAILY_ROSTER_LIMIT");
+  hasCode(() => bid(host, 9, 1), "DAILY_AUCTION_INACTIVE");
 });
+
+for (const mode of ["scheduled", "practice"]) {
+  test(`${mode} auction locks only after every joined manager signs seven players, then awaits final scores`, t => {
+    const opened = mode === "practice" ? puck + 75 * MINUTE : starts;
+    let now = opened;
+    const store = createDailyStore({ filename: ":memory:", clock: () => now });
+    t.after(() => store.close());
+    const guestPlayers = ["F", "F", "F", "D", "D", "F", "F"].map((position, index) => ({
+      ...players[0], id: "guest-" + index, name: "Guest skater " + index, position,
+    }));
+    const fullSlate = { ...slate, players: [...players, ...guestPlayers] };
+    const original = store.createRoom({ actor: host, name: "Early finish", capacity: 8, slate: fullSlate, mode });
+    const roomId = original.id;
+    store.joinRoom({ roomId, actor: guest });
+    const bid = (actor, playerId, amount = 1) => store.bid({ roomId, actor, playerId, amount });
+    const view = () => store.getRoom({ roomId, actor: host });
+    for (const id of ["1", "2", "3", "4", "5", "7", "8"]) bid(host, id, 2);
+    bid(guest, "1"); // This reservation loses, so seven bids must not become a full roster.
+    for (const player of guestPlayers.slice(0, 6)) bid(guest, player.id);
+    assert.equal(view().phase, "auction");
+    assert.deepEqual(view().members.map(member => member.roster.length), [0, 0]);
+    assert.deepEqual(store.listScoringRooms(), []);
+    now += 2 * MINUTE;
+    assert.deepEqual(view().members.map(member => member.roster.length), [7, 6]);
+    assert.equal(view().phase, "auction");
+    assert.deepEqual(store.listScoringRooms(), []);
+    bid(guest, guestPlayers[6].id);
+    now += 2 * MINUTE - 1;
+    assert.equal(view().phase, "auction");
+    now++;
+    const locked = view();
+    assert.equal(locked.phase, "locked");
+    assert.equal(locked.auctionEndsAt, new Date(now).toISOString());
+    assert.equal(locked.auctionStartsAt, original.auctionStartsAt);
+    assert.equal(locked.firstGameAt, original.firstGameAt);
+    assert.deepEqual(locked.members.map(member => member.roster.length), [7, 7]);
+    assert.deepEqual(locked.members.map(member => member.remainingCap), [86, 93]);
+    assert.deepEqual(locked.auctions, []);
+    assert.deepEqual(locked.availablePlayers, []);
+    assert.equal(locked.bidLimits.F.maxAmount, 0);
+    assert.equal(store.listRooms({ actor: outsider })[0].phase, "locked");
+    assert.equal(store.listScoringRooms()[0].id, roomId);
+    hasCode(() => store.joinRoom({ roomId, actor: outsider }), "DAILY_ROOM_LOCKED");
+    hasCode(() => bid(host, "9"), "DAILY_AUCTION_INACTIVE");
+    hasCode(() => store.getRoomDate(roomId, host), "DAILY_AUCTION_INACTIVE");
+    hasCode(() => store.closeRoom({ roomId, actor: host }), "DAILY_CLOSE_FORBIDDEN");
+    store.syncRoomSchedule(roomId, { ...slate, firstGameAt: puck + 60 * MINUTE });
+    store.syncBiddingSchedule(slate.date, null);
+    assert.equal(view().phase, "locked", "schedule refresh cannot reopen or void a completed auction");
+    assert.equal(view().firstGameAt, original.firstGameAt);
+    const pointsByPlayerId = Object.fromEntries(locked.members.flatMap(member =>
+      member.roster.map(player => [player.id, member.id === host.id ? 100 : 200])));
+    store.updateScores({ roomId, pointsByPlayerId, final: false });
+    assert.equal(view().phase, "locked");
+    assert.deepEqual(view().winners, []);
+    store.updateScores({ roomId, pointsByPlayerId, final: true });
+    assert.equal(view().phase, "finished");
+    assert.deepEqual(view().winners, [{ ...guest, points: 14 }]);
+    assert.deepEqual(store.listScoringRooms(), []);
+    assert.equal(store.closeRoom({ roomId, actor: host }).phase, "closed");
+  });
+}
 
 test("defense flex limits and cap include all bids even when another manager bid more", (t) => {
   const { bid, at, join, view } = setup(t);
@@ -382,6 +444,30 @@ test("restarts settle expired lots with no hidden writes on GET; admin can close
     assert.equal(store.listRooms().length, 0);
   } finally {
     store.close();
+    db.close();
+  }
+});
+
+test("early roster completion survives restart without writes from lobby, detail or scoring reads", t => {
+  const filename = fileFixture(t);
+  const original = createDailyStore({ filename, clock: () => starts });
+  const { id: roomId } = original.createRoom({ actor: host, name: "Full roster", capacity: 8, slate });
+  for (const playerId of ["1", "2", "3", "4", "5", "7", "8"]) {
+    original.bid({ roomId, actor: host, playerId, amount: 1 });
+  }
+  original.close();
+  const db = new DatabaseSync(filename);
+  const stored = db.prepare("SELECT * FROM rooms").all();
+  const version = db.prepare("PRAGMA data_version").get().data_version;
+  const reopened = createDailyStore({ filename, clock: () => starts + 2 * MINUTE, existingOnly: true });
+  try {
+    assert.equal(reopened.getRoom({ roomId, actor: host }).phase, "locked");
+    assert.equal(reopened.listRooms()[0].auctionEndsAt, new Date(starts + 2 * MINUTE).toISOString());
+    assert.equal(reopened.listScoringRooms()[0].id, roomId);
+    assert.deepEqual(db.prepare("SELECT * FROM rooms").all(), stored);
+    assert.equal(db.prepare("PRAGMA data_version").get().data_version, version);
+  } finally {
+    reopened.close();
     db.close();
   }
 });

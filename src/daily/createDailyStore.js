@@ -1,7 +1,7 @@
 "use strict";
 
 const { createHash, randomUUID } = require("node:crypto");
-const { MINUTE, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom } = require("./dailyRoom");
+const { MINUTE, ROSTER_SIZE, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom } = require("./dailyRoom");
 
 const DAILY_DATABASE_ID = 1212433457;
 const MEMBER_PHASES = new Set(["waiting", "auction"]);
@@ -73,7 +73,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
   const roomRow = db.prepare("SELECT * FROM rooms WHERE id=?");
   const priorCreate = db.prepare("SELECT * FROM rooms WHERE creator_id=? AND request_id=?");
   const slateRow = db.prepare("SELECT payload FROM slates WHERE id=?");
-  const visibleRows = db.prepare("SELECT info FROM rooms WHERE closed=0 ORDER BY first_game_at DESC, rowid DESC");
+  const visibleRows = db.prepare("SELECT info,play FROM rooms WHERE closed=0 ORDER BY first_game_at DESC, rowid DESC");
   const savePlay = db.prepare("UPDATE rooms SET play=? WHERE id=?");
   const saveInfo = db.prepare("UPDATE rooms SET info=?, first_game_at=?, ended=?, closed=? WHERE id=?");
 
@@ -125,9 +125,9 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
   }
   function getRoomDate(roomId, actor) {
     requireActor(actor);
-    const row = db.prepare("SELECT info FROM rooms WHERE id=?").get(roomId);
+    const row = db.prepare("SELECT info,play FROM rooms WHERE id=?").get(roomId);
     if (!row) reject(404, "DAILY_ROOM_NOT_FOUND", "This room could not be found.");
-    const room = JSON.parse(row.info);
+    const room = fromRow(row);
     if (!room.members.some(({ id }) => id === actor.id)) reject(403, "DAILY_MEMBERSHIP_REQUIRED", "Join this room before bidding.");
     if (!MEMBER_PHASES.has(phase(room, clock()))) reject(409, "DAILY_AUCTION_INACTIVE", "Bidding is closed.");
     return room.mode === "practice" ? null : room.date;
@@ -238,7 +238,10 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
   }
 
   function listScoringRooms() {
-    const rows = db.prepare("SELECT * FROM rooms WHERE closed=0 AND ended=0 AND first_game_at<=?").all(clock());
+    const now = clock();
+    const rows = db.prepare(`SELECT * FROM rooms WHERE closed=0 AND ended=0 AND
+      (first_game_at<=? OR json_array_length(play,'$.lots')=?*json_array_length(info,'$.members'))`).all(now, ROSTER_SIZE)
+      .filter(row => phase(fromRow(row), now) === "locked");
     const slates = new Map();
     return rows.map((row) => {
       if (!slates.has(row.slate_id)) slates.set(row.slate_id, getSlate(row));
@@ -273,7 +276,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
       // Recheck under the write lock. A schedule update cannot reopen a locked room.
       if (row.closed || row.ended || now >= row.first_game_at || firstGameAt === row.first_game_at) return;
       const room = fromRow(row);
-      if (room.mode === "practice") return;
+      if (room.mode === "practice" || phase(room, now) === "locked") return;
       if (firstGameAt === null) {
         room.void = true;
         room.voidAt = now;
@@ -322,7 +325,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
   }
 
   return {
-    listRooms: ({ actor } = {}) => visibleRows.all().map(({ info }) => summary(JSON.parse(info), actor, clock())),
+    listRooms: ({ actor } = {}) => visibleRows.all().map(row => summary(fromRow(row), actor, clock())),
     getRoom, getRoomDate, replayCreate, createRoom, joinRoom, bid, closeRoom, listScoringRooms, updateScores,
     listReminders: ({ actor }) => actor?.id ? reminders(actor.id, false) : [],
     listDueReminders: () => reminders(null, true), markReminderSent,

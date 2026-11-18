@@ -206,3 +206,39 @@ test("background maintenance retries a failed push and a missing score, then pre
   await daily.runMaintenance();
   assert.equal(scoreCalls, 2);
 });
+
+test("maintenance scores a full practice roster before its time limit and only finishes on final NHL stats", async t => {
+  let now = puckDrop + 75 * minute;
+  let scoreCalls = 0, final = false;
+  const fullSlate = { ...slate, players: ["F", "F", "F", "D", "D", "F", "F"].map((position, index) => ({
+    ...players[0], id: String(index), name: "Skater " + index, position,
+  })) };
+  const daily = createDailyService({ filename: ":memory:", clock: () => now, feed: {
+    async getSlate() { return fullSlate; },
+    async getScores(original) {
+      assert.deepEqual(original, fullSlate);
+      scoreCalls++;
+      return { final, pointsByPlayerId: Object.fromEntries(fullSlate.players.map(player => [player.id, 100])) };
+    },
+  } });
+  t.after(() => daily.close());
+  const { room } = await daily.create({ actor: host, input: { ...input, mode: "practice" } });
+  const request = { actor: host, roomId: room.id };
+  for (const player of fullSlate.players) await daily.bid({ ...request, input: { playerId: player.id, amount: 1 } });
+  await daily.runMaintenance();
+  assert.equal(scoreCalls, 0);
+  now += 2 * minute;
+  await daily.runMaintenance();
+  const locked = daily.room(request).room;
+  assert.equal(scoreCalls, 1);
+  assert.equal(locked.phase, "locked");
+  assert.equal(locked.members[0].points, 7);
+  assert.deepEqual(locked.winners, []);
+  await assert.rejects(daily.bid({ ...request, input: { playerId: "0", amount: 2 } }), { code: "DAILY_AUCTION_INACTIVE" });
+  final = true;
+  now += minute;
+  await daily.runMaintenance();
+  assert.equal(scoreCalls, 2);
+  assert.equal(daily.room(request).room.phase, "finished");
+  assert.deepEqual(daily.room(request).room.winners, [{ ...host, points: 7 }]);
+});

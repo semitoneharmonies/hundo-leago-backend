@@ -17,11 +17,25 @@ function requireActor(actor) {
   }
 }
 
+function rostersFilledAt(room, now) {
+  if (!room.members.length || room.lots?.length !== room.members.length * ROSTER_SIZE) return null;
+  const signed = new Map(room.members.map(({ id }) => [id, 0]));
+  let completedAt = 0;
+  for (const lot of room.lots) {
+    // Active bids reserve slots but are not signings, even when a manager leads.
+    if (lot.endsAt > now) return null;
+    const winner = winningBid(lot);
+    signed.set(winner.userId, (signed.get(winner.userId) ?? 0) + 1);
+    completedAt = Math.max(completedAt, lot.endsAt);
+  }
+  return room.members.every(({ id }) => signed.get(id) === ROSTER_SIZE) ? completedAt : null;
+}
+
 function phase(room, now) {
   if (room.closed) return "closed";
   if (room.void) return "void";
   if (room.finished) return "finished";
-  if (now >= auctionEnd(room)) return "locked";
+  if (now >= auctionEnd(room) || rostersFilledAt(room, now) !== null) return "locked";
   if (now >= auctionEnd(room) - 30 * MINUTE) return "auction";
   return "waiting";
 }
@@ -34,7 +48,7 @@ function summary(room, actor, now) {
     commissionerId: room.commissionerId, commissionerName: room.members.find(member => member.id === room.commissionerId)?.name ?? null,
     date: room.date, firstGameAt: iso(room.firstGameAt),
     mode: room.mode ?? "scheduled", auctionStartsAt: iso(auctionEnd(room) - 30 * MINUTE),
-    auctionEndsAt: iso(auctionEnd(room)), phase: currentPhase, winners: room.winners,
+    auctionEndsAt: iso(Math.min(auctionEnd(room), rostersFilledAt(room, now) ?? Infinity)), phase: currentPhase, winners: room.winners,
     canClose: currentPhase !== "closed" && (actor?.isAdmin === true ||
       (actor?.id === room.commissionerId && (currentPhase === "finished" || currentPhase === "void"))),
   };
@@ -167,4 +181,4 @@ function scoreRoom(room, pointsByPlayerId, final, voided, now) {
   }
 }
 
-module.exports = { MINUTE, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom };
+module.exports = { MINUTE, ROSTER_SIZE, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom };
