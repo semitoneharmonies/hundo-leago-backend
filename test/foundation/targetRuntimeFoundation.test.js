@@ -1605,6 +1605,24 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(scheduled.scheduledForMs, observedAtMs - observedAtMs % (30 * 60_000));
     assert.equal(scheduled.maintenance.compactProjectionsPruned, 0);
     assert.equal(database.prepare("SELECT count(*) n FROM compact_stat_refreshes").get().n, 1);
+    const beforeLive = database.serialize();
+    let liveFetches = 0;
+    const live = createTargetRuntime({ ...options, expandedScoringEnabled: true, nhlLiveStatisticsEnabled: true,
+      nhlFetchImplementation: async url => {
+        liveFetches++;
+        const date = String(url).split('/').at(-1);
+        assert.match(String(url), /\/v1\/schedule\//);
+        return { ok: true, json: async () => ({ gameWeek: Array.from({ length: 7 }, (_, day) => ({
+          date: new Date(Date.parse(`${date}T00:00:00Z`) + day * 86_400_000).toISOString().slice(0, 10), games: [],
+        })) }) };
+      } });
+    assert.equal(liveFetches, 0, 'construction never fetches or persists live data');
+    assert.equal(runtime.services.league.liveStatistics, null, 'the live switch defaults off');
+    assert.ok(!live.services.league.scheduledJobs.some(job => job.name === 'nhl_live_statistics'), 'live polling cannot hold up matchup locks');
+    assert.equal(typeof live.services.league.liveStatistics.job.run, 'function');
+    assert.equal((await live.services.league.liveStatistics.job.run()).fetchedGames, 0);
+    assert.equal(liveFetches, 1);
+    assert.deepEqual(database.serialize(), beforeLive, 'the live collector never changes league storage');
   });
   test("constructs every repository, service, router, and socket boundary without writes or listening", (t) => {
     const database = createDatabase(t);

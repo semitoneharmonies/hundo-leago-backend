@@ -2,7 +2,7 @@ const { createMatchupScoringService } = require('./createMatchupScoringService')
 const { calculateMatchupGameProgress } = require('../../../domain/matchups/matchupGameProgressPolicy');
 const { calculateMatchupDay, calculateMatchupDays } = require('../../../domain/matchups/matchupDayPolicy');
 
-function createMatchupGameProgressService({ leagueAuthorization, readRepository, scoringRepository, scheduleRepository, scheduleAdapter, statisticsProviders, clock, expandedScoringEnabled = false }) {
+function createMatchupGameProgressService({ leagueAuthorization, readRepository, scoringRepository, scheduleRepository, scheduleAdapter, statisticsProviders, clock, expandedScoringEnabled = false, liveDisplayService }) {
   return Object.freeze({
     async read(input) {
       leagueAuthorization.requireActiveMembership(input.authenticated, input.leagueId);
@@ -35,8 +35,12 @@ function createMatchupGameProgressService({ leagueAuthorization, readRepository,
       }
       const timeZone = scheduleRepository?.readWeek(scope)?.timezone;
       const progress = calculateMatchupGameProgress({ context, scoring, schedule, timeZone, asOfMs: scoreInput.nowMs });
-      const day = calculateMatchupDay({ context, scoring, progress, timeZone, asOfMs: scoreInput.nowMs });
-      const days = calculateMatchupDays({ context, scoring, progress, timeZone, asOfMs: scoreInput.nowMs });
+      let day = calculateMatchupDay({ context, scoring, progress, timeZone, asOfMs: scoreInput.nowMs });
+      let days = calculateMatchupDays({ context, scoring, progress, timeZone, asOfMs: scoreInput.nowMs });
+      if (!final && liveDisplayService) {
+        day = liveDisplayService.projectDay({ context, scoring, day, timeZone });
+        days = days.map(item => liveDisplayService.projectDay({ context, scoring, day: item, timeZone }));
+      }
       return { ...base, sourceRefreshId: context.refresh.id, ...progress, day, days };
     },
   });

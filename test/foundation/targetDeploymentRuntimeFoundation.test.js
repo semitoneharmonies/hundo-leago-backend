@@ -418,6 +418,7 @@ describe("M7-01 deployed target runtime configuration", () => {
   test("NHL statistics and matchup processing require separate explicit controls", () => {
     const defaults = loadTargetRuntimeConfig({ env: deployedEnvironment(), backendRoot: ROOT });
     assert.equal(defaults.nhlCompletedStatisticsEnabled, false);
+    assert.equal(defaults.nhlLiveStatisticsEnabled, false);
     assert.equal(defaults.expandedScoringEnabled, false);
     assert.equal(defaults.nhlStatisticsEfficiencyEnabled, false);
     assert.equal(defaults.nhlStatisticsRetentionEnabled, false);
@@ -434,6 +435,11 @@ describe("M7-01 deployed target runtime configuration", () => {
     assert.equal(enabled.nhlCompletedStatisticsEnabled, true);
     assert.equal(enabled.expandedScoringEnabled, true);
     assert.equal(enabled.matchupProcessingEnabled, true);
+    const live = loadTargetRuntimeConfig({ env: deployedEnvironment({ NHL_COMPLETED_STATISTICS_ENABLED: 'true', EXPANDED_SCORING_ENABLED: 'true', NHL_LIVE_STATISTICS_ENABLED: 'true' }), backendRoot: ROOT });
+    assert.equal(live.nhlLiveStatisticsEnabled, true);
+    for (const overrides of [{ NHL_LIVE_STATISTICS_ENABLED: 'true' }, { NHL_COMPLETED_STATISTICS_ENABLED: 'true', NHL_LIVE_STATISTICS_ENABLED: 'true' }, { NHL_LIVE_STATISTICS_ENABLED: 'yes' }]) {
+      assert.throws(() => loadTargetRuntimeConfig({ env: deployedEnvironment(overrides), backendRoot: ROOT }), TargetRuntimeConfigError);
+    }
     const compact = loadTargetRuntimeConfig({ env: deployedEnvironment({ NHL_COMPLETED_STATISTICS_ENABLED: "true", EXPANDED_SCORING_ENABLED: "true",
       NHL_STATISTICS_EFFICIENCY_ENABLED: "true", NHL_STATISTICS_RETENTION_ENABLED: "true" }), backendRoot: ROOT });
     assert.equal(compact.nhlStatisticsEfficiencyEnabled, true);

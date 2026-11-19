@@ -126,6 +126,7 @@ for (const custom of [false, true]) test(`${custom ? "custom scoring " : ""}${us
   const correctedStats = { ...initialStats, evenStrengthGoals: 0, primaryAssists: 0, giveaways: 6 };
   const completion = { refreshId, statSourceId: IDS.source, provider: "nhl-completed-games", playerIdentityProvider,
     nhlSeasonKey: "20262027", sourceVersion: "corrected-expanded", completedAtMs,
+    nhlGameCollection: { schemaVersion: 1, pendingGames: [] },
     rows: normalizeStatisticsRows({ rows: [{ playerId: "8", gamesPlayed: 12, goals: 1, assists: 2 }], minimumPlayerCount: 1, sourceUpdatedAtMs: completedAtMs }),
     playerGameRows: [{ externalPlayerId: "8", nhlGameId: "2026020001", nhlGameScheduledStartsAtMs: NOW_MS - 5 * HOUR_MS,
       observedGameState: "final", goals: 0, assists: 0, nhlPoints: 0, fantasyPointsHundredths: 0, sourceUpdatedAtMs: completedAtMs }],
@@ -139,7 +140,7 @@ for (const custom of [false, true]) test(`${custom ? "custom scoring " : ""}${us
   const errors = [];
   const corrections = createProviderResultCorrectionService({ repository: createSqliteProviderResultCorrectionRepository({ database }),
     scoringService: service, clock: { nowMs: () => completedAtMs + 1 }, createId: () => uuid(nextId++), logger: { warn: (...args) => errors.push(args) } });
-  assert.deepEqual(corrections.reconcile(), { checked: 1, corrected: 1, unchanged: 0, awaitingData: 0, requiresPlayoffReview: 0 }, JSON.stringify(errors));
+  assert.deepEqual(await corrections.reconcile(), { checked: 1, corrected: 1, unchanged: 0, awaitingData: 0, requiresPlayoffReview: 0 }, JSON.stringify(errors));
   const versions = database.prepare("SELECT * FROM matchup_result_versions ORDER BY version_number").all();
   assert.deepEqual(versions[0], historyBefore[0]);
   assert.equal(versions[1].home_score_hundredths, custom?-30:-60);
@@ -151,7 +152,7 @@ for (const custom of [false, true]) test(`${custom ? "custom scoring " : ""}${us
   assert.equal(final.home.players[0].scoreHundredths, custom?-30:-60);
   if(custom)assert.equal(final.home.scoringRuleVersion,'league-scoring-'+uuid(191));
   const writesBefore = database.prepare("SELECT total_changes() AS count").get().count;
-  assert.equal(corrections.reconcile().unchanged, 1);
+  assert.equal((await corrections.reconcile()).unchanged, 1);
   assert.equal(database.prepare("SELECT total_changes() AS count").get().count, writesBefore);
   assert.deepEqual(errors, []);
   const protectedFinalTables = ["matchup_roster_locks", "matchup_roster_players", "stat_snapshots", "stat_snapshot_players", "matchup_results", "matchup_result_versions"];

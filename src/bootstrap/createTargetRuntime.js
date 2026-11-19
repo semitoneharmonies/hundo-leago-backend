@@ -1,4 +1,7 @@
 const { runStatisticsWorker } = require("../jobs/runStatisticsWorker");
+const { createNhlLiveGameAdapter } = require('../infrastructure/nhl/NhlLiveGameAdapter');
+const { createNhlLiveStatisticsService } = require('../application/services/statistics/createNhlLiveStatisticsService');
+const { createMatchupLiveDisplayService } = require('../application/services/matchups/createMatchupLiveDisplayService');
 const { createSqlitePushRepository } = require('../infrastructure/persistence/sqlite/SqlitePushRepository');
 const { createPushService } = require('../application/services/push/createPushService');
 const { createPushRouter } = require('../transport/http/createPushRouter');
@@ -2137,6 +2140,7 @@ function createTargetServices({
   createSportsDataIoLiveNhlAdapterFunction =
     createSportsDataIoLiveNhlAdapter,
   nhlCompletedStatisticsEnabled = false,
+  nhlLiveStatisticsEnabled = false,
   nhlStatisticsEfficiencyEnabled = false,
   nhlStatisticsRetentionEnabled = false,
   expandedScoringEnabled = false,
@@ -2151,6 +2155,8 @@ function createTargetServices({
     requireVerifiedSportsDataIoLiveDescriptor(sportsDataIoLiveNhl);
   if (
     typeof nhlCompletedStatisticsEnabled !== "boolean" ||
+    typeof nhlLiveStatisticsEnabled !== "boolean" ||
+    (nhlLiveStatisticsEnabled && (!nhlCompletedStatisticsEnabled || !expandedScoringEnabled)) ||
     typeof nhlStatisticsEfficiencyEnabled !== "boolean" ||
     typeof nhlStatisticsRetentionEnabled !== "boolean" ||
     ((nhlStatisticsEfficiencyEnabled || nhlStatisticsRetentionEnabled) && !nhlCompletedStatisticsEnabled) ||
@@ -2716,6 +2722,13 @@ function createTargetServices({
     logger,
   });
   const nhlSchedule = createNhlScheduleAdapter({ fetchImpl: nhlFetchImplementation, nowMs: () => clock.nowMs() });
+  const liveStatistics = nhlLiveStatisticsEnabled ? createNhlLiveStatisticsService({
+    adapter: createNhlLiveGameAdapter({ fetchImpl: nhlFetchImplementation, nowMs: () => clock.nowMs() }),
+    scheduleAdapter: nhlSchedule, nhlSeasonKey: currentSeason.nhlSeasonKey, clock, logger,
+  }) : null;
+  const liveDisplayService = liveStatistics ? createMatchupLiveDisplayService({
+    repository: repositories.matchupScoring, liveStatistics,
+  }) : null;
   const matchupScoring = createMatchupScoringService({
     expandedScoringEnabled,
     repository: repositories.matchupScoring,
@@ -2760,6 +2773,7 @@ function createTargetServices({
     createId: () => secureRandom.id(),
   });
   const matchup = createMatchupIntegrationService({
+    liveDisplayService,
     leagueAuthorization,
     readRepository: repositories.matchupRead,
     scheduleService: matchupSchedule,
@@ -2974,6 +2988,7 @@ function createTargetServices({
       scheduleAdapter: nhlSchedule,
     }),
     matchupGameProgress: createMatchupGameProgressService({
+      liveDisplayService,
       leagueAuthorization,
       readRepository: repositories.matchupRead,
       scoringRepository: repositories.matchupScoring,
@@ -3330,6 +3345,7 @@ function createTargetServices({
       clock,
     }),
     statistics,
+    liveStatistics,
     statisticsOperations: createStatisticsOperationsService({
       platformAuthorization,
       statisticsService: statistics,
@@ -3615,6 +3631,7 @@ function createTargetRuntime({
   sportsDataIoFetchImplementation,
   createSportsDataIoLiveNhlAdapterFunction,
   nhlCompletedStatisticsEnabled = false,
+  nhlLiveStatisticsEnabled = false,
   nhlStatisticsEfficiencyEnabled = false,
   nhlStatisticsRetentionEnabled = false,
   expandedScoringEnabled = false,
@@ -3673,6 +3690,7 @@ function createTargetRuntime({
     sportsDataIoFetchImplementation,
     createSportsDataIoLiveNhlAdapterFunction,
     nhlCompletedStatisticsEnabled,
+    nhlLiveStatisticsEnabled,
     nhlStatisticsEfficiencyEnabled,
     nhlStatisticsRetentionEnabled,
     expandedScoringEnabled,

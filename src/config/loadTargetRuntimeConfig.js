@@ -443,6 +443,7 @@ function loadTargetRuntimeConfig({
     "FREE_AGENT_DRAFT_ROUTES_ENABLED"
   );
   const nhlCompletedStatisticsEnabled = optionalExactBoolean(env, "NHL_COMPLETED_STATISTICS_ENABLED") === true;
+  const nhlLiveStatisticsEnabled = optionalExactBoolean(env, "NHL_LIVE_STATISTICS_ENABLED") === true;
   const nhlStatisticsEfficiencyEnabled = optionalExactBoolean(env, "NHL_STATISTICS_EFFICIENCY_ENABLED") === true;
   const nhlStatisticsRetentionEnabled = optionalExactBoolean(env, "NHL_STATISTICS_RETENTION_ENABLED") === true;
   const expandedScoringEnabled = optionalExactBoolean(env, "EXPANDED_SCORING_ENABLED") === true;
@@ -466,6 +467,9 @@ function loadTargetRuntimeConfig({
   if (expandedScoringEnabled && !nhlCompletedStatisticsEnabled) {
     fail("EXPANDED_SCORING_ENABLED", "the completed-game NHL source must be enabled first");
   }
+  if (nhlLiveStatisticsEnabled && (!nhlCompletedStatisticsEnabled || !expandedScoringEnabled)) {
+    fail("NHL_LIVE_STATISTICS_ENABLED", "live display requires the completed-game source and expanded scoring");
+  }
     if ((nhlStatisticsEfficiencyEnabled || nhlStatisticsRetentionEnabled) && !nhlCompletedStatisticsEnabled) {
       fail("NHL_STATISTICS_EFFICIENCY_ENABLED", "statistics optimization requires the completed-game NHL source");
     }
@@ -479,6 +483,7 @@ function loadTargetRuntimeConfig({
   const runtimeConfig = {
     webPush: loadWebPushConfig(env),
     nhlCompletedStatisticsEnabled,
+    nhlLiveStatisticsEnabled,
     nhlStatisticsEfficiencyEnabled,
     nhlStatisticsRetentionEnabled,
     expandedScoringEnabled,

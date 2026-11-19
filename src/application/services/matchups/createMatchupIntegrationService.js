@@ -189,6 +189,7 @@ function createMatchupIntegrationService({
   scheduleService,
   weekService,
   scoringService,
+  liveDisplayService,
   resultCorrectionService,
   standingsService,
   recoveryService,
@@ -358,6 +359,10 @@ function createMatchupIntegrationService({
           providers: scoringProviders,
           nowMs: clock.nowMs(),
         });
+        if (liveDisplayService) liveScore = liveDisplayService.read({
+          leagueId: input.leagueId, seasonId: input.seasonId, weekId: input.weekId,
+          matchupId: input.matchupId, providers: scoringProviders, nowMs: clock.nowMs(),
+        }, liveScore);
         scoreHealth = Object.freeze({
           status: liveScore.source.freshnessStatus,
           completedAtMs: liveScore.source.completedAtMs,
@@ -367,6 +372,7 @@ function createMatchupIntegrationService({
           mode: "live",
           home: liveScore.home,
           away: liveScore.away,
+          ...(liveScore.source.live ? { source: liveScore.source } : {}),
         });
       } catch (error) {
         if (!String(error?.code || "").startsWith("MATCHUP_SCORING_")) throw error;
