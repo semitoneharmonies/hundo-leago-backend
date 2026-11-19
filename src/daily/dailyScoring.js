@@ -44,6 +44,17 @@ function validatedScoringDetails(room, slate, playerStatsById, pointsByPlayerId,
       throw new TypeError("Daily player collection evidence is incomplete.");
     }
     const scoringStats = entry.scoringStats === null ? null : normalizeScoringStats(entry.scoringStats);
+    // Additive evidence identifies exactly which final games the persisted total
+    // already contains. Older captures remain valid, but cannot prove a live handoff.
+    let collectedGameIds;
+    if (entry.collectedGameIds !== undefined) {
+      if (!Array.isArray(entry.collectedGameIds) || entry.collectedGameIds.length !== entry.gamesCollected ||
+          entry.collectedGameIds.some(id => typeof id !== "string" || !/^[1-9]\d{0,12}$/.test(id)) ||
+          new Set(entry.collectedGameIds).size !== entry.collectedGameIds.length) {
+        throw new TypeError("Daily collected-game identities are incomplete or duplicated.");
+      }
+      collectedGameIds = [...entry.collectedGameIds].sort();
+    }
     if (["partial", "collected"].includes(entry.statsStatus) && !scoringStats) {
       throw new TypeError("Collected Daily statistics require every category.");
     }
@@ -54,7 +65,8 @@ function validatedScoringDetails(room, slate, playerStatsById, pointsByPlayerId,
       throw new TypeError("Daily category totals do not match the authoritative player points.");
     }
     result[playerId] = { scoringStats, statsStatus: entry.statsStatus,
-      gamesCollected: entry.gamesCollected, gamesExpected: entry.gamesExpected };
+      gamesCollected: entry.gamesCollected, gamesExpected: entry.gamesExpected,
+      ...(collectedGameIds ? { collectedGameIds } : {}) };
   }
   return result;
 }

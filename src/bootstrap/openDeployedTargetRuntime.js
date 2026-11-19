@@ -442,6 +442,7 @@ function openDeployedTargetRuntime({
       sportsDataIoLiveNhl,
       sportsDataIoFetchImplementation,
       nhlCompletedStatisticsEnabled: config.nhlCompletedStatisticsEnabled === true,
+      nhlLiveStatisticsEnabled: config.nhlLiveStatisticsEnabled === true,
       expandedScoringEnabled: config.expandedScoringEnabled === true,
       matchupProcessingEnabled: config.matchupProcessingEnabled === true,
       matchupProcessingLeagueIds: config.matchupProcessingLeagueIds,
@@ -473,6 +474,7 @@ function openDeployedTargetRuntime({
           ].includes(name))
         : runtime.services.league.scheduledJobs,
       emailJob: runtime.services.accountEmail.job,
+      liveStatisticsJob: runtime.services.liveStatistics || null,
       backupEnabled: config.backupScheduleEnabled === true,
       backupJob,
       health,

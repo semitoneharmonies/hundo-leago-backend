@@ -304,9 +304,10 @@ function createHundoDailyFeed({ fetchImpl = fetch, nowMs = Date.now, timeoutMs =
       const playsFor = game => game.homeTeam === player.team || game.awayTeam === player.team;
       const gamesExpected = activeGames.filter(playsFor).length;
       const gamesCollected = completed.filter(playsFor).length;
+      const collectedGameIds = completed.filter(playsFor).map(game => game.id).sort();
       const statsStatus = gamesCollected === gamesExpected ? "collected" : gamesCollected ? "partial" : "pending";
       return [player.id, { scoringStats: statsStatus === "pending" ? null : collectedStats[player.id],
-        statsStatus, gamesCollected, gamesExpected }];
+        statsStatus, gamesCollected, gamesExpected, collectedGameIds }];
     }));
     return { final, pointsByPlayerId, playerStatsById, voided: final && completed.length === 0 };
   }

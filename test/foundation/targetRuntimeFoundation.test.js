@@ -1662,6 +1662,22 @@ describe("M3-19 exact target endpoint dispatch", () => {
 });
 
 describe("M3-19 exact-schema target dependency composition", () => {
+  test("Daily live data composes independently without starting fetches or altering league jobs", (t) => {
+    const database = createDatabase(t);
+    let fetches = 0;
+    const options = runtimeOptions(database, { nhlLiveStatisticsEnabled: true,
+      nhlFetchImplementation: async () => { fetches++; throw new Error("No implicit live fetch"); } });
+    const before = database.serialize();
+    const runtime = createTargetRuntime(options);
+    t.after(() => runtime.close());
+    assert.equal(runtime.services.liveStatistics.readSnapshot().status, "unavailable");
+    assert.equal(typeof runtime.services.liveStatistics.job.run, "function");
+    assert.equal(runtime.services.league.scheduledJobs.some(({ name }) => name === "nhl_live_statistics"), false);
+    assert.equal(runtime.services.league.scheduledJobs.some(({ name }) => name === "nhl_completed_statistics"), false);
+    assert.equal(fetches, 0);
+    assert.deepEqual(database.serialize(), before);
+    assert.throws(() => createTargetRuntime({ ...options, nhlLiveStatisticsEnabled: "true" }), /enablement/);
+  });
   test("composes completed NHL statistics separately and projects only the configured season", async (t) => {
     const database = createDatabase(t);
     const rows = seedLiveStatisticsCatalog(database);

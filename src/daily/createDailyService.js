@@ -2,6 +2,7 @@ const { existsSync } = require("node:fs");
 const { createDailyStore } = require("./createDailyStore");
 const { vancouverDate } = require("./vancouverDate");
 const { createHundoDailyFeed } = require("../infrastructure/nhl/HundoDailyFeed");
+const { createDailyLiveDisplay } = require("./createDailyLiveDisplay");
 
 const MINUTE = 60_000;
 
@@ -17,7 +18,8 @@ function dateAfter(date, offset) {
 }
 
 function createDailyService({ filename, clock = Date.now, feed = createHundoDailyFeed({ nowMs: clock }),
-  openStore = createDailyStore, push, subscriptions, backgroundEnabled = false, logger } = {}) {
+  openStore = createDailyStore, push, subscriptions, backgroundEnabled = false, logger, liveStatistics = null } = {}) {
+  const liveDisplay = liveStatistics ? createDailyLiveDisplay({ liveStatistics }) : null;
   let store, timer, maintenance, stopped = false;
   let nextScoring = 0;
   let nextSlateRefresh = 0;
@@ -210,7 +212,10 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
   return {
     lobby, create, bid, runMaintenance, orderPlayerPool: feed.orderPlayerPool,
     start() { if (backgroundEnabled && filename !== ":memory:" && existsSync(filename)) startTimer(); },
-    room: ({ actor, roomId }) => ({ room: required().getRoom({ roomId, actor }) }),
+    room: ({ actor, roomId }) => {
+      const current = required();
+      return { room: liveDisplay ? liveDisplay.project(current.readRoomForDisplay({ roomId, actor })) : current.getRoom({ roomId, actor }) };
+    },
     join: ({ actor, roomId }) => ({ room: required().joinRoom({ roomId, actor }) }),
     closeRoom: ({ actor, roomId }) => ({ room: required().closeRoom({ roomId, actor }) }),
     reminders: ({ actor }) => ({ reminders: existing()?.listReminders({ actor }) || [] }),

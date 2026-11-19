@@ -418,6 +418,11 @@ describe("M7-01 deployed target runtime configuration", () => {
   test("NHL statistics and matchup processing require separate explicit controls", () => {
     const defaults = loadTargetRuntimeConfig({ env: deployedEnvironment(), backendRoot: ROOT });
     assert.equal(defaults.nhlCompletedStatisticsEnabled, false);
+    assert.equal(defaults.nhlLiveStatisticsEnabled, false);
+    const liveOnly = loadTargetRuntimeConfig({ env: deployedEnvironment({ NHL_LIVE_STATISTICS_ENABLED: "true" }), backendRoot: ROOT });
+    assert.equal(liveOnly.nhlLiveStatisticsEnabled, true);
+    assert.equal(liveOnly.nhlCompletedStatisticsEnabled, false);
+    assert.throws(() => loadTargetRuntimeConfig({ env: deployedEnvironment({ NHL_LIVE_STATISTICS_ENABLED: "yes" }), backendRoot: ROOT }), TargetRuntimeConfigError);
     assert.equal(defaults.expandedScoringEnabled, false);
     assert.equal(defaults.matchupProcessingEnabled, false);
     assert.equal(defaults.matchupProcessingLeagueIds, null);

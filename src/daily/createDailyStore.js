@@ -115,15 +115,17 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
     if (!row) reject(404, "DAILY_ROOM_NOT_FOUND", "This room could not be found.");
     return row;
   }
-  function getRoom({ roomId, actor }) {
+  function readRoomForDisplay({ roomId, actor }) {
     const row = findRoom(roomId);
     const info = JSON.parse(row.info);
     if (actor?.isAdmin !== true && !info.members.some(({ id }) => id === actor?.id)) {
       reject(403, "DAILY_MEMBERSHIP_REQUIRED", "Join this room to see its players and rosters.");
     }
     if (info.closed) reject(410, "DAILY_ROOM_CLOSED", "This room has been closed.");
-    return roomView(fromRow(row), getSlate(row), actor, clock());
+    const slate = getSlate(row);
+    return { room: roomView(fromRow(row), slate, actor, clock()), slate };
   }
+  function getRoom(input) { return readRoomForDisplay(input).room; }
   function getRoomDate(roomId, actor) {
     requireActor(actor);
     const row = db.prepare("SELECT info,play FROM rooms WHERE id=?").get(roomId);
@@ -345,7 +347,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
 
   return {
     listRooms: ({ actor } = {}) => visibleRows.all().map(row => summary(fromRow(row), actor, clock())),
-    getRoom, getRoomDate, replayCreate, createRoom, joinRoom, bid, closeRoom, listScoringRooms, listStatsHydrationRooms, updateScores,
+    getRoom, readRoomForDisplay, getRoomDate, replayCreate, createRoom, joinRoom, bid, closeRoom, listScoringRooms, listStatsHydrationRooms, updateScores,
     listReminders: ({ actor }) => actor?.id ? reminders(actor.id, false) : [],
     listDueReminders: () => reminders(null, true), markReminderSent,
     listWaitingDates, listBiddingDates, syncRoomSchedule, syncBiddingSchedule, refreshWaitingSlate: (slate) => changeWaiting(slate.date, slate),

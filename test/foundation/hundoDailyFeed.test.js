@@ -129,7 +129,7 @@ test("confirmed player-game evidence reproduces the season scores including sign
   assert.equal(calls.filter(path => path.endsWith("/landing")).length, 1);
   assert.equal(result.pointsByPlayerId["999"], 0);
   assert.deepEqual(result.playerStatsById["999"], { scoringStats: emptyScoringStats(), statsStatus: "collected",
-    gamesCollected: 1, gamesExpected: 1 }, "A verified scratch has collected zero categories, not pending data");
+    gamesCollected: 1, gamesExpected: 1, collectedGameIds: [String(reports.gameId)] }, "A verified scratch has collected zero categories, not pending data");
   assert.equal(Object.keys(result.pointsByPlayerId).length, 37);
   assert.equal(Object.keys(result.playerStatsById).length, 37);
   let negative = false;
@@ -139,7 +139,7 @@ test("confirmed player-game evidence reproduces the season scores including sign
     assert.equal(result.pointsByPlayerId[p.id], target);
     const detail = result.playerStatsById[p.id];
     assert.deepEqual(Object.keys(detail.scoringStats), CATEGORY_KEYS);
-    assert.deepEqual(detail, { scoringStats: stats, statsStatus: "collected", gamesCollected: 1, gamesExpected: 1 });
+    assert.deepEqual(detail, { scoringStats: stats, statsStatus: "collected", gamesCollected: 1, gamesExpected: 1, collectedGameIds: [String(reports.gameId)] });
     if (target < 0) negative = true;
   }
   assert.equal(negative, true);
@@ -154,7 +154,7 @@ test("uncollected games expose pending null categories instead of collected zero
   for (const player of slate.players) {
     assert.equal(result.pointsByPlayerId[player.id], 0);
     assert.deepEqual(result.playerStatsById[player.id], { scoringStats: null, statsStatus: "pending",
-      gamesCollected: 0, gamesExpected: 1 });
+      gamesCollected: 0, gamesExpected: 1, collectedGameIds: [] });
   }
   assert.equal(calls.some(path => path.endsWith("/boxscore")), false);
 });
@@ -204,7 +204,7 @@ test("two team games retain partial categories until both validate, then sum eve
     const first = partial.playerStatsById[player.id].scoringStats;
     const expected = Object.fromEntries(CATEGORY_KEYS.map(key => [key, first[key] * 2]));
     assert.deepEqual(complete.playerStatsById[player.id], { scoringStats: expected, statsStatus: "collected",
-      gamesCollected: 2, gamesExpected: 2 });
+      gamesCollected: 2, gamesExpected: 2, collectedGameIds: [String(reports.gameId), String(later.id)].sort() });
     assert.equal(complete.pointsByPlayerId[player.id], partial.pointsByPlayerId[player.id] * 2);
     assert.equal(calculateExpandedScore(expected, player.position === "D" ? "D" : "F").fantasyPointsHundredths,
       complete.pointsByPlayerId[player.id]);

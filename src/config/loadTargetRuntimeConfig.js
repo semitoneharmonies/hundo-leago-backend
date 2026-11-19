@@ -443,6 +443,7 @@ function loadTargetRuntimeConfig({
     "FREE_AGENT_DRAFT_ROUTES_ENABLED"
   );
   const nhlCompletedStatisticsEnabled = optionalExactBoolean(env, "NHL_COMPLETED_STATISTICS_ENABLED") === true;
+  const nhlLiveStatisticsEnabled = optionalExactBoolean(env, "NHL_LIVE_STATISTICS_ENABLED") === true;
   const expandedScoringEnabled = optionalExactBoolean(env, "EXPANDED_SCORING_ENABLED") === true;
   const matchupProcessingEnabled = optionalExactBoolean(env, "MATCHUP_PROCESSING_ENABLED") === true;
   let matchupProcessingLeagueIds = null;
@@ -471,6 +472,7 @@ function loadTargetRuntimeConfig({
   const runtimeConfig = {
     webPush: loadWebPushConfig(env),
     nhlCompletedStatisticsEnabled,
+    nhlLiveStatisticsEnabled,
     expandedScoringEnabled,
     matchupProcessingEnabled,
     matchupProcessingLeagueIds,

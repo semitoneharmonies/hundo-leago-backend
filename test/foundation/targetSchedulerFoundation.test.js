@@ -50,6 +50,70 @@ function harness(overrides = {}) {
   return { calls, email, handles, runner, scheduler, states };
 }
 
+test('live statistics stays disabled with league jobs or maintenance, and requires a controlled runner', async () => {
+  let liveCalls = 0;
+  const liveStatisticsJob = { job: { async run() { liveCalls += 1; } } };
+  for (const options of [{ enabled: false }, { leagueWriteMode: 'closed' }]) {
+    const state = harness({ ...options, liveStatisticsJob });
+    state.scheduler.start();
+    assert.equal(state.handles.length, 0);
+    assert.equal((await state.scheduler.runLiveCycle()).reason, 'not_running');
+    await state.scheduler.close();
+  }
+  assert.equal(liveCalls, 0);
+  assert.throws(() => harness({ liveStatisticsJob: {} }), /controlled live statistics/);
+});
+
+test('independent live tick defers to pending league work and starts only after that cycle finishes', async () => {
+  let release, liveCalls = 0;
+  const pending = new Promise(resolve => { release = resolve; });
+  const state = harness({ jobs: [{ name: 'lock', runner: { run: () => pending } }],
+    liveStatisticsJob: { job: { async run() { liveCalls += 1; return { status: 'succeeded' }; } } } });
+  const initial = state.scheduler.start().initialRun;
+  assert.deepEqual(state.handles.map(handle => handle.intervalMs), [30000, 10000]);
+  assert.equal((await state.scheduler.runLiveCycle()).reason, 'league_jobs_running');
+  assert.equal(liveCalls, 0);
+  release({ status: 'succeeded' }); await initial;
+  assert.equal((await state.scheduler.runLiveCycle()).status, 'succeeded');
+  assert.equal(liveCalls, 1);
+  await state.scheduler.close();
+  assert.ok(state.handles.every(handle => handle.cleared));
+});
+
+test('slow live work never delays the next league cycle, never overlaps itself, and shutdown waits for it', async () => {
+  let release, liveCalls = 0;
+  const pending = new Promise(resolve => { release = resolve; });
+  const state = harness({ liveStatisticsJob: { job: { run() { liveCalls += 1; return pending; } } } });
+  await state.scheduler.start().initialRun;
+  const liveRun = state.scheduler.runLiveCycle();
+  await Promise.resolve();
+  assert.equal((await state.scheduler.runLiveCycle()).reason, 'overlap');
+  assert.equal((await state.scheduler.runCycle()).status, 'succeeded');
+  assert.deepEqual(state.calls, ['domain', 'outbox', 'domain', 'outbox']);
+  assert.equal(liveCalls, 1);
+  let closed = false;
+  const closing = state.scheduler.close().then(() => { closed = true; });
+  await Promise.resolve();
+  assert.equal(closed, false);
+  assert.ok(state.handles.every(handle => handle.cleared));
+  assert.equal((await state.scheduler.runLiveCycle()).reason, 'not_running');
+  release({ status: 'succeeded' }); await liveRun; await closing;
+  assert.equal(closed, true);
+  assert.equal(state.scheduler.getState(), 'stopped');
+});
+
+test('live feed failure is isolated from ordinary scheduler health and subsequent league jobs', async () => {
+  const errors = [];
+  const state = harness({ liveStatisticsJob: { job: { async run() { throw new Error('private upstream error'); } } },
+    logger: { error: (...args) => errors.push(args) } });
+  await state.scheduler.start().initialRun;
+  assert.deepEqual(await state.scheduler.runLiveCycle(), { status: 'failed', code: 'TARGET_LIVE_STATISTICS_FAILED' });
+  assert.equal(state.scheduler.getState(), 'running');
+  assert.equal((await state.scheduler.runCycle()).status, 'succeeded');
+  assert.equal(JSON.stringify(errors).includes('private upstream error'), false);
+  await state.scheduler.close();
+});
+
 test("backup lifecycle runs while league writes or jobs are disabled and shutdown drains its pending work", async () => {
   for (const enabled of [true, false]) {
     let finish;

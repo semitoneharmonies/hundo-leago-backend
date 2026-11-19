@@ -1,4 +1,7 @@
 const { createDailyService } = require("../daily/createDailyService");
+const { createNhlLiveGameAdapter } = require("../infrastructure/nhl/NhlLiveGameAdapter");
+const { createNhlScheduleAdapter } = require("../infrastructure/nhl/NhlScheduleAdapter");
+const { createNhlLiveStatisticsService } = require("../application/services/statistics/createNhlLiveStatisticsService");
 const { createHundoDailyRouter, dailyEndpoints } = require("../transport/http/createHundoDailyRouter");
 const { createSqlitePushRepository } = require('../infrastructure/persistence/sqlite/SqlitePushRepository');
 const { createPushService } = require('../application/services/push/createPushService');
@@ -2083,6 +2086,7 @@ function createTargetServices({
   createSportsDataIoLiveNhlAdapterFunction =
     createSportsDataIoLiveNhlAdapter,
   nhlCompletedStatisticsEnabled = false,
+  nhlLiveStatisticsEnabled = false,
   expandedScoringEnabled = false,
   matchupProcessingEnabled = false,
   nhlFetchImplementation,
@@ -2095,6 +2099,7 @@ function createTargetServices({
     requireVerifiedSportsDataIoLiveDescriptor(sportsDataIoLiveNhl);
   if (
     typeof nhlCompletedStatisticsEnabled !== "boolean" ||
+    typeof nhlLiveStatisticsEnabled !== "boolean" ||
     typeof expandedScoringEnabled !== "boolean" ||
     (expandedScoringEnabled && !nhlCompletedStatisticsEnabled) ||
     typeof matchupProcessingEnabled !== "boolean" ||
@@ -2858,6 +2863,11 @@ function createTargetServices({
   });
   const pushJob=createJobRunner({name:'web-push:deliver:target',logger,execute:()=>push.deliverDue()});
 
+  const liveStatistics = nhlLiveStatisticsEnabled ? createNhlLiveStatisticsService({
+    adapter: createNhlLiveGameAdapter({ fetchImpl: nhlFetchImplementation }),
+    scheduleAdapter: createNhlScheduleAdapter({ fetchImpl: nhlFetchImplementation, nowMs: () => clock.nowMs() }),
+    nhlSeasonKey: currentSeason.nhlSeasonKey, clock, logger,
+  }) : null;
   const league = Object.freeze({
     candidateAllocation,
     candidateAllocationJob,
@@ -3229,6 +3239,7 @@ function createTargetServices({
 
   return Object.freeze({
     push,
+    liveStatistics,
     account,
     playerInjuries: createPlayerInjuryService({ repository: repositories.playerInjuries, platformAuthorization }),
     playerCatalogue: createPlayerCatalogueControlService({repository:repositories.playerCatalogue,platformAuthorization,provider:createNhlCatalogueLookup({fetchImpl:nhlFetchImplementation})}),
@@ -3510,6 +3521,7 @@ function createTargetRuntime({
   sportsDataIoFetchImplementation,
   createSportsDataIoLiveNhlAdapterFunction,
   nhlCompletedStatisticsEnabled = false,
+  nhlLiveStatisticsEnabled = false,
   expandedScoringEnabled = false,
   matchupProcessingEnabled = false,
   nhlFetchImplementation,
@@ -3563,6 +3575,7 @@ function createTargetRuntime({
     sportsDataIoFetchImplementation,
     createSportsDataIoLiveNhlAdapterFunction,
     nhlCompletedStatisticsEnabled,
+    nhlLiveStatisticsEnabled,
     expandedScoringEnabled,
     matchupProcessingEnabled,
     nhlFetchImplementation,
@@ -3571,6 +3584,7 @@ function createTargetRuntime({
     filename: database.name && !database.memory ? require("node:path").resolve(database.name) + ".hundo-daily.sqlite3" : ":memory:",
     clock: () => securityFoundations.clock.nowMs(),
     feed: dailyFeed,
+    liveStatistics: services.liveStatistics,
     backgroundEnabled: dailyBackgroundEnabled && leagueWriteMode === "open",
     logger: securityFoundations.logger,
     push: pushAdapter || createWebPushAdapter({ config: pushConfig }),

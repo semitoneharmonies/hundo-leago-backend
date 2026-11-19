@@ -1,5 +1,6 @@
 const DEFAULT_INTERVAL_MS = 30_000;
 const MAXIMUM_INTERVAL_MS = 5 * 60_000;
+const LIVE_TICK_INTERVAL_MS = 10_000;
 
 function createTargetScheduler({
   enabled,
@@ -9,6 +10,7 @@ function createTargetScheduler({
   emailJob = null,
   backupEnabled = false,
   backupJob = null,
+  liveStatisticsJob = null,
   health,
   logger,
   intervalMs = DEFAULT_INTERVAL_MS,
@@ -56,6 +58,9 @@ function createTargetScheduler({
       (backupJob !== null && (typeof backupJob.start !== "function" || typeof backupJob.close !== "function"))) {
     throw new TypeError("target scheduler requires a controlled backup job when backups are enabled");
   }
+  if (liveStatisticsJob !== null && typeof liveStatisticsJob.job?.run !== "function") {
+    throw new TypeError("target scheduler requires a controlled live statistics job");
+  }
   if (!health || typeof health.setSchedulerState !== "function") {
     throw new TypeError("target scheduler requires runtime health state");
   }
@@ -79,6 +84,8 @@ function createTargetScheduler({
     : "disabled";
   let intervalHandle = null;
   let inFlight = null;
+  let liveIntervalHandle = null;
+  let liveInFlight = null;
   let startResult = null;
   let closePromise = null;
   let emailStarted = false;
@@ -137,6 +144,21 @@ function createTargetScheduler({
     return cycle;
   }
 
+  // Provisional fetches never sit in front of time-sensitive league jobs.
+  // The live service owns its actual polling cadence and provider backoff.
+  function runLiveCycle() {
+    if (!liveStatisticsJob || state !== "running") return Promise.resolve({ status: "skipped", reason: "not_running" });
+    if (inFlight) return Promise.resolve({ status: "skipped", reason: "league_jobs_running" });
+    if (liveInFlight) return Promise.resolve({ status: "skipped", reason: "overlap" });
+    const cycle = Promise.resolve().then(() => liveStatisticsJob.job.run()).catch(() => {
+      logger.error("target_scheduler.live_statistics_failed", { code: "TARGET_LIVE_STATISTICS_FAILED" });
+      return { status: "failed", code: "TARGET_LIVE_STATISTICS_FAILED" };
+    });
+    liveInFlight = cycle;
+    cycle.finally(() => { if (liveInFlight === cycle) liveInFlight = null; });
+    return cycle;
+  }
+
   function start() {
     if (startResult) return startResult;
     if (closePromise) {
@@ -180,6 +202,10 @@ function createTargetScheduler({
       if (intervalHandle && typeof intervalHandle.unref === "function") {
         intervalHandle.unref();
       }
+      if (liveStatisticsJob) {
+        liveIntervalHandle = setIntervalFunction(() => { void runLiveCycle(); }, LIVE_TICK_INTERVAL_MS);
+        if (liveIntervalHandle && typeof liveIntervalHandle.unref === "function") liveIntervalHandle.unref();
+      }
       startResult = Object.freeze({
         status: "running",
         initialRun,
@@ -209,6 +235,10 @@ function createTargetScheduler({
         clearIntervalFunction(intervalHandle);
         intervalHandle = null;
       }
+      if (liveIntervalHandle !== null) {
+        clearIntervalFunction(liveIntervalHandle);
+        liveIntervalHandle = null;
+      }
       const errors = [];
       if (inFlight) {
         try {
@@ -216,6 +246,9 @@ function createTargetScheduler({
         } catch (error) {
           errors.push(error);
         }
+      }
+      if (liveInFlight) {
+        try { await liveInFlight; } catch (error) { errors.push(error); }
       }
       if (emailStarted) {
         try {
@@ -244,6 +277,7 @@ function createTargetScheduler({
       return state === "running";
     },
     runCycle,
+    runLiveCycle,
     start,
   });
 }
@@ -251,5 +285,6 @@ function createTargetScheduler({
 module.exports = {
   DEFAULT_INTERVAL_MS,
   MAXIMUM_INTERVAL_MS,
+  LIVE_TICK_INTERVAL_MS,
   createTargetScheduler,
 };
