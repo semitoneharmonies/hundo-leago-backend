@@ -383,16 +383,17 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
   function syncBiddingSchedule(date, schedule) {
     const firstGameAt = revisedTime(date, schedule);
     const rows = db.prepare(`SELECT id FROM rooms WHERE date=? AND closed=0 AND ended=0 AND first_game_at>?
-      AND first_game_at IS NOT ? AND json_extract(info,'$.mode') IS NOT 'practice'
+      AND json_extract(info,'$.firstGameAt') IS NOT ? AND json_extract(info,'$.mode') IS NOT 'practice'
       AND json_array_length(play,'$.lots')>0`).all(date, clock(), firstGameAt);
     for (const row of rows) applyRevisedTime(row.id, firstGameAt);
   }
   function syncRoomSchedule(roomId, schedule) {
-    const row = db.prepare("SELECT date,first_game_at,closed,ended,json_extract(info,'$.mode') AS mode FROM rooms WHERE id=?").get(roomId);
+    const row = db.prepare(`SELECT date,first_game_at,closed,ended,json_extract(info,'$.mode') AS mode,
+      json_extract(info,'$.firstGameAt') AS official_first_game_at FROM rooms WHERE id=?`).get(roomId);
     if (!row) reject(404, "DAILY_ROOM_NOT_FOUND", "This room could not be found.");
     if (row.mode === "practice") return;
     const firstGameAt = revisedTime(row.date, schedule);
-    if (!row.closed && !row.ended && row.first_game_at > clock() && firstGameAt !== row.first_game_at) {
+    if (!row.closed && !row.ended && row.first_game_at > clock() && firstGameAt !== row.official_first_game_at) {
       applyRevisedTime(roomId, firstGameAt);
     }
   }

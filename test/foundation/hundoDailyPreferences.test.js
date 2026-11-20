@@ -30,7 +30,7 @@ function fixture(t, options = {}) {
     getSlate: async () => slate, getScores: async () => ({ final: false, pointsByPlayerId: { "1": 0, "2": 0 } }), ...options.feed };
   const daily = createDailyService({ filename, clock: () => now, feed,
     notify: options.notify ?? (notice => { notices.push(structuredClone(notice)); }),
-    push: { available: true, send: async (_, payload) => { pushes.push(payload); } }, subscriptions: () => [{}],
+    push: options.push ?? { available: true, send: async (_, payload) => { pushes.push(payload); } }, subscriptions: () => [{}],
   });
   if (file) file.keep(daily); else t.after(() => daily.close());
   return { daily, notices, pushes, at: time => { now = time; } };
@@ -117,6 +117,12 @@ test("selected times survive later NHL delays, shorten safely for earlier puck d
   assert.equal(view().auctionEndsAt, new Date(start + 30 * MINUTE).toISOString());
   now = start;
   store.bid({ roomId, actor: host, playerId: "1", amount: 2 });
+  const exactEnd = start + 30 * MINUTE;
+  store.syncRoomSchedule(roomId, { ...slate, firstGameAt: exactEnd });
+  assert.equal(view().firstGameAt, new Date(exactEnd).toISOString(), "A bid-time schedule check compares the official start, not the auction-end index");
+  store.syncRoomSchedule(roomId, slate);
+  store.syncBiddingSchedule(slate.date, { ...slate, firstGameAt: exactEnd });
+  assert.equal(view().firstGameAt, new Date(exactEnd).toISOString(), "The background schedule check also updates an exact auction-end match");
   store.syncRoomSchedule(roomId, { ...slate, firstGameAt: start + MINUTE });
   assert.equal(view().auctionEndsAt, new Date(start + MINUTE).toISOString());
   assert.equal(view().auctions[0].endsAt, view().auctionEndsAt);
@@ -145,6 +151,60 @@ test("custom-time reminders persist once per participant; joining inside the win
   assert.equal(pushes.length, 2);
   at(start);
   await daily.runMaintenance();
+  assert.equal(notices.length, 2);
+});
+
+test("due and late-join notices persist while an earlier NHL refresh remains blocked across the deadline", async t => {
+  let blocked = false, releaseRefresh, enteredRefresh;
+  const entered = new Promise(resolve => { enteredRefresh = resolve; });
+  const { daily, at, notices } = fixture(t, { feed: { getSlate: () => {
+    if (!blocked) return Promise.resolve(slate);
+    enteredRefresh();
+    return new Promise(resolve => { releaseRefresh = resolve; });
+  } } });
+  const { room } = await daily.create({ actor: host, input });
+  at(start - 11 * MINUTE);
+  blocked = true;
+  const pending = daily.runMaintenance();
+  await entered;
+  at(start - 9 * MINUTE);
+  daily.join({ roomId: room.id, actor: guest });
+  const nextTick = daily.runMaintenance();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(notices.map(notice => notice.userId), [host.id, guest.id]);
+  assert.ok(notices.every(notice => notice.createdAtMs === start - 10 * MINUTE));
+  at(start + 1);
+  releaseRefresh(slate);
+  await Promise.all([pending, nextTick]);
+  assert.equal(notices.length, 2, "A slow NHL response cannot lose or repeat already-persisted reminders");
+});
+
+test("notices precede slow push delivery and concurrent late-join ticks serialize notification writes", async t => {
+  let enteredPush, releasePush, releaseGuest;
+  const entered = new Promise(resolve => { enteredPush = resolve; });
+  const notices = [];
+  const { daily, at } = fixture(t, {
+    push: { available: true, send: () => { enteredPush(); return new Promise(resolve => { releasePush = resolve; }); } },
+    notify: notice => {
+      notices.push(structuredClone(notice));
+      if (notice.userId === guest.id) return new Promise(resolve => { releaseGuest = resolve; });
+    },
+  });
+  const { room } = await daily.create({ actor: host, input });
+  at(start - 10 * MINUTE);
+  const pending = daily.runMaintenance();
+  await entered;
+  assert.deepEqual(notices.map(notice => notice.userId), [host.id], "In-app delivery occurs before waiting on push providers");
+  at(start - MINUTE);
+  daily.join({ roomId: room.id, actor: guest });
+  const ticks = [daily.runMaintenance(), daily.runMaintenance(), daily.runMaintenance()];
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(notices.map(notice => notice.userId), [host.id, guest.id], "One in-flight notification writer handles all overlapping ticks");
+  releaseGuest();
+  await new Promise(resolve => setImmediate(resolve));
+  at(start + 1);
+  releasePush();
+  await Promise.all([pending, ...ticks]);
   assert.equal(notices.length, 2);
 });
 
@@ -184,7 +244,7 @@ test("missing or failing notification sink cannot acknowledge a due event", asyn
   const observer = file.keep(createDailyStore({ filename: file.filename, clock: () => start - 10 * MINUTE, existingOnly: true }));
   assert.equal(observer.listDueNotifications().length, 1);
   await f.daily.runMaintenance();
-  assert.equal(attempts, 2);
+  assert.ok(attempts >= 2, "Unacknowledged notifications remain eligible for retry");
   const noSink = file.keep(createDailyService({ filename: file.filename, clock: () => start - 10 * MINUTE,
     feed: { getSlate: async () => slate } }));
   await noSink.runMaintenance();

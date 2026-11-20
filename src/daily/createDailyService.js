@@ -23,7 +23,7 @@ function dateAfter(date, offset) {
 function createDailyService({ filename, clock = Date.now, feed = createHundoDailyFeed({ nowMs: clock }),
   openStore = createDailyStore, push, subscriptions, notify, backgroundEnabled = false, logger, liveStatistics = null } = {}) {
   const liveDisplay = liveStatistics ? createDailyLiveDisplay({ liveStatistics }) : null;
-  let store, timer, maintenance, stopped = false;
+  let store, timer, maintenance, notificationDelivery, stopped = false;
   let nextScoring = 0;
   let nextSlateRefresh = 0;
 
@@ -181,15 +181,19 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
       } catch { logFailure("scoring"); }
     }
   }
-  async function sendNotifications(current) {
+  function sendNotifications(current) {
     if (typeof notify !== "function") return;
-    for (const notice of current.listDueNotifications()) {
-      if (stopped) return;
-      try {
-        await notify(notice);
-        if (!stopped) current.markNotificationSent(notice);
-      } catch { logFailure("notification"); }
-    }
+    if (notificationDelivery) return notificationDelivery;
+    notificationDelivery = (async () => {
+      for (const notice of current.listDueNotifications()) {
+        if (stopped) return;
+        try {
+          await notify(notice);
+          if (!stopped) current.markNotificationSent(notice);
+        } catch { logFailure("notification"); }
+      }
+    })().finally(() => { notificationDelivery = null; });
+    return notificationDelivery;
   }
   async function refreshWaitingDates(current) {
     if (clock() < nextSlateRefresh) return;
@@ -213,9 +217,13 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
     }
   }
   async function runMaintenance() {
-    if (stopped || maintenance) return maintenance;
+    if (stopped) return;
     const current = existing();
     if (!current) return;
+    // Persist due notices on every tick, including while NHL/push work is still pending.
+    // Delivery is serialized independently so concurrent ticks cannot duplicate a write.
+    await sendNotifications(current);
+    if (stopped || maintenance) return maintenance;
     maintenance = (async () => {
       await Promise.all([scoreRooms(current), refreshWaitingDates(current).then(() => {
         if (!stopped) return sendReminders(current);
