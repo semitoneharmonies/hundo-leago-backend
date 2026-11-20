@@ -5,6 +5,8 @@ const endpoints = [
   ["GET", base + "/rooms", "lobby"],
   ["GET", base + "/rooms/:roomId", "room"],
   ["GET", base + "/reminders", "reminders"],
+  ["GET", base + "/profile", "profile"],
+  ["POST", base + "/profile", "updateProfile"],
   ["POST", base + "/rooms", "create"],
   ["POST", base + "/rooms/:roomId/join", "join"],
   ["POST", base + "/rooms/:roomId/bids", "bid"],

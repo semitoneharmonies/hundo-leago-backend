@@ -3,6 +3,9 @@ const { createDailyStore } = require("./createDailyStore");
 const { vancouverDate } = require("./vancouverDate");
 const { createHundoDailyFeed } = require("../infrastructure/nhl/HundoDailyFeed");
 const { createDailyLiveDisplay } = require("./createDailyLiveDisplay");
+const { auctionStartOptions, parseAuctionStart } = require("./dailySchedule");
+const { validateDailyAppearance } = require("./dailyProfile");
+const { requireActor } = require("./dailyRoom");
 
 const MINUTE = 60_000;
 
@@ -18,7 +21,7 @@ function dateAfter(date, offset) {
 }
 
 function createDailyService({ filename, clock = Date.now, feed = createHundoDailyFeed({ nowMs: clock }),
-  openStore = createDailyStore, push, subscriptions, backgroundEnabled = false, logger, liveStatistics = null } = {}) {
+  openStore = createDailyStore, push, subscriptions, notify, backgroundEnabled = false, logger, liveStatistics = null } = {}) {
   const liveDisplay = liveStatistics ? createDailyLiveDisplay({ liveStatistics }) : null;
   let store, timer, maintenance, stopped = false;
   let nextScoring = 0;
@@ -48,14 +51,15 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
     return existing() || fail(404, "DAILY_ROOM_MISSING", "This room could not be found.");
   }
   async function dayOption(date, day) {
-    const option = { date, day, status: "no_games", firstGameAt: null, auctionStartsAt: null };
+    const option = { date, day, status: "no_games", firstGameAt: null, auctionStartsAt: null, auctionStartOptions: [] };
     try {
       const schedule = await feed.getSchedule(date);
       if (!schedule) return option;
       if (schedule.date !== date || !Number.isSafeInteger(schedule.firstGameAt)) {
         return { ...option, status: "unavailable" };
       }
-      return { ...option, status: schedule.firstGameAt > clock() ? "open" : "locked",
+      const choices = auctionStartOptions(date, schedule.firstGameAt, clock());
+      return { ...option, status: choices.length ? "open" : "locked", auctionStartOptions: choices,
         firstGameAt: schedule.firstGameAt, auctionStartsAt: schedule.firstGameAt - 30 * MINUTE };
     } catch {
       return { ...option, status: "unavailable" };
@@ -87,7 +91,7 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
       status: today.firstGameAt === null ? today.status : "available" };
     return { rooms, slate, slateOptions, practiceSlate, slateUnavailable: !slate && slateOptions.some(option => option.status === "unavailable") };
   }
-  async function selectRoomDate(requested) {
+  async function selectRoomDate(requested, legacyStart) {
     const today = vancouverDate(clock());
     const tomorrow = dateAfter(today, 1);
     let option;
@@ -95,7 +99,7 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
       option = await dayOption(requested, requested === today ? "today" : "tomorrow");
     } else if (!requested || (requested > tomorrow && requested <= dateAfter(today, 6))) {
       const options = await roomDates(today);
-      option = options.find(item => item.status === "open");
+      option = options.find(item => item.status === "open" || (legacyStart && item.firstGameAt > clock()));
       if (!option && options.some(item => item.status === "unavailable")) {
         fail(503, "DAILY_SCHEDULE_UNAVAILABLE", "The NHL schedule is temporarily unavailable. Try again shortly.");
       }
@@ -104,23 +108,25 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
     if (option?.status === "unavailable") {
       fail(503, "DAILY_SCHEDULE_UNAVAILABLE", "The NHL schedule is temporarily unavailable. Try again shortly.");
     }
-    if (option?.status !== "open") {
+    if (option?.status !== "open" && !(legacyStart && option?.firstGameAt > clock())) {
       fail(409, "DAILY_SLATE_CHANGED", "There is no open NHL slate for that date. Refresh the lobby.");
     }
     return option.date;
   }
   async function create({ actor, input, requestId }) {
-    const { name, capacity, slateDate, mode = "scheduled" } = input || {};
+    const { name, capacity, slateDate, auctionStartsAt, mode = "scheduled" } = input || {};
+    const scheduledStartsAt = parseAuctionStart(auctionStartsAt);
     if (!["scheduled", "practice"].includes(mode)) fail(400, "DAILY_MODE_INVALID", "Choose a scheduled or practice room.");
     if (typeof name !== "string" || !name.trim() || name.trim().length > 60 || !Number.isSafeInteger(capacity) || capacity < 1 ||
       (slateDate !== undefined && (typeof slateDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(slateDate)))) {
       fail(400, "DAILY_INPUT_INVALID", "Enter a room name (up to 60 characters) and a positive number of seats.");
     }
-    const request = { actor, name, capacity, slateDate, requestId, mode };
+    if (mode === "practice" && scheduledStartsAt !== undefined) fail(400, "DAILY_START_INVALID", "Practice auctions start immediately.");
+    const request = { actor, name, capacity, slateDate, requestId, mode, scheduledStartsAt };
     const replay = requestId && existing()?.replayCreate(request);
     if (replay) return { room: replay };
     const practice = mode === "practice";
-    const date = practice ? vancouverDate(clock()) : await selectRoomDate(slateDate);
+    const date = practice ? vancouverDate(clock()) : await selectRoomDate(slateDate, scheduledStartsAt === undefined);
     if (practice && slateDate && slateDate !== date) {
       fail(409, "DAILY_SLATE_CHANGED", "Practice rooms use today's NHL games. Refresh the lobby.");
     }
@@ -175,6 +181,16 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
       } catch { logFailure("scoring"); }
     }
   }
+  async function sendNotifications(current) {
+    if (typeof notify !== "function") return;
+    for (const notice of current.listDueNotifications()) {
+      if (stopped) return;
+      try {
+        await notify(notice);
+        if (!stopped) current.markNotificationSent(notice);
+      } catch { logFailure("notification"); }
+    }
+  }
   async function refreshWaitingDates(current) {
     if (clock() < nextSlateRefresh) return;
     nextSlateRefresh = clock() + MINUTE;
@@ -204,6 +220,7 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
       await Promise.all([scoreRooms(current), refreshWaitingDates(current).then(() => {
         if (!stopped) return sendReminders(current);
       })]);
+      if (!stopped) await sendNotifications(current);
     })().finally(() => { maintenance = null; });
     return maintenance;
   }
@@ -219,6 +236,12 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
     join: ({ actor, roomId }) => ({ room: required().joinRoom({ roomId, actor }) }),
     closeRoom: ({ actor, roomId }) => ({ room: required().closeRoom({ roomId, actor }) }),
     reminders: ({ actor }) => ({ reminders: existing()?.listReminders({ actor }) || [] }),
+    profile: ({ actor }) => { requireActor(actor); return { profile: existing()?.getProfile({ actor }) || { appearance: null } }; },
+    updateProfile: ({ actor, input }) => {
+      requireActor(actor);
+      validateDailyAppearance(input);
+      return { profile: writable().updateProfile({ actor, input }) };
+    },
     close() {
       if (stopped) return;
       stopped = true;

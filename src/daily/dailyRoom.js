@@ -7,7 +7,9 @@ const RULES = Object.freeze({ cap: 100, minBid: 1, lotSeconds: 120, forwards: 3,
 const ROSTER_SIZE = RULES.forwards + RULES.defense + RULES.extras;
 const FORWARDS = new Set(["F", "C", "L", "R", "LW", "RW"]);
 const iso = (value) => new Date(value).toISOString();
-const auctionEnd = (room) => room.practiceEndsAt ?? room.firstGameAt;
+const auctionEnd = (room) => room.practiceEndsAt ?? (room.scheduledStartsAt === undefined ? room.firstGameAt
+  : Math.min(room.firstGameAt, room.scheduledStartsAt + 30 * MINUTE));
+const auctionStart = (room) => room.scheduledStartsAt ?? auctionEnd(room) - 30 * MINUTE;
 
 function reject(status, code, message) {
   throw Object.assign(new Error(message), { status, code });
@@ -38,7 +40,7 @@ function phase(room, now) {
   if (room.void) return "void";
   if (room.finished) return "finished";
   if (now >= auctionEnd(room) || rostersFilledAt(room, now) !== null) return "locked";
-  if (now >= auctionEnd(room) - 30 * MINUTE) return "auction";
+  if (now >= auctionStart(room)) return "auction";
   return "waiting";
 }
 
@@ -49,7 +51,7 @@ function summary(room, actor, now) {
     joined: room.members.some((member) => member.id === actor?.id),
     commissionerId: room.commissionerId, commissionerName: room.members.find(member => member.id === room.commissionerId)?.name ?? null,
     date: room.date, firstGameAt: iso(room.firstGameAt),
-    mode: room.mode ?? "scheduled", auctionStartsAt: iso(auctionEnd(room) - 30 * MINUTE),
+    mode: room.mode ?? "scheduled", auctionStartsAt: iso(auctionStart(room)),
     auctionEndsAt: iso(Math.min(auctionEnd(room), rostersFilledAt(room, now) ?? Infinity)), phase: currentPhase, winners: room.winners,
     canClose: currentPhase !== "closed" && (actor?.isAdmin === true ||
       (actor?.id === room.commissionerId && (currentPhase === "finished" || currentPhase === "void"))),
@@ -181,7 +183,8 @@ function scoreRoom(room, pointsByPlayerId, final, voided, now) {
     room.winners = room.members.filter(({ id }) => totals.get(id) === highest)
       .map(({ id, name }) => ({ id, name, points: highest / 100 }));
     room.finished = true;
+    room.finishedAt = now;
   }
 }
 
-module.exports = { MINUTE, ROSTER_SIZE, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom };
+module.exports = { MINUTE, ROSTER_SIZE, auctionStart, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom };

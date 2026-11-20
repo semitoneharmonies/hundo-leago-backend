@@ -3,6 +3,8 @@
 const { createHash, randomUUID } = require("node:crypto");
 const { MINUTE, ROSTER_SIZE, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom } = require("./dailyRoom");
 const { validatedScoringDetails } = require("./dailyScoring");
+const { validateAuctionStart } = require("./dailySchedule");
+const { validateDailyAppearance } = require("./dailyProfile");
 
 const DAILY_DATABASE_ID = 1212433457;
 const MEMBER_PHASES = new Set(["waiting", "auction"]);
@@ -78,6 +80,34 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
   const savePlay = db.prepare("UPDATE rooms SET play=? WHERE id=?");
   const saveInfo = db.prepare("UPDATE rooms SET info=?, first_game_at=?, ended=?, closed=? WHERE id=?");
 
+  function appearance(userId) {
+    if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='daily_profiles'").get()) return null;
+    const row = db.prepare("SELECT appearance FROM daily_profiles WHERE user_id=?").get(userId);
+    return row ? JSON.parse(row.appearance) : null;
+  }
+  function getProfile({ actor }) {
+    requireActor(actor);
+    return { appearance: appearance(actor.id) };
+  }
+  function updateProfile({ actor, input }) {
+    requireActor(actor);
+    const value = validateDailyAppearance(input);
+    return transaction(() => {
+      // Optional extension of the Daily sidecar; old readers remain compatible.
+      // Only an authorized profile write creates it, never a GET or startup read.
+      db.exec("CREATE TABLE IF NOT EXISTS daily_profiles (user_id TEXT PRIMARY KEY, appearance TEXT NOT NULL)");
+      db.prepare(`INSERT INTO daily_profiles(user_id,appearance) VALUES(?,?)
+        ON CONFLICT(user_id) DO UPDATE SET appearance=excluded.appearance
+        WHERE daily_profiles.appearance<>excluded.appearance`).run(actor.id, JSON.stringify(value));
+      return { appearance: value };
+    });
+  }
+  function presentRoom(room, slate, actor, now) {
+    const view = roomView(room, slate, actor, now);
+    view.members = view.members.map(member => ({ ...member, dailyAppearance: appearance(member.id) }));
+    return view;
+  }
+
   function persistSlate(slate) {
     if (!slate || !/^\d{4}-\d{2}-\d{2}$/.test(slate.date) || !Number.isSafeInteger(slate.firstGameAt) ||
         !Array.isArray(slate.players) || !slate.players.length) {
@@ -123,7 +153,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
     }
     if (info.closed) reject(410, "DAILY_ROOM_CLOSED", "This room has been closed.");
     const slate = getSlate(row);
-    return { room: roomView(fromRow(row), slate, actor, clock()), slate };
+    return { room: presentRoom(fromRow(row), slate, actor, clock()), slate };
   }
   function getRoom(input) { return readRoomForDisplay(input).room; }
   function getRoomDate(roomId, actor) {
@@ -144,7 +174,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
       const now = clock();
       fn(room, slate, now);
       save(row, room);
-      return roomView(room, slate, actor, now);
+      return presentRoom(room, slate, actor, now);
     });
   }
   function checkSetup(actor, name, capacity, requestId) {
@@ -157,7 +187,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
       reject(400, "DAILY_REQUEST_ID", "Use a valid request identifier.");
     }
   }
-  function replayCreate({ actor, name, capacity, requestId, slateDate, mode = "scheduled" }) {
+  function replayCreate({ actor, name, capacity, requestId, slateDate, scheduledStartsAt, mode = "scheduled" }) {
     checkSetup(actor, name, capacity, requestId);
     if (mode !== "scheduled" && mode !== "practice") reject(400, "DAILY_ROOM_MODE", "Choose a scheduled or practice room.");
     if (requestId == null) return null;
@@ -165,28 +195,32 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
     if (!row) return null;
     const info = JSON.parse(row.info);
     if (info.name !== name.trim() || info.capacity !== capacity ||
-        (info.mode ?? "scheduled") !== mode || (slateDate && info.date !== slateDate)) {
+        (info.mode ?? "scheduled") !== mode || (slateDate && info.date !== slateDate) ||
+        (info.requestedAuctionStartsAt ?? info.scheduledStartsAt) !== scheduledStartsAt) {
       reject(409, "DAILY_CREATE_CONFLICT", "That request identifier already belongs to a different room.");
     }
-    return roomView(fromRow(row), getSlate(row), actor, clock());
+    return presentRoom(fromRow(row), getSlate(row), actor, clock());
   }
   function createRoom(input) {
-    const { actor, name, capacity, slate, requestId, mode = "scheduled" } = input;
+    const { actor, name, capacity, slate, requestId, scheduledStartsAt, mode = "scheduled" } = input;
     return transaction(() => {
       const replay = replayCreate(input);
       if (replay) return replay;
       const slateId = persistSlate(slate);
       const now = clock();
+      if (mode === "practice" && scheduledStartsAt !== undefined) reject(400, "DAILY_START_INVALID", "Practice auctions start immediately.");
+      if (mode === "scheduled") validateAuctionStart(scheduledStartsAt, slate, now);
       if (mode === "scheduled" && now >= slate.firstGameAt) reject(409, "DAILY_ROOM_LOCKED", "The first game has already started.");
       const member = { id: actor.id, name: actor.name };
       const info = { id: randomUUID(), name: name.trim(), capacity, commissionerId: actor.id, date: slate.date,
         mode, firstGameAt: slate.firstGameAt, ...(mode === "practice" ? { practiceEndsAt: now + 30 * MINUTE } : {}),
+        ...(scheduledStartsAt === undefined ? {} : { scheduledStartsAt, requestedAuctionStartsAt: scheduledStartsAt }),
         members: [member], winners: [], closed: false, finished: false, void: false };
       const play = { lots: [], scores: {} };
       db.prepare(`INSERT INTO rooms(id,slate_id,date,first_game_at,info,play,creator_id,request_id)
         VALUES(?,?,?,?,?,?,?,?)`).run(info.id, slateId, info.date, auctionEnd(info), JSON.stringify(info),
           JSON.stringify(play), member.id, requestId ?? null);
-      return roomView({ ...info, ...play }, slate, actor, now);
+      return presentRoom({ ...info, ...play }, slate, actor, now);
     });
   }
   function joinRoom(input) {
@@ -238,6 +272,40 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
         AND json_extract(info,'$.mode') IS NOT 'practice'
         AND first_game_at>? AND first_game_at<=? AND (? IS NULL OR first_game_at-?=?)`)
       .run(userId, 30 * MINUTE, roomId, now + 30 * MINUTE, now + 40 * MINUTE, scheduled, 30 * MINUTE, scheduled);
+  }
+
+  function listDueNotifications() {
+    const notices = [];
+    for (const reminder of reminders(null, false)) {
+      const room = fromRow(findRoom(reminder.roomId));
+      const id = "daily:reminder:" + reminder.id;
+      if (room.notificationReceipts?.includes(id)) continue;
+      notices.push({ id, roomId: room.id, userId: reminder.userId, type: "daily_auction_reminder",
+        createdAtMs: Date.parse(reminder.auctionStartsAt) - 10 * MINUTE,
+        messageData: { roomId: room.id, roomName: room.name, auctionStartsAt: reminder.auctionStartsAt } });
+    }
+    // Only new finalizations carry finishedAt. Historical winners are not flooded with retroactive notices.
+    const finished = db.prepare(`SELECT * FROM rooms WHERE ended=1 AND json_extract(info,'$.finished')=1
+      AND json_extract(info,'$.finishedAt') IS NOT NULL AND json_extract(info,'$.void')=0`).all();
+    for (const row of finished) {
+      const room = fromRow(row);
+      for (const winner of room.winners) {
+        const id = "daily:won:" + room.id + ":" + winner.id;
+        if (room.notificationReceipts?.includes(id)) continue;
+        notices.push({ id, roomId: room.id, userId: winner.id, type: "daily_room_won", createdAtMs: room.finishedAt,
+          messageData: { roomId: room.id, roomName: room.name, points: winner.points,
+            tied: room.winners.length > 1, winnerCount: room.winners.length } });
+      }
+    }
+    return notices;
+  }
+  function markNotificationSent(notice) {
+    return transaction(() => {
+      if (!listDueNotifications().some(candidate => candidate.id === notice.id && candidate.userId === notice.userId)) return;
+      const row = findRoom(notice.roomId), room = fromRow(row);
+      room.notificationReceipts = [...(room.notificationReceipts || []), notice.id];
+      save(row, room);
+    });
   }
 
   function listScoringRooms() {
@@ -295,16 +363,18 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
       const row = findRoom(roomId);
       const now = clock();
       // Recheck under the write lock. A schedule update cannot reopen a locked room.
-      if (row.closed || row.ended || now >= row.first_game_at || firstGameAt === row.first_game_at) return;
+      if (row.closed || row.ended || now >= row.first_game_at) return;
       const room = fromRow(row);
+      if (firstGameAt === room.firstGameAt) return;
       if (room.mode === "practice" || phase(room, now) === "locked") return;
       if (firstGameAt === null) {
         room.void = true;
         room.voidAt = now;
       } else {
         room.firstGameAt = firstGameAt;
+        if (room.scheduledStartsAt !== undefined) room.scheduledStartsAt = Math.min(room.scheduledStartsAt, firstGameAt - 30 * MINUTE);
         for (const lot of room.lots) {
-          if (lot.endsAt > now) lot.endsAt = Math.min(lot.endsAt, firstGameAt);
+          if (lot.endsAt > now) lot.endsAt = Math.min(lot.endsAt, auctionEnd(room));
         }
       }
       save(row, room);
@@ -339,6 +409,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
         if (slateId) {
           db.prepare("UPDATE rooms SET slate_id=? WHERE id=?").run(slateId, room.id);
           room.firstGameAt = slate.firstGameAt;
+          if (room.scheduledStartsAt !== undefined) room.scheduledStartsAt = Math.min(room.scheduledStartsAt, slate.firstGameAt - 30 * MINUTE);
         } else room.void = true;
         save(row, room);
       }
@@ -348,6 +419,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
   return {
     listRooms: ({ actor } = {}) => visibleRows.all().map(row => summary(fromRow(row), actor, clock())),
     getRoom, readRoomForDisplay, getRoomDate, replayCreate, createRoom, joinRoom, bid, closeRoom, listScoringRooms, listStatsHydrationRooms, updateScores,
+    getProfile, updateProfile, listDueNotifications, markNotificationSent,
     listReminders: ({ actor }) => actor?.id ? reminders(actor.id, false) : [],
     listDueReminders: () => reminders(null, true), markReminderSent,
     listWaitingDates, listBiddingDates, syncRoomSchedule, syncBiddingSchedule, refreshWaitingSlate: (slate) => changeWaiting(slate.date, slate),

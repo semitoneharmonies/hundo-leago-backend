@@ -1321,9 +1321,10 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
       .run(uuid(8114), uuid(8113));
     database.prepare("INSERT INTO push_subscriptions VALUES (?,?,?,?,?,1,1)")
       .run(uuid(8115), uuid(8112), guest.session.id, "https://web.push.apple.com/example", '{"endpoint":"https://web.push.apple.com/example"}');
-    const snapshot = () => database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name<>'sessions' ORDER BY name").all()
+    const snapshot = () => database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('sessions','notifications') ORDER BY name").all()
       .map(({ name }) => database.prepare('SELECT * FROM "' + name.replaceAll('"', '""') + '"').all());
     const before = snapshot();
+    const priorNotifications = database.prepare("SELECT * FROM notifications ORDER BY id").all();
     const sidecar = database.name + ".hundo-daily.sqlite3";
     async function send(path, session, input, status = 200, extraHeaders = {}) {
       const headers = browserHeaders(session ? {
@@ -1342,10 +1343,15 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
       return json.data;
     }
     await send("rooms", null, null, 401);
+    await send("profile", null, null, 401);
+    assert.deepEqual((await send("profile", host)).profile, { appearance: null });
+    assert.equal(fs.existsSync(sidecar), false, "Profile GET cannot create the Daily sidecar");
+    await send("profile", host, { appearance: null }, 403, { "X-CSRF-Token": "bad" });
+    await send("profile", host, { appearance: { patternTemplate: "unknown" } }, 400);
     assert.equal((await send("rooms", host)).slate.firstGameAt, firstGameAt);
     await send("rooms", host, { name: "One", capacity: 2 }, 403, { "X-CSRF-Token": "bad" });
     assert.equal(fs.existsSync(sidecar), false);
-    const create = { name: "One", capacity: 2, slateDate: slate.date };
+    const create = { name: "One", capacity: 2, slateDate: slate.date, auctionStartsAt: new Date(firstGameAt - 30 * 60_000).toISOString() };
     const { room } = await send("rooms", host, create, 200, { "Idempotency-Key": "daily-create" });
     const path = "rooms/" + room.id;
     assert.deepEqual(room.availablePlayers, [slate.players[1], slate.players[0]]);
@@ -1354,12 +1360,27 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
     assert.equal((await send("rooms", host, create, 200, { "Idempotency-Key": "daily-create" })).room.id, room.id);
     await send(path, guest, null, 403);
     await send(path + "/join", guest, {});
+    const dailyAppearance = { patternTemplate: "even-two", primaryColour: "#123456", secondaryColour: "#abcdef", tertiaryColour: null };
+    await send("profile", host, { appearance: dailyAppearance, userId: uuid(8112) }, 400);
+    assert.deepEqual((await send("profile", host, { appearance: dailyAppearance })).profile.appearance, dailyAppearance);
+    assert.equal((await send("profile", guest)).profile.appearance, null);
+    assert.deepEqual((await send(path, guest)).room.members.map(member => member.dailyAppearance), [dailyAppearance, null]);
     await send(path + "/close", host, {}, 403);
     now = firstGameAt - 40 * 60_000;
     assert.equal((await send("reminders", guest)).reminders[0].roomId, room.id);
     await runtime.daily.runMaintenance();
     await runtime.daily.runMaintenance();
     assert.deepEqual(sent.map(p => p.url), ["/daily/rooms/" + room.id]);
+    const reminderRows = database.prepare("SELECT * FROM notifications WHERE event_type='daily_auction_reminder'").all();
+    assert.equal(reminderRows.length, 2);
+    assert.ok(reminderRows.every(row => row.league_id === null && row.related_record_id === room.id));
+    // Simulate a crash after the durable main write but before the sidecar acknowledgement.
+    const { DatabaseSync } = require("node:sqlite");
+    const dailyDb = new DatabaseSync(sidecar);
+    try { dailyDb.prepare("UPDATE rooms SET info=json_remove(info,'$.notificationReceipts') WHERE id=?").run(room.id); }
+    finally { dailyDb.close(); }
+    await runtime.daily.runMaintenance();
+    assert.deepEqual(database.prepare("SELECT * FROM notifications WHERE event_type='daily_auction_reminder'").all(), reminderRows);
     now = firstGameAt - 30 * 60_000;
     await send(path + "/bids", guest, { playerId: "88", amount: 8 });
     await send(path + "/bids", host, { playerId: "88", amount: 10 });
@@ -1374,20 +1395,38 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
     final = true;
     await runtime.daily.runMaintenance();
     assert.deepEqual((await send("rooms", host)).rooms[0].winners, [{ id: uuid(8111), name: "Host", points: 3.25 }]);
+    await runtime.daily.runMaintenance();
+    const wins = database.prepare("SELECT * FROM notifications WHERE event_type='daily_room_won'").all();
+    assert.equal(wins.length, 1);
+    assert.equal(wins[0].user_id, uuid(8111));
+    assert.deepEqual(JSON.parse(wins[0].message_data_json), { roomId: room.id, roomName: "One", points: 3.25, tied: false, winnerCount: 1 });
+    const notificationHeaders = browserHeaders({ Cookie: runtime.transport.sessionCookie.name + "=" + host.rawSessionToken,
+      "X-CSRF-Token": host.rawCsrfToken });
+    const listResponse = await fetch(base + "/api/v1/notifications?category=all", { headers: notificationHeaders });
+    assert.equal(listResponse.status, 200);
+    const listed = (await listResponse.json()).data.notifications;
+    assert.ok(listed.some(notice => notice.id === wins[0].id));
+    assert.ok(!listed.some(notice => reminderRows.some(row => row.user_id === uuid(8112) && row.id === notice.id)));
+    const readResponse = await fetch(base + "/api/v1/notifications/" + wins[0].id + "/read", {
+      method: "POST", headers: notificationHeaders, body: "{}",
+    });
+    assert.equal(readResponse.status, 200);
+    assert.ok(database.prepare("SELECT read_at_ms FROM notifications WHERE id=?").get(wins[0].id).read_at_ms);
     await send(path + "/close", guest, {}, 403);
     await send(path + "/close", host, {});
     assert.deepEqual((await send("rooms", host)).rooms, []);
     assert.deepEqual(snapshot(), before);
+    assert.deepEqual(database.prepare("SELECT * FROM notifications WHERE event_type NOT IN ('daily_auction_reminder','daily_room_won') ORDER BY id").all(), priorNotifications);
   } finally { runtime.close(); }
 });
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 218 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 218);
+  test("declares 220 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 220);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      218
+      220
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -2647,7 +2686,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 218);
+    assert.equal(TARGET_ENDPOINTS.length, 220);
   });
 
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {

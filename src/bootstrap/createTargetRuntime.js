@@ -3595,6 +3595,14 @@ function createTargetRuntime({
         AND s.idle_expires_at_ms>? AND s.absolute_expires_at_ms>?`).all(userId, now, now);
       return rows.map(row => JSON.parse(row.subscription_json));
     },
+    notify(notice) {
+      repositories.notificationWriter.insert({
+        id: require("node:crypto").randomUUID(), userId: notice.userId, leagueId: null,
+        eventType: notice.type, messageDataJson: JSON.stringify(notice.messageData),
+        relatedFeature: "daily", relatedRecordId: notice.roomId, deliveryStatus: "delivered",
+        createdAtMs: notice.createdAtMs, deliveredAtMs: notice.createdAtMs, deduplicationKey: notice.id,
+      });
+    },
   });
   const transport = createTargetRouters({
     daily,
