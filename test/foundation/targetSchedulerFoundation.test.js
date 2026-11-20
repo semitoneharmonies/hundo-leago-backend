@@ -114,6 +114,56 @@ test('live feed failure is isolated from ordinary scheduler health and subsequen
   await state.scheduler.close();
 });
 
+test("Daily companion backup honors the open scheduler gate without changing main backup lifecycle", async () => {
+  for (const options of [{ enabled: false }, { leagueWriteMode: "closed" }, {}]) {
+    let dailyStarts = 0, dailyCloses = 0, mainStarts = 0;
+    const state = harness({ ...options, backupEnabled: true,
+      backupJob: { start() { mainStarts++; return { initialRun: Promise.resolve("main-only") }; }, async close() {} },
+      dailyBackupJob: { start() { dailyStarts++; return { initialRun: Promise.resolve("daily-only") }; }, async close() { dailyCloses++; } },
+    });
+    const started = state.scheduler.start();
+    assert.equal(await started.backupInitialRun, "main-only");
+    await started.initialRun;
+    assert.equal(mainStarts, 1);
+    assert.equal(dailyStarts, Object.keys(options).length ? 0 : 1);
+    await state.scheduler.close();
+    assert.equal(dailyCloses, dailyStarts);
+  }
+});
+
+test("Daily backup startup and delivery failures cannot fail Leago scheduler health", async () => {
+  for (const immediate of [true, false]) {
+    const errors = [];
+    const state = harness({ dailyBackupJob: {
+      start() {
+        if (immediate) throw new Error("private backup failure");
+        return { initialRun: Promise.reject(new Error("private backup failure")) };
+      }, async close() { throw new Error("private shutdown failure"); },
+    }, logger: { error: (...args) => errors.push(args) } });
+    await state.scheduler.start().initialRun;
+    assert.equal(state.scheduler.getState(), "running");
+    assert.equal((await state.scheduler.runCycle()).status, "succeeded");
+    await state.scheduler.close();
+    assert.equal(state.scheduler.getState(), "stopped");
+    assert.ok(errors.length);
+    assert.equal(JSON.stringify(errors).includes("private"), false);
+  }
+});
+
+test("Daily backup shutdown drains pending companion work before releasing the runtime", async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const state = harness({ dailyBackupJob: { start: () => ({ initialRun: pending }), close: () => pending } });
+  await state.scheduler.start().initialRun;
+  let closed = false;
+  const closing = state.scheduler.close().then(() => { closed = true; });
+  await Promise.resolve();
+  assert.equal(closed, false);
+  release();
+  await closing;
+  assert.equal(closed, true);
+});
+
 test("backup lifecycle runs while league writes or jobs are disabled and shutdown drains its pending work", async () => {
   for (const enabled of [true, false]) {
     let finish;

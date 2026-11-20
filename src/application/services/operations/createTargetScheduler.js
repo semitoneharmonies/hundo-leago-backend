@@ -10,6 +10,7 @@ function createTargetScheduler({
   emailJob = null,
   backupEnabled = false,
   backupJob = null,
+  dailyBackupJob = null,
   liveStatisticsJob = null,
   health,
   logger,
@@ -90,6 +91,7 @@ function createTargetScheduler({
   let closePromise = null;
   let emailStarted = false;
   let backupStarted = false;
+  let dailyBackupStarted = false;
 
   function transition(nextState) {
     state = nextState;
@@ -170,6 +172,17 @@ function createTargetScheduler({
       if (backupEnabled) {
         backupStart = backupJob.start();
         backupStarted = true;
+      }
+      if (enabled && leagueWriteMode === "open" && dailyBackupJob) {
+        try {
+          const dailyStart = dailyBackupJob.start();
+          dailyBackupStarted = true;
+          Promise.resolve(dailyStart?.initialRun).catch(() => {
+            logger.error("daily_backup.failed", { code: "DAILY_BACKUP_FAILED" });
+          });
+        } catch {
+          logger.error("daily_backup.failed", { code: "DAILY_BACKUP_FAILED" });
+        }
       }
       if (emailEnabled) {
         emailStart = emailJob.start();
@@ -259,6 +272,11 @@ function createTargetScheduler({
       }
       if (backupStarted) {
         try { await backupJob.close(); } catch (error) { errors.push(error); }
+      }
+      if (dailyBackupStarted) {
+        try { await dailyBackupJob.close(); } catch {
+          logger.error("daily_backup.failed", { code: "DAILY_BACKUP_SHUTDOWN_FAILED" });
+        }
       }
       if (leagueSchedulerActive) transition("stopped");
       if (errors.length > 0) {

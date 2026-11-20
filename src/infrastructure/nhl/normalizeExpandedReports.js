@@ -11,29 +11,37 @@ function pair(row) {
   if (!/^[1-9][0-9]+$/.test(String(row?.gameId)) || !/^[1-9][0-9]+$/.test(String(row?.playerId))) fail("NHL category identity is invalid.");
   return `${row.gameId}:${row.playerId}`;
 }
-function index(rows) {
+function playerKey(row) {
+  if (!/^[1-9][0-9]+$/.test(String(row?.playerId))) fail("NHL player identity is invalid.");
+  return String(row.playerId);
+}
+function index(rows, keyOf = pair) {
   if (!Array.isArray(rows)) fail("An NHL category report is unavailable.");
   const result = new Map();
   for (const row of rows) {
-    const key = pair(row);
+    const key = keyOf(row);
     if (result.has(key)) fail("An NHL category report contains duplicate player-games.");
     result.set(key, row);
   }
   return result;
 }
 
-// All four reports are keyed by game and player; totals are never joined by
-// display name or NHL team, both of which may change during a season.
-function normalizeExpandedReports({ summary, realtime, scoring, penalties, penaltyShots = [], penaltyShotLandings = [] }) {
-  const summaries = index(summary);
-  const reports = [index(realtime), index(scoring), index(penalties)];
+// Game reports require game/player and team context; Daily's season ranking
+// explicitly opts into player-keyed totals spanning all teams played for.
+function normalizeExpandedReports({ summary, realtime, scoring, penalties, penaltyShots = [], penaltyShotLandings = [] }, { seasonTotals = false } = {}) {
+  const keyOf = seasonTotals ? playerKey : pair;
+  const summaries = index(summary, keyOf);
+  const reports = [realtime, scoring, penalties].map(rows => index(rows, keyOf));
   const penaltyShotRows = index(penaltyShots);
-  if ([...penaltyShotRows.keys()].some(key => !summaries.has(key))) fail("NHL penalty shots contain an unknown player-game.");
+  if ([...penaltyShotRows.values()].some(row => !summaries.has(keyOf(row)))) fail("NHL penalty shots contain an unknown player-game.");
   if (reports.some((report) => report.size !== summaries.size)) fail("NHL category reports have different player-game coverage.");
   const result = new Map();
   for (const [key, row] of summaries) {
     const [physical, assists, infractions] = reports.map((report) => report.get(key));
-    if (!physical || !assists || !infractions || [row, physical, assists, infractions].some((item) => item.gamesPlayed !== 1 || item.teamAbbrev !== row.teamAbbrev || item.opponentTeamAbbrev !== row.opponentTeamAbbrev || item.homeRoad !== row.homeRoad)) fail("NHL category reports disagree on a player-game.");
+    if (!physical || !assists || !infractions || !Number.isSafeInteger(row.gamesPlayed) || row.gamesPlayed < 1 ||
+        (!seasonTotals && row.gamesPlayed !== 1) || [physical, assists, infractions].some(item =>
+          item.gamesPlayed !== row.gamesPlayed || (!seasonTotals && (item.teamAbbrev !== row.teamAbbrev ||
+          item.opponentTeamAbbrev !== row.opponentTeamAbbrev || item.homeRoad !== row.homeRoad)))) fail("NHL category reports disagree on player coverage.");
     const stats = {
       evenStrengthGoals: integer(row.evGoals, "even-strength goals"),
       powerPlayGoals: integer(row.ppGoals, "power-play goals"),
@@ -54,7 +62,7 @@ function normalizeExpandedReports({ summary, realtime, scoring, penalties, penal
         stats.primaryAssists + stats.secondaryAssists !== row.assists ||
         assists.goals !== row.goals || assists.assists !== row.assists ||
         infractions.goals !== row.goals || infractions.assists !== row.assists ||
-        stats.gameWinningGoals > 1 || stats.gameWinningGoals > row.goals) fail("NHL category reports do not reconcile with goals and assists.");
+        stats.gameWinningGoals > row.gamesPlayed || stats.gameWinningGoals > row.goals) fail("NHL category reports do not reconcile with goals and assists.");
     result.set(key, stats);
   }
   // NHL summary can label a successful penalty shot SH/PP. The approved
@@ -64,7 +72,7 @@ function normalizeExpandedReports({ summary, realtime, scoring, penalties, penal
   for (const row of penaltyShotRows.values()) {
     const goals = integer(row.penaltyShotsGoals, "penalty-shot goals");
     if (goals === 0) continue;
-    const stats = result.get(pair(row));
+    const stats = result.get(keyOf(row));
     const landing = landings.get(String(row.gameId));
     if (!stats || !landing || !["OFF", "FINAL"].includes(landing.gameState) || !Array.isArray(landing.summary?.scoring)) fail("A scored penalty shot has no complete goal classification.");
     const shotGoals = landing.summary.scoring.filter((period) => period.periodDescriptor?.periodType !== "SO").flatMap((period) => period.goals || []).filter((goal) => goal.playerId === row.playerId && ["ps", "penalty-shot"].includes(goal.goalModifier));

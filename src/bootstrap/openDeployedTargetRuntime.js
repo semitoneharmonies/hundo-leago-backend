@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const { createDeployedBackupJob } = require("./createDeployedBackupJob");
+const { createDeployedDailyBackupJob } = require("./createDeployedDailyBackupJob");
 const { assertRecoveryRuntimeAllowed } = require("../infrastructure/database/recoveryHold");
 
 const {
@@ -353,6 +354,7 @@ function openDeployedTargetRuntime({
   emailJobOptions,
   backupFetchImplementation,
   backupJobOptions,
+  dailyBackupJobOptions,
   sportsDataIoFetchImplementation,
   leagueInvalidationPublisher,
   fsModule = fs,
@@ -409,6 +411,7 @@ function openDeployedTargetRuntime({
     persistentRoot: config.persistentRoot,
     requirePersistentRoot: true,
   });
+  let runtime;
   try {
     const migrations = discoverMigrations({
       migrationsDirectory: config.migrationsDirectory,
@@ -424,9 +427,12 @@ function openDeployedTargetRuntime({
     assertRecoveryRuntimeAllowed(connection.database);
     const backupJob = createDeployedBackupJob({ database: connection.database, config: runtimeConfig,
       logger: securityFoundations.logger, fetchImplementation: backupFetchImplementation, jobOptions: backupJobOptions });
+    const dailyBackupJob = createDeployedDailyBackupJob({ config: runtimeConfig,
+      logger: securityFoundations.logger, fetchImplementation: backupFetchImplementation, jobOptions: dailyBackupJobOptions });
     const stagingAccountAutoVerificationEnabled =
       isStagingAccountAutoVerificationEnabled(config);
-    const runtime = createRuntimeFunction({
+    runtime = createRuntimeFunction({
+      dailyBackgroundEnabled: config.scheduledJobsEnabled,
       pushConfig: config.webPush,
       database: connection.database,
       migrationsDirectory: config.migrationsDirectory,
@@ -477,6 +483,7 @@ function openDeployedTargetRuntime({
       liveStatisticsJob: runtime.services.league.liveStatistics || null,
       backupEnabled: config.backupScheduleEnabled === true,
       backupJob,
+      dailyBackupJob,
       health,
       logger: securityFoundations.logger,
     });
@@ -652,6 +659,7 @@ function openDeployedTargetRuntime({
       scheduler,
     });
   } catch (error) {
+    runtime?.close?.();
     if (connection.database?.open) connection.database.close();
     throw error;
   }
