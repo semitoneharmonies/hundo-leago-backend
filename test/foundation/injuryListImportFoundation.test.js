@@ -57,6 +57,48 @@ test('clipboard formats, absent status, aliases, ambiguity and malformed input f
   }
 });
 
+test('Team-column clipboard copies remove only recognized NHL logo labels before the timeline', () => {
+  const expected = parseInjuryList('McWard, Cole\tDay to Day\tOUT\tUndisclosed\nMcMichael, Connor\tDay to Day\tOUT\tUndisclosed');
+  const screenshot = 'Player Team Timeline Status Reason\nMcWard, Cole Maple Leafs logo.\nDay to Day\nOUT Undisclosed\nMcMichael, Connor Blues logo.\nDay to Day\nOUT Undisclosed';
+  for (const text of [screenshot, screenshot.replace(/^.*\n/, ''),
+    screenshot.replace(' Maple Leafs logo.', '').replace(' Blues logo.', ''),
+    screenshot.replace(' Blues logo.', ''),
+    '\uFEFFPlayer\tTeam\tTimeline\tStatus\tReason\r\nMcWard, Cole\tToronto Maple Leafs logo.\tDay to Day\tOUT\tUndisclosed\r\nMcMichael, Connor\tSt. Louis Blues logo.\tDay to Day\tOUT\tUndisclosed',
+    'Player\u00a0Team\u00a0Timeline\u00a0Status\u00a0Reason\nMcWard, Cole\nMaple\u00a0Leafs logo\nDay to Day\nOUT Undisclosed\nMcMichael, Connor\nBlues logo.\nDay to Day\nOUT Undisclosed',
+  ]) {
+    assert.deepEqual(parseInjuryList(text), expected);
+    const matched = matchInjuryList(parseInjuryList(text), [
+      { id: 'cole', full_name: 'Cole McWard' }, { id: 'connor', full_name: 'Connor McMichael' },
+    ]);
+    assert.deepEqual(matched.matches.map(row => row.playerId), ['cole', 'connor']);
+    assert.deepEqual(matched.unresolved, []); assert.deepEqual(matched.skipped, []);
+  }
+  const aliasRows = parseInjuryList('Player Team Timeline Status Reason\nTanev, Christopher Maple Leafs logo.\tWeek to Week\tIR\tUpper Body\nSýkora, Adam Blue Jackets logo.\tMonth to Month\tOUT\tLower Body\nPageau, Jean-Gabriel Golden Knights logo.\tDay to Day\tKnee');
+  assert.deepEqual(aliasRows, parseInjuryList('Tanev, Christopher\tWeek to Week\tIR\tUpper Body\nSýkora, Adam\tMonth to Month\tOUT\tLower Body\nPageau, Jean-Gabriel\tDay to Day\tKnee'));
+  assert.deepEqual(matchInjuryList(aliasRows, [{ id: 'chris', full_name: 'Chris Tanev' }, { id: 'adam', full_name: 'Adam Sykora' }, { id: 'jean', full_name: 'Jean-Gabriel Pageau' }]).matches.map(row => row.playerId), ['chris', 'adam', 'jean']);
+});
+
+test('unknown logo labels, incomplete rows and decorated duplicates fail closed', () => {
+  const header = 'Player Team Timeline Status Reason\n';
+  const row = 'McWard, Cole Maple Leafs logo.\nDay to Day\nOUT Undisclosed';
+  for (const text of [
+    header + row.replace('Maple Leafs', 'Unknown Club'),
+    row.replace('Maple Leafs', 'Unknown Club'),
+    header + row.replace('logo.', 'logo. unexpected'),
+    header + 'McWard, Cole Maple Leafs logo.\nDay to Day',
+    header + 'McWard, Cole Maple Leafs logo.\nOUT Undisclosed',
+    header + row + '\nMcMichael, Connor Blues logo.',
+    header + row + '\n' + row.replace('Maple Leafs', 'Blues'),
+    row + '\nMcWard, Cole\tDay to Day\tOUT\tUndisclosed',
+  ]) assert.throws(() => parseInjuryList(text), { code: 'INJURY_LIST_INVALID' });
+  // Flattened spaces cannot distinguish every extra Team word from a given-name
+  // part. Such text must retain the existing manual-review boundary, never match.
+  const ambiguous = parseInjuryList(header + row.replace('Maple Leafs', 'Montreal Hockey Canadiens'));
+  const result = matchInjuryList(ambiguous, [{ id: 'cole', full_name: 'Cole McWard' }]);
+  assert.deepEqual(result.matches, []); assert.deepEqual(result.skipped, []);
+  assert.deepEqual(result.unresolved[0].candidates.map(player => player.id), ['cole']);
+});
+
 test('clearly different first names skip while close spellings, initials and nickname variants require review', () => {
   for (const [input, catalogue] of [["Jake O'Brien", "Liam O'Brien"], ['Patrick Thomas', 'Robert Thomas'], ['Patrick Thomas', 'Pierre Thomas']]) {
     const split = input.lastIndexOf(' ');
@@ -148,13 +190,15 @@ test('review is read-only; apply is atomic, audited, exact, stale-safe and prese
     return crypto.createHash('sha256').update(JSON.stringify(db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'player_injury_%' ORDER BY name").all().map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()]))).digest('hex');
   }
   const before = protectedHash();
-  const input = { text: "Staal, Jordan\nDay to Day\nOUT\tLower Body\nTanev, Christopher\tWeek to Week\tIR\tUpper Body\nAbsent, Player\tDay to Day\tOUT\tUndisclosed\nO'Brien, Jake\tDay to Day\tOUT\tUpper Body\nThomas, Patrick\tDay to Day\tIR\tLower Body" };
+  const legacyInput = { text: "Staal, Jordan\nDay to Day\nOUT\tLower Body\nTanev, Christopher\tWeek to Week\tIR\tUpper Body\nAbsent, Player\tDay to Day\tOUT\tUndisclosed\nO'Brien, Jake\tDay to Day\tOUT\tUpper Body\nThomas, Patrick\tDay to Day\tIR\tLower Body" };
+  const input = { text: "Player Team Timeline Status Reason\nStaal, Jordan Hurricanes logo.\nDay to Day\nOUT\tLower Body\nTanev, Christopher\tMaple Leafs logo.\tWeek to Week\tIR\tUpper Body\nAbsent, Player\tDucks logo.\tDay to Day\tOUT\tUndisclosed\nO'Brien, Jake\tMammoth logo.\tDay to Day\tOUT\tUpper Body\nThomas, Patrick\tBlues logo.\tDay to Day\tIR\tLower Body" };
   for (const authenticated of ['commissioner', 'manager', null]) {
     assert.throws(() => service.previewList({ input, authenticated }), { code: 'PLATFORM_ADMINISTRATOR_REQUIRED' });
     assert.throws(() => service.applyList({ input, authenticated }), { code: 'PLATFORM_ADMINISTRATOR_REQUIRED' });
   }
   const writes = db.prepare('SELECT total_changes() n').get().n;
   const preview = service.previewList({ input, authenticated: 'admin' });
+  assert.deepEqual(preview, service.previewList({ input: legacyInput, authenticated: 'admin' }));
   assert.equal(db.prepare('SELECT total_changes() n').get().n, writes);
   assert.equal(preview.counts.add, 2);
   assert.equal(preview.canApply, true);
@@ -162,6 +206,11 @@ test('review is read-only; apply is atomic, audited, exact, stale-safe and prese
   assert.equal(preview.unresolved.length, 0);
   assert.deepEqual(preview.skipped.map(row => row.name), ['Player Absent', "Jake O'Brien", 'Patrick Thomas']);
   const applyInput = { ...input, expectedRevision: preview.revision, confirmReplacement: true };
+  const beforeMalformed = db.serialize();
+  const malformed = { ...applyInput, text: input.text.replace('Hurricanes logo.', 'Unknown Club logo.') };
+  assert.throws(() => service.previewList({ input: { text: malformed.text }, authenticated: 'admin' }), { code: 'INJURY_LIST_INVALID' });
+  assert.throws(() => service.applyList({ input: malformed, authenticated: 'admin' }), { code: 'INJURY_LIST_INVALID' });
+  assert(beforeMalformed.equals(db.serialize()), 'a malformed Team cell cannot change any records');
   assert.throws(() => service.applyList({ input: { ...applyInput, confirmReplacement: false }, authenticated: 'admin' }), { code: 'INJURY_INPUT_INVALID' });
   // A mid-batch failure must roll back the statuses and their audit events.
   db.exec(`CREATE TEMP TRIGGER fail_second_injury BEFORE INSERT ON player_injury_status WHEN NEW.id='${other}' BEGIN SELECT RAISE(ABORT,'test rollback'); END`);
@@ -180,6 +229,14 @@ test('review is read-only; apply is atomic, audited, exact, stale-safe and prese
     assert.deepEqual(player.injury.details, { timeline: 'Day to Day', designation: 'OUT', reason: 'Lower Body' });
     assert.equal(canUseInjuredReserve(player), true);
   }
+  const ambiguousTeamInput = { text: input.text.replace('Hurricanes logo.', 'Carolina Hockey Hurricanes logo.') };
+  const beforeAmbiguousTeam = db.serialize();
+  const ambiguousTeam = service.previewList({ input: ambiguousTeamInput, authenticated: 'admin' });
+  assert.equal(ambiguousTeam.canApply, false);
+  assert.deepEqual(ambiguousTeam.unresolved[0].candidates.map(player => player.id), [shared]);
+  assert.throws(() => service.applyList({ input: { ...ambiguousTeamInput, expectedRevision: ambiguousTeam.revision, confirmReplacement: true }, authenticated: 'admin' }), { code: 'INJURY_LIST_INVALID' });
+  assert.equal(repo.read(shared).status, 'injured');
+  assert(beforeAmbiguousTeam.equals(db.serialize()), 'ambiguous Team text cannot clear an existing injury or write any record');
   const noChange = service.previewList({ input, authenticated: 'admin' });
   assert.equal(noChange.changes.length, 0); assert.equal(noChange.counts.unchanged, 2);
   const recovery = { text: 'Tanev, Christopher\tMonth to Month\tIR\tHand' };

@@ -1,6 +1,23 @@
 const { normalizedName } = require('./injuryStatusPolicy');
 
 const MAX_TEXT = 100_000;
+// The Team column copies image alt text into the name/timeline gap. Strip only
+// recognized NHL labels with the literal logo marker, never arbitrary name words.
+const TEAM_LOGO_SUFFIX = new RegExp(`\\s+(?:${[
+  ['Anaheim', 'Ducks'], ['Boston', 'Bruins'], ['Buffalo', 'Sabres'], ['Calgary', 'Flames'],
+  ['Carolina', 'Hurricanes'], ['Chicago', 'Blackhawks'], ['Colorado', 'Avalanche'],
+  ['Columbus', 'Blue Jackets'], ['Dallas', 'Stars'], ['Detroit', 'Red Wings'],
+  ['Edmonton', 'Oilers'], ['Florida', 'Panthers'], ['Los Angeles', 'Kings'],
+  ['Minnesota', 'Wild'], ['Montreal', 'Canadiens'], ['Nashville', 'Predators'],
+  ['New Jersey', 'Devils'], ['New York', 'Islanders'], ['New York', 'Rangers'],
+  ['Ottawa', 'Senators'], ['Philadelphia', 'Flyers'], ['Pittsburgh', 'Penguins'],
+  ['San Jose', 'Sharks'], ['Seattle', 'Kraken'], ['St. Louis', 'Blues'],
+  ['Tampa Bay', 'Lightning'], ['Toronto', 'Maple Leafs'], ['Utah', 'Mammoth'],
+  ['Vancouver', 'Canucks'], ['Vegas', 'Golden Knights'], ['Washington', 'Capitals'],
+  ['Winnipeg', 'Jets'],
+].flatMap(([city, team]) => [`${city} ${team}`, team])
+  .map(label => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+'))
+  .join('|')})\\s+logo\\.?$`, 'i');
 const ALIASES = Object.fromEntries(Object.entries({
   'Christopher Tanev': 'Chris Tanev', 'Cameron York': 'Cam York',
   'Sam Montembeault': 'Samuel Montembeault', 'Joseph Veleno': 'Joe Veleno',
@@ -67,7 +84,7 @@ function parseInjuryList(text) {
   if (typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) invalid('Paste a complete injury list (up to 100,000 characters).');
   const groups = [];
   for (const line of text.replace(/^\uFEFF/, '').split(/\r?\n/).map(x => x.trim()).filter(Boolean)) {
-    if (/^Player\s+Timeline\s+Status\s+Reason$/i.test(line)) continue;
+    if (/^Player\s+(?:Team\s+)?Timeline\s+Status\s+Reason$/i.test(line)) continue;
     if (line.includes(',')) groups.push(line);
     else if (groups.length) groups[groups.length - 1] += ' ' + line;
     else invalid('The list must start with a player name in Last, First format.');
@@ -78,7 +95,9 @@ function parseInjuryList(text) {
     const match = group.match(/^([^,]+),\s*(.+?)\s+(Day to Day|Week to Week|Month to Month|Season|Indefinite|Out for Season)\s+(.+)$/i);
     if (!match) invalid(`Row ${index + 1}: check the name, timeline, status, and reason.`);
     const [, last, first, timeline, tail] = match;
-    const name = `${first.trim()} ${last.trim()}`;
+    const givenName = first.replace(TEAM_LOGO_SUFFIX, '').trim();
+    if (/\blogo\b/i.test(givenName)) invalid(`Row ${index + 1}: unrecognized team logo label.`);
+    const name = `${givenName} ${last.trim()}`;
     if (!/^[\p{L}\p{M} .’'\-]+$/u.test(name) || name.length > 100) invalid(`Row ${index + 1}: invalid player name.`);
     const status = tail.match(/^(OUT|IR|LTIR|SELTIR|SUSP|NR|DTD)\s+(.+)$/i);
     // Some copied rows omit the status column. Keep that field explicitly empty.

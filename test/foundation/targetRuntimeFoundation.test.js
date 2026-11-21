@@ -1335,12 +1335,24 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
       .run(uuid(8114), uuid(8113));
     database.prepare("INSERT INTO push_subscriptions VALUES (?,?,?,?,?,1,1)")
       .run(uuid(8115), uuid(8112), guest.session.id, "https://web.push.apple.com/example", '{"endpoint":"https://web.push.apple.com/example"}');
+    database.prepare("INSERT INTO players(id,first_name,last_name,full_name,status,created_at_ms,updated_at_ms) VALUES (?,'Global','Identity','Global Identity','active',1,1)").run(uuid(8120));
+    database.prepare("INSERT INTO player_external_ids(id,player_id,provider,external_value,created_at_ms) VALUES (?,?,'nhl','88',1)").run(uuid(8121), uuid(8120));
+    database.prepare("INSERT INTO player_injury_status(id,status,source,evidence_at_ms,observed_at_ms,updated_at_ms,version,timeline,designation,injury_reason) VALUES (?,'injured','admin',?,?,?,1,'Week to week','Out','Upper body')")
+      .run(uuid(8120), now, now, now);
     const snapshot = () => database.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('sessions','notifications') ORDER BY name").all()
       .map(({ name }) => database.prepare('SELECT * FROM "' + name.replaceAll('"', '""') + '"').all());
     const before = snapshot();
     const priorNotifications = database.prepare("SELECT * FROM notifications ORDER BY id").all();
     const sidecar = database.name + ".hundo-daily.sqlite3";
+    function dailyRows() {
+      if (!fs.existsSync(sidecar)) return null;
+      const reader = new (require("node:sqlite").DatabaseSync)(sidecar, { readOnly: true });
+      try { return JSON.stringify(reader.prepare("SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name").all()
+        .map(({ name }) => reader.prepare('SELECT * FROM "' + name.replaceAll('"', '""') + '"').all())); }
+      finally { reader.close(); }
+    }
     async function send(path, session, input, status = 200, extraHeaders = {}) {
+      const beforeRead = !input ? { main: database.serialize(), daily: dailyRows() } : null;
       const headers = browserHeaders(session ? {
         Cookie: runtime.transport.sessionCookie.name + "=" + session.rawSessionToken,
         "X-CSRF-Token": session.rawCsrfToken,
@@ -1350,9 +1362,21 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
         body: input ? JSON.stringify(input) : undefined });
       const json = await response.json();
       assert.equal(response.status, status, JSON.stringify(json.error));
+      if (beforeRead) {
+        assert.deepEqual(database.serialize(), beforeRead.main, "Daily GET must not change main storage");
+        assert.equal(dailyRows(), beforeRead.daily, "Daily GET must not save player details into the sidecar");
+      }
       if (status === 200) {
         assert.equal(json.meta.serverNowMs, now);
         assert.ok(json.meta.requestId);
+        if (json.data.room) {
+          for (const p of [...json.data.room.availablePlayers, ...json.data.room.auctions,
+            ...json.data.room.members.flatMap(member => member.roster)]) {
+            assert.equal(p.injury.status, p.id === "88" ? "injured" : "unknown");
+            if (p.id === "88") assert.equal(p.injury.details.timeline, "Week to week");
+            assert.equal(p.seasonStatistics, null);
+          }
+        }
       }
       return json.data;
     }
@@ -1368,7 +1392,7 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
     const create = { name: "One", capacity: 2, slateDate: slate.date, auctionStartsAt: new Date(firstGameAt - 30 * 60_000).toISOString() };
     const { room } = await send("rooms", host, create, 200, { "Idempotency-Key": "daily-create" });
     const path = "rooms/" + room.id;
-    assert.deepEqual(room.availablePlayers, [slate.players[1], slate.players[0]]);
+    assert.deepEqual(room.availablePlayers.map(({ injury, seasonStatistics, ...p }) => p), [slate.players[1], slate.players[0]]);
     assert.deepEqual((await send(path, host)).room.availablePlayers, room.availablePlayers);
     assert.equal((await send("rooms", guest)).rooms[0].commissionerName, "Host");
     assert.equal((await send("rooms", host, create, 200, { "Idempotency-Key": "daily-create" })).room.id, room.id);
@@ -1435,12 +1459,12 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
 });
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 237 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 237);
+  test("declares 239 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 239);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      237
+      239
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -1475,6 +1499,7 @@ describe("M3-19 exact target endpoint dispatch", () => {
       "matchup",
       "mrBoni",
       "platformAdministration",
+      "platformAnnouncement",
       "player",
       "playerCatalogue",
       "playerInjury",

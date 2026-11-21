@@ -1,5 +1,6 @@
 const { runStatisticsWorker } = require("../jobs/runStatisticsWorker");
 const { createDailyService } = require("../daily/createDailyService");
+const { createDailyPlayerDetails } = require("../daily/createDailyPlayerDetails");
 const { createHundoDailyRouter, dailyEndpoints } = require("../transport/http/createHundoDailyRouter");
 const { createNhlLiveGameAdapter } = require('../infrastructure/nhl/NhlLiveGameAdapter');
 const { createNhlLiveStatisticsService } = require('../application/services/statistics/createNhlLiveStatisticsService');
@@ -26,6 +27,9 @@ const { createMrBoniRouter } = require("../transport/http/createMrBoniRouter");
 const { createLeagueAnnouncementService } = require("../application/services/activity/createLeagueAnnouncementService");
 const { createSqliteLeagueAnnouncementRepository } = require("../infrastructure/persistence/sqlite/SqliteLeagueAnnouncementRepository");
 const { createLeagueAnnouncementRouter } = require("../transport/http/createLeagueAnnouncementRouter");
+const { createPlatformAnnouncementService } = require("../application/services/activity/createPlatformAnnouncementService");
+const { createSqlitePlatformAnnouncementRepository } = require("../infrastructure/persistence/sqlite/SqlitePlatformAnnouncementRepository");
+const { createPlatformAnnouncementRouter } = require("../transport/http/createPlatformAnnouncementRouter");
 const {createCalendarWorkspaceService}=require('../application/services/leagues/createCalendarWorkspaceService');
 const {createPlayerCatalogueControlService}=require('../application/services/players/createPlayerCatalogueControlService');
 const {createCorrectionReversalService}=require('../application/services/leagues/createCorrectionReversalService');
@@ -869,6 +873,8 @@ const TARGET_ENDPOINTS = Object.freeze([
   ["GET", "/api/v1/admin/quote-submissions", "quote"],
   ["POST", "/api/v1/admin/quote-submissions/:quoteId/review", "quote"],
   ["POST", "/api/v1/leagues/:leagueId/announcements", "leagueAnnouncement"],
+  ["POST", "/api/v1/admin/announcements/preview", "platformAnnouncement"],
+  ["POST", "/api/v1/admin/announcements", "platformAnnouncement"],
   ['GET', '/api/v1/leagues/:leagueId/scoring', 'leagueScoring'],
   ['GET', '/api/v1/leagues/:leagueId/help', 'leagueHelp'],
   ['GET', '/api/v1/leagues/:leagueId/help/targets', 'leagueHelp'],
@@ -2083,6 +2089,8 @@ function createTargetRepositories({
       ? createSqlitePlayerInjuryRepository({ database }) : null,
     communications: database.pragma("user_version", { simple: true }) >= 71
       ? createSqliteLeagueCommunicationRepository({ database, notificationWriter }) : null,
+    platformAnnouncements: database.pragma("user_version", { simple: true }) >= 71
+      ? createSqlitePlatformAnnouncementRepository({ database, notificationWriter }) : null,
     fadDeadlineControl: database.pragma("user_version", { simple: true }) >= 72
       ? createSqliteFadDeadlineControlRepository({ database }) : null,
     fadTiming: database.pragma("user_version", { simple: true }) >= 73
@@ -3362,6 +3370,9 @@ function createTargetServices({
     push,
     account,
     playerInjuries: createPlayerInjuryService({ repository: repositories.playerInjuries, platformAuthorization }),
+    platformAnnouncements: createPlatformAnnouncementService({ repository: repositories.platformAnnouncements,
+      platformAuthorization, leagueAuthorization, auditRepository: repositories.audit, clock,
+      createId: () => secureRandom.id() }),
     playerCatalogue: createPlayerCatalogueControlService({repository:repositories.playerCatalogue,platformAuthorization,provider:createNhlCatalogueLookup({fetchImpl:nhlFetchImplementation})}),
     accountEmail,
     actionTokenService,
@@ -3388,6 +3399,7 @@ function createTargetRouters({
   services,
   daily,
   dailyActor,
+  dailyPlayerDetails = null,
   securityFoundations,
   networkSourceResolver,
   getRecoveryEpoch,
@@ -3422,6 +3434,7 @@ function createTargetRouters({
   const routers = Object.freeze({
     hundoDaily: createHundoDailyRouter({
       requestSecurity: dailySecurity, service: daily, getActor: dailyActor,
+      playerDetails: dailyPlayerDetails,
       nowMs: () => securityFoundations.clock.nowMs(),
     }),
     quote: createQuoteRouter({ requestSecurity, quoteService: services.league.quotes }),
@@ -3452,6 +3465,7 @@ function createTargetRouters({
       requestSecurity,
       service: services.league.communications,
     }),
+    platformAnnouncement: createPlatformAnnouncementRouter({ requestSecurity, service: services.platformAnnouncements }),
     statisticsOperations: createStatisticsOperationsRouter({
       requestSecurity,
       statisticsOperationsService: services.league.statisticsOperations,
@@ -3739,6 +3753,7 @@ function createTargetRuntime({
   });
   const transport = createTargetRouters({
     daily,
+    dailyPlayerDetails: createDailyPlayerDetails({ playerRepository: repositories.players, currentNhlSeason: currentSeason.nhlSeasonKey }),
     dailyActor(session) {
       return { id: session.user.id, name: session.user.displayName,
         isAdmin: Boolean(repositories.platformRoles.findActiveByUserId(session.user.id)) };

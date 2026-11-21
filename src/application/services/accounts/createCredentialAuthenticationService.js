@@ -1,6 +1,7 @@
 const {
   AccountRegistrationPolicyError,
   normalizeEmail,
+  normalizeDisplayName,
 } = require(
   "../../../domain/accounts/accountRegistrationPolicy"
 );
@@ -63,10 +64,11 @@ function successful({ user, credential, needsRehash }) {
 
 function inspectedInput({
   emailNormalized,
+  displayNameNormalized = null,
   password,
   valid,
 }) {
-  const result = { emailNormalized, valid };
+  const result = { emailNormalized, displayNameNormalized, valid };
   Object.defineProperty(result, "password", {
     configurable: false,
     enumerable: false,
@@ -90,7 +92,8 @@ function inspectInput(input, passwordInspector = inspectPassword) {
   }
 
   const keys = Object.keys(input).sort();
-  const exact = ["email", "password"];
+  const identifierField = Object.hasOwn(input, "identifier") ? "identifier" : "email";
+  const exact = [identifierField, "password"];
   if (
     keys.length !== exact.length ||
     keys.some((key, index) => key !== exact[index])
@@ -103,9 +106,10 @@ function inspectInput(input, passwordInspector = inspectPassword) {
   }
 
   let emailNormalized = null;
+  let displayNameNormalized = null;
   try {
     emailNormalized = normalizeEmail(
-      input.email
+      input[identifierField]
     ).normalized;
   } catch (error) {
     if (
@@ -114,15 +118,23 @@ function inspectInput(input, passwordInspector = inspectPassword) {
       throw error;
     }
   }
+  if (identifierField === "identifier") {
+    try {
+      displayNameNormalized = normalizeDisplayName(input.identifier).normalized;
+    } catch (error) {
+      if (!(error instanceof AccountRegistrationPolicyError)) throw error;
+    }
+  }
   const passwordInspection = passwordInspector(
     input.password
   );
   const valid =
-    emailNormalized !== null &&
+    (emailNormalized !== null || displayNameNormalized !== null) &&
     passwordInspection.ok;
 
   return inspectedInput({
     emailNormalized,
+    displayNameNormalized,
     password: passwordInspection.ok
       ? input.password
       : DUMMY_PASSWORD,
@@ -153,6 +165,11 @@ function createCredentialAuthenticationService({
     "a user repository"
   );
   assertMethod(
+    userRepository,
+    "findByNormalizedDisplayName",
+    "a display-name user lookup"
+  );
+  assertMethod(
     credentialRepository,
     "findActiveByUserId",
     "a credential repository"
@@ -168,13 +185,31 @@ function createCredentialAuthenticationService({
     );
   }
 
-  async function authenticate(input) {
-    const inspected = inspectInput(input, passwordInspector);
-    const user = inspected.emailNormalized
+  function resolveUser(inspected) {
+    const emailUser = inspected.emailNormalized
       ? userRepository.findByNormalizedEmail(
           inspected.emailNormalized
         )
       : null;
+    // Existing email access has precedence over an email-shaped display name.
+    // Never try another account after a password or eligibility failure.
+    return emailUser || (inspected.displayNameNormalized
+      ? userRepository.findByNormalizedDisplayName(inspected.displayNameNormalized)
+      : null);
+  }
+
+  function rateLimitSubject(input) {
+    const inspected = inspectInput(input, passwordInspector);
+    const user = resolveUser(inspected);
+    return user?.email_normalized || inspected.emailNormalized ||
+      (inspected.displayNameNormalized
+        ? `display_name:${inspected.displayNameNormalized}`
+        : "invalid_email_input");
+  }
+
+  async function authenticate(input) {
+    const inspected = inspectInput(input, passwordInspector);
+    const user = resolveUser(inspected);
     const eligibleUser = Boolean(
       inspected.valid &&
         user &&
@@ -236,7 +271,7 @@ function createCredentialAuthenticationService({
     });
   }
 
-  return Object.freeze({ authenticate });
+  return Object.freeze({ authenticate, rateLimitSubject });
 }
 
 module.exports = {

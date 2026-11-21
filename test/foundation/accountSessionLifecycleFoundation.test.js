@@ -1948,6 +1948,65 @@ describe("M3-08 deactivation and reactivation lifecycle", () => {
 });
 
 describe("M3-08 isolated session HTTP contracts", () => {
+  test("display-name HTTP login uses the current unique name and retains email access", async (t) => {
+    const runtime = await createRuntime(t);
+    const api = await startSessionApi(t, runtime);
+    const post = (body) => request(api.baseUrl, "/api/v1/session", {
+      method: "POST", headers: browserHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+    const signedIn = await post({ identifier: "  MANAGER ONE  ", password: PASSWORD });
+    assert.equal(signedIn.status, 200);
+    assert.equal(signedIn.json.data.user.id, runtime.created.user.id);
+    assert.match(signedIn.headers.get("set-cookie"), /HttpOnly/);
+    assert.deepEqual(runtime.clearCalls, [{ canonicalIdentifier: "manager@example.test" }]);
+    const current = runtime.users.findById(runtime.created.user.id);
+    runtime.users.updateVersioned({ key: current.id, expectedVersion: current.version,
+      changes: { display_name: "Équipe Two", display_name_normalized: "équipe two", updated_at_ms: NOW_MS } });
+    assert.equal((await post({ identifier: "Manager One", password: PASSWORD })).status, 401);
+    assert.equal((await post({ identifier: " ÉQUIPE TWO ", password: PASSWORD })).status, 200);
+    assert.equal((await post(credentials())).status, 200);
+    assert.equal((await post({ identifier: "Équipe Two", ...credentials() })).status, 400);
+    const countBefore = count(runtime.database, "sessions");
+    const denied = await request(api.baseUrl, "/api/v1/session", {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: "https://untrusted.example" },
+      body: JSON.stringify({ identifier: "Équipe Two", password: PASSWORD }),
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(count(runtime.database, "sessions"), countBefore);
+  });
+
+  test("email and display-name aliases share durable failure limits and successful clearing", async (t) => {
+    const runtime = await createRuntime(t);
+    const { createAuthenticationRateLimiter } = require("../../src/application/services/accounts/createAuthenticationRateLimiter");
+    const { createSqliteAuthenticationRateLimitRepository } = require("../../src/infrastructure/persistence/sqlite/SqliteAuthenticationRateLimitRepository");
+    const limiter = createAuthenticationRateLimiter({
+      repository: createSqliteAuthenticationRateLimitRepository({ database: runtime.database }),
+      privacyDigest: createKeyedPrivacyDigest({ secretSlot: { configured: true, keyVersion: 1,
+        value: "login-identifier-test-key" }, purpose: "rate_limit" }),
+      clock: runtime.clock, secureRandom: runtime.secureRandom,
+    });
+    Object.assign(runtime.rateLimiter, limiter);
+    const api = await startSessionApi(t, runtime);
+    const post = (identifier, password = "incorrect password") => request(api.baseUrl, "/api/v1/session", {
+      method: "POST", headers: browserHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ identifier, password }),
+    });
+    assert.equal((await post("manager@example.test")).status, 401);
+    assert.equal((await post(" Manager One ")).status, 401);
+    assert.equal((await post("MANAGER ONE", PASSWORD)).status, 200);
+    const subject = { action: "sign_in", bucket: "subject", canonicalIdentifier: "manager@example.test" };
+    assert.equal(limiter.check(subject).allowed, true);
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      const response = await post(attempt % 2 ? "MANAGER ONE" : "manager@example.test");
+      assert.equal(response.status, 401);
+    }
+    assert.equal(limiter.check(subject).allowed, false);
+    assert.equal((await post("manager@example.test", PASSWORD)).status, 429);
+    assert.equal((await post("Manager One", PASSWORD)).status, 429);
+    assert.equal(count(runtime.database, "sessions"), 1);
+  });
+
   test("signs in, bootstraps without writes, and authoritatively signs out", async (t) => {
     const runtime = await createRuntime(t);
     const api = await startSessionApi(t, runtime);
