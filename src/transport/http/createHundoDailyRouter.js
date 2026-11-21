@@ -13,7 +13,7 @@ const endpoints = [
   ["POST", base + "/rooms/:roomId/close", "closeRoom"],
 ];
 
-function createHundoDailyRouter({ requestSecurity, service, getActor, nowMs }) {
+function createHundoDailyRouter({ requestSecurity, service, getActor, nowMs, playerDetails = null }) {
   const router = express.Router();
   for (const name of ["assignRequestId", "securityHeaders", "credentialedCors",
     "requireAllowedOrigin", "requireJson", "requireCompatibleFetchMetadata"]) {
@@ -37,6 +37,7 @@ function createHundoDailyRouter({ requestSecurity, service, getActor, nowMs }) {
           if (data.room?.availablePlayers?.length > 1 && service.orderPlayerPool) {
             data.room.availablePlayers = await service.orderPlayerPool(data.room.date, data.room.availablePlayers);
           }
+          if (data.room && playerDetails) data.room = playerDetails.project(data.room);
           response.set("Cache-Control", "private, no-store").json({
             data, meta: { requestId: requestSecurity.getRequestId(request), serverNowMs: nowMs() },
           });

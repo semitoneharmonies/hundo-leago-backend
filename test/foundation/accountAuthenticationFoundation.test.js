@@ -43,6 +43,7 @@ function activeCredential(overrides = {}) {
 
 function harness({
   user = activeUser(),
+  displayNameUser = user,
   credential = activeCredential(),
   verification = Object.freeze({
     verified: true,
@@ -53,6 +54,7 @@ function harness({
   const calls = {
     credentialUserIds: [],
     emails: [],
+    displayNames: [],
     verifications: [],
   };
   const service =
@@ -61,6 +63,10 @@ function harness({
         findByNormalizedEmail(email) {
           calls.emails.push(email);
           return user;
+        },
+        findByNormalizedDisplayName(displayName) {
+          calls.displayNames.push(displayName);
+          return displayNameUser;
         },
       },
       credentialRepository: {
@@ -84,6 +90,78 @@ function harness({
 }
 
 describe("credential authentication service", () => {
+  test("display names use existing case and whitespace rules without altering passwords", async () => {
+    const { calls, service } = harness();
+    const input = { identifier: "  Équipe ONE  ", password: "  exact pass  " };
+    const result = await service.authenticate(input);
+    assert.equal(result.authenticated, true);
+    assert.deepEqual(calls.emails, []);
+    assert.deepEqual(calls.displayNames, ["équipe one"]);
+    assert.equal(calls.verifications[0].password, input.password);
+    assert.equal(service.rateLimitSubject(input), "person@example.com");
+    assert.equal(service.rateLimitSubject({ email: " PERSON@example.com ", password: "short" }),
+      "person@example.com");
+    assert.doesNotMatch(JSON.stringify(result), /person@example|stored-hash|exact pass/);
+  });
+
+  test("an exact email account wins without a display-name retry on password or eligibility failure", async () => {
+    for (const status of ["active", "deactivated", "pending_verification"]) {
+      const { calls, service } = harness({
+        user: activeUser({ status }),
+        displayNameUser: activeUser({ id: "different-account" }),
+        verification: { verified: false, needsRehash: false },
+      });
+      const result = await service.authenticate({
+        identifier: " PERSON@example.com ", password: "incorrect password",
+      });
+      assert.deepEqual(result, AUTHENTICATION_FAILED);
+      assert.deepEqual(calls.displayNames, []);
+      assert.equal(calls.verifications.length, 1);
+      assert.equal(result.user.id, activeUser().id);
+    }
+  });
+
+  test("an email-shaped display name works only when no email account matches", async () => {
+    const { calls, service } = harness({ user: null, displayNameUser: activeUser() });
+    const input = { identifier: "Captain@Home", password: "correct password" };
+    assert.equal((await service.authenticate(input)).authenticated, true);
+    assert.deepEqual(calls.emails, ["captain@home"]);
+    assert.deepEqual(calls.displayNames, ["captain@home"]);
+    assert.equal(service.rateLimitSubject(input), "person@example.com");
+    assert.deepEqual(await service.authenticate({ email: "Captain@Home", password: "correct password" }),
+      AUTHENTICATION_FAILED);
+    assert.deepEqual(calls.displayNames, ["captain@home", "captain@home"]);
+  });
+
+  test("unknown and ineligible display names receive the same generic failure and dummy work", async () => {
+    for (const displayNameUser of [null, activeUser({ status: "disabled" }),
+      activeUser({ status: "pending_verification" })]) {
+      const { calls, service } = harness({ displayNameUser });
+      const input = { identifier: "Manager One", password: "submitted password" };
+      assert.deepEqual(await service.authenticate(input), AUTHENTICATION_FAILED);
+      assert.deepEqual(calls.credentialUserIds, []);
+      assert.equal(calls.verifications.length, 1);
+      assert.equal(calls.verifications[0].encodedPassword, DUMMY_PASSWORD_HASH);
+      assert.equal(service.rateLimitSubject(input), displayNameUser
+        ? "person@example.com" : "display_name:manager one");
+    }
+  });
+
+  test("ambiguous body fields and invalid display names never select an account", async () => {
+    for (const identifier of ["", "a".repeat(51), "name\ninside", {}, 1]) {
+      const { calls, service } = harness();
+      assert.deepEqual(await service.authenticate({ identifier, password: "correct password" }),
+        AUTHENTICATION_FAILED);
+      assert.deepEqual(calls.displayNames, []);
+      assert.deepEqual(calls.emails, []);
+    }
+    const { calls, service } = harness();
+    assert.deepEqual(await service.authenticate({ identifier: "Manager One",
+      email: "person@example.com", password: "correct password" }), AUTHENTICATION_FAILED);
+    assert.deepEqual(calls.emails, []);
+    assert.deepEqual(calls.displayNames, []);
+  });
+
   test("normalizes only the email and keeps the exact password non-enumerable", () => {
     const inspected = inspectInput({
       email: " Person@Example.COM ",
@@ -92,6 +170,7 @@ describe("credential authentication service", () => {
 
     assert.deepEqual(inspected, {
       emailNormalized: "person@example.com",
+      displayNameNormalized: null,
       valid: true,
     });
     assert.equal(
@@ -282,6 +361,9 @@ describe("credential authentication service", () => {
       createCredentialAuthenticationService({
         userRepository: {
           findByNormalizedEmail() {
+            return null;
+          },
+          findByNormalizedDisplayName() {
             return null;
           },
         },

@@ -26,7 +26,7 @@ const SAFE_MESSAGES = Object.freeze({
   PASSWORD_RESET_INVALID:
     "The password-reset request is invalid or expired.",
   SIGN_IN_FAILED:
-    "The email or password is incorrect, or the account cannot sign in.",
+    "The username, email, or password is incorrect, or the account cannot sign in.",
 });
 
 function assertMethod(value, method, description) {
@@ -96,6 +96,7 @@ function createAccountSessionRouter({
     "a sign-in service"
   );
   assertMethod(leagueReadService, "list", "authorized league reads for session bootstrap");
+  assertMethod(signInService, "rateLimitSubject", "a canonical sign-in rate-limit subject");
   assertMethod(
     signOutService,
     "signOut",
@@ -309,7 +310,8 @@ function createAccountSessionRouter({
   );
 
   router.post("/api/v1/session", async (request, response) => {
-    if (!exactBody(request.body, ["email", "password"])) {
+    if (!exactBody(request.body, ["email", "password"]) &&
+        !exactBody(request.body, ["identifier", "password"])) {
       errorResponse(
         request,
         response,
@@ -318,7 +320,7 @@ function createAccountSessionRouter({
       );
       return;
     }
-    const subject = emailSubject(request.body);
+    const subject = signInService.rateLimitSubject(request.body);
     const networkIdentity = rateIdentity(
       "sign_in",
       "network",

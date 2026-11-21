@@ -127,6 +127,11 @@ function createSignInService({
     "a session service"
   );
   assertMethod(
+    credentialAuthenticationService,
+    "rateLimitSubject",
+    "a canonical sign-in rate-limit subject"
+  );
+  assertMethod(
     auditRepository,
     "append",
     "a Security Audit repository"
@@ -216,7 +221,11 @@ function createSignInService({
     });
   }
 
-  return Object.freeze({ signIn });
+  function rateLimitSubject(input) {
+    return credentialAuthenticationService.rateLimitSubject(input);
+  }
+
+  return Object.freeze({ signIn, rateLimitSubject });
 }
 
 module.exports = {
