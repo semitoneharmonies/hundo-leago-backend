@@ -3595,6 +3595,11 @@ function createTargetRuntime({
     nhlFetchImplementation,
   });
   const daily = createDailyService({
+    publishChatChange: require("../daily/dailyChat").createDailyChatPublisher({
+      getIo: () => targetApplication?.get("io"),
+      authorizeHandshake: handshake => socketAuthorization.authorizeHandshake(handshake),
+      canRead: (roomId, userId) => daily.canReadChat(roomId, userId),
+    }),
     filename: database.name && !database.memory ? require("node:path").resolve(database.name) + ".hundo-daily.sqlite3" : ":memory:",
     clock: () => securityFoundations.clock.nowMs(),
     feed: dailyFeed,

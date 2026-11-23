@@ -1383,7 +1383,16 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
     assert.equal((await send("rooms", guest)).rooms[0].commissionerName, "Host");
     assert.equal((await send("rooms", host, create, 200, { "Idempotency-Key": "daily-create" })).room.id, room.id);
     await send(path, guest, null, 403);
+    await send(path + "/chat", null, null, 401);
+    await send(path + "/chat", guest, null, 403);
+    await send(path + "/chat", admin, null, 403);
+    await send(path + "/chat", host, { text: "hello" }, 403, { "X-CSRF-Token": "bad" });
     await send(path + "/join", guest, {});
+    assert.deepEqual(await send(path + "/chat", guest), { messages: [], readOnly: false });
+    await send(path + "/chat", host, { text: " " }, 400, { "Idempotency-Key": "blank-chat" });
+    const chat = await send(path + "/chat", host, { text: "Hello room", username: "Fake" }, 200, { "Idempotency-Key": "chat-1" });
+    assert.equal(chat.messages[0].username, "Host");
+    assert.deepEqual(await send(path + "/chat", guest), chat);
     const dailyAppearance = { patternTemplate: "even-two", primaryColour: "#123456", secondaryColour: "#abcdef", tertiaryColour: null };
     await send("profile", host, { appearance: dailyAppearance, userId: uuid(8112) }, 400);
     assert.deepEqual((await send("profile", host, { appearance: dailyAppearance })).profile.appearance, dailyAppearance);
@@ -1415,9 +1424,12 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
     await send(path + "/bids", guest, { playerId: "88", amount: 25 }, 409);
     await runtime.daily.runMaintenance();
     assert.equal((await send(path, host)).room.phase, "locked");
+    await send(path + "/chat", guest, { text: "Still collecting stats" }, 200, { "Idempotency-Key": "chat-locked" });
     now += 61_000;
     final = true;
     await runtime.daily.runMaintenance();
+    assert.equal((await send(path + "/chat", host)).readOnly, true);
+    await send(path + "/chat", guest, { text: "Too late" }, 409, { "Idempotency-Key": "chat-final" });
     assert.deepEqual((await send("rooms", host)).rooms[0].winners, [{ id: uuid(8111), name: "Host", points: 3.25 }]);
     await runtime.daily.runMaintenance();
     const wins = database.prepare("SELECT * FROM notifications WHERE event_type='daily_room_won'").all();
@@ -1446,7 +1458,7 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
 
 describe("M3-19 exact target endpoint dispatch", () => {
   test("declares 222 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 222);
+    assert.equal(TARGET_ENDPOINTS.length, 224);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
@@ -2711,7 +2723,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 222);
+    assert.equal(TARGET_ENDPOINTS.length, 224);
   });
 
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {

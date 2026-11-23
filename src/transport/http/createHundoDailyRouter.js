@@ -4,6 +4,8 @@ const base = "/api/v1/daily";
 const endpoints = [
   ["GET", base + "/rooms", "lobby"],
   ["GET", base + "/rooms/:roomId", "room"],
+  ["GET", base + "/rooms/:roomId/chat", "chat"],
+  ["POST", base + "/rooms/:roomId/chat", "postChat"],
   ["GET", base + "/reminders", "reminders"],
   ["GET", base + "/profile", "profile"],
   ["POST", base + "/profile", "updateProfile"],

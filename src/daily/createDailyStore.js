@@ -5,6 +5,7 @@ const { MINUTE, ROSTER_SIZE, auctionEnd, reject, requireActor, phase, summary, r
 const { validatedScoringDetails } = require("./dailyScoring");
 const { validateAuctionStart } = require("./dailySchedule");
 const { validateDailyAppearance } = require("./dailyProfile");
+const { chatText, requireChatMember, chatView } = require("./dailyChat");
 
 const DAILY_DATABASE_ID = 1212433457;
 const MEMBER_PHASES = new Set(["waiting", "auction"]);
@@ -156,6 +157,40 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
     return { room: presentRoom(fromRow(row), slate, actor, clock()), slate };
   }
   function getRoom(input) { return readRoomForDisplay(input).room; }
+  function canReadChat(roomId, userId) {
+    requireChatMember(JSON.parse(findRoom(roomId).info), userId);
+    return true;
+  }
+  function getChat({ roomId, actor }) {
+    requireActor(actor);
+    const room = JSON.parse(findRoom(roomId).info);
+    requireChatMember(room, actor.id);
+    return chatView(room);
+  }
+  function postChat({ roomId, actor, input, requestId }) {
+    requireActor(actor);
+    const text = chatText(input?.text);
+    if (typeof requestId !== "string" || !/^[a-zA-Z0-9-]{1,128}$/.test(requestId)) {
+      reject(400, "DAILY_CHAT_REQUEST", "Use a valid message request identifier.");
+    }
+    return transaction(() => {
+      const row = findRoom(roomId), room = fromRow(row);
+      requireChatMember(room, actor.id);
+      if (room.finished || room.void || room.closed) reject(409, "DAILY_CHAT_READ_ONLY", "This room's chat is now read-only.");
+      const messages = room.chat || [];
+      const prior = messages.find(message => message.userId === actor.id && message.requestId === requestId);
+      if (prior) {
+        if (prior.text !== text) reject(409, "DAILY_CHAT_CONFLICT", "That request already belongs to another message.");
+        return chatView(room);
+      }
+      const now = clock();
+      const previous = messages.findLast(message => message.userId === actor.id);
+      if (previous && now - previous.createdAtMs < 1000) reject(429, "DAILY_CHAT_RATE_LIMIT", "Wait a moment before sending another message.");
+      room.chat = [...messages, { id: randomUUID(), userId: actor.id, username: actor.name, text, createdAtMs: now, requestId }];
+      save(row, room);
+      return chatView(room);
+    });
+  }
   function getRoomDate(roomId, actor) {
     requireActor(actor);
     const row = db.prepare("SELECT info,play FROM rooms WHERE id=?").get(roomId);
@@ -420,7 +455,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
   return {
     listRooms: ({ actor } = {}) => visibleRows.all().map(row => summary(fromRow(row), actor, clock())),
     getRoom, readRoomForDisplay, getRoomDate, replayCreate, createRoom, joinRoom, bid, closeRoom, listScoringRooms, listStatsHydrationRooms, updateScores,
-    getProfile, updateProfile, listDueNotifications, markNotificationSent,
+    getProfile, updateProfile, getChat, postChat, canReadChat, listDueNotifications, markNotificationSent,
     listReminders: ({ actor }) => actor?.id ? reminders(actor.id, false) : [],
     listDueReminders: () => reminders(null, true), markReminderSent,
     listWaitingDates, listBiddingDates, syncRoomSchedule, syncBiddingSchedule, refreshWaitingSlate: (slate) => changeWaiting(slate.date, slate),

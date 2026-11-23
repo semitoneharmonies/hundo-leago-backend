@@ -21,7 +21,7 @@ function dateAfter(date, offset) {
 }
 
 function createDailyService({ filename, clock = Date.now, feed = createHundoDailyFeed({ nowMs: clock }),
-  openStore = createDailyStore, push, subscriptions, notify, backgroundEnabled = false, logger, liveStatistics = null } = {}) {
+  openStore = createDailyStore, push, subscriptions, notify, publishChatChange = () => {}, backgroundEnabled = false, logger, liveStatistics = null } = {}) {
   const liveDisplay = liveStatistics ? createDailyLiveDisplay({ liveStatistics }) : null;
   let store, timer, maintenance, notificationDelivery, stopped = false;
   let nextScoring = 0;
@@ -177,7 +177,10 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
       try {
         if (!reports.has(room.slate)) reports.set(room.slate, await feed.getScores(room.slate));
         const report = reports.get(room.slate);
-        if (!stopped) current.updateScores({ roomId: room.id, ...report, hydrateStatsOnly: room.hydrateStatsOnly === true });
+        if (!stopped) {
+          current.updateScores({ roomId: room.id, ...report, hydrateStatsOnly: room.hydrateStatsOnly === true });
+          if (report.final) publishChatChange(room.id);
+        }
       } catch { logFailure("scoring"); }
     }
   }
@@ -236,6 +239,13 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
   // resume after a restart even when no manager has the page open.
   return {
     lobby, create, bid, runMaintenance, orderPlayerPool: feed.orderPlayerPool,
+    chat: input => required().getChat(input),
+    canReadChat: (roomId, userId) => required().canReadChat(roomId, userId),
+    postChat: input => {
+      const result = required().postChat(input);
+      publishChatChange(input.roomId);
+      return result;
+    },
     start() { if (backgroundEnabled && filename !== ":memory:" && existsSync(filename)) startTimer(); },
     room: ({ actor, roomId }) => {
       const current = required();
