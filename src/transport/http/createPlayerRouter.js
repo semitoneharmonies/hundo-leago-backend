@@ -6,6 +6,7 @@ const SAFE_MESSAGES = Object.freeze({
   PLAYER_NOT_FOUND: "The player was not found.",
   PLAYER_READ_FAILED: "The player request could not be completed.",
   PLAYER_READ_INPUT_INVALID: "The player request is invalid.",
+  PLAYER_PERIOD_UNAVAILABLE: "Statistics for this period are unavailable until complete game data is collected.",
 });
 
 function assertMethod(value, method, description) {
@@ -64,6 +65,9 @@ function createPlayerRouter({
   }
 
   function mapError(request, response, error) {
+    if (error?.code === "PLAYER_PERIOD_UNAVAILABLE") {
+      return failure(request, response, 503, error.code);
+    }
     if (error?.code === "PLAYER_READ_INPUT_INVALID") {
       return failure(request, response, 400, error.code);
     }
@@ -151,6 +155,10 @@ function createPlayerRouter({
             maximumAavCents: request.query.maximumAavCents,
             remainingYears: request.query.remainingYears,
             contractType: request.query.contractType,
+            statsPeriod: request.query.statsPeriod,
+            startDate: request.query.startDate,
+            endDate: request.query.endDate,
+            lastGames: request.query.lastGames,
           });
           return response.status(200).json({
             data: result.players,
@@ -172,6 +180,10 @@ function createPlayerRouter({
               authenticated: requestSecurity.getSessionBootstrap(request),
               leagueId: request.params.leagueId,
               playerId: request.params.playerId,
+              statsPeriod: request.query.statsPeriod,
+              startDate: request.query.startDate,
+              endDate: request.query.endDate,
+              lastGames: request.query.lastGames,
             }),
             meta: { requestId: requestId(request) },
           });

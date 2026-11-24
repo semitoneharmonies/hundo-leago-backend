@@ -81,6 +81,7 @@ function createSqliteNotificationRepository({ database } = {}) {
       created_at_ms, read_at_ms, delivered_at_ms, version
     `;
     const filters = `
+      AND (related_feature IS NULL OR related_feature <> 'daily')
       AND (@category = 'all' OR @category = CASE
         WHEN event_type LIKE '%trade%' THEN 'trade'
         WHEN event_type LIKE '%auction%' THEN 'auction'
@@ -132,6 +133,7 @@ function createSqliteNotificationRepository({ database } = {}) {
       SELECT ${columns}
       FROM notifications
       WHERE id = @notificationId AND user_id = @userId
+        AND (related_feature IS NULL OR related_feature <> 'daily')
       LIMIT 2
     `);
     markReadStatement = database.prepare(`
@@ -145,6 +147,7 @@ function createSqliteNotificationRepository({ database } = {}) {
       UPDATE notifications
       SET read_at_ms = @readAtMs, version = version + 1
       WHERE user_id = @userId AND read_at_ms IS NULL
+        AND (related_feature IS NULL OR related_feature <> 'daily')
     `);
   } catch (error) {
     throw mapRepositoryError(error, {

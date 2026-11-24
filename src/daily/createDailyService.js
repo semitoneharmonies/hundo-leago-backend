@@ -6,6 +6,7 @@ const { createDailyLiveDisplay } = require("./createDailyLiveDisplay");
 const { auctionStartOptions, parseAuctionStart } = require("./dailySchedule");
 const { validateDailyAppearance } = require("./dailyProfile");
 const { requireActor } = require("./dailyRoom");
+const { DEFAULT_DAILY_PREFERENCES, validateDailyPreferences } = require("./dailyNotifications");
 
 const MINUTE = 60_000;
 
@@ -21,9 +22,9 @@ function dateAfter(date, offset) {
 }
 
 function createDailyService({ filename, clock = Date.now, feed = createHundoDailyFeed({ nowMs: clock }),
-  openStore = createDailyStore, push, subscriptions, notify, backgroundEnabled = false, logger, liveStatistics = null } = {}) {
+  openStore = createDailyStore, push, subscriptions, notify, notificationInbox, publishChatChange = () => {}, backgroundEnabled = false, logger, liveStatistics = null } = {}) {
   const liveDisplay = liveStatistics ? createDailyLiveDisplay({ liveStatistics }) : null;
-  let store, timer, maintenance, notificationDelivery, stopped = false;
+  let store, timer, maintenance, notificationDelivery, pushDelivery, stopped = false;
   let nextScoring = 0;
   let nextSlateRefresh = 0;
 
@@ -151,19 +152,23 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
 
   async function sendReminders(current) {
     if (!push?.available) return;
-    for (const reminder of current.listDueReminders()) {
+    for (const reminder of current.listDuePushNotifications()) {
       if (stopped) return;
-      const startsAt = new Date(reminder.auctionStartsAt).getTime();
-      if (startsAt <= clock()) continue;
+      if (reminder.expiresAtMs <= clock()) continue;
       try {
         const targets = subscriptions(reminder.userId, clock());
-        const payload = { title: "Hundo Daily auction soon", body: reminder.roomName,
-          url: "/daily/rooms/" + encodeURIComponent(reminder.roomId), tag: reminder.id };
-        const results = await Promise.allSettled(targets.map(device =>
-          push.send(device, payload, Math.max(0, Math.floor((startsAt - clock()) / 1000)))));
+        const payload = { title: "Hundo Daily · " + reminder.title, body: reminder.messageData.roomName,
+          url: "/daily/rooms/" + encodeURIComponent(reminder.roomId),
+          tag: "daily:" + require("node:crypto").createHash("sha256").update(reminder.id).digest("hex") };
+        const results = await Promise.allSettled(targets.map(async device => {
+          if (current.pushTargetDelivered(reminder, device)) return;
+          try { await push.send(device, payload, Math.max(0, Math.floor((reminder.expiresAtMs - clock()) / 1000))); }
+          catch (error) { if (![404, 410].includes(error?.statusCode)) throw error; }
+          if (!stopped) current.markPushTargetDelivered(reminder, device);
+        }));
         // Gone endpoints are terminal. Other failures are retried under the same browser notification tag.
         if (!stopped && targets.length && results.every(r => r.status === "fulfilled" || [404, 410].includes(r.reason?.statusCode))) {
-          current.markReminderSent(reminder);
+          current.markPushNotificationSent(reminder);
         }
       } catch { logFailure("reminder"); }
     }
@@ -177,7 +182,10 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
       try {
         if (!reports.has(room.slate)) reports.set(room.slate, await feed.getScores(room.slate));
         const report = reports.get(room.slate);
-        if (!stopped) current.updateScores({ roomId: room.id, ...report, hydrateStatsOnly: room.hydrateStatsOnly === true });
+        if (!stopped) {
+          current.updateScores({ roomId: room.id, ...report, hydrateStatsOnly: room.hydrateStatsOnly === true });
+          if (report.final) publishChatChange(room.id);
+        }
       } catch { logFailure("scoring"); }
     }
   }
@@ -223,11 +231,11 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
     // Persist due notices on every tick, including while NHL/push work is still pending.
     // Delivery is serialized independently so concurrent ticks cannot duplicate a write.
     await sendNotifications(current);
+    // Timed alerts must not wait for NHL schedule/stat fetches to complete.
+    if (!stopped && !pushDelivery) pushDelivery = sendReminders(current).catch(() => logFailure("push")).finally(() => { pushDelivery = null; });
     if (stopped || maintenance) return maintenance;
     maintenance = (async () => {
-      await Promise.all([scoreRooms(current), refreshWaitingDates(current).then(() => {
-        if (!stopped) return sendReminders(current);
-      })]);
+      await Promise.all([scoreRooms(current), refreshWaitingDates(current), pushDelivery]);
       if (!stopped) await sendNotifications(current);
     })().finally(() => { maintenance = null; });
     return maintenance;
@@ -235,7 +243,23 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
   // A fresh install opens its sidecar only on the first room creation. Existing rooms
   // resume after a restart even when no manager has the page open.
   return {
+    notifications: input => notificationInbox?.list(input) || { notifications: [], unreadCount: 0 },
+    readNotifications: input => notificationInbox?.read(input) || { changedCount: 0 },
+    notificationSettings: ({ actor }) => { requireActor(actor); return existing()?.getNotificationSettings({ actor }) || { preferences: { ...DEFAULT_DAILY_PREFERENCES } }; },
+    updateNotificationSettings: input => { requireActor(input.actor); validateDailyPreferences(input.input); return writable().updateNotificationSettings(input); },
     lobby, create, bid, runMaintenance, orderPlayerPool: feed.orderPlayerPool,
+    chat: input => required().getChat(input),
+    canReadChat: (roomId, userId) => required().canReadChat(roomId, userId),
+    postChat: input => {
+      const result = required().postChat(input);
+      publishChatChange(input.roomId);
+      return result;
+    },
+    reactToChat: input => {
+      const result = required().reactToChat(input);
+      publishChatChange(input.roomId);
+      return result;
+    },
     start() { if (backgroundEnabled && filename !== ":memory:" && existsSync(filename)) startTimer(); },
     room: ({ actor, roomId }) => {
       const current = required();

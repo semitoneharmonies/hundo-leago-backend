@@ -1382,6 +1382,11 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
     }
     await send("rooms", null, null, 401);
     await send("profile", null, null, 401);
+    await send("notifications", null, null, 401);
+    await send("notification-settings", null, null, 401);
+    assert.deepEqual(await send("notifications", host), { notifications: [], unreadCount: 0 });
+    const dailyPreferences = { enabled: true, reminder: true, start: true, idle: true, end: true, win: true };
+    assert.deepEqual(await send("notification-settings", host), { preferences: dailyPreferences });
     assert.deepEqual((await send("profile", host)).profile, { appearance: null });
     assert.equal(fs.existsSync(sidecar), false, "Profile GET cannot create the Daily sidecar");
     await send("profile", host, { appearance: null }, 403, { "X-CSRF-Token": "bad" });
@@ -1391,13 +1396,36 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
     assert.equal(fs.existsSync(sidecar), false);
     const create = { name: "One", capacity: 2, slateDate: slate.date, auctionStartsAt: new Date(firstGameAt - 30 * 60_000).toISOString() };
     const { room } = await send("rooms", host, create, 200, { "Idempotency-Key": "daily-create" });
+    await send("notification-settings", host, { preferences: dailyPreferences }, 403, { "X-CSRF-Token": "bad" });
+    await send("notification-settings", host, { preferences: { enabled: true } }, 400);
+    assert.deepEqual(await send("notification-settings", host, { preferences: { ...dailyPreferences, idle: false } }),
+      { preferences: { ...dailyPreferences, idle: false } });
+    assert.deepEqual(await send("notification-settings", guest), { preferences: dailyPreferences });
     const path = "rooms/" + room.id;
     assert.deepEqual(room.availablePlayers.map(({ injury, seasonStatistics, ...p }) => p), [slate.players[1], slate.players[0]]);
     assert.deepEqual((await send(path, host)).room.availablePlayers, room.availablePlayers);
     assert.equal((await send("rooms", guest)).rooms[0].commissionerName, "Host");
     assert.equal((await send("rooms", host, create, 200, { "Idempotency-Key": "daily-create" })).room.id, room.id);
     await send(path, guest, null, 403);
+    await send(path + "/chat", null, null, 401);
+    await send(path + "/chat", guest, null, 403);
+    await send(path + "/chat", admin, null, 403);
+    await send(path + "/chat", host, { text: "hello" }, 403, { "X-CSRF-Token": "bad" });
     await send(path + "/join", guest, {});
+    assert.deepEqual(await send(path + "/chat", guest), { messages: [], readOnly: false });
+    await send(path + "/chat", host, { text: " " }, 400, { "Idempotency-Key": "blank-chat" });
+    const chat = await send(path + "/chat", host, { text: "Hello room", username: "Fake" }, 200, { "Idempotency-Key": "chat-1" });
+    assert.equal(chat.messages[0].username, "Host");
+    assert.deepEqual(await send(path + "/chat", guest), chat);
+    const reaction = { messageId: chat.messages[0].id, reaction: "like", userId: host.userId, username: "Fake" };
+    await send(path + "/chat/reactions", null, reaction, 401);
+    await send(path + "/chat/reactions", admin, reaction, 403);
+    await send(path + "/chat/reactions", guest, reaction, 403, { "X-CSRF-Token": "bad" });
+    const reacted = await send(path + "/chat/reactions", guest, reaction);
+    assert.equal(reacted.messages[0].reactions.length, 1);
+    assert.equal(reacted.messages[0].reactions[0].username, "Guest");
+    assert.notEqual(reacted.messages[0].reactions[0].userId, chat.messages[0].userId);
+    await send(path + "/chat/reactions", host, reaction, 400);
     const dailyAppearance = { patternTemplate: "even-two", primaryColour: "#123456", secondaryColour: "#abcdef", tertiaryColour: null };
     await send("profile", host, { appearance: dailyAppearance, userId: uuid(8112) }, 400);
     assert.deepEqual((await send("profile", host, { appearance: dailyAppearance })).profile.appearance, dailyAppearance);
@@ -1429,9 +1457,13 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
     await send(path + "/bids", guest, { playerId: "88", amount: 25 }, 409);
     await runtime.daily.runMaintenance();
     assert.equal((await send(path, host)).room.phase, "locked");
+    await send(path + "/chat", guest, { text: "Still collecting stats" }, 200, { "Idempotency-Key": "chat-locked" });
     now += 61_000;
     final = true;
     await runtime.daily.runMaintenance();
+    assert.equal((await send(path + "/chat", host)).readOnly, true);
+    await send(path + "/chat", guest, { text: "Too late" }, 409, { "Idempotency-Key": "chat-final" });
+    await send(path + "/chat/reactions", guest, reaction, 409);
     assert.deepEqual((await send("rooms", host)).rooms[0].winners, [{ id: uuid(8111), name: "Host", points: 3.25 }]);
     await runtime.daily.runMaintenance();
     const wins = database.prepare("SELECT * FROM notifications WHERE event_type='daily_room_won'").all();
@@ -1443,28 +1475,34 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
     const listResponse = await fetch(base + "/api/v1/notifications?category=all", { headers: notificationHeaders });
     assert.equal(listResponse.status, 200);
     const listed = (await listResponse.json()).data.notifications;
-    assert.ok(listed.some(notice => notice.id === wins[0].id));
+    assert.ok(!listed.some(notice => notice.related?.feature === "daily"));
     assert.ok(!listed.some(notice => reminderRows.some(row => row.user_id === uuid(8112) && row.id === notice.id)));
     const readResponse = await fetch(base + "/api/v1/notifications/" + wins[0].id + "/read", {
       method: "POST", headers: notificationHeaders, body: "{}",
     });
-    assert.equal(readResponse.status, 200);
+    assert.equal(readResponse.status, 404);
+    const dailyListed = await send("notifications", host);
+    assert.ok(dailyListed.notifications.some(notice => notice.id === wins[0].id));
+    assert.ok(!dailyListed.notifications.some(notice => reminderRows.some(row => row.user_id === uuid(8112) && row.id === notice.id)));
+    await send("notifications/read", guest, { ids: [wins[0].id] }, 404);
+    await send("notifications/read", host, { ids: [wins[0].id] }, 403, { "X-CSRF-Token": "bad" });
+    await send("notifications/read", host, { ids: [wins[0].id] });
     assert.ok(database.prepare("SELECT read_at_ms FROM notifications WHERE id=?").get(wins[0].id).read_at_ms);
     await send(path + "/close", guest, {}, 403);
     await send(path + "/close", host, {});
     assert.deepEqual((await send("rooms", host)).rooms, []);
     assert.deepEqual(snapshot(), before);
-    assert.deepEqual(database.prepare("SELECT * FROM notifications WHERE event_type NOT IN ('daily_auction_reminder','daily_room_won') ORDER BY id").all(), priorNotifications);
+    assert.deepEqual(database.prepare("SELECT * FROM notifications WHERE related_feature IS NULL OR related_feature<>'daily' ORDER BY id").all(), priorNotifications);
   } finally { runtime.close(); }
 });
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 239 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 239);
+  test("declares 246 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 246);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      239
+      246
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
@@ -1761,6 +1799,8 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const runtime = createTargetRuntime(options);
     const names = runtime.services.league.scheduledJobs.map(({ name }) => name);
     assert.ok(names.includes("nhl_completed_statistics"));
+    assert.ok(!names.includes("nhl_team_assignments"), "team lookups cannot hold up matchup jobs");
+    assert.equal(typeof runtime.services.league.teamAssignmentsJob?.run, "function");
     assert.ok(!names.includes("matchup_occurrences"));
     assert.equal(fetches, 0);
     const result = await runtime.services.league.statistics.refresh();
@@ -2743,7 +2783,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 228);
+    assert.equal(TARGET_ENDPOINTS.length, 246);
   });
 
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {

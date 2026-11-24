@@ -1,0 +1,39 @@
+"use strict";
+
+const { reject } = require("./dailyRoom");
+
+function chatText(value) {
+  if (typeof value !== "string" || value.length > 280 || !value.trim() || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) {
+    reject(400, "DAILY_CHAT_TEXT", "Enter a message from 1 to 280 characters.");
+  }
+  return value.trim();
+}
+
+function requireChatMember(room, userId) {
+  if (!userId || !room.members.some(member => member.id === userId)) {
+    reject(403, "DAILY_MEMBERSHIP_REQUIRED", "Only room members can use this chat.");
+  }
+}
+
+function chatView(room, appearance = () => null) {
+  return { messages: (room.chat || []).map(({ requestId: _requestId, ...message }) => ({
+    ...message, reactions: message.reactions || [],
+    usernameColour: appearance(message.userId)?.primaryColour || null,
+  })),
+    readOnly: Boolean(room.finished || room.void || room.closed) };
+}
+
+// Reuse authenticated sockets without putting message contents on a broadcast.
+// Re-check both the session and this room's membership immediately before emit.
+function createDailyChatPublisher({ getIo, authorizeHandshake, canRead }) {
+  return roomId => {
+    for (const socket of getIo()?.sockets?.sockets?.values() || []) {
+      try {
+        const authority = authorizeHandshake(socket.handshake);
+        if (canRead(roomId, authority.userId)) socket.emit("daily.chat.changed", { roomId });
+      } catch { /* A revoked session or nonmember receives no room signal. */ }
+    }
+  };
+}
+
+module.exports = { chatText, requireChatMember, chatView, createDailyChatPublisher };

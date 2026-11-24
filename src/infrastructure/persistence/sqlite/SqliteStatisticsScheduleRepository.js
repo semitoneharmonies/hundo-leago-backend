@@ -5,7 +5,8 @@ const JOB_TYPE = "statistics:completed_games";
 const LEASE_MS = 10 * 60_000;
 const RETRY_MS = 15 * 60_000;
 
-function createSqliteStatisticsScheduleRepository({ database, createId = randomUUID } = {}) {
+function createSqliteStatisticsScheduleRepository({ database, createId = randomUUID, jobType = JOB_TYPE } = {}) {
+  if (![JOB_TYPE, "players:nhl_teams"].includes(jobType)) throw new TypeError("An approved NHL scheduled job type is required.");
   const read = database.prepare("SELECT * FROM job_runs WHERE league_id IS NULL AND job_type = ? AND occurrence_key = ?");
   const insert = database.prepare(`INSERT INTO job_runs (id, job_type, occurrence_key, scheduled_for_ms, status, attempt_count, lease_owner, lease_expires_at_ms, started_at_ms, created_at_ms, updated_at_ms, version) VALUES (?, ?, ?, ?, 'running', 1, ?, ?, ?, ?, ?, 1)`);
   const retry = database.prepare(`UPDATE job_runs SET status = 'running', attempt_count = attempt_count + 1, lease_owner = ?, lease_expires_at_ms = ?, started_at_ms = ?, completed_at_ms = NULL, updated_at_ms = ?, version = version + 1 WHERE id = ? AND version = ?`);
@@ -13,15 +14,15 @@ function createSqliteStatisticsScheduleRepository({ database, createId = randomU
   const active = database.prepare("SELECT 1 FROM job_runs WHERE league_id IS NULL AND job_type=? AND status='running' AND lease_expires_at_ms>? LIMIT 1");
   const claim = database.transaction(({ occurrenceKey, scheduledForMs, nowMs, owner }) => {
     if (typeof occurrenceKey !== "string" || !/^\d{8}:\d+$/.test(occurrenceKey) || !Number.isSafeInteger(scheduledForMs) || !Number.isSafeInteger(nowMs) || scheduledForMs > nowMs || typeof owner !== "string" || !owner) throw new TypeError("A canonical statistics schedule claim is required.");
-    if (active.get(JOB_TYPE, nowMs)) return null;
-    const previous = read.get(JOB_TYPE, occurrenceKey);
+    if (active.get(jobType, nowMs)) return null;
+    const previous = read.get(jobType, occurrenceKey);
     if (previous?.status === "succeeded" || (previous?.lease_expires_at_ms > nowMs) || (previous?.status === "failed" && previous.completed_at_ms + RETRY_MS > nowMs)) return null;
     if (previous) retry.run(owner, nowMs + LEASE_MS, nowMs, nowMs, previous.id, previous.version);
-    else insert.run(createId(), JOB_TYPE, occurrenceKey, scheduledForMs, owner, nowMs + LEASE_MS, nowMs, nowMs, nowMs);
-    return Object.freeze({ ...read.get(JOB_TYPE, occurrenceKey) });
+    else insert.run(createId(), jobType, occurrenceKey, scheduledForMs, owner, nowMs + LEASE_MS, nowMs, nowMs, nowMs);
+    return Object.freeze({ ...read.get(jobType, occurrenceKey) });
   });
   function assertLease(lease, nowMs) {
-    const current = read.get(JOB_TYPE, lease.occurrence_key);
+    const current = read.get(jobType, lease.occurrence_key);
     if (!current || current.id !== lease.id || current.version !== lease.version || current.lease_owner !== lease.lease_owner || current.lease_expires_at_ms <= nowMs || current.status !== "running") throw Object.assign(new Error("The statistics schedule lease expired or changed."), { code: "NHL_STATISTICS_LEASE_LOST" });
   }
   return Object.freeze({

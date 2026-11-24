@@ -481,6 +481,7 @@ function openDeployedTargetRuntime({
         : runtime.services.league.scheduledJobs,
       emailJob: runtime.services.accountEmail.job,
       liveStatisticsJob: runtime.services.league.liveStatistics || null,
+      teamAssignmentsJob: runtime.services.league.teamAssignmentsJob || null,
       backupEnabled: config.backupScheduleEnabled === true,
       backupJob,
       dailyBackupJob,

@@ -452,6 +452,9 @@ const { createSqliteCompletedGameCacheRepository } = require("../infrastructure/
 const { createSqliteStatisticsRetentionRepository } = require("../infrastructure/persistence/sqlite/SqliteStatisticsRetentionRepository");
 const { createSqliteSharedStatisticsRepository } = require("../infrastructure/persistence/sqlite/SqliteSharedStatisticsRepository");
 const { createRunCompletedGameStatisticsJob } = require("../jobs/definitions/runCompletedGameStatistics");
+const { createNhlTeamAssignmentAdapter } = require("../infrastructure/nhl/NhlTeamAssignmentAdapter");
+const { createSqliteNhlTeamAssignmentRepository } = require("../infrastructure/persistence/sqlite/SqliteNhlTeamAssignmentRepository");
+const { createRefreshNhlTeamAssignmentsJob } = require("../jobs/definitions/refreshNhlTeamAssignments");
 const {
   PROVIDER_NAME: SPORTSDATAIO_PLAYER_IDENTITY_PROVIDER_NAME,
 } = require("../infrastructure/sportsdataio/SportsDataIoNhlAdapter");
@@ -2070,6 +2073,8 @@ function createTargetRepositories({
         matchupOccurrenceExecutionGuard,
     }),
     statisticsSchedule: createSqliteStatisticsScheduleRepository({ database }),
+    nhlTeamSchedule: createSqliteStatisticsScheduleRepository({ database, jobType: "players:nhl_teams" }),
+    nhlTeamAssignments: createSqliteNhlTeamAssignmentRepository({ database }),
     completedGameCache: database.pragma('user_version', { simple: true }) >= 67
       ? createSqliteCompletedGameCacheRepository({ database }) : null,
     statisticsRetention: database.pragma('user_version', { simple: true }) >= 68
@@ -2425,6 +2430,16 @@ function createTargetServices({
     if (!expandedScoringEnabled || !matchupProcessingEnabled) return lateLocks;
     return { lateLocks, corrections: await runPostRefresh("corrections", () => providerResultCorrections.reconcile()) };
   };
+  const nhlTeamAssignmentJob = completedNhlAdapter
+    ? createRefreshNhlTeamAssignmentsJob({
+        repository: repositories.nhlTeamSchedule,
+        teamRepository: repositories.nhlTeamAssignments,
+        provider: createNhlTeamAssignmentAdapter({ fetchImpl: nhlFetchImplementation, nowMs: () => clock.nowMs() }),
+        nhlSeasonKey: currentSeason.nhlSeasonKey,
+        clock,
+        logger,
+      })
+    : null;
   const completedStatisticsJob = completedNhlAdapter
     ? createRunCompletedGameStatisticsJob({
         repository: repositories.statisticsSchedule,
@@ -3357,6 +3372,7 @@ function createTargetServices({
     }),
     statistics,
     liveStatistics,
+    teamAssignmentsJob: nhlTeamAssignmentJob,
     statisticsOperations: createStatisticsOperationsService({
       platformAuthorization,
       statisticsService: statistics,
@@ -3728,6 +3744,12 @@ function createTargetRuntime({
     nhlFetchImplementation,
   });
   const daily = createDailyService({
+    notificationInbox: require("../daily/createDailyNotificationInbox").createDailyNotificationInbox({ database, clock: () => securityFoundations.clock.nowMs() }),
+    publishChatChange: require("../daily/dailyChat").createDailyChatPublisher({
+      getIo: () => targetApplication?.get("io"),
+      authorizeHandshake: handshake => socketAuthorization.authorizeHandshake(handshake),
+      canRead: (roomId, userId) => daily.canReadChat(roomId, userId),
+    }),
     filename: database.name && !database.memory ? require("node:path").resolve(database.name) + ".hundo-daily.sqlite3" : ":memory:",
     clock: () => securityFoundations.clock.nowMs(),
     feed: dailyFeed,

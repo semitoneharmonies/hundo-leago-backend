@@ -5,6 +5,8 @@ const { MINUTE, ROSTER_SIZE, auctionEnd, reject, requireActor, phase, summary, r
 const { validatedScoringDetails } = require("./dailyScoring");
 const { validateAuctionStart } = require("./dailySchedule");
 const { validateDailyAppearance } = require("./dailyProfile");
+const { DEFAULT_DAILY_PREFERENCES, validateDailyPreferences, dailyNotices } = require("./dailyNotifications");
+const { chatText, requireChatMember, chatView } = require("./dailyChat");
 
 const DAILY_DATABASE_ID = 1212433457;
 const MEMBER_PHASES = new Set(["waiting", "auction"]);
@@ -89,6 +91,22 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
     requireActor(actor);
     return { appearance: appearance(actor.id) };
   }
+  function notificationPreferences(userId) {
+    if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='daily_notification_preferences'").get()) return { ...DEFAULT_DAILY_PREFERENCES };
+    const row = db.prepare("SELECT preferences FROM daily_notification_preferences WHERE user_id=?").get(userId);
+    return { ...DEFAULT_DAILY_PREFERENCES, ...(row ? JSON.parse(row.preferences) : {}) };
+  }
+  function getNotificationSettings({ actor }) { requireActor(actor); return { preferences: notificationPreferences(actor.id) }; }
+  function updateNotificationSettings({ actor, input }) {
+    requireActor(actor);
+    const value = validateDailyPreferences(input);
+    return transaction(() => {
+      db.exec("CREATE TABLE IF NOT EXISTS daily_notification_preferences (user_id TEXT PRIMARY KEY, preferences TEXT NOT NULL)");
+      db.prepare("INSERT INTO daily_notification_preferences VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET preferences=excluded.preferences")
+        .run(actor.id, JSON.stringify(value));
+      return { preferences: value };
+    });
+  }
   function updateProfile({ actor, input }) {
     requireActor(actor);
     const value = validateDailyAppearance(input);
@@ -156,6 +174,59 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
     return { room: presentRoom(fromRow(row), slate, actor, clock()), slate };
   }
   function getRoom(input) { return readRoomForDisplay(input).room; }
+  function canReadChat(roomId, userId) {
+    requireChatMember(JSON.parse(findRoom(roomId).info), userId);
+    return true;
+  }
+  function getChat({ roomId, actor }) {
+    requireActor(actor);
+    const room = JSON.parse(findRoom(roomId).info);
+    requireChatMember(room, actor.id);
+    return chatView(room, appearance);
+  }
+  function postChat({ roomId, actor, input, requestId }) {
+    requireActor(actor);
+    const text = chatText(input?.text);
+    if (typeof requestId !== "string" || !/^[a-zA-Z0-9-]{1,128}$/.test(requestId)) {
+      reject(400, "DAILY_CHAT_REQUEST", "Use a valid message request identifier.");
+    }
+    return transaction(() => {
+      const row = findRoom(roomId), room = fromRow(row);
+      requireChatMember(room, actor.id);
+      if (room.finished || room.void || room.closed) reject(409, "DAILY_CHAT_READ_ONLY", "This room's chat is now read-only.");
+      const messages = room.chat || [];
+      const prior = messages.find(message => message.userId === actor.id && message.requestId === requestId);
+      if (prior) {
+        if (prior.text !== text) reject(409, "DAILY_CHAT_CONFLICT", "That request already belongs to another message.");
+        return chatView(room, appearance);
+      }
+      const now = clock();
+      const previous = messages.findLast(message => message.userId === actor.id);
+      if (previous && now - previous.createdAtMs < 1000) reject(429, "DAILY_CHAT_RATE_LIMIT", "Wait a moment before sending another message.");
+      room.chat = [...messages, { id: randomUUID(), userId: actor.id, username: actor.name, text, createdAtMs: now, requestId }];
+      save(row, room);
+      return chatView(room, appearance);
+    });
+  }
+  function reactToChat({ roomId, actor, input }) {
+    requireActor(actor);
+    if (typeof input?.messageId !== "string" || !input.messageId ||
+        !["like", "dislike", null].includes(input.reaction)) {
+      reject(400, "DAILY_CHAT_REACTION", "Choose like or dislike, or remove your reaction.");
+    }
+    return transaction(() => {
+      const row = findRoom(roomId), room = fromRow(row);
+      requireChatMember(room, actor.id);
+      if (room.finished || room.void || room.closed) reject(409, "DAILY_CHAT_READ_ONLY", "This room's chat is now read-only.");
+      const message = (room.chat || []).find(item => item.id === input.messageId);
+      if (!message) reject(404, "DAILY_CHAT_MESSAGE_NOT_FOUND", "This message could not be found.");
+      if (message.userId === actor.id) reject(400, "DAILY_CHAT_OWN_REACTION", "You can react to other members' messages.");
+      message.reactions = (message.reactions || []).filter(item => item.userId !== actor.id);
+      if (input.reaction) message.reactions.push({ userId: actor.id, username: actor.name, reaction: input.reaction });
+      save(row, room);
+      return chatView(room, appearance);
+    });
+  }
   function getRoomDate(roomId, actor) {
     requireActor(actor);
     const row = db.prepare("SELECT info,play FROM rooms WHERE id=?").get(roomId);
@@ -274,30 +345,44 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
       .run(userId, 30 * MINUTE, roomId, now + 30 * MINUTE, now + 40 * MINUTE, scheduled, 30 * MINUTE, scheduled);
   }
 
+  function allDueNotices() {
+    const now = clock();
+    return db.prepare(`SELECT * FROM rooms WHERE (closed=0 AND first_game_at>?)
+      OR json_extract(info,'$.finishedAt')>?`).all(now - 30 * MINUTE, now - 24 * 60 * MINUTE)
+      .flatMap(row => dailyNotices(fromRow(row), now));
+  }
   function listDueNotifications() {
-    const notices = [];
-    for (const reminder of reminders(null, false)) {
-      const room = fromRow(findRoom(reminder.roomId));
-      const id = "daily:reminder:" + reminder.id;
-      if (room.notificationReceipts?.includes(id)) continue;
-      notices.push({ id, roomId: room.id, userId: reminder.userId, type: "daily_auction_reminder",
-        createdAtMs: Date.parse(reminder.auctionStartsAt) - 10 * MINUTE,
-        messageData: { roomId: room.id, roomName: room.name, auctionStartsAt: reminder.auctionStartsAt } });
-    }
-    // Only new finalizations carry finishedAt. Historical winners are not flooded with retroactive notices.
-    const finished = db.prepare(`SELECT * FROM rooms WHERE ended=1 AND json_extract(info,'$.finished')=1
-      AND json_extract(info,'$.finishedAt') IS NOT NULL AND json_extract(info,'$.void')=0`).all();
-    for (const row of finished) {
-      const room = fromRow(row);
-      for (const winner of room.winners) {
-        const id = "daily:won:" + room.id + ":" + winner.id;
-        if (room.notificationReceipts?.includes(id)) continue;
-        notices.push({ id, roomId: room.id, userId: winner.id, type: "daily_room_won", createdAtMs: room.finishedAt,
-          messageData: { roomId: room.id, roomName: room.name, points: winner.points,
-            tied: room.winners.length > 1, winnerCount: room.winners.length } });
-      }
-    }
-    return notices;
+    return allDueNotices().filter(notice => !fromRow(findRoom(notice.roomId)).notificationReceipts?.includes(notice.id));
+  }
+  function listDuePushNotifications() {
+    return allDueNotices().filter(notice => {
+      const preferences = notificationPreferences(notice.userId), room = fromRow(findRoom(notice.roomId));
+      if (!preferences.enabled || !preferences[notice.category] || room.pushNotificationReceipts?.includes(notice.id)) return false;
+      // Preserve delivery receipts from the original reminder implementation.
+      return notice.category !== "reminder" || !db.prepare("SELECT 1 FROM sent_reminders WHERE room_id=? AND user_id=? AND starts_at=?")
+        .get(notice.roomId, notice.userId, Date.parse(notice.messageData.auctionStartsAt));
+    });
+  }
+  function markPushNotificationSent(notice) {
+    return transaction(() => {
+      const row = findRoom(notice.roomId), room = fromRow(row);
+      if (!room.members.some(member => member.id === notice.userId)) return;
+      room.pushNotificationReceipts = [...new Set([...(room.pushNotificationReceipts || []), notice.id])];
+      save(row, room);
+    });
+  }
+  function pushTargetKey(notice, device) {
+    return createHash("sha256").update(notice.id + ":" + (device.endpoint || JSON.stringify(device))).digest("hex");
+  }
+  function pushTargetDelivered(notice, device) {
+    return fromRow(findRoom(notice.roomId)).pushTargetReceipts?.includes(pushTargetKey(notice, device)) === true;
+  }
+  function markPushTargetDelivered(notice, device) {
+    return transaction(() => {
+      const row = findRoom(notice.roomId), room = fromRow(row);
+      room.pushTargetReceipts = [...new Set([...(room.pushTargetReceipts || []), pushTargetKey(notice, device)])];
+      save(row, room);
+    });
   }
   function markNotificationSent(notice) {
     return transaction(() => {
@@ -418,9 +503,10 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
   }
 
   return {
+    getNotificationSettings, updateNotificationSettings, listDuePushNotifications, markPushNotificationSent, pushTargetDelivered, markPushTargetDelivered,
     listRooms: ({ actor } = {}) => visibleRows.all().map(row => summary(fromRow(row), actor, clock())),
     getRoom, readRoomForDisplay, getRoomDate, replayCreate, createRoom, joinRoom, bid, closeRoom, listScoringRooms, listStatsHydrationRooms, updateScores,
-    getProfile, updateProfile, listDueNotifications, markNotificationSent,
+    getProfile, updateProfile, getChat, postChat, reactToChat, canReadChat, listDueNotifications, markNotificationSent,
     listReminders: ({ actor }) => actor?.id ? reminders(actor.id, false) : [],
     listDueReminders: () => reminders(null, true), markReminderSent,
     listWaitingDates, listBiddingDates, syncRoomSchedule, syncBiddingSchedule, refreshWaitingSlate: (slate) => changeWaiting(slate.date, slate),

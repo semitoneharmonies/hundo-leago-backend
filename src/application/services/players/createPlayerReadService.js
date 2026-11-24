@@ -130,6 +130,7 @@ function safeStatistics(row) {
     nhlPoints: row.statistics_nhl_points,
     fantasyPointsHundredths: row.statistics_fantasy_points_hundredths,
     sourceUpdatedAtMs: row.statistics_source_updated_at_ms,
+    ...(row.statistics_period ? { period: row.statistics_period } : {}),
     ...(row.statistics_scoring_stats_json ? {
       scoringRuleVersion: row.statistics_scoring_rule_version || "expanded-2026-v1",
           ...(row.statistics_scoring_weights ? {scoringWeights:row.statistics_scoring_weights} : {}),

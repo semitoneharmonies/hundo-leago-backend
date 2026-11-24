@@ -177,6 +177,31 @@ test("NHL completed-game totals exclude live goals, include zero-game catalog pl
   assert.equal(summaryRequest.searchParams.get("cayenneExp"), "gameId in (2025020001)");
 });
 
+test("NHL team changes preserve completed old-team points and current-team coverage", async () => {
+  const f = fixture({
+    change: ({ games, boxes }) => {
+      games[1].homeTeamId = 21;
+      boxes.get(String(games[1].id)).homeTeam.id = 21;
+    },
+    response: (url, data) => ({ ok: true, json: async () => structuredClone(
+      url.pathname.includes("/player/") ? { ...data, currentTeamId: 21 } : data
+    ) }),
+  });
+  const result = await f.adapter.fetchLiveSnapshot(f.input);
+  const observations = normalizePlayerGameStatisticsRows({ rows: result.playerGameRows, capturedAtMs: result.capturedAtMs });
+  const coverage = normalizePlayerGameCoverageResponse({
+    requiredPlayers: f.input.requiredPlayers, requiredPlayerGames: [],
+    response: result.playerGameCoverage, observationRows: observations, capturedAtMs: result.capturedAtMs,
+  });
+  assert.equal(result.playerGameCoverage.players[0].providerTeamId, "21");
+  assert.deepEqual(coverage.coverage.map(row => [row.nhlGameId, row.providerTeamId, row.observedGameState]), [
+    ["2025020001", "13", "final"], ["2025020002", "21", "in_progress"],
+  ]);
+  assert.deepEqual(result.totalsRows[0], { playerId: "8478000", gamesPlayed: 1, goals: 2, assists: 1 });
+  assert.equal(observations.find(row => row.nhlGameId === "2025020001").fantasyPointsHundredths, 350);
+  assert.equal(observations.find(row => row.nhlGameId === "2025020002").fantasyPointsHundredths, 0);
+});
+
 for (const pendingBoxState of ["FINAL", "OFF"]) test(`NHL ${pendingBoxState} games awaiting official reports do not block confirmed scores or publish provisional points`, async () => {
   const cached = [];
   const f = fixture({ completedGameCache: { read: () => new Map(), save: entries => cached.push(...entries) },

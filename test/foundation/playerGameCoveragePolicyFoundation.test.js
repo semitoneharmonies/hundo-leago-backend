@@ -617,6 +617,92 @@ describe("FAD-05 player-game coverage policy", () => {
     ]);
   });
 
+  for (const currentTeamId of ["20", null]) {
+    test(`preserves completed old-team coverage with current team ${currentTeamId}`, () => {
+      const completedStart = CAPTURED_AT_MS - 60 * 60_000;
+      const completedGame = {
+        providerTeamId: "10", nhlGameId: "9001",
+        nhlGameScheduledStartsAtMs: completedStart, observedGameState: "final",
+      };
+      const games = [completedGame];
+      const observationRows = [observation({
+        nhlGameScheduledStartsAtMs: completedStart, observedGameState: "final",
+        goals: 2, assists: 1, nhlPoints: 3, fantasyPointsHundredths: 350,
+      })];
+      if (currentTeamId !== null) {
+        games.push({ providerTeamId: currentTeamId, nhlGameId: "9002",
+          nhlGameScheduledStartsAtMs: GAME_TWO_START_MS, observedGameState: "scheduled" });
+        observationRows.push(observation({ nhlGameId: "9002",
+          nhlGameScheduledStartsAtMs: GAME_TWO_START_MS, observedGameState: "scheduled" }));
+      }
+      const result = normalizePlayerGameCoverageResponse(responseInput({
+        requiredPlayers: [REQUIRED_A], requiredPlayerGames: [],
+        players: [providerExpectedPlayer({ providerTeamId: currentTeamId, games })],
+        observationRows,
+      }));
+      assert.deepEqual(result.coverage.map(entry => [entry.nhlGameId, entry.providerTeamId]),
+        currentTeamId === null ? [["9001", "10"]] : [["9001", "10"], ["9002", "20"]]);
+      assert.equal(result.observationRows[0].fantasyPointsHundredths, 350);
+      assert.deepEqual(result.requiredPlayerGames, []);
+    });
+  }
+
+  for (const state of ["scheduled", "pre_game", "in_progress", "postponed", "cancelled"]) {
+    test(`rejects non-historical old-team ${state} coverage`, () => {
+      const start = CAPTURED_AT_MS - 60 * 60_000;
+      assertCoverageError(() => normalizePlayerGameCoverageResponse(responseInput({
+        requiredPlayers: [REQUIRED_A],
+        players: [providerExpectedPlayer({ providerTeamId: "20", games: [{
+          providerTeamId: "10", nhlGameId: "9001",
+          nhlGameScheduledStartsAtMs: start, observedGameState: state,
+        }] })],
+        observationRows: [observation({ nhlGameScheduledStartsAtMs: start, observedGameState: state })],
+      })), PLAYER_GAME_COVERAGE_CODES.responseInvalid, "expected_game_current_team_binding_mismatch");
+    });
+  }
+
+  test("rejects future old-team coverage labelled final", () => {
+    assertCoverageError(() => normalizePlayerGameCoverageResponse(responseInput({
+      requiredPlayers: [REQUIRED_A],
+      players: [providerExpectedPlayer({ providerTeamId: "20", games: [{
+        ...providerExpectedPlayer().games[0], observedGameState: "final",
+      }] })],
+      observationRows: [observation({ observedGameState: "final" })],
+    })), PLAYER_GAME_COVERAGE_CODES.responseInvalid, "expected_game_current_team_binding_mismatch");
+  });
+
+  test("completed old-team coverage cannot rebind a required historical game", () => {
+    const start = CAPTURED_AT_MS - 60 * 60_000;
+    assertCoverageError(() => normalizePlayerGameCoverageResponse(responseInput({
+      requiredPlayers: [REQUIRED_A],
+      requiredPlayerGames: [{ ...REQUIRED_GAME_A_ONE, nhlGameScheduledStartsAtMs: start }],
+      players: [providerExpectedPlayer({ providerTeamId: null, games: [{
+        providerTeamId: "11", nhlGameId: "9001",
+        nhlGameScheduledStartsAtMs: start, observedGameState: "final",
+      }] })],
+      observationRows: [observation({ nhlGameScheduledStartsAtMs: start, observedGameState: "final" })],
+    })), PLAYER_GAME_COVERAGE_CODES.responseInvalid, "required_player_game_binding_mismatch");
+  });
+
+  for (const mismatch of ["missing", "state", "start"]) {
+    test(`completed old-team coverage rejects ${mismatch} observation evidence`, () => {
+      const start = CAPTURED_AT_MS - 60 * 60_000;
+      const exact = observation({ nhlGameScheduledStartsAtMs: start, observedGameState: "final" });
+      const observationRows = mismatch === "missing" ? [] : [{ ...exact,
+        ...(mismatch === "state" ? { observedGameState: "in_progress" } : { nhlGameScheduledStartsAtMs: start - 1 }),
+      }];
+      assertCoverageError(() => normalizePlayerGameCoverageResponse(responseInput({
+        requiredPlayers: [REQUIRED_A],
+        players: [providerExpectedPlayer({ providerTeamId: "20", games: [{
+          providerTeamId: "10", nhlGameId: "9001",
+          nhlGameScheduledStartsAtMs: start, observedGameState: "final",
+        }] })],
+        observationRows,
+      })), mismatch === "missing" ? PLAYER_GAME_COVERAGE_CODES.responseIncomplete : PLAYER_GAME_COVERAGE_CODES.responseInvalid,
+      mismatch === "missing" ? "expected_observation_set_mismatch" : "expected_observation_binding_mismatch");
+    });
+  }
+
   test("requires every non-historical game to use a non-null current team", () => {
     const extraGame = {
       providerTeamId: "20",

@@ -2,8 +2,15 @@ const express = require("express");
 
 const base = "/api/v1/daily";
 const endpoints = [
+  ["GET", base + "/notifications", "notifications"],
+  ["POST", base + "/notifications/read", "readNotifications"],
+  ["GET", base + "/notification-settings", "notificationSettings"],
+  ["POST", base + "/notification-settings", "updateNotificationSettings"],
   ["GET", base + "/rooms", "lobby"],
   ["GET", base + "/rooms/:roomId", "room"],
+  ["GET", base + "/rooms/:roomId/chat", "chat"],
+  ["POST", base + "/rooms/:roomId/chat", "postChat"],
+  ["POST", base + "/rooms/:roomId/chat/reactions", "reactToChat"],
   ["GET", base + "/reminders", "reminders"],
   ["GET", base + "/profile", "profile"],
   ["POST", base + "/profile", "updateProfile"],

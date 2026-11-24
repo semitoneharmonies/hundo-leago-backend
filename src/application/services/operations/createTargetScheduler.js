@@ -12,6 +12,7 @@ function createTargetScheduler({
   backupJob = null,
   dailyBackupJob = null,
   liveStatisticsJob = null,
+  teamAssignmentsJob = null,
   health,
   logger,
   intervalMs = DEFAULT_INTERVAL_MS,
@@ -62,6 +63,9 @@ function createTargetScheduler({
   if (liveStatisticsJob !== null && typeof liveStatisticsJob.job?.run !== "function") {
     throw new TypeError("target scheduler requires a controlled live statistics job");
   }
+  if (teamAssignmentsJob !== null && typeof teamAssignmentsJob.run !== "function") {
+    throw new TypeError("target scheduler requires a controlled team-assignment job");
+  }
   if (!health || typeof health.setSchedulerState !== "function") {
     throw new TypeError("target scheduler requires runtime health state");
   }
@@ -87,6 +91,8 @@ function createTargetScheduler({
   let inFlight = null;
   let liveIntervalHandle = null;
   let liveInFlight = null;
+  let teamAssignmentsIntervalHandle = null;
+  let teamAssignmentsInFlight = null;
   let startResult = null;
   let closePromise = null;
   let emailStarted = false;
@@ -161,6 +167,20 @@ function createTargetScheduler({
     return cycle;
   }
 
+  // Catalogue fetches have their own overlap guard and durable daily lease.
+  // Waiting on the provider must never delay league jobs or live statistics.
+  function runTeamAssignmentsCycle() {
+    if (!teamAssignmentsJob || state !== "running") return Promise.resolve({ status: "skipped", reason: "not_running" });
+    if (teamAssignmentsInFlight) return Promise.resolve({ status: "skipped", reason: "overlap" });
+    const cycle = Promise.resolve().then(() => teamAssignmentsJob.run()).catch(() => {
+      logger.error("target_scheduler.team_assignments_failed", { code: "TARGET_TEAM_ASSIGNMENTS_FAILED" });
+      return { status: "failed", code: "TARGET_TEAM_ASSIGNMENTS_FAILED" };
+    });
+    teamAssignmentsInFlight = cycle;
+    cycle.finally(() => { if (teamAssignmentsInFlight === cycle) teamAssignmentsInFlight = null; });
+    return cycle;
+  }
+
   function start() {
     if (startResult) return startResult;
     if (closePromise) {
@@ -219,12 +239,18 @@ function createTargetScheduler({
         liveIntervalHandle = setIntervalFunction(() => { void runLiveCycle(); }, LIVE_TICK_INTERVAL_MS);
         if (liveIntervalHandle && typeof liveIntervalHandle.unref === "function") liveIntervalHandle.unref();
       }
+      const teamAssignmentsInitialRun = teamAssignmentsJob ? runTeamAssignmentsCycle() : null;
+      if (teamAssignmentsJob) {
+        teamAssignmentsIntervalHandle = setIntervalFunction(() => { void runTeamAssignmentsCycle(); }, intervalMs);
+        if (teamAssignmentsIntervalHandle && typeof teamAssignmentsIntervalHandle.unref === "function") teamAssignmentsIntervalHandle.unref();
+      }
       startResult = Object.freeze({
         status: "running",
         initialRun,
         emailInitialRun: emailStart?.initialRun || null,
         emailRecovered: emailStart?.recovered ?? null,
         ...(backupStarted ? { backupInitialRun: backupStart?.initialRun || null } : {}),
+        ...(teamAssignmentsJob ? { teamAssignmentsInitialRun } : {}),
       });
       return startResult;
     } catch (error) {
@@ -252,6 +278,10 @@ function createTargetScheduler({
         clearIntervalFunction(liveIntervalHandle);
         liveIntervalHandle = null;
       }
+      if (teamAssignmentsIntervalHandle !== null) {
+        clearIntervalFunction(teamAssignmentsIntervalHandle);
+        teamAssignmentsIntervalHandle = null;
+      }
       const errors = [];
       if (inFlight) {
         try {
@@ -262,6 +292,9 @@ function createTargetScheduler({
       }
       if (liveInFlight) {
         try { await liveInFlight; } catch (error) { errors.push(error); }
+      }
+      if (teamAssignmentsInFlight) {
+        try { await teamAssignmentsInFlight; } catch (error) { errors.push(error); }
       }
       if (emailStarted) {
         try {
@@ -296,6 +329,7 @@ function createTargetScheduler({
     },
     runCycle,
     runLiveCycle,
+    runTeamAssignmentsCycle,
     start,
   });
 }

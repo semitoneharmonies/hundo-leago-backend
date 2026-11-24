@@ -1,6 +1,7 @@
 const {
   CANONICAL_UUID_PATTERN,
 } = require("../../../domain/players/playerIdentityPolicy");
+const { normalizePlayerStatisticsPeriod } = require('../../../domain/statistics/playerStatisticsPeriodPolicy');
 const {
   PlayerNotFoundError,
   PlayerReadInputError,
@@ -179,8 +180,13 @@ function createLeaguePlayerReadService({
     maximumAavCents,
     remainingYears,
     contractType,
+    statsPeriod,
+    startDate,
+    endDate,
+    lastGames,
   } = {}) {
     const authority = authorize(authenticated, leagueId);
+    const statisticsPeriod = normalizePlayerStatisticsPeriod({ statsPeriod, startDate, endDate, lastGames });
     const canonicalQuery = normalizeQuery(query);
     const canonicalStatus = normalizeStatus(status);
     const canonicalSort = normalizeSort(sort);
@@ -207,7 +213,7 @@ function createLeaguePlayerReadService({
     const pageSize = normalizeLimit(limit);
     const cursorId = normalizeCursor(cursor);
     const cursorRow =
-      cursorId === null ? null : playerRepository.findPageCursor(cursorId, {leagueId});
+      cursorId === null ? null : playerRepository.findPageCursor(cursorId, {leagueId, statisticsPeriod});
     if (!cursorRow) {
       if (cursorId !== null) failInput();
     } else if (
@@ -236,6 +242,7 @@ function createLeaguePlayerReadService({
       ...contractFilters,
       auctionEligible: false,
       sort: canonicalSort,
+      statisticsPeriod,
     });
     const hasMore = rows.length > pageSize;
     const pageRows = rows.slice(0, pageSize);
@@ -268,15 +275,16 @@ function createLeaguePlayerReadService({
     });
   }
 
-  function read({ authenticated, leagueId, playerId } = {}) {
+  function read({ authenticated, leagueId, playerId, statsPeriod, startDate, endDate, lastGames } = {}) {
     const authority = authorize(authenticated, leagueId);
+    const statisticsPeriod = normalizePlayerStatisticsPeriod({ statsPeriod, startDate, endDate, lastGames });
     if (
       typeof playerId !== "string" ||
       !CANONICAL_UUID_PATTERN.test(playerId)
     ) {
       failInput();
     }
-    const row = playerRepository.findDetailById(playerId, {leagueId});
+    const row = playerRepository.findDetailById(playerId, {leagueId, statisticsPeriod});
     if (!row) throw new PlayerNotFoundError();
     const leagueRow = leaguePlayerRepository.findByPlayerId({
       leagueId: authority.leagueId,

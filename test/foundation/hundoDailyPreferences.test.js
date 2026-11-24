@@ -151,7 +151,8 @@ test("custom-time reminders persist once per participant; joining inside the win
   assert.equal(pushes.length, 2);
   at(start);
   await daily.runMaintenance();
-  assert.equal(notices.length, 2);
+  assert.equal(notices.filter(n => n.type === "daily_auction_reminder").length, 2);
+  assert.equal(notices.filter(n => n.type === "daily_auction_started").length, 2);
 });
 
 test("due and late-join notices persist while an earlier NHL refresh remains blocked across the deadline", async t => {
@@ -176,7 +177,7 @@ test("due and late-join notices persist while an earlier NHL refresh remains blo
   at(start + 1);
   releaseRefresh(slate);
   await Promise.all([pending, nextTick]);
-  assert.equal(notices.length, 2, "A slow NHL response cannot lose or repeat already-persisted reminders");
+  assert.equal(notices.filter(n => n.type === "daily_auction_reminder").length, 2, "A slow NHL response cannot lose or repeat already-persisted reminders");
 });
 
 test("notices precede slow push delivery and concurrent late-join ticks serialize notification writes", async t => {
@@ -187,7 +188,7 @@ test("notices precede slow push delivery and concurrent late-join ticks serializ
     push: { available: true, send: () => { enteredPush(); return new Promise(resolve => { releasePush = resolve; }); } },
     notify: notice => {
       notices.push(structuredClone(notice));
-      if (notice.userId === guest.id) return new Promise(resolve => { releaseGuest = resolve; });
+      if (notice.userId === guest.id && notice.type === "daily_auction_reminder") return new Promise(resolve => { releaseGuest = resolve; });
     },
   });
   const { room } = await daily.create({ actor: host, input });
@@ -205,7 +206,7 @@ test("notices precede slow push delivery and concurrent late-join ticks serializ
   at(start + 1);
   releasePush();
   await Promise.all([pending, ...ticks]);
-  assert.equal(notices.length, 2);
+  assert.equal(notices.filter(n => n.type === "daily_auction_reminder").length, 2);
 });
 
 test("winner events include each tied winner, survive restart, and wait for a successful notification acknowledgement", t => {
@@ -219,9 +220,9 @@ test("winner events include each tied winner, survive restart, and wait for a su
   store.bid({ roomId, actor: guest, playerId: "2", amount: 2 });
   now += 30 * MINUTE;
   store.updateScores({ roomId, final: false, pointsByPlayerId: { "1": 100, "2": 100 } });
-  assert.deepEqual(store.listDueNotifications(), []);
+  assert.deepEqual(store.listDueNotifications().filter(n => n.type === "daily_room_won"), []);
   store.updateScores({ roomId, final: true, pointsByPlayerId: { "1": 100, "2": 100 } });
-  const due = store.listDueNotifications();
+  const due = store.listDueNotifications().filter(n => n.type === "daily_room_won");
   assert.equal(due.length, 2);
   assert.ok(due.every(notice => notice.type === "daily_room_won" && notice.messageData.tied && notice.messageData.winnerCount === 2));
   store.markNotificationSent(due[0]);

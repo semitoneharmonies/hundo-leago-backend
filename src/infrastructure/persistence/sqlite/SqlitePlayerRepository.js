@@ -1,7 +1,8 @@
 const {createLeagueScoringRuleReader} = require('./leagueScoringRules');
-const {calculateExpandedScore} = require('../../../domain/statistics/expandedScoringPolicy');
+const {calculateExpandedScore, defaultScoringWeights} = require('../../../domain/statistics/expandedScoringPolicy');
 const { createInjuryReader } = require('./SqlitePlayerInjuryRepository');
 const { injuryProjection } = require('../../../domain/players/injuryStatusPolicy');
+const { createPlayerStatisticsPeriodReader } = require('./readPlayerStatisticsPeriod');
 const {
   CANONICAL_UUID_PATTERN,
   assertStablePlayerId,
@@ -47,6 +48,7 @@ const DEFAULT_CONTRACT_FILTERS = Object.freeze({
   maximumAavCents: null,
   remainingYears: null,
   contractType: "all",
+  statisticsPeriod: null,
 });
 const CONTRACT_FILTER_SQL = `
   AND ((@ownershipFilter != 'signed' AND @minimumAavCents IS NULL
@@ -134,9 +136,13 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
   const readInjury = createInjuryReader(database);
   const withInjury = row => row ? { ...row, injury: injuryProjection(readInjury(row.id)) } : row;
   const readScoringRule = createLeagueScoringRuleReader(database, nowMs);
+  const readPeriod = createPlayerStatisticsPeriodReader({ database, season: currentNhlStatisticsSeason,
+    expanded: expandedScoringEnabled && currentNhlStatisticsSeason === '20262027' });
+  const periodParameters = (leagueId, period) => period ? readPeriod({ leagueId, period }) : { json: null, metadata: null };
   const ruleParameters = leagueId => {
     const rule = readScoringRule(leagueId);
-    return {scoringWeightsJson:rule ? JSON.stringify(rule.weights) : null, scoringRuleVersion:rule?.version || null};
+    return {scoringWeightsJson:rule ? JSON.stringify(rule.weights) : null, scoringRuleVersion:rule?.version || null,
+      defaultScoringWeightsJson: JSON.stringify(defaultScoringWeights())};
   };
   database.function('hl_league_fantasy_points', {deterministic:true}, (stats, position, weights) =>
     ['F','D'].includes(position) ? calculateExpandedScore(JSON.parse(stats), position, {weights:JSON.parse(weights)}).fantasyPointsHundredths : null);
@@ -200,25 +206,37 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
       "LEFT JOIN stat_sources AS statistics_source ON statistics_source.id = statistics.stat_source_id";
     const expandedRequired = expandedScoringEnabled && currentNhlStatisticsSeason === '20262027';
     const expandedSchema = database.pragma("user_version", { simple: true }) >= 57;
-    const expandedJoin = expandedSchema ? " LEFT JOIN expanded_stat_totals AS expanded ON expanded.total_id = statistics.id " : "";
-    const fantasyPoints = expandedSchema
+    const expandedJoin = (expandedSchema ? " LEFT JOIN expanded_stat_totals AS expanded ON expanded.total_id = statistics.id " : "") +
+      " LEFT JOIN period_statistics AS period_statistics ON period_statistics.player_id=players.id ";
+    const periodFields = ['nhl_season_key', 'games_played', 'goals', 'assists', 'nhl_points', 'fantasy_points_hundredths', 'source_updated_at_ms'];
+    const periodPrefix = `WITH period_statistics AS MATERIALIZED (SELECT key AS player_id, ${periodFields.map(field =>
+      `json_extract(value,'$.${field}') AS ${field}`).join(', ')}, json_extract(value,'$.scoring_stats') AS stats_json
+      FROM json_each(@periodStatisticsJson)) `;
+    const selected = field => `(CASE WHEN @periodStatisticsJson IS NULL THEN statistics.${field} ELSE period_statistics.${field} END)`;
+    const seasonFantasyPoints = expandedSchema
       ? "CASE WHEN expanded.total_id IS NOT NULL AND @scoringWeightsJson IS NOT NULL THEN hl_league_fantasy_points(expanded.stats_json,source.normalized_position,@scoringWeightsJson) WHEN expanded.total_id IS NOT NULL THEN CASE source.normalized_position WHEN 'D' THEN expanded.defence_fp_hundredths WHEN 'F' THEN expanded.forward_fp_hundredths END " +
         (expandedRequired ? "ELSE NULL END" : "ELSE statistics.fantasy_points_hundredths END")
       : "statistics.fantasy_points_hundredths";
+    const periodFantasyPoints = `CASE WHEN period_statistics.stats_json IS NOT NULL THEN
+      CASE WHEN @scoringWeightsJson IS NOT NULL THEN hl_league_fantasy_points(period_statistics.stats_json,source.normalized_position,@scoringWeightsJson)
+      ELSE hl_league_fantasy_points(period_statistics.stats_json,source.normalized_position,@defaultScoringWeightsJson) END
+      ELSE period_statistics.fantasy_points_hundredths END`;
+    const fantasyPoints = `(CASE WHEN @periodStatisticsJson IS NULL THEN ${seasonFantasyPoints} ELSE ${periodFantasyPoints} END)`;
     const sortFantasyPoints = `COALESCE(${fantasyPoints}, -9007199254740991)`;
     const readColumns = PLAYER_READ_COLUMNS.map(column => column === 'statistics.fantasy_points_hundredths AS statistics_fantasy_points_hundredths'
-      ? `${fantasyPoints} AS statistics_fantasy_points_hundredths` : column).concat([
-        `${expandedSchema ? 'expanded.stats_json' : 'NULL'} AS statistics_scoring_stats_json`,
+      ? `${fantasyPoints} AS statistics_fantasy_points_hundredths` :
+        column.replace(/statistics\.(nhl_season_key|games_played|goals|assists|nhl_points|source_updated_at_ms)/, (_, field) => selected(field))).concat([
+        `(CASE WHEN @periodStatisticsJson IS NULL THEN ${expandedSchema ? 'expanded.stats_json' : 'NULL'} ELSE period_statistics.stats_json END) AS statistics_scoring_stats_json`,
         `${expandedRequired ? 1 : 0} AS statistics_expanded_required`,
         '@scoringRuleVersion AS statistics_scoring_rule_version', '@scoringWeightsJson AS statistics_scoring_weights_json',
       ]);
     findDetailByIdStatement = database.prepare(
-      `SELECT ${readColumns.join(", ")} FROM players ` +
+      periodPrefix + `SELECT ${readColumns.join(", ")} FROM players ` +
         `${currentSourceJoin} ${currentStatisticsJoin} ${expandedJoin} ` +
         "WHERE players.id = @playerId LIMIT 1"
     );
     findPageCursorStatement = database.prepare(
-      "SELECT players.id, players.full_name, " +
+      periodPrefix + "SELECT players.id, players.full_name, " +
         "lower(players.full_name) AS sort_name, players.status, " +
         `${sortFantasyPoints} ` +
         "AS sort_fantasy_points_hundredths " +
@@ -231,14 +249,14 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         "ORDER BY provider ASC, external_value ASC"
     );
     listPageStatement = database.prepare(
-      `SELECT ${readColumns.join(", ")} FROM players ` +
+      periodPrefix + `SELECT ${readColumns.join(", ")} FROM players ` +
         `${currentSourceJoin} ${currentStatisticsJoin} ${expandedJoin} ` +
         "WHERE (@status = 'all' OR players.status = @status) " +
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
         "AND (@providerActive IS NULL OR source.active IS NULL OR source.active = 1) " +
         "AND (@providerPosition IS NULL OR source.normalized_position = @providerPosition) " +
         "AND (@nhlTeam IS NULL OR source.nhl_team_abbreviation IN (@nhlTeam, @nhlTeamAlias)) " +
-        "AND COALESCE(statistics.games_played, 0) >= @minimumGames " +
+        `AND COALESCE(${selected('games_played')}, 0) >= @minimumGames ` +
         "AND (@ownershipTeamId IS NULL OR EXISTS (" +
         "SELECT 1 FROM leagues AS ownership_league " +
         "JOIN player_ownerships AS team_ownership " +
@@ -319,14 +337,14 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         "LIMIT @limit"
     );
     listPageByFantasyPointsStatement = database.prepare(
-      `SELECT ${readColumns.join(", ")} FROM players ` +
+      periodPrefix + `SELECT ${readColumns.join(", ")} FROM players ` +
         `${currentSourceJoin} ${currentStatisticsJoin} ${expandedJoin} ` +
         "WHERE (@status = 'all' OR players.status = @status) " +
         "AND (@pattern = '' OR lower(players.full_name) LIKE @pattern ESCAPE '\\') " +
         "AND (@providerActive IS NULL OR source.active IS NULL OR source.active = 1) " +
         "AND (@providerPosition IS NULL OR source.normalized_position = @providerPosition) " +
         "AND (@nhlTeam IS NULL OR source.nhl_team_abbreviation IN (@nhlTeam, @nhlTeamAlias)) " +
-        "AND COALESCE(statistics.games_played, 0) >= @minimumGames " +
+        `AND COALESCE(${selected('games_played')}, 0) >= @minimumGames ` +
         "AND (@ownershipTeamId IS NULL OR EXISTS (" +
         "SELECT 1 FROM leagues AS ownership_league " +
         "JOIN player_ownerships AS team_ownership " +
@@ -463,12 +481,13 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         })
       );
     },
-    findDetailById(playerId, {leagueId = null} = {}) {
+    findDetailById(playerId, {leagueId = null, statisticsPeriod = null} = {}) {
       const canonicalPlayerId = assertStablePlayerId(playerId);
+      const period = periodParameters(leagueId, statisticsPeriod);
       try {
-        return freezeRow(
-          scoredRow(withInjury(findDetailByIdStatement.get({ playerId: canonicalPlayerId, ...ruleParameters(leagueId) })))
-        );
+        const row = scoredRow(withInjury(findDetailByIdStatement.get({ playerId: canonicalPlayerId, ...ruleParameters(leagueId),
+          periodStatisticsJson: period.json })));
+        return freezeRow(row && { ...row, statistics_period: period.metadata });
       } catch (error) {
         throw mapRepositoryError(error, {
           operation: "findPlayerDetailById",
@@ -476,10 +495,11 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         });
       }
     },
-    findPageCursor(playerId, {leagueId = null} = {}) {
+    findPageCursor(playerId, {leagueId = null, statisticsPeriod = null} = {}) {
       const canonicalPlayerId = assertStablePlayerId(playerId);
+      const period = periodParameters(leagueId, statisticsPeriod);
       try {
-        return freezeRow(findPageCursorStatement.get({playerId:canonicalPlayerId, ...ruleParameters(leagueId)}));
+        return freezeRow(findPageCursorStatement.get({playerId:canonicalPlayerId, ...ruleParameters(leagueId), periodStatisticsJson: period.json}));
       } catch (error) {
         throw mapRepositoryError(error, {
           operation: "findPlayerPageCursor",
@@ -540,6 +560,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
           "maximumAavCents",
           "remainingYears",
           "contractType",
+          "statisticsPeriod",
           "auctionEligible",
           "sort",
         ],
@@ -641,6 +662,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
         options.query === ""
           ? ""
           : `%${escapeLike(options.query.toLowerCase())}%`;
+      const period = periodParameters(options.leagueId, options.statisticsPeriod);
       try {
         return freezeRows(
           (options.sort === "fantasyPoints"
@@ -654,6 +676,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
             limit: options.limit,
             leagueId: options.leagueId,
             ...ruleParameters(options.leagueId),
+            periodStatisticsJson: period.json,
             ownershipTeamId: options.ownershipTeamId,
             providerPosition: options.providerPosition,
             providerActive: options.providerActive === true ? 1 : null,
@@ -666,7 +689,7 @@ function createSqlitePlayerRepository({ database, currentNhlStatisticsSeason = n
             remainingYears: options.remainingYears,
             contractType: options.contractType,
             auctionEligible: options.auctionEligible ? 1 : 0,
-          }).map(withInjury).map(scoredRow)
+          }).map(withInjury).map(scoredRow).map(row => ({ ...row, statistics_period: period.metadata }))
         );
       } catch (error) {
         throw mapRepositoryError(error, {

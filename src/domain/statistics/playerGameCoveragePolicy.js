@@ -842,7 +842,8 @@ function sameRequiredPlayerGameBinding(required, coverage) {
 function assertRequiredPlayerGameCoverage(
   requiredPlayerGames,
   coverage,
-  providerPlayers
+  providerPlayers,
+  capturedAtMs
 ) {
   const expectedByIdentity = new Map(
     coverage
@@ -886,6 +887,13 @@ function assertRequiredPlayerGameCoverage(
     for (const game of player.games) {
       const identity = `${player.playerId}\u0000${game.nhlGameId}`;
       if (exactHistoricalIdentities.has(identity)) continue;
+      // Completed appearances retain their actual team after an NHL team change.
+      // Their exact final observations are still required below; sealed late-lock
+      // bindings were checked above and are never replaced by the current team.
+      if (
+        game.observedGameState === "final" &&
+        game.nhlGameScheduledStartsAtMs <= capturedAtMs
+      ) continue;
       if (
         player.providerTeamId === null ||
         game.providerTeamId !== player.providerTeamId
@@ -1034,7 +1042,8 @@ function normalizePlayerGameCoverageResponse(input = {}) {
   assertRequiredPlayerGameCoverage(
     requiredPlayerGames,
     coverage,
-    providerPlayers
+    providerPlayers,
+    capturedAtMs
   );
   const observations = normalizeObservationRows(
     request.observationRows,

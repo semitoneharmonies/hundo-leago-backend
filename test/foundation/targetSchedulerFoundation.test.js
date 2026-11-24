@@ -50,6 +50,78 @@ function harness(overrides = {}) {
   return { calls, email, handles, runner, scheduler, states };
 }
 
+test('team assignments remain inactive before start, when absent, disabled or under maintenance', async () => {
+  let calls = 0;
+  const teamAssignmentsJob = { async run() { calls++; return { status: 'succeeded' }; } };
+  for (const options of [{ enabled: false }, { leagueWriteMode: 'closed' }]) {
+    const state = harness({ ...options, teamAssignmentsJob });
+    assert.equal((await state.scheduler.runTeamAssignmentsCycle()).reason, 'not_running');
+    const started = state.scheduler.start();
+    assert.equal(started.teamAssignmentsInitialRun, undefined);
+    assert.equal(state.handles.length, 0);
+    assert.equal((await state.scheduler.runTeamAssignmentsCycle()).reason, 'not_running');
+    await state.scheduler.close();
+  }
+  const absent = harness();
+  await absent.scheduler.start().initialRun;
+  assert.equal((await absent.scheduler.runTeamAssignmentsCycle()).reason, 'not_running');
+  await absent.scheduler.close();
+  assert.equal(calls, 0);
+  assert.throws(() => harness({ teamAssignmentsJob: {} }), /controlled team-assignment job/);
+});
+
+test('blocked team feed cannot delay league cycles or live polling, never overlaps, and shutdown drains it', async () => {
+  let release, teamCalls = 0, liveCalls = 0;
+  const pending = new Promise(resolve => { release = resolve; });
+  const state = harness({
+    teamAssignmentsJob: { run() { teamCalls++; return pending; } },
+    liveStatisticsJob: { job: { async run() { liveCalls++; return { status: 'succeeded' }; } } },
+  });
+  const started = state.scheduler.start();
+  assert.equal(state.scheduler.start(), started);
+  await started.initialRun;
+  assert.equal(teamCalls, 1);
+  assert.deepEqual(state.handles.map(handle => handle.intervalMs), [30000, 10000, 30000]);
+  assert.equal((await state.scheduler.runTeamAssignmentsCycle()).reason, 'overlap');
+  state.handles[2].callback();
+  await Promise.resolve();
+  assert.equal(teamCalls, 1);
+  assert.equal((await state.scheduler.runCycle()).status, 'succeeded');
+  assert.equal((await state.scheduler.runLiveCycle()).status, 'succeeded');
+  assert.equal(liveCalls, 1);
+  assert.deepEqual(state.calls, ['domain', 'outbox', 'domain', 'outbox']);
+  let closed = false;
+  const closing = state.scheduler.close().then(() => { closed = true; });
+  await Promise.resolve();
+  assert.equal(closed, false);
+  assert.ok(state.handles.every(handle => handle.cleared));
+  assert.equal((await state.scheduler.runTeamAssignmentsCycle()).reason, 'not_running');
+  release({ status: 'succeeded' });
+  assert.equal((await started.teamAssignmentsInitialRun).status, 'succeeded');
+  await closing;
+  assert.equal(closed, true); assert.equal(state.scheduler.getState(), 'stopped');
+});
+
+test('team assignment timer resumes after completion while failures stay bounded and isolated', async () => {
+  const errors = [];
+  let calls = 0;
+  const state = harness({ teamAssignmentsJob: { run() {
+    calls++;
+    if (calls === 1) throw new Error('private provider response');
+    return Promise.resolve({ status: 'succeeded' });
+  } }, logger: { error: (...args) => errors.push(args) } });
+  const started = state.scheduler.start();
+  assert.deepEqual(await started.teamAssignmentsInitialRun, { status: 'failed', code: 'TARGET_TEAM_ASSIGNMENTS_FAILED' });
+  await started.initialRun;
+  assert.equal(state.scheduler.getState(), 'running');
+  assert.equal((await state.scheduler.runCycle()).status, 'succeeded');
+  assert.deepEqual(errors, [['target_scheduler.team_assignments_failed', { code: 'TARGET_TEAM_ASSIGNMENTS_FAILED' }]]);
+  state.handles[1].callback();
+  await Promise.resolve();
+  assert.equal(calls, 2);
+  await state.scheduler.close();
+});
+
 test('live statistics stays disabled with league jobs or maintenance, and requires a controlled runner', async () => {
   let liveCalls = 0;
   const liveStatisticsJob = { job: { async run() { liveCalls += 1; } } };
