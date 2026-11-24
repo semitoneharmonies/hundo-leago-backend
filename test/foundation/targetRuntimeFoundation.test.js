@@ -1457,12 +1457,12 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
 });
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 222 unique method/path contracts across the exact router set", () => {
+  test("declares 224 unique method/path contracts across the exact router set", () => {
     assert.equal(TARGET_ENDPOINTS.length, 224);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      222
+      224
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
