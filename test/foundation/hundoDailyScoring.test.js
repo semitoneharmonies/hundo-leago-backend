@@ -73,11 +73,12 @@ test("verified player categories and team subtotals distinguish pending, partial
   update(report());
   const final = view();
   assert.equal(final.phase, "finished");
-  assert.equal(final.members[0].points, 3.2, "F and D category weights preserve authoritative FP");
+  assert.equal(final.members[0].hockeyPoints, 3.2, "F and D category weights preserve authoritative hockey FP");
+  assert.equal(final.members[0].points, 3.91);
   assert.deepEqual(final.members[0].scoringStats, stats({ primaryAssists: 1, giveaways: 1, hits: 2, blockedShots: 1 }));
   assert.equal(final.members[0].statsStatus, "collected");
   assert.deepEqual(final.members[0].roster.map(player => player.price), [5, 6]);
-  assert.deepEqual(final.winners, [{ ...host, points: 3.2 }]);
+  assert.deepEqual(final.winners, [{ ...host, points: 3.91 }]);
 });
 
 test("legacy zero and nonzero score entries are unavailable; verified mixed-team subtotals remain visible", () => {

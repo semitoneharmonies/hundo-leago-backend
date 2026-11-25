@@ -132,7 +132,7 @@ test("practice uses today's full NHL slate after puck drop with its own immediat
   assert.equal(daily.room(request).room.phase, "locked");
   await daily.runMaintenance();
   assert.equal(scoreCalls, 1);
-  assert.deepEqual(daily.room(request).room.winners, [{ id: host.id, name: host.name, points: 4.52 }]);
+  assert.deepEqual(daily.room(request).room.winners, [{ id: host.id, name: host.name, points: 5.32 }]);
   assert.equal((await daily.create({ actor: host, input: practice, requestId: "practice-today" })).room.id, room.id);
   await assert.rejects(daily.create({ actor: host, input, requestId: "practice-today" }), { code: "DAILY_CREATE_CONFLICT" });
 });
@@ -236,7 +236,8 @@ test("maintenance scores a full practice roster before its time limit and only f
   const locked = daily.room(request).room;
   assert.equal(scoreCalls, 1);
   assert.equal(locked.phase, "locked");
-  assert.equal(locked.members[0].points, 7);
+  assert.equal(locked.members[0].hockeyPoints, 7);
+  assert.equal(locked.members[0].points, 8.63);
   assert.deepEqual(locked.winners, []);
   await assert.rejects(daily.bid({ ...request, input: { playerId: "0", amount: 2 } }), { code: "DAILY_AUCTION_INACTIVE" });
   final = true;
@@ -244,5 +245,5 @@ test("maintenance scores a full practice roster before its time limit and only f
   await daily.runMaintenance();
   assert.equal(scoreCalls, 2);
   assert.equal(daily.room(request).room.phase, "finished");
-  assert.deepEqual(daily.room(request).room.winners, [{ ...host, points: 7 }]);
+  assert.deepEqual(daily.room(request).room.winners, [{ ...host, points: 8.63 }]);
 });

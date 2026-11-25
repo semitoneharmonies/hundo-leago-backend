@@ -71,7 +71,8 @@ test("practice starts immediately after puck drop, locks on its own clock, and s
   assert.deepEqual(store.listScoringRooms().find(entry => entry.id === roomId).slate, slate);
   hasCode(() => store.bid({ roomId, actor: host, playerId: "7", amount: 3 }), "DAILY_AUCTION_INACTIVE");
   store.updateScores({ roomId, pointsByPlayerId: { 1: 354, 2: 0 }, final: true });
-  assert.deepEqual(view().winners, [{ id: guest.id, name: guest.name, points: 3.54 }]);
+  assert.equal(view().members[1].hockeyPoints, 3.54);
+  assert.deepEqual(view().winners, [{ id: guest.id, name: guest.name, points: 4.31 }]);
 });
 
 test("separate scheduled and practice rooms survive an NHL clock change on the same date", (t) => {
@@ -94,7 +95,7 @@ test("lobby, membership, capacity, multiple rooms and retry-safe creates", (t) =
   const { store, roomId, create, join, view, at } = setup(t);
   assert.equal(store.listRooms({ actor: guest })[0].joined, false);
   assert.equal(view().memberCount, 1);
-  hasCode(() => view(guest), "DAILY_MEMBERSHIP_REQUIRED");
+  assert.equal(view(guest).joined, false, "spectators can view without joining");
   assert.equal(view(admin).canClose, true);
   assert.equal(join(guest).memberCount, 2);
   assert.equal(join(guest).memberCount, 2);
@@ -191,7 +192,8 @@ for (const mode of ["scheduled", "practice"]) {
     assert.deepEqual(view().winners, []);
     store.updateScores({ roomId, pointsByPlayerId, final: true });
     assert.equal(view().phase, "finished");
-    assert.deepEqual(view().winners, [{ ...guest, points: 14 }]);
+    assert.equal(view().members[1].hockeyPoints, 14);
+    assert.deepEqual(view().winners, [{ ...guest, points: 17.26 }]);
     assert.deepEqual(store.listScoringRooms(), []);
     assert.equal(store.closeRoom({ roomId, actor: host }).phase, "closed");
   });
@@ -233,7 +235,7 @@ test("horn truncates auctions; partial rosters, shared wins and commissioner clo
   hasCode(() => store.closeRoom({ roomId, actor: host }), "DAILY_CLOSE_FORBIDDEN");
   at(puck - 200);
   bid(host, 1, 10);
-  bid(guest, 7, 5);
+  bid(guest, 7, 10);
   assert.equal(view().auctions[0].endsAt, new Date(puck).toISOString());
   at(puck);
   hasCode(() => bid(host, 2, 2), "DAILY_AUCTION_INACTIVE");
@@ -246,11 +248,12 @@ test("horn truncates auctions; partial rosters, shared wins and commissioner clo
   assert.equal(view().members[0].points, -1.99);
   store.updateScores({ roomId, pointsByPlayerId: { 1: 201, 7: 201 }, final: true });
   assert.equal(view().winners.length, 2);
-  assert.deepEqual(view().members.map((team) => team.points), [2.01, 2.01]);
+  assert.deepEqual(view().members.map((team) => team.hockeyPoints), [2.01, 2.01]);
+  assert.deepEqual(view().members.map((team) => team.points), [2.46, 2.46]);
   assert.equal(view().phase, "finished");
   assert.deepEqual(store.listScoringRooms(), []);
   store.updateScores({ roomId, pointsByPlayerId: { 1: 5 }, final: true });
-  assert.equal(view().members[0].points, 2.01);
+  assert.equal(view().members[0].points, 2.46);
   assert.equal(store.listRooms({ actor: outsider })[0].winners.length, 2);
   hasCode(() => store.closeRoom({ roomId, actor: guest }), "DAILY_CLOSE_FORBIDDEN");
   assert.equal(store.closeRoom({ roomId, actor: host }).phase, "closed");
@@ -401,7 +404,7 @@ test("a manager's rooms have independent pools, reservations and results", (t) =
   store.updateScores({ roomId, pointsByPlayerId: { 1: 225, 2: 124 }, final: true });
   const first = store.getRoom({ actor: host, roomId });
   const second = store.getRoom({ actor: host, roomId: parallelRoom });
-  assert.deepEqual(first.winners, [{ id: host.id, name: host.name, points: 2.25 }]);
+  assert.deepEqual(first.winners, [{ id: host.id, name: host.name, points: 2.28 }]);
   assert.equal(second.phase, "locked");
   assert.deepEqual(second.winners, []);
   assert.equal(first.members[0].roster[0].price, 94);

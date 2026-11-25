@@ -7,6 +7,8 @@ const { auctionStartOptions, parseAuctionStart } = require("./dailySchedule");
 const { validateDailyAppearance } = require("./dailyProfile");
 const { requireActor } = require("./dailyRoom");
 const { DEFAULT_DAILY_PREFERENCES, validateDailyPreferences } = require("./dailyNotifications");
+const { spectatorChatSetting } = require("./dailyChat");
+const { validateCapSavingsBonus } = require("./dailyTeamScore");
 
 const MINUTE = 60_000;
 
@@ -116,6 +118,8 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
   }
   async function create({ actor, input, requestId }) {
     const { name, capacity, slateDate, auctionStartsAt, mode = "scheduled" } = input || {};
+    const allowSpectatorChat = spectatorChatSetting(input?.allowSpectatorChat);
+    const capSavingsBonus = validateCapSavingsBonus(input?.capSavingsBonus);
     const scheduledStartsAt = parseAuctionStart(auctionStartsAt);
     if (!["scheduled", "practice"].includes(mode)) fail(400, "DAILY_MODE_INVALID", "Choose a scheduled or practice room.");
     if (typeof name !== "string" || !name.trim() || name.trim().length > 60 || !Number.isSafeInteger(capacity) || capacity < 1 ||
@@ -123,7 +127,7 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
       fail(400, "DAILY_INPUT_INVALID", "Enter a room name (up to 60 characters) and a positive number of seats.");
     }
     if (mode === "practice" && scheduledStartsAt !== undefined) fail(400, "DAILY_START_INVALID", "Practice auctions start immediately.");
-    const request = { actor, name, capacity, slateDate, requestId, mode, scheduledStartsAt };
+    const request = { actor, name, capacity, slateDate, requestId, mode, scheduledStartsAt, allowSpectatorChat, capSavingsBonus };
     const replay = requestId && existing()?.replayCreate(request);
     if (replay) return { room: replay };
     const practice = mode === "practice";
@@ -143,7 +147,12 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
     const current = required();
     const date = current.getRoomDate(roomId, actor);
     if (date) {
-      const schedule = await feed.getSchedule(date);
+      let schedule;
+      try { schedule = await feed.getSchedule(date, { allowRecentOnFailure: true }); }
+      catch (error) {
+        if (error?.code !== "HUNDO_DAILY_FEED_UNAVAILABLE") throw error;
+        fail(503, "DAILY_SCHEDULE_UNAVAILABLE", "The NHL schedule check is temporarily unavailable. Your bid was not placed; try again shortly.");
+      }
       if (stopped) fail(503, "DAILY_UNAVAILABLE", "Hundo Daily is restarting.");
       current.syncRoomSchedule(roomId, schedule);
     }

@@ -51,8 +51,10 @@ test("Daily live totals preserve signed roster prices, position bonuses, caps, w
   const fixture = setup(t), context = fixture.context(), before = structuredClone(context);
   const liveGame = game(0); liveGame.playerGames[1].positionGroup = "F";
   const projected = projector(snapshot([liveGame])).project(context);
-  assert.equal(projected.members[0].points, 3.2, "the saved D position earns the defence hit/block bonus");
-  assert.equal(projected.members[1].points, 2.55);
+  assert.equal(projected.members[0].hockeyPoints, 3.2, "the saved D position earns the defence hit/block bonus");
+  assert.equal(projected.members[1].hockeyPoints, 2.55);
+  assert.equal(projected.members[0].points, 3.91, "the team bonus is added after summing live hockey points");
+  assert.equal(projected.members[1].points, 3.14);
   assert.deepEqual(projected.members[0].roster.map(player => player.price), [5, 6]);
   assert.equal(projected.members[0].remainingCap, before.room.members[0].remainingCap);
   assert.deepEqual(projected.winners, []);
@@ -63,13 +65,25 @@ test("Daily live totals preserve signed roster prices, position bonuses, caps, w
   assert.deepEqual(fixture.context(), before, "provisional display cannot persist scores");
 });
 
+test("legacy live rooms retain raw hockey totals even while new-room bonuses are enabled", t => {
+  const fixture = setup(t), context = fixture.context();
+  context.room.scoringVersion = "classic-v1";
+  context.room.capBonusRatePercent = 0;
+  const before = structuredClone(context);
+  const projected = projector(snapshot([game(0)])).project(context);
+  assert.deepEqual(projected.members.map(member => [member.hockeyPoints, member.capBonusPoints, member.points]),
+    [[3.2, 0, 3.2], [2.55, 0, 2.55]]);
+  assert.deepEqual(context, before, "legacy live projection remains read-only");
+});
+
 test("only exact accepted game IDs remove overlays; a live-feed FINAL label alone never double-counts or settles", t => {
   const fixture = setup(t);
   fixture.update(report(first, [slate.games[0].id]));
   const cache = snapshot([game(0, first, "final"), game(1, second, "final")]);
   const display = projector(cache);
   const provisional = display.project(fixture.context());
-  assert.equal(provisional.members[0].points, 3.5);
+  assert.equal(provisional.members[0].hockeyPoints, 3.5);
+  assert.equal(provisional.members[0].points, 4.28);
   assert.deepEqual(provisional.live.gameIds, [slate.games[1].id]);
   assert.equal(provisional.phase, "locked");
   assert.deepEqual(provisional.winners, []);
@@ -95,7 +109,8 @@ test("every nonzero scoring category reaches player and team totals with saved D
   assert.deepEqual(result.members[0].roster[1].scoringStats, every);
   assert.equal(result.members[0].roster[0].points, 14.7);
   assert.equal(result.members[0].roster[1].points, 15);
-  assert.equal(result.members[0].points, 29.7);
+  assert.equal(result.members[0].hockeyPoints, 29.7);
+  assert.equal(result.members[0].points, 36.31);
   assert.deepEqual(result.members[0].scoringStats, Object.fromEntries(Object.keys(every).map(key => [key, 2])));
 });
 
@@ -146,7 +161,7 @@ test("wrong dates, starts, seasons, unlisted games, excluded games, teams and in
 
 test("practice retains whole-day scoring after its own lock and auctions do not show provisional totals", t => {
   const fixture = setup(t, "practice"), display = projector(snapshot([game(0)]));
-  assert.equal(display.project(fixture.context()).members[0].points, 3.2, "practice includes the original slate even before the practice auction start");
+  assert.equal(display.project(fixture.context()).members[0].hockeyPoints, 3.2, "practice includes the original slate even before the practice auction start");
   fixture.clock(puck + 80 * minute);
   const auction = fixture.context();
   assert.equal(auction.room.phase, "auction");
@@ -157,15 +172,16 @@ test("stale replacement snapshots stay labelled and corrections can reduce provi
   const fixture = setup(t);
   const firstView = projector(snapshot([game(0)], "stale")).project(fixture.context());
   assert.equal(firstView.live.status, "stale");
-  assert.equal(firstView.members[0].points, 3.2);
+  assert.equal(firstView.members[0].hockeyPoints, 3.2);
   const corrected = projector(snapshot([game(0, first)])).project(fixture.context());
-  assert.equal(corrected.members[0].points, 0.3);
+  assert.equal(corrected.members[0].hockeyPoints, 0.3);
+  assert.equal(corrected.members[0].points, 0.37);
   const unavailable = projector(snapshot([], "unavailable")).project(fixture.context());
   assert.equal(unavailable.members[0].points, 0);
   assert.equal(unavailable.live.status, "unavailable");
 });
 
-test("live room reads do not fetch, write the Daily sidecar or bypass membership", async t => {
+test("live member and spectator reads do not fetch, write the Daily sidecar or bypass authentication", async t => {
   const directory = fs.mkdtempSync(path.join(__dirname, ".daily-live-"));
   const filename = path.join(directory, "daily.sqlite");
   let now = puck - 30 * minute, scoreCalls = 0, cacheReads = 0;
@@ -181,11 +197,23 @@ test("live room reads do not fetch, write the Daily sidecar or bypass membership
   observer = new DatabaseSync(filename);
   const before = observer.prepare("SELECT * FROM rooms").all();
   const version = observer.prepare("PRAGMA data_version").get().data_version;
-  for (let i = 0; i < 25; i++) assert.equal(daily.room({ actor: host, roomId: room.id }).room.members[0].points, 2.15);
+  for (let i = 0; i < 25; i++) {
+    const member = daily.room({ actor: host, roomId: room.id }).room.members[0];
+    assert.equal(member.hockeyPoints, 2.15);
+    assert.equal(member.points, 2.66);
+  }
   assert.equal(cacheReads, 25);
   assert.equal(scoreCalls, 0);
   assert.deepEqual(observer.prepare("SELECT * FROM rooms").all(), before);
   assert.equal(observer.prepare("PRAGMA data_version").get().data_version, version);
-  assert.throws(() => daily.room({ actor: guest, roomId: room.id }), { code: "DAILY_MEMBERSHIP_REQUIRED" });
-  assert.equal(cacheReads, 25, "authorization occurs before reading the live cache");
+  const spectator = daily.room({ actor: guest, roomId: room.id }).room;
+  assert.equal(spectator.joined, false);
+  assert.equal(spectator.members[0].points, 2.66);
+  assert.equal(spectator.members[0].availableCap, null);
+  assert.equal(spectator.members[0].reserved, null);
+  assert.equal(cacheReads, 26);
+  assert.deepEqual(observer.prepare("SELECT * FROM rooms").all(), before);
+  assert.equal(observer.prepare("PRAGMA data_version").get().data_version, version);
+  assert.throws(() => daily.room({ roomId: room.id }), { code: "DAILY_SIGN_IN_REQUIRED" });
+  assert.equal(cacheReads, 26, "authentication occurs before reading the live cache");
 });

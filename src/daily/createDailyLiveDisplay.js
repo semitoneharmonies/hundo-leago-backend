@@ -1,6 +1,7 @@
 const { addScoringStats, emptyScoringStats, normalizeScoringStats, calculateExpandedScore } = require("../domain/statistics/expandedScoringPolicy");
 const { teamScoringDetails } = require("./dailyScoring");
 const { vancouverDate } = require("./vancouverDate");
+const { dailyTeamScore } = require("./dailyTeamScore");
 
 // Presentation only: never calls the provider, writes a score, awards winners,
 // changes a bid, or supplies input to settlement. It joins the latest replacement
@@ -76,7 +77,8 @@ function createDailyLiveDisplay({ liveStatistics } = {}) {
             live: { provisional: true, officialPoints: player.points, gameIds: gameIds.sort() } };
         });
         if (!changed) return member;
-        return { ...member, roster, points: roster.reduce((total, player) => total + Math.round(player.points * 100), 0) / 100,
+        const pointsHundredths = roster.reduce((total, player) => total + Math.round(player.points * 100), 0);
+        return { ...member, roster, ...dailyTeamScore(room, pointsHundredths, member.spent),
           ...teamScoringDetails(roster), live: { provisional: true, officialPoints: member.points } };
       });
       live.gameIds = [...usedGames].sort();

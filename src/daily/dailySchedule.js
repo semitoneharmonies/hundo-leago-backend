@@ -1,16 +1,16 @@
 "use strict";
 
-const { vancouverDate } = require("./vancouverDate");
 const MINUTE = 60_000;
 const QUARTER = 15 * MINUTE;
 const DURATION = 30 * MINUTE;
 
-function auctionStartOptions(date, firstGameAt, now) {
-  const midnight = Date.parse(date + "T00:00:00Z");
+function auctionStartOptions(_date, firstGameAt, now) {
   const options = [];
-  // Iterate UTC instants so repeated or missing historical Pacific hours remain exact.
-  for (let at = midnight; at < midnight + 36 * 60 * MINUTE; at += QUARTER) {
-    if (at > now && at + DURATION <= firstGameAt && vancouverDate(at) === date) options.push(new Date(at).toISOString());
+  if (!Number.isSafeInteger(firstGameAt) || !Number.isSafeInteger(now)) return options;
+  // The auction may precede its game day. UTC quarters keep historical Pacific
+  // clock changes exact while always starting strictly after room creation.
+  for (let at = (Math.floor(now / QUARTER) + 1) * QUARTER; at + DURATION <= firstGameAt; at += QUARTER) {
+    options.push(new Date(at).toISOString());
   }
   return options;
 }
@@ -26,8 +26,8 @@ function parseAuctionStart(value) {
 
 function validateAuctionStart(at, slate, now) {
   if (at !== undefined && (!Number.isSafeInteger(at) || at % QUARTER !== 0 || at <= now ||
-      vancouverDate(at) !== slate.date || at + DURATION > slate.firstGameAt)) {
-    throw Object.assign(new Error("Choose a future start on the game day, at least 30 minutes before the first game."),
+      at + DURATION > slate.firstGameAt)) {
+    throw Object.assign(new Error("Choose a future start at least 30 minutes before the first game."),
       { status: 409, code: "DAILY_START_UNAVAILABLE" });
   }
 }

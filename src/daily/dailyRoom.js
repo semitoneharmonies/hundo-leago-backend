@@ -1,6 +1,7 @@
 "use strict";
 
 const { scoringCategories, playerScoringDetails, teamScoringDetails } = require("./dailyScoring");
+const { CLASSIC_VERSION, capBonusRatePercent, dailyTeamScore } = require("./dailyTeamScore");
 
 const MINUTE = 60_000;
 const RULES = Object.freeze({ cap: 100, minBid: 1, lotSeconds: 120, forwards: 3, defense: 2, extras: 2 });
@@ -48,6 +49,8 @@ function summary(room, actor, now) {
   const currentPhase = phase(room, now);
   return {
     id: room.id, name: room.name, capacity: room.capacity, memberCount: room.members.length,
+    scoringVersion: room.scoringVersion ?? CLASSIC_VERSION, capBonusRatePercent: capBonusRatePercent(room),
+    allowSpectatorChat: room.allowSpectatorChat === true,
     joined: room.members.some((member) => member.id === actor?.id),
     commissionerId: room.commissionerId, commissionerName: room.members.find(member => member.id === room.commissionerId)?.name ?? null,
     date: room.date, firstGameAt: iso(room.firstGameAt),
@@ -117,11 +120,13 @@ function roomView(room, slate, actor, now) {
   const nominated = new Set(room.lots.map((lot) => lot.playerId));
   return {
     ...detail,
+    games: (slate.games ?? []).filter(game => game.awayTeam && game.homeTeam)
+      .map(({ id, awayTeam, homeTeam }) => ({ id, awayTeam, homeTeam })),
     members: room.members.map(({ id, name }) => {
       const { roster, spent, reserved, pointsHundredths } = teams.get(id);
       const mine = id === actor?.id;
       return { id, name, roster, spent, reserved: mine ? reserved : null, remainingCap: RULES.cap - spent,
-        availableCap: mine ? RULES.cap - spent - reserved : null, points: pointsHundredths / 100, ...teamScoringDetails(roster) };
+        availableCap: mine ? RULES.cap - spent - reserved : null, ...dailyTeamScore(room, pointsHundredths, spent), ...teamScoringDetails(roster) };
     }),
     availablePlayers: ["waiting", "auction"].includes(detail.phase) ? slate.players.filter((player) => !nominated.has(player.id)) : [],
     auctions: room.lots.filter((lot) => !room.void && now < lot.endsAt).map((lot) => ({
@@ -173,15 +178,18 @@ function scoreRoom(room, pointsByPlayerId, final, voided, now) {
     else if (final || points !== undefined) throw new TypeError("Daily scoring lacks a valid signed player total.");
   }
   if (final) {
-    const totals = new Map(room.members.map(({ id }) => [id, 0]));
+    const totals = new Map(room.members.map(({ id }) => [id, { raw: 0, spent: 0 }]));
     for (const lot of room.lots) {
-      const { userId } = winningBid(lot);
-      totals.set(userId, totals.get(userId) + room.scores[lot.playerId]);
+      const { userId, amount } = winningBid(lot);
+      const team = totals.get(userId);
+      team.raw += room.scores[lot.playerId];
+      team.spent += amount;
     }
+    const scores = new Map([...totals].map(([id, { raw, spent }]) => [id, dailyTeamScore(room, raw, spent).points]));
     let highest = -Infinity;
-    for (const points of totals.values()) highest = Math.max(highest, points);
-    room.winners = room.members.filter(({ id }) => totals.get(id) === highest)
-      .map(({ id, name }) => ({ id, name, points: highest / 100 }));
+    for (const points of scores.values()) highest = Math.max(highest, points);
+    room.winners = room.members.filter(({ id }) => scores.get(id) === highest)
+      .map(({ id, name }) => ({ id, name, points: highest }));
     room.finished = true;
     room.finishedAt = now;
   }

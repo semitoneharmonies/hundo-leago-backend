@@ -6,7 +6,8 @@ const { validatedScoringDetails } = require("./dailyScoring");
 const { validateAuctionStart } = require("./dailySchedule");
 const { validateDailyAppearance } = require("./dailyProfile");
 const { DEFAULT_DAILY_PREFERENCES, validateDailyPreferences, dailyNotices } = require("./dailyNotifications");
-const { chatText, requireChatMember, chatView } = require("./dailyChat");
+const { chatText, spectatorChatSetting, requireChatAccess, chatView } = require("./dailyChat");
+const { CAP_SAVINGS_VERSION, CLASSIC_VERSION, validateCapSavingsBonus } = require("./dailyTeamScore");
 
 const DAILY_DATABASE_ID = 1212433457;
 const MEMBER_PHASES = new Set(["waiting", "auction"]);
@@ -164,24 +165,22 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
     return row;
   }
   function readRoomForDisplay({ roomId, actor }) {
+    requireActor(actor);
     const row = findRoom(roomId);
     const info = JSON.parse(row.info);
-    if (actor?.isAdmin !== true && !info.members.some(({ id }) => id === actor?.id)) {
-      reject(403, "DAILY_MEMBERSHIP_REQUIRED", "Join this room to see its players and rosters.");
-    }
     if (info.closed) reject(410, "DAILY_ROOM_CLOSED", "This room has been closed.");
     const slate = getSlate(row);
     return { room: presentRoom(fromRow(row), slate, actor, clock()), slate };
   }
   function getRoom(input) { return readRoomForDisplay(input).room; }
   function canReadChat(roomId, userId) {
-    requireChatMember(JSON.parse(findRoom(roomId).info), userId);
+    requireChatAccess(JSON.parse(findRoom(roomId).info), userId);
     return true;
   }
   function getChat({ roomId, actor }) {
     requireActor(actor);
     const room = JSON.parse(findRoom(roomId).info);
-    requireChatMember(room, actor.id);
+    requireChatAccess(room, actor.id);
     return chatView(room, appearance);
   }
   function postChat({ roomId, actor, input, requestId }) {
@@ -192,7 +191,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
     }
     return transaction(() => {
       const row = findRoom(roomId), room = fromRow(row);
-      requireChatMember(room, actor.id);
+      requireChatAccess(room, actor.id);
       if (room.finished || room.void || room.closed) reject(409, "DAILY_CHAT_READ_ONLY", "This room's chat is now read-only.");
       const messages = room.chat || [];
       const prior = messages.find(message => message.userId === actor.id && message.requestId === requestId);
@@ -216,11 +215,11 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
     }
     return transaction(() => {
       const row = findRoom(roomId), room = fromRow(row);
-      requireChatMember(room, actor.id);
+      requireChatAccess(room, actor.id);
       if (room.finished || room.void || room.closed) reject(409, "DAILY_CHAT_READ_ONLY", "This room's chat is now read-only.");
       const message = (room.chat || []).find(item => item.id === input.messageId);
       if (!message) reject(404, "DAILY_CHAT_MESSAGE_NOT_FOUND", "This message could not be found.");
-      if (message.userId === actor.id) reject(400, "DAILY_CHAT_OWN_REACTION", "You can react to other members' messages.");
+      if (message.userId === actor.id) reject(400, "DAILY_CHAT_OWN_REACTION", "You can react to other people's messages.");
       message.reactions = (message.reactions || []).filter(item => item.userId !== actor.id);
       if (input.reaction) message.reactions.push({ userId: actor.id, username: actor.name, reaction: input.reaction });
       save(row, room);
@@ -258,22 +257,26 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
       reject(400, "DAILY_REQUEST_ID", "Use a valid request identifier.");
     }
   }
-  function replayCreate({ actor, name, capacity, requestId, slateDate, scheduledStartsAt, mode = "scheduled" }) {
+  function replayCreate({ actor, name, capacity, requestId, slateDate, scheduledStartsAt, mode = "scheduled", allowSpectatorChat = false, capSavingsBonus }) {
     checkSetup(actor, name, capacity, requestId);
+    spectatorChatSetting(allowSpectatorChat);
+    validateCapSavingsBonus(capSavingsBonus);
     if (mode !== "scheduled" && mode !== "practice") reject(400, "DAILY_ROOM_MODE", "Choose a scheduled or practice room.");
     if (requestId == null) return null;
     const row = priorCreate.get(actor.id, requestId);
     if (!row) return null;
     const info = JSON.parse(row.info);
     if (info.name !== name.trim() || info.capacity !== capacity ||
-        (info.mode ?? "scheduled") !== mode || (slateDate && info.date !== slateDate) ||
+        (info.mode ?? "scheduled") !== mode || (info.allowSpectatorChat === true) !== allowSpectatorChat ||
+        (capSavingsBonus !== undefined && (info.scoringVersion === CAP_SAVINGS_VERSION) !== capSavingsBonus) ||
+        (slateDate && info.date !== slateDate) ||
         (info.requestedAuctionStartsAt ?? info.scheduledStartsAt) !== scheduledStartsAt) {
       reject(409, "DAILY_CREATE_CONFLICT", "That request identifier already belongs to a different room.");
     }
     return presentRoom(fromRow(row), getSlate(row), actor, clock());
   }
   function createRoom(input) {
-    const { actor, name, capacity, slate, requestId, scheduledStartsAt, mode = "scheduled" } = input;
+    const { actor, name, capacity, slate, requestId, scheduledStartsAt, mode = "scheduled", allowSpectatorChat = false, capSavingsBonus } = input;
     return transaction(() => {
       const replay = replayCreate(input);
       if (replay) return replay;
@@ -284,6 +287,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
       if (mode === "scheduled" && now >= slate.firstGameAt) reject(409, "DAILY_ROOM_LOCKED", "The first game has already started.");
       const member = { id: actor.id, name: actor.name };
       const info = { id: randomUUID(), name: name.trim(), capacity, commissionerId: actor.id, date: slate.date,
+        scoringVersion: capSavingsBonus === false ? CLASSIC_VERSION : CAP_SAVINGS_VERSION, allowSpectatorChat,
         mode, firstGameAt: slate.firstGameAt, ...(mode === "practice" ? { practiceEndsAt: now + 30 * MINUTE } : {}),
         ...(scheduledStartsAt === undefined ? {} : { scheduledStartsAt, requestedAuctionStartsAt: scheduledStartsAt }),
         members: [member], winners: [], closed: false, finished: false, void: false };

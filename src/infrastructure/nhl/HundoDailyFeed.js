@@ -42,6 +42,7 @@ function finishedBoxPlayers(box, game) {
 function createHundoDailyFeed({ fetchImpl = fetch, nowMs = Date.now, timeoutMs = 8000 } = {}) {
   const cache = new Map();
   const pending = new Map();
+  const recentSchedules = new Map();
   const queue = [];
   let active = 0;
 
@@ -122,12 +123,26 @@ function createHundoDailyFeed({ fetchImpl = fetch, nowMs = Date.now, timeoutMs =
             homeTeamId: nhlId(raw.homeTeam.id), awayTeamId: nhlId(raw.awayTeam.id), excluded: excluded(raw.gameScheduleState) });
         }
       }
-      return games.sort((a, b) => a.startsAtMs - b.startsAtMs || a.id.localeCompare(b.id));
+      games.sort((a, b) => a.startsAtMs - b.startsAtMs || a.id.localeCompare(b.id));
+      // Only a completed, validated provider response renews this timestamp.
+      recentSchedules.set(date, { games, checkedAt: nowMs() });
+      while (recentSchedules.size > 16) recentSchedules.delete(recentSchedules.keys().next().value);
+      return games;
     });
   }
 
-  async function getSchedule(date) {
-    const games = (await dayGames(date)).filter(game => !game.excluded);
+  async function getSchedule(date, { allowRecentOnFailure = false } = {}) {
+    let scheduled;
+    try { scheduled = await dayGames(date); }
+    catch (error) {
+      const recent = recentSchedules.get(date);
+      // A brief NHL outage must not interrupt an established auction. Creation
+      // and maintenance still require fresh data; bids get at most two minutes
+      // from the last actual check, including the normal one-minute cache TTL.
+      if (!allowRecentOnFailure || !recent || nowMs() - recent.checkedAt >= 2 * MINUTE) throw error;
+      scheduled = recent.games;
+    }
+    const games = scheduled.filter(game => !game.excluded);
     return games.length ? { date, firstGameAt: games[0].startsAtMs, games } : null;
   }
 
