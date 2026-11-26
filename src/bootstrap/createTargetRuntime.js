@@ -54,6 +54,10 @@ const {createLeaguePickRepairRouter}=require('../transport/http/createLeaguePick
 const { createSqliteGoonDraftSettingsRepository } = require("../infrastructure/persistence/sqlite/SqliteGoonDraftSettingsRepository");
 const { createGoonDraftSettingsService } = require("../application/services/freeAgentDraft/createGoonDraftSettingsService");
 const { createSqlitePlayerInjuryRepository } = require('../infrastructure/persistence/sqlite/SqlitePlayerInjuryRepository');
+const { createSqliteRealtimeInjuryRepository } = require('../infrastructure/persistence/sqlite/SqliteRealtimeInjuryRepository');
+const { createSqliteInjuryRecoveryReader } = require('../infrastructure/persistence/sqlite/SqliteInjuryRecoveryReader');
+const { createRealtimeInjuryAdapter } = require('../infrastructure/realtime/RealtimeInjuryAdapter');
+const { createRefreshRealtimeInjuriesJob } = require('../jobs/definitions/refreshRealtimeInjuries');
 const { createPlayerInjuryService } = require('../application/services/players/createPlayerInjuryService');
 const { createPlayerInjuryRouter } = require('../transport/http/createPlayerInjuryRouter');
 const express = require("express");
@@ -2092,6 +2096,10 @@ function createTargetRepositories({
     rosterSchedule: createSqliteRosterScheduleRepository({ database, expandedScoringEnabled }),
     playerInjuries: database.pragma('user_version', { simple: true }) >= 65
       ? createSqlitePlayerInjuryRepository({ database }) : null,
+    realtimeInjuries: database.pragma('user_version', { simple: true }) >= 97
+      ? createSqliteRealtimeInjuryRepository({ database, nowMs }) : null,
+    injuryRecovery: currentNhlStatisticsSeason && database.pragma('user_version', { simple: true }) >= 96
+      ? createSqliteInjuryRecoveryReader({ database, nhlSeasonKey: currentNhlStatisticsSeason }) : null,
     communications: database.pragma("user_version", { simple: true }) >= 71
       ? createSqliteLeagueCommunicationRepository({ database, notificationWriter }) : null,
     platformAnnouncements: database.pragma("user_version", { simple: true }) >= 71
@@ -2137,6 +2145,8 @@ function createTargetRepositories({
 }
 
 function createTargetServices({
+  realtimeInjuries = { enabled: false },
+  realtimeInjuryFetchImplementation,
   statisticsWorkerOptions = null,
   pushConfig = { enabled:false },
   pushAdapter,
@@ -2439,6 +2449,17 @@ function createTargetServices({
         clock,
         logger,
       })
+    : null;
+  if (realtimeInjuries.enabled && !repositories.realtimeInjuries) {
+    throw new TypeError('Automatic injuries require the preserving injury-provider migration.');
+  }
+  const realtimeInjuryJob = realtimeInjuries.enabled
+    ? createRefreshRealtimeInjuriesJob({ repository: repositories.realtimeInjuries,
+        adapter: createRealtimeInjuryAdapter({ apiKey: realtimeInjuries.apiKey,
+          fetchImpl: realtimeInjuryFetchImplementation, nowMs: () => clock.nowMs() }),
+        recoveryReader: repositories.injuryRecovery,
+        initialMappings: require('../../config/providers/realtime-injury-identities.json').mappings,
+        timeZone: realtimeInjuries.timeZone, clock, logger })
     : null;
   const completedStatisticsJob = completedNhlAdapter
     ? createRunCompletedGameStatisticsJob({
@@ -3385,7 +3406,10 @@ function createTargetServices({
   return Object.freeze({
     push,
     account,
-    playerInjuries: createPlayerInjuryService({ repository: repositories.playerInjuries, platformAuthorization }),
+    injuryJob: realtimeInjuryJob,
+    playerInjuries: createPlayerInjuryService({ repository: repositories.playerInjuries, platformAuthorization,
+      automaticRepository: repositories.realtimeInjuries, automaticEnabled: realtimeInjuries.enabled,
+      nowMs: () => clock.nowMs() }),
     platformAnnouncements: createPlatformAnnouncementService({ repository: repositories.platformAnnouncements,
       platformAuthorization, leagueAuthorization, auditRepository: repositories.audit, clock,
       createId: () => secureRandom.id() }),
@@ -3651,6 +3675,8 @@ function createTargetRouters({
 }
 
 function createTargetRuntime({
+  realtimeInjuries = { enabled: false },
+  realtimeInjuryFetchImplementation,
   dailyFeed,
   dailyBackgroundEnabled = false,
   pushConfig,
@@ -3717,6 +3743,8 @@ function createTargetRuntime({
       getSocketReauthorizer: () => socketRooms?.reauthorize,
     });
   const services = createTargetServices({
+    realtimeInjuries,
+    realtimeInjuryFetchImplementation,
     statisticsWorkerOptions: database.name && !database.memory
       ? { databasePath: require("node:path").resolve(database.name), leagueIds: matchupProcessingLeagueIds } : null,
     pushConfig,

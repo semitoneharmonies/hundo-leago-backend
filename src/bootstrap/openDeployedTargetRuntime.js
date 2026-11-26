@@ -432,6 +432,7 @@ function openDeployedTargetRuntime({
     const stagingAccountAutoVerificationEnabled =
       isStagingAccountAutoVerificationEnabled(config);
     runtime = createRuntimeFunction({
+      realtimeInjuries: config.realtimeInjuries || { enabled: false },
       dailyBackgroundEnabled: config.scheduledJobsEnabled,
       pushConfig: config.webPush,
       database: connection.database,
@@ -482,6 +483,7 @@ function openDeployedTargetRuntime({
       emailJob: runtime.services.accountEmail.job,
       liveStatisticsJob: runtime.services.league.liveStatistics || null,
       teamAssignmentsJob: runtime.services.league.teamAssignmentsJob || null,
+      injuryJob: runtime.services.injuryJob || null,
       backupEnabled: config.backupScheduleEnabled === true,
       backupJob,
       dailyBackupJob,

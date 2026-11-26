@@ -1,11 +1,13 @@
 const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
+const REALTIME_STALE_AFTER_MS = 15 * 60 * 60 * 1000;
 
 function injuryProjection(row, nowMs = Date.now()) {
   if (!row) return { status: 'unknown', source: null, observedAtMs: null, needsReview: false, stale: false };
   return {
     status: row.status, source: row.source, observedAtMs: row.observed_at_ms,
     needsReview: Boolean(row.review_reason),
-    stale: row.source === 'espn' && nowMs - row.observed_at_ms > STALE_AFTER_MS,
+    stale: (row.source === 'espn' && nowMs - row.observed_at_ms > STALE_AFTER_MS) ||
+      (row.source === 'realtime' && nowMs - row.observed_at_ms > REALTIME_STALE_AFTER_MS),
     ...(row.status === 'injured' && row.timeline ? { details: {
       timeline: row.timeline, designation: row.designation ?? null,
       reason: row.injury_reason ?? null,
@@ -28,4 +30,4 @@ function normalizedName(value) {
   return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z]/g, '');
 }
 
-module.exports = { STALE_AFTER_MS, injuryProjection, canUseInjuredReserve, normalizedName };
+module.exports = { STALE_AFTER_MS, REALTIME_STALE_AFTER_MS, injuryProjection, canUseInjuredReserve, normalizedName };

@@ -13,6 +13,7 @@ function createTargetScheduler({
   dailyBackupJob = null,
   liveStatisticsJob = null,
   teamAssignmentsJob = null,
+  injuryJob = null,
   health,
   logger,
   intervalMs = DEFAULT_INTERVAL_MS,
@@ -66,6 +67,9 @@ function createTargetScheduler({
   if (teamAssignmentsJob !== null && typeof teamAssignmentsJob.run !== "function") {
     throw new TypeError("target scheduler requires a controlled team-assignment job");
   }
+  if (injuryJob !== null && typeof injuryJob.run !== 'function') {
+    throw new TypeError('target scheduler requires a controlled injury job');
+  }
   if (!health || typeof health.setSchedulerState !== "function") {
     throw new TypeError("target scheduler requires runtime health state");
   }
@@ -93,6 +97,8 @@ function createTargetScheduler({
   let liveInFlight = null;
   let teamAssignmentsIntervalHandle = null;
   let teamAssignmentsInFlight = null;
+  let injuryIntervalHandle = null;
+  let injuryInFlight = null;
   let startResult = null;
   let closePromise = null;
   let emailStarted = false;
@@ -181,6 +187,18 @@ function createTargetScheduler({
     return cycle;
   }
 
+  function runInjuryCycle() {
+    if (!injuryJob || state !== 'running') return Promise.resolve({ status: 'skipped', reason: 'not_running' });
+    if (injuryInFlight) return Promise.resolve({ status: 'skipped', reason: 'overlap' });
+    const cycle = Promise.resolve().then(() => injuryJob.run()).catch(() => {
+      logger.error('target_scheduler.injuries_failed', { code: 'TARGET_INJURIES_FAILED' });
+      return { status: 'failed', code: 'TARGET_INJURIES_FAILED' };
+    });
+    injuryInFlight = cycle;
+    cycle.finally(() => { if (injuryInFlight === cycle) injuryInFlight = null; });
+    return cycle;
+  }
+
   function start() {
     if (startResult) return startResult;
     if (closePromise) {
@@ -240,6 +258,11 @@ function createTargetScheduler({
         if (liveIntervalHandle && typeof liveIntervalHandle.unref === "function") liveIntervalHandle.unref();
       }
       const teamAssignmentsInitialRun = teamAssignmentsJob ? runTeamAssignmentsCycle() : null;
+      const injuryInitialRun = injuryJob ? runInjuryCycle() : null;
+      if (injuryJob) {
+        injuryIntervalHandle = setIntervalFunction(() => { void runInjuryCycle(); }, intervalMs);
+        if (injuryIntervalHandle && typeof injuryIntervalHandle.unref === 'function') injuryIntervalHandle.unref();
+      }
       if (teamAssignmentsJob) {
         teamAssignmentsIntervalHandle = setIntervalFunction(() => { void runTeamAssignmentsCycle(); }, intervalMs);
         if (teamAssignmentsIntervalHandle && typeof teamAssignmentsIntervalHandle.unref === "function") teamAssignmentsIntervalHandle.unref();
@@ -251,6 +274,7 @@ function createTargetScheduler({
         emailRecovered: emailStart?.recovered ?? null,
         ...(backupStarted ? { backupInitialRun: backupStart?.initialRun || null } : {}),
         ...(teamAssignmentsJob ? { teamAssignmentsInitialRun } : {}),
+        ...(injuryJob ? { injuryInitialRun } : {}),
       });
       return startResult;
     } catch (error) {
@@ -283,6 +307,13 @@ function createTargetScheduler({
         teamAssignmentsIntervalHandle = null;
       }
       const errors = [];
+      if (injuryIntervalHandle !== null) {
+        clearIntervalFunction(injuryIntervalHandle);
+        injuryIntervalHandle = null;
+      }
+      if (injuryInFlight) {
+        try { await injuryInFlight; } catch (error) { errors.push(error); }
+      }
       if (inFlight) {
         try {
           await inFlight;
@@ -330,6 +361,7 @@ function createTargetScheduler({
     runCycle,
     runLiveCycle,
     runTeamAssignmentsCycle,
+    runInjuryCycle,
     start,
   });
 }

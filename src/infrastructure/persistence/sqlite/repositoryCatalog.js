@@ -72,6 +72,10 @@ const DEFINITIONS = [
   repositoryDefinition("player_injury_feed", REPOSITORY_SCOPES.global, { versioned: true }),
   repositoryDefinition("player_injury_events", REPOSITORY_SCOPES.global),
   repositoryDefinition("player_injury_sync", REPOSITORY_SCOPES.global, { versioned: true }),
+  repositoryDefinition("player_injury_realtime_mappings", REPOSITORY_SCOPES.global, { versioned: true }),
+  repositoryDefinition("player_injury_realtime_feed", REPOSITORY_SCOPES.global, { versioned: true }),
+  repositoryDefinition("player_injury_realtime_runs", REPOSITORY_SCOPES.global),
+  repositoryDefinition("player_injury_realtime_state", REPOSITORY_SCOPES.global, { versioned: true }),
   repositoryDefinition("trade_participants", REPOSITORY_SCOPES.requiredLeague),
   repositoryDefinition("expanded_stat_refreshes", REPOSITORY_SCOPES.global, { keyColumn: "refresh_id" }),
   repositoryDefinition("expanded_stat_totals", REPOSITORY_SCOPES.global, { keyColumn: "total_id" }),
@@ -751,6 +755,7 @@ function getRepositoryCatalogForSchemaVersion(schemaVersion) {
     throw repositoryError(REPOSITORY_ERROR_CODES.schemaIncompatible, "A migrated database schema is required.");
   }
   return [54, 55, 56].includes(schemaVersion) ? SCHEMA_54_REPOSITORY_CATALOG : REPOSITORY_CATALOG.filter(({ tableName }) =>
+    (schemaVersion >= 97 || !tableName.startsWith("player_injury_realtime_")) &&
     (schemaVersion >= 96 || !tableName.startsWith("mr_boni_")) &&
     (schemaVersion >= 95 || !tableName.startsWith("tip_jar_guest_")) &&
     (schemaVersion >= 94 || !tableName.startsWith("tip_jar_")) &&

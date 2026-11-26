@@ -1143,8 +1143,9 @@ describe("M3-02 security foundation composition", () => {
 
   test("passes deployed secret values only to the logger redaction boundary", () => {
     const lines = [];
+    const injuryKey = 'realtime-synthetic-private-key';
     const foundations = createSecurityFoundations({
-      env: deployedEnv("staging"),
+      env: { ...deployedEnv("staging"), REALTIME_INJURY_API_KEY: injuryKey },
       now: () => FIXED_NOW_MS,
       randomBytes: (byteLength) =>
         Buffer.alloc(byteLength, 9),
@@ -1160,13 +1161,15 @@ describe("M3-02 security foundation composition", () => {
         note:
           `${RATE_LIMIT_SECRET}:${AUDIT_SECRET}:` +
           ACTION_TOKEN_DELIVERY_KEY +
-          `:${RESEND_API_KEY}`,
+          `:${RESEND_API_KEY}:${injuryKey}`,
       }
     );
 
     const serializedConfig = JSON.stringify(
       foundations.config
     );
+    assert.equal(serializedConfig.includes(injuryKey), false);
+    assert.equal(lines[0].includes(injuryKey), false);
     assert.equal(
       serializedConfig.includes(RATE_LIMIT_SECRET),
       false

@@ -171,7 +171,7 @@ test('review is read-only; apply is atomic, audited, exact, stale-safe and prese
   db = openDatabase({ databasePath, environment: 'test' }).database;
   const { migrateDatabase } = require('../../src/infrastructure/database/migrate');
   migrateDatabase({ database: db, migrationsDirectory, applicationBuildId: 'injury-current-schema-test' });
-  assert.equal(db.pragma('user_version', { simple: true }), 96);
+  assert.equal(db.pragma('user_version', { simple: true }), 97);
   const actorId = fixtureId('account:platformAdmin');
   const repo = createSqlitePlayerInjuryRepository({ database: db });
   const service = createPlayerInjuryService({ repository: repo, platformAuthorization: {

@@ -1,4 +1,5 @@
 const path = require("node:path");
+const { loadRealtimeInjuryConfig } = require('./loadRealtimeInjuryConfig');
 const { loadWebPushConfig } = require('./loadWebPushConfig');
 const { loadBackupConfig } = require("./loadBackupConfig");
 const { loadFirstAdministratorSetupConfig } = require("./loadFirstAdministratorSetupConfig");
@@ -481,6 +482,7 @@ function loadTargetRuntimeConfig({
     fail("STAGING_MIGRATION_LINEAGE", "the alternate migration lineage is restricted to staging");
   }
   const runtimeConfig = {
+    realtimeInjuries: loadRealtimeInjuryConfig(env),
     webPush: loadWebPushConfig(env),
     nhlCompletedStatisticsEnabled,
     nhlLiveStatisticsEnabled,

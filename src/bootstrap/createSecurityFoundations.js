@@ -100,6 +100,8 @@ function createSecurityFoundations({
       config.email.apiKey.value,
       config.sportsDataIoLive.apiKey.value,
       config.sportsDataIoLive.capabilitySecret.value,
+      ...(typeof (env ?? process.env).REALTIME_INJURY_API_KEY === 'string' && (env ?? process.env).REALTIME_INJURY_API_KEY
+        ? [(env ?? process.env).REALTIME_INJURY_API_KEY] : []),
     ],
   };
   if (loggerSink !== undefined) {

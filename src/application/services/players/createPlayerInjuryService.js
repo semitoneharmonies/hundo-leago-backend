@@ -1,7 +1,8 @@
 const { parseInjuryList } = require('../../../domain/players/injuryListPolicy');
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 function invalid() { throw Object.assign(new Error('Check the injury update and try again.'), { code: 'INJURY_INPUT_INVALID' }); }
-function createPlayerInjuryService({ repository, platformAuthorization, adapter = null } = {}) {
+function createPlayerInjuryService({ repository, platformAuthorization, adapter = null,
+  automaticRepository = null, automaticEnabled = false, nowMs = Date.now } = {}) {
   async function refresh({ authenticated, scheduled = false } = {}) {
     if (!scheduled) platformAuthorization.requireAdministrator(authenticated);
     if (!adapter) throw Object.assign(new Error('No verified injury source is enabled.'), { code: 'INJURY_FEED_UNAVAILABLE' });
@@ -33,7 +34,21 @@ function createPlayerInjuryService({ repository, platformAuthorization, adapter 
     list({ authenticated, search = '' }) {
       platformAuthorization.requireAdministrator(authenticated);
       if (typeof search !== 'string' || search.length > 100) invalid();
-      return repository.list({ search: search.trim() });
+      const result = repository.list({ search: search.trim() });
+      if (!automaticRepository) return result;
+      const state = automaticRepository.state();
+      const mappings = new Map(automaticRepository.listMappings().map(row => [row.providerPlayerId, row.playerId]));
+      const feed = automaticRepository.listFeed();
+      if (!automaticEnabled && state.lastSuccessAtMs === null && feed.length === 0) return result;
+      const byPlayer = new Map(feed.filter(row => mappings.has(row.id)).map(row => [mappings.get(row.id), row]));
+      return { ...result, sync: { enabled: automaticEnabled === true, lastSuccessAtMs: state.lastSuccessAtMs, errorCode: state.errorCode },
+        players: result.players.map(row => row.source !== 'realtime' ? row : { ...row,
+          stale: nowMs() - row.observedAtMs > require('../../../domain/players/injuryStatusPolicy').REALTIME_STALE_AFTER_MS,
+          designation: byPlayer.get(row.id)?.designation ?? row.designation,
+          injuryType: byPlayer.get(row.id)?.medical_reason ?? row.injuryType }),
+        unmatched: feed.filter(row => row.present && row.classification !== 'excluded' && !mappings.has(row.id)).slice(0, 100)
+          .map(row => ({ id: row.id, name: row.name, birthDate: null, team: row.team,
+            designation: row.designation, injuryType: row.medical_reason, version: row.version })) };
     },
     decide: ({ input, authenticated }) => decision(input, authenticated, false),
     map: ({ input, authenticated }) => decision(input, authenticated, true),

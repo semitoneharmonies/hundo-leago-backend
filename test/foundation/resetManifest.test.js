@@ -228,6 +228,10 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
         { tableName: "player_injury_feed", introducedByMigrationId: 65, treatment: "require_empty" },
         { tableName: "player_injury_events", introducedByMigrationId: 65, treatment: "require_empty" },
         { tableName: "player_injury_sync", introducedByMigrationId: 65, treatment: "require_empty" },
+        { tableName: "player_injury_realtime_mappings", introducedByMigrationId: 97, treatment: "require_empty" },
+        { tableName: "player_injury_realtime_feed", introducedByMigrationId: 97, treatment: "require_empty" },
+        { tableName: "player_injury_realtime_runs", introducedByMigrationId: 97, treatment: "require_empty" },
+        { tableName: "player_injury_realtime_state", introducedByMigrationId: 97, treatment: "require_empty" },
         { tableName: "trade_participants", introducedByMigrationId: 64, treatment: "require_empty" },
         {
           tableName: "expanded_stat_refreshes",
@@ -518,9 +522,9 @@ describe("M2-07 explicit Season 1 reset manifest", () => {
         },
       ]
     );
-    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 99);
-    assert.equal(classifiedTables.length, 181);
-    assert.equal(new Set(classifiedTables).size, 181);
+    assert.equal(RESET_V1_POST_RESET_TABLE_POLICY.length, 103);
+    assert.equal(classifiedTables.length, 185);
+    assert.equal(new Set(classifiedTables).size, 185);
     assert.deepEqual(
       [...classifiedTables].sort(),
       [...catalogTables].sort()

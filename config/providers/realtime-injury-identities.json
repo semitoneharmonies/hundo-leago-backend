@@ -1,0 +1,1532 @@
+{
+  "schemaVersion": 1,
+  "provider": "realtime",
+  "purpose": "injury identity only; does not replace the NHL player catalogue or any statistics source",
+  "mappings": [
+    {
+      "providerPlayerId": "2517899",
+      "nhlPlayerId": "8475883",
+      "providerName": "Frederik Andersen",
+      "verifiedAtMs": 1795665154237,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8475883/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "2562606",
+      "nhlPlayerId": "8476456",
+      "providerName": "Jonathan Huberdeau",
+      "verifiedAtMs": 1795665154232,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476456/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "2562622",
+      "nhlPlayerId": "8476480",
+      "providerName": "Vladislav Namestnikov",
+      "verifiedAtMs": 1795665154665,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476480/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "2590829",
+      "nhlPlayerId": "8476312",
+      "providerName": "Josh Manson",
+      "verifiedAtMs": 1795665154889,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476312/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "2590861",
+      "nhlPlayerId": "8476331",
+      "providerName": "Dylan DeMelo",
+      "verifiedAtMs": 1795665155097,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476331/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "2591155",
+      "nhlPlayerId": "8475810",
+      "providerName": "Bryan Rust",
+      "verifiedAtMs": 1795665155416,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8475810/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "2952729",
+      "nhlPlayerId": "8476792",
+      "providerName": "Torey Krug",
+      "verifiedAtMs": 1795665155628,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476792/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "2976839",
+      "nhlPlayerId": "8476885",
+      "providerName": "Jacob Trouba",
+      "verifiedAtMs": 1795665155939,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476885/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "2976850",
+      "nhlPlayerId": "8476874",
+      "providerName": "Olli Maatta",
+      "verifiedAtMs": 1795665156164,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476874/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "2976851",
+      "nhlPlayerId": "8476875",
+      "providerName": "Mike Matheson",
+      "verifiedAtMs": 1795665156479,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476875/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "2993474",
+      "nhlPlayerId": "8476925",
+      "providerName": "Colton Sissons",
+      "verifiedAtMs": 1795665156729,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476925/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3024798",
+      "nhlPlayerId": "8477220",
+      "providerName": "Nate Schmidt",
+      "verifiedAtMs": 1795665157004,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477220/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3041969",
+      "nhlPlayerId": "8477492",
+      "providerName": "Nathan MacKinnon",
+      "verifiedAtMs": 1795665157164,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477492/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3042014",
+      "nhlPlayerId": "8477503",
+      "providerName": "Max Domi",
+      "verifiedAtMs": 1795665157450,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477503/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3042019",
+      "nhlPlayerId": "8477506",
+      "providerName": "Ryan Pulock",
+      "verifiedAtMs": 1795665157597,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477506/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3042037",
+      "nhlPlayerId": "8477511",
+      "providerName": "Anthony Mantha",
+      "verifiedAtMs": 1795665157883,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477511/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3042044",
+      "nhlPlayerId": "8477444",
+      "providerName": "Andre Burakovsky",
+      "verifiedAtMs": 1795665158026,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477444/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3042056",
+      "nhlPlayerId": "8477479",
+      "providerName": "Tyler Bertuzzi",
+      "verifiedAtMs": 1795665158333,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477479/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3042081",
+      "nhlPlayerId": "8477402",
+      "providerName": "Pavel Buchnevich",
+      "verifiedAtMs": 1795665158565,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477402/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3042085",
+      "nhlPlayerId": "8477406",
+      "providerName": "Mattias Janmark",
+      "verifiedAtMs": 1795665158856,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477406/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3042095",
+      "nhlPlayerId": "8477416",
+      "providerName": "Oliver Bjorkstrand",
+      "verifiedAtMs": 1795665159662,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477416/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3042110",
+      "nhlPlayerId": "8477425",
+      "providerName": "Miles Wood",
+      "verifiedAtMs": 1795665159409,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477425/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3042122",
+      "nhlPlayerId": "8477435",
+      "providerName": "Ryan Graves",
+      "verifiedAtMs": 1795665159972,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477435/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3069342",
+      "nhlPlayerId": "8476907",
+      "providerName": "Mackenzie MacEachern",
+      "verifiedAtMs": 1795665160192,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476907/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3069448",
+      "nhlPlayerId": "8476891",
+      "providerName": "Matt Grzelcyk",
+      "verifiedAtMs": 1795665160682,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476891/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3069687",
+      "nhlPlayerId": "8476981",
+      "providerName": "Josh Anderson",
+      "verifiedAtMs": 1795665160873,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476981/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3096217",
+      "nhlPlayerId": "8477967",
+      "providerName": "Thatcher Demko",
+      "verifiedAtMs": 1795665161234,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477967/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3114741",
+      "nhlPlayerId": "8477940",
+      "providerName": "Nikolaj Ehlers",
+      "verifiedAtMs": 1795665161384,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477940/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3114770",
+      "nhlPlayerId": "8477951",
+      "providerName": "Nick Schmaltz",
+      "verifiedAtMs": 1795665161758,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477951/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3114777",
+      "nhlPlayerId": "8477955",
+      "providerName": "Jared McCann",
+      "verifiedAtMs": 1795665161914,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477955/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3150479",
+      "nhlPlayerId": "8478173",
+      "providerName": "Hayden Hodgson",
+      "verifiedAtMs": 1795665162356,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8478173/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3151036",
+      "nhlPlayerId": "8477998",
+      "providerName": "Warren Foegele",
+      "verifiedAtMs": 1795665162451,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8477998/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3151038",
+      "nhlPlayerId": "8478007",
+      "providerName": "Elvis Merzlikins",
+      "verifiedAtMs": 1795665162878,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8478007/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3151297",
+      "nhlPlayerId": "8478048",
+      "providerName": "Igor Shesterkin",
+      "verifiedAtMs": 1795665163002,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8478048/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3648015",
+      "nhlPlayerId": "8478421",
+      "providerName": "A.J. Greer",
+      "verifiedAtMs": 1795665163436,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8478421/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3891922",
+      "nhlPlayerId": "8476979",
+      "providerName": "Erik Gustafsson",
+      "verifiedAtMs": 1795665163521,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8476979/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3904098",
+      "nhlPlayerId": "8478458",
+      "providerName": "Jack Roslovic",
+      "verifiedAtMs": 1795665163980,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8478458/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3904175",
+      "nhlPlayerId": "8478443",
+      "providerName": "Brandon Carlo",
+      "verifiedAtMs": 1795665164041,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8478443/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3904178",
+      "nhlPlayerId": "8478416",
+      "providerName": "Erik Cernak",
+      "verifiedAtMs": 1795665164507,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8478416/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3939716",
+      "nhlPlayerId": "8478476",
+      "providerName": "Kyle Capobianco",
+      "verifiedAtMs": 1795665164571,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8478476/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3941974",
+      "nhlPlayerId": "8478507",
+      "providerName": "John Marino",
+      "verifiedAtMs": 1795665165025,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8478507/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3942714",
+      "nhlPlayerId": "8478470",
+      "providerName": "Sam Montembeault",
+      "verifiedAtMs": 1795665165105,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8478470/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [
+        "Samuel Montembeault"
+      ],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "3942866",
+      "nhlPlayerId": "8478465",
+      "providerName": "Guillaume Brisebois",
+      "verifiedAtMs": 1795665165547,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8478465/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4031645",
+      "nhlPlayerId": "8479619",
+      "providerName": "Michael Carcone",
+      "verifiedAtMs": 1795665165629,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8479619/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4062251",
+      "nhlPlayerId": "8479385",
+      "providerName": "Jordan Kyrou",
+      "verifiedAtMs": 1795665166066,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8479385/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4063268",
+      "nhlPlayerId": "8479346",
+      "providerName": "Dillon Dube",
+      "verifiedAtMs": 1795665166149,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8479346/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4064781",
+      "nhlPlayerId": "8479671",
+      "providerName": "Mathieu Olivier",
+      "verifiedAtMs": 1795665166577,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8479671/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4233566",
+      "nhlPlayerId": "8480012",
+      "providerName": "Elias Pettersson",
+      "verifiedAtMs": 1795665166593,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480012/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4233668",
+      "nhlPlayerId": "8480068",
+      "providerName": "Ryan Poehling",
+      "verifiedAtMs": 1795665167107,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480068/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4233685",
+      "nhlPlayerId": "8480028",
+      "providerName": "Morgan Frost",
+      "verifiedAtMs": 1795665167154,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480028/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4233890",
+      "nhlPlayerId": "8479981",
+      "providerName": "Jonah Gadjovich",
+      "verifiedAtMs": 1795665167654,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8479981/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4320548",
+      "nhlPlayerId": "8480800",
+      "providerName": "Quinn Hughes",
+      "verifiedAtMs": 1795665167589,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480800/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4329962",
+      "nhlPlayerId": "8480356",
+      "providerName": "Kyle Keyser",
+      "verifiedAtMs": 1795665168147,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480356/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4331611",
+      "nhlPlayerId": "8480831",
+      "providerName": "Alec Regula",
+      "verifiedAtMs": 1795665168244,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480831/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4352770",
+      "nhlPlayerId": "8480817",
+      "providerName": "K'Andre Miller",
+      "verifiedAtMs": 1795665168644,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480817/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4352803",
+      "nhlPlayerId": "8480873",
+      "providerName": "Rasmus Sandin",
+      "verifiedAtMs": 1795665168796,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480873/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4352804",
+      "nhlPlayerId": "8480813",
+      "providerName": "Joe Veleno",
+      "verifiedAtMs": 1795665169187,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480813/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [
+        "Joseph Veleno"
+      ],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4378686",
+      "nhlPlayerId": "8480860",
+      "providerName": "Kevin Bahl",
+      "verifiedAtMs": 1795665169331,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480860/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4391255",
+      "nhlPlayerId": "8480748",
+      "providerName": "Kiefer Sherwood",
+      "verifiedAtMs": 1795665169720,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480748/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4392260",
+      "nhlPlayerId": "8479576",
+      "providerName": "Vincent Desharnais",
+      "verifiedAtMs": 1795665169845,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8479576/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4392883",
+      "nhlPlayerId": "8481028",
+      "providerName": "Martin Pospisil",
+      "verifiedAtMs": 1795665170286,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8481028/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4419778",
+      "nhlPlayerId": "8483546",
+      "providerName": "Marshall Rifai",
+      "verifiedAtMs": 1795665170434,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483546/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4565225",
+      "nhlPlayerId": "8481524",
+      "providerName": "Bowen Byram",
+      "verifiedAtMs": 1795665170720,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8481524/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4565246",
+      "nhlPlayerId": "8481580",
+      "providerName": "Connor McMichael",
+      "verifiedAtMs": 1795665170980,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8481580/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4565275",
+      "nhlPlayerId": "8481582",
+      "providerName": "Nick Robertson",
+      "verifiedAtMs": 1795665171272,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8481582/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4587588",
+      "nhlPlayerId": "8481604",
+      "providerName": "Pavel Dorofeyev",
+      "verifiedAtMs": 1795665171410,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8481604/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4587854",
+      "nhlPlayerId": "8481014",
+      "providerName": "Alexander Romanov",
+      "verifiedAtMs": 1795665171794,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8481014/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4587904",
+      "nhlPlayerId": "8481006",
+      "providerName": "Tyler Tucker",
+      "verifiedAtMs": 1795665171923,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8481006/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4587933",
+      "nhlPlayerId": "8480192",
+      "providerName": "Johnathan Kovacevic",
+      "verifiedAtMs": 1795665172324,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480192/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4587996",
+      "nhlPlayerId": "8480893",
+      "providerName": "Kirill Marchenko",
+      "verifiedAtMs": 1795665172467,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480893/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4588205",
+      "nhlPlayerId": "8480995",
+      "providerName": "Pontus Holmberg",
+      "verifiedAtMs": 1795665172873,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480995/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4588331",
+      "nhlPlayerId": "8480842",
+      "providerName": "Filip Hallander",
+      "verifiedAtMs": 1795665173021,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8480842/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4697404",
+      "nhlPlayerId": "8482475",
+      "providerName": "Egor Chinakhov",
+      "verifiedAtMs": 1795665173310,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8482475/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4697436",
+      "nhlPlayerId": "8482171",
+      "providerName": "William Wallinder",
+      "verifiedAtMs": 1795665173478,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8482171/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4697717",
+      "nhlPlayerId": "8482176",
+      "providerName": "Wyatt Kaiser",
+      "verifiedAtMs": 1795665173745,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8482176/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4697767",
+      "nhlPlayerId": "8482174",
+      "providerName": "William Villeneuve",
+      "verifiedAtMs": 1795665173912,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8482174/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4781550",
+      "nhlPlayerId": "8483565",
+      "providerName": "Nick Blankenburg",
+      "verifiedAtMs": 1795665174300,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483565/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4781709",
+      "nhlPlayerId": "8481570",
+      "providerName": "Cade Webber",
+      "verifiedAtMs": 1795665174407,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8481570/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4874720",
+      "nhlPlayerId": "8482762",
+      "providerName": "Simon Edvinsson",
+      "verifiedAtMs": 1795665174811,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8482762/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4874721",
+      "nhlPlayerId": "8482667",
+      "providerName": "William Eklund",
+      "verifiedAtMs": 1795665174844,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8482667/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4874731",
+      "nhlPlayerId": "8482765",
+      "providerName": "Isak Rosen",
+      "verifiedAtMs": 1795665175239,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8482765/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4874744",
+      "nhlPlayerId": "8482742",
+      "providerName": "Zachary L'Heureux",
+      "verifiedAtMs": 1795665175278,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8482742/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4894355",
+      "nhlPlayerId": "8479941",
+      "providerName": "Justin Danforth",
+      "verifiedAtMs": 1795665175798,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8479941/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4895527",
+      "nhlPlayerId": "8482896",
+      "providerName": "Tyson Kozak",
+      "verifiedAtMs": 1795665175707,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8482896/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "4997129",
+      "nhlPlayerId": "8483549",
+      "providerName": "Lucas Condotta",
+      "verifiedAtMs": 1795665176152,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483549/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5075840",
+      "nhlPlayerId": "8481725",
+      "providerName": "Elmer Soderblom",
+      "verifiedAtMs": 1795665176322,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8481725/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5080153",
+      "nhlPlayerId": "8483512",
+      "providerName": "Matt Savoie",
+      "verifiedAtMs": 1795665176602,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483512/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5080155",
+      "nhlPlayerId": "8483447",
+      "providerName": "Conor Geekie",
+      "verifiedAtMs": 1795665176745,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483447/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5080162",
+      "nhlPlayerId": "8483425",
+      "providerName": "Lian Bichsel",
+      "verifiedAtMs": 1795665177029,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483425/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5080171",
+      "nhlPlayerId": "8483516",
+      "providerName": "Jimmy Snuggerud",
+      "verifiedAtMs": 1795665177176,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483516/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5080177",
+      "nhlPlayerId": "8483472",
+      "providerName": "Maveric Lamoureux",
+      "verifiedAtMs": 1795665177465,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483472/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5080212",
+      "nhlPlayerId": "8483429",
+      "providerName": "Seamus Casey",
+      "verifiedAtMs": 1795665177636,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483429/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5080232",
+      "nhlPlayerId": "8483669",
+      "providerName": "Adam Sykora",
+      "verifiedAtMs": 1795665177892,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483669/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5103547",
+      "nhlPlayerId": "8483553",
+      "providerName": "Marc Gatcomb",
+      "verifiedAtMs": 1795665178076,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483553/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5136614",
+      "nhlPlayerId": "8484149",
+      "providerName": "Gavin Brindley",
+      "verifiedAtMs": 1795665178330,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8484149/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5136624",
+      "nhlPlayerId": "8483685",
+      "providerName": "Aidan Thompson",
+      "verifiedAtMs": 1795665178513,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483685/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5136696",
+      "nhlPlayerId": "8484287",
+      "providerName": "Cole McWard",
+      "verifiedAtMs": 1795665178766,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8484287/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5149125",
+      "nhlPlayerId": "8484144",
+      "providerName": "Connor Bedard",
+      "verifiedAtMs": 1795665178946,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8484144/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5149153",
+      "nhlPlayerId": "8484153",
+      "providerName": "Leo Carlsson",
+      "verifiedAtMs": 1795665179211,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8484153/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5149209",
+      "nhlPlayerId": "8484200",
+      "providerName": "Quentin Musty",
+      "verifiedAtMs": 1795665179376,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8484200/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5149241",
+      "nhlPlayerId": "8484163",
+      "providerName": "Jakub Dvorak",
+      "verifiedAtMs": 1795665179650,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8484163/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5157",
+      "nhlPlayerId": "8475167",
+      "providerName": "Victor Hedman",
+      "verifiedAtMs": 1795665179822,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8475167/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5161",
+      "nhlPlayerId": "8475168",
+      "providerName": "Matt Duchene",
+      "verifiedAtMs": 1795665180205,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8475168/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5188490",
+      "nhlPlayerId": "8483733",
+      "providerName": "Nikita Grebenkin",
+      "verifiedAtMs": 1795665180337,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8483733/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5216858",
+      "nhlPlayerId": "8484762",
+      "providerName": "Beckett Sennecke",
+      "verifiedAtMs": 1795665180750,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8484762/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5216860",
+      "nhlPlayerId": "8484984",
+      "providerName": "Ivan Demidov",
+      "verifiedAtMs": 1795665180886,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8484984/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5216882",
+      "nhlPlayerId": "8484797",
+      "providerName": "Konsta Helenius",
+      "verifiedAtMs": 1795665181295,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8484797/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5216907",
+      "nhlPlayerId": "8484994",
+      "providerName": "Igor Chernyshov",
+      "verifiedAtMs": 1795665181509,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8484994/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5275337",
+      "nhlPlayerId": "8485395",
+      "providerName": "James Hagens",
+      "verifiedAtMs": 1795665181871,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8485395/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5291944",
+      "nhlPlayerId": "8485383",
+      "providerName": "Jake O'Brien",
+      "verifiedAtMs": 1795665182022,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8485383/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5329651",
+      "nhlPlayerId": "8485218",
+      "providerName": "Bryce Pickford",
+      "verifiedAtMs": 1795665182456,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8485218/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5334662",
+      "nhlPlayerId": "8485957",
+      "providerName": "Alberts Smits",
+      "verifiedAtMs": 1795665182547,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8485957/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5509",
+      "nhlPlayerId": "8475786",
+      "providerName": "Zach Hyman",
+      "verifiedAtMs": 1795665183019,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8475786/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5517",
+      "nhlPlayerId": "8475151",
+      "providerName": "Kyle Palmieri",
+      "verifiedAtMs": 1795665183094,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8475151/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5614",
+      "nhlPlayerId": "8475848",
+      "providerName": "Brendan Gallagher",
+      "verifiedAtMs": 1795665183577,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8475848/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5828",
+      "nhlPlayerId": "8475760",
+      "providerName": "Nick Bjugstad",
+      "verifiedAtMs": 1795665183641,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8475760/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    },
+    {
+      "providerPlayerId": "5833",
+      "nhlPlayerId": "8475184",
+      "providerName": "Chris Kreider",
+      "verifiedAtMs": 1795665184102,
+      "evidenceUrls": [
+        "https://api-web.nhle.com/v1/player/8475184/landing",
+        "https://www.realtimesportsapi.com/docs",
+        "https://www.realtimesportsapi.com/api/v1/sports/hockey/leagues/nhl/injuries"
+      ],
+      "aliases": [],
+      "verificationMethod": "reviewed_crosswalk"
+    }
+  ]
+}

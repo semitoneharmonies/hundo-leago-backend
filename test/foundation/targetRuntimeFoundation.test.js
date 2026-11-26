@@ -1812,6 +1812,33 @@ describe("M3-19 exact target endpoint dispatch", () => {
 });
 
 describe("M3-19 exact-schema target dependency composition", () => {
+  test('Realtime injuries remain separate from the existing NHL statistics provider', async t => {
+    const database = new (require('better-sqlite3'))(':memory:');
+    database.pragma('foreign_keys=ON');
+    migrateDatabase({ database, migrationsDirectory: MIGRATIONS_DIRECTORY, applicationBuildId: 'injury-provider-isolation', now: () => NOW_MS });
+    t.after(() => database.close());
+    const rows = seedLiveStatisticsCatalog(database);
+    const insert = database.prepare("INSERT INTO player_external_ids (id,player_id,provider,external_value,created_at_ms) VALUES (?,?,'nhl',?,1)");
+    rows.forEach((row, i) => insert.run(uuid(90_000+i), uuid(20_000+i), String(row.PlayerID)));
+    let nhlCalls = 0, injuryCalls = 0;
+    const runtime = createTargetRuntime(runtimeOptions(database, {
+      nhlCompletedStatisticsEnabled: true,
+      realtimeInjuries: { enabled: true, apiKey: 'synthetic-private-injury-key', timeZone: 'Etc/GMT+8' },
+      realtimeInjuryFetchImplementation: async () => { injuryCalls++; throw new Error('Unexpected injury request'); },
+      nhlFetchImplementation: async url => {
+        nhlCalls++; assert.match(String(url), /api\.nhle\.com\/stats\/rest\/en\/game/);
+        return { ok: true, json: async () => ({ total: 1, data: [{ id: 2026020001, season: 20262027, gameType: 2,
+          easternStartTime: '2026-10-10T19:00:00', homeTeamId: 13, visitingTeamId: 16, gameStateId: 1 }] }) };
+      },
+    }));
+    assert.equal(typeof runtime.services.injuryJob?.run, 'function');
+    assert.equal((await runtime.services.injuryJob.run()).reason, 'not_due');
+    assert.equal(injuryCalls, 0);
+    const result = await runtime.services.league.statistics.refresh();
+    assert.equal(result.playerCount, rows.length); assert.equal(nhlCalls, 1); assert.equal(injuryCalls, 0);
+    assert.equal(runtime.repositories.players.findDetailById(uuid(20_000)).statistics_provider, 'nhl-completed-games');
+    assert.equal(database.prepare('SELECT count(*) n FROM player_injury_status').get().n, 0);
+  });
   test("composes completed NHL statistics separately and projects only the configured season", async (t) => {
     const database = createDatabase(t);
     const rows = seedLiveStatisticsCatalog(database);
@@ -1874,7 +1901,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     const options = runtimeOptions(database);
     const runtime = createTargetRuntime(options);
     assert.equal(runtime.migrationState.status, "exact");
-    assert.equal(runtime.migrationState.userVersion, 96);
+    assert.equal(runtime.migrationState.userVersion, 97);
     assert.equal(
       typeof runtime.services.league.auctionResolution.resolveDue,
       "function"
