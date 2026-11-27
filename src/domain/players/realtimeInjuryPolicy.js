@@ -127,4 +127,5 @@ function resolveRealtimeIdentityCandidates({ snapshot, catalogue = [], mappings 
   return result;
 }
 
-module.exports = { MEDICAL_REASONS, classifyRealtimeInjury, assessRealtimeRecovery, resolveRealtimeIdentityCandidates };
+module.exports = { MEDICAL_REASONS, classifyRealtimeInjury, assessRealtimeRecovery, resolveRealtimeIdentityCandidates,
+  realtimeIdentityTeam: identityTeam };

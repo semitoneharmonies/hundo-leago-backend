@@ -1,6 +1,7 @@
 const { randomUUID } = require('node:crypto');
 const { normalizedName } = require('../../../domain/players/injuryStatusPolicy');
 const { classifyRealtimeInjury, assessRealtimeRecovery, resolveRealtimeIdentityCandidates } = require('../../../domain/players/realtimeInjuryPolicy');
+const { legacyRealtimeRecoveryCandidates } = require('../../../domain/players/realtimeLegacyInjuryRecoveryPolicy');
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:@/+\-]{0,159}$/;
 const NHL_ID = /^[1-9]\d{0,19}$/;
@@ -34,6 +35,19 @@ function createSqliteRealtimeInjuryRepository({ database, nowMs = Date.now, crea
     FROM players p JOIN player_external_ids e ON e.player_id=p.id AND e.provider='nhl'
     JOIN player_source_state s ON s.player_id=p.id AND s.provider='nhl' AND s.ended_at_ms IS NULL
     WHERE p.status='active' AND s.active=1 ORDER BY p.id`);
+  const legacyStatuses = database.prepare("SELECT id AS playerId,status,source,evidence_at_ms AS evidenceAtMs FROM player_injury_status WHERE status='injured' AND source IN ('admin','espn')");
+  const allNhlIdentities = database.prepare("SELECT player_id AS playerId,external_value AS nhlPlayerId FROM player_external_ids WHERE provider='nhl'");
+  function legacyCandidates(snapshot, previous, currentState, mappings) {
+    return legacyRealtimeRecoveryCandidates({ snapshot,
+      previousRows: previous.map(row => ({ providerPlayerId: row.id, name: row.name, teamId: row.team_id,
+        team: row.team, position: row.position, observedAtMs: row.observed_at_ms, present: row.present === 1 })),
+      previousSuccessAtMs: currentState?.last_success_at_ms,
+      previousSourceCount: currentState?.last_source_count, previousTeamCount: currentState?.last_team_count,
+      catalogue: identityCatalogue.all().map(row => ({ ...row, active: row.active === 1 })),
+      identities: allNhlIdentities.all(), statuses: legacyStatuses.all(),
+      mappings: mappings.map(row => ({ providerPlayerId: row.id, playerId: row.player_id,
+        nhlPlayerId: row.nhl_player_id, providerName: row.provider_name, aliases: JSON.parse(row.aliases_json) })) });
+  }
   const runByToken = database.prepare('SELECT * FROM player_injury_realtime_runs WHERE token=?');
   const quotaCount = database.prepare('SELECT count(*) AS n FROM player_injury_realtime_runs WHERE request_month=?');
   const writeStatus = database.prepare(`INSERT INTO player_injury_status
@@ -185,6 +199,9 @@ function createSqliteRealtimeInjuryRepository({ database, nowMs = Date.now, crea
       const permission = options.authorizePersist();
       valid(permission !== false && !permission?.then, 'INJURY_PERSISTENCE_NOT_AUTHORIZED');
     }
+    // Recompute after the asynchronous proof read and before replacing the prior
+    // report. A newer manual decision or identity change must win this race.
+    const legacy = legacyCandidates(snapshot, previous, currentState, [...mappings.values()]);
     const beforeById = new Map(previous.map(row => [row.id, row]));
     const seen = new Set(snapshot.rows.map(row => row.providerPlayerId));
     let changed = 0, unresolved = 0, preserved = 0, possibleReturns = 0, recovered = 0;
@@ -243,6 +260,21 @@ function createSqliteRealtimeInjuryRepository({ database, nowMs = Date.now, crea
         possibleReturns++;
       } else preserved++;
     }
+    for (const candidate of legacy) {
+      const current = statusRow.get(candidate.playerId);
+      const candidateProof = options.recoveryProofs[candidate.playerId];
+      const proof = candidateProof?.playerId === candidate.playerId && candidateProof.nhlPlayerId === candidate.nhlPlayerId
+        ? candidateProof : null;
+      if (!current || current.status !== 'injured' || current.evidence_at_ms !== candidate.afterMs) continue;
+      const recovery = assessRealtimeRecovery({ present: false, absenceCount: 2,
+        lastInjuryEvidenceAtMs: current.evidence_at_ms, manualDecisionAtMs: current.evidence_at_ms,
+        proof, nowMs: snapshot.fetchedAtMs });
+      if (recovery.status === 'healthy') {
+        changed += Number(saveStatus(candidate.playerId, { status: 'healthy', evidence_at_ms: recovery.evidenceAtMs,
+          observed_at_ms: snapshot.fetchedAtMs }, at, `Two verified Realtime absences and NHL return after legacy injury: ${recovery.gameId}`));
+        recovered++;
+      } else preserved++;
+    }
     const quota = snapshot.quota ?? {};
     database.prepare(`UPDATE player_injury_realtime_state SET last_success_at_ms=?,last_source_generated_at_ms=COALESCE(?,last_source_generated_at_ms),
       last_source_count=?,last_team_count=?,last_error_code=NULL,cooldown_until_ms=0,
@@ -285,7 +317,7 @@ function createSqliteRealtimeInjuryRepository({ database, nowMs = Date.now, crea
     recoveryCandidates(snapshot) {
       const verified = validateSnapshot(snapshot, clock());
       const present = new Set(verified.rows.map(row => row.providerPlayerId));
-      return database.prepare(`SELECT m.id,m.player_id,m.nhl_player_id,m.provider_name,m.aliases_json,
+      const tracked = database.prepare(`SELECT m.id,m.player_id,m.nhl_player_id,m.provider_name,m.aliases_json,
         f.name,f.last_injury_evidence_at_ms,s.evidence_at_ms
         FROM player_injury_realtime_mappings m JOIN player_injury_realtime_feed f ON f.id=m.id
         JOIN player_injury_status s ON s.id=m.player_id WHERE s.status='injured' ORDER BY m.id`).all()
@@ -293,6 +325,7 @@ function createSqliteRealtimeInjuryRepository({ database, nowMs = Date.now, crea
           [row.provider_name, ...JSON.parse(row.aliases_json)].some(name => normalizedName(name) === normalizedName(row.name)))
         .map(row => ({ playerId: row.player_id, nhlPlayerId: row.nhl_player_id,
           afterMs: Math.max(row.last_injury_evidence_at_ms, row.evidence_at_ms) }));
+      return [...tracked, ...legacyCandidates(verified, allFeed.all(), stateRow.get(), allMappings.all())];
     },
     state() {
       const at = clock(), current = stateRow.get();
