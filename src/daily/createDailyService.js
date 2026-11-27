@@ -24,7 +24,7 @@ function dateAfter(date, offset) {
 }
 
 function createDailyService({ filename, clock = Date.now, feed = createHundoDailyFeed({ nowMs: clock }),
-  openStore = createDailyStore, push, subscriptions, notify, notificationInbox, publishChatChange = () => {}, backgroundEnabled = false, logger, liveStatistics = null } = {}) {
+  openStore = createDailyStore, push, subscriptions, notify, notificationInbox, publishChatChange = () => {}, backgroundEnabled = false, logger, liveStatistics = null, recordAggregateMetrics = null } = {}) {
   const liveDisplay = liveStatistics ? createDailyLiveDisplay({ liveStatistics }) : null;
   let store, timer, maintenance, notificationDelivery, pushDelivery, stopped = false;
   let nextScoring = 0;
@@ -34,7 +34,7 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
 
   function existing() {
     if (!store && !stopped && filename !== ":memory:" && existsSync(filename)) {
-      store = openStore({ filename, clock, existingOnly: true });
+      store = openStore({ filename, clock, existingOnly: true, recordAggregateMetrics });
     }
     return store;
   }
@@ -45,7 +45,7 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
   }
   function writable() {
     if (stopped) fail(503, "DAILY_UNAVAILABLE", "Hundo Daily is restarting.");
-    if (!store) store = openStore({ filename, clock });
+    if (!store) store = openStore({ filename, clock, recordAggregateMetrics });
     startTimer();
     return store;
   }
@@ -237,6 +237,8 @@ function createDailyService({ filename, clock = Date.now, feed = createHundoDail
     if (stopped) return;
     const current = existing();
     if (!current) return;
+    // Only newly created rooms carry lifecycle counter markers; legacy room data is unchanged.
+    try { current.captureAnalyticsStarts?.(); } catch { logFailure("aggregate_analytics"); }
     // Persist due notices on every tick, including while NHL/push work is still pending.
     // Delivery is serialized independently so concurrent ticks cannot duplicate a write.
     await sendNotifications(current);

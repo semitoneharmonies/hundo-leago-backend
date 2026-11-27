@@ -1524,18 +1524,19 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
 });
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 246 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 246);
+  test("declares 248 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 248);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      246
+      248
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
       "accountRegistration",
       "accountSession",
       "activityNotification",
+      "aggregateAnalytics",
       "auction",
       "auctionReveal",
       "auctionTiming",
@@ -2837,7 +2838,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 246);
+    assert.equal(TARGET_ENDPOINTS.length, 248);
   });
 
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {
@@ -8660,4 +8661,70 @@ test('Week 1 website preview stays read-only and confirms only the reviewed pre-
  const afterOpening=database.serialize();assert.equal((await patch(command,applyHeaders)).status,200);assert.deepEqual(database.serialize(),afterOpening);
  assert.deepEqual(database.pragma('foreign_key_check'),[]);assert.equal(database.pragma('integrity_check',{simple:true}),'ok');
  assert.ok(before.length>0);
+});
+
+test("aggregate analytics runtime preserves main and Daily data and read-only authentication", async t => {
+  let now = NOW_MS;
+  const database = createDatabase(t);
+  const runtime = createTargetRuntime(runtimeOptions(database, {
+    securityFoundations: createSecurityFoundations({ env: securityEnv(), now: () => now, loggerSink() {} }),
+  }));
+  try {
+    const base = await startRuntimeApp(t, runtime);
+    const sidecar = database.name + ".analytics.sqlite3";
+    assert.equal(fs.existsSync(sidecar), false, "runtime startup does not initialize analytics");
+    const insert = database.prepare(`INSERT INTO users
+      (id,email_normalized,email_display,display_name,display_name_normalized,status,created_at_ms,updated_at_ms,version)
+      VALUES (?,?,?,?,?,'active',?,?,1)`);
+    for (const [number, name, createdAt] of [[931001, "Admin", now], [931002, "Member", now - 90 * 86400000]]) {
+      const email = name.toLowerCase() + "@example.test";
+      insert.run(uuid(number), email, email, name, name.toLowerCase(), createdAt, now);
+    }
+    database.prepare("INSERT INTO platform_roles VALUES (?,?,'platform_administrator','active',NULL,?,NULL,1)")
+      .run(uuid(931003), uuid(931001), now);
+    const admin = runtime.services.sessionService.issueForUser({ userId: uuid(931001) });
+    const member = runtime.services.sessionService.issueForUser({ userId: uuid(931002) });
+    const headers = session => browserHeaders({ Cookie: runtime.transport.sessionCookie.name + "=" + session.rawSessionToken });
+    const mainBefore = database.serialize();
+    const dailySnapshot = () => fs.existsSync(database.name + ".hundo-daily.sqlite3") ? fs.readFileSync(database.name + ".hundo-daily.sqlite3") : null;
+    const dailyBefore = dailySnapshot();
+    const read = await fetch(base + "/api/v1/admin/analytics", { headers: headers(admin) });
+    assert.equal(read.status, 200);
+    const envelope = await read.json();
+    assert.match(envelope.meta.requestId, /^[0-9a-f-]+$/);
+    assert.equal(envelope.data.measurement.coverage, "not_started");
+    assert.deepEqual(envelope.data.accounts, { total: 2, createdInPeriod: 1 });
+    assert.equal(envelope.data.operations.gameplay.status, "available", "real runtime calls operational reader");
+    assert.equal(envelope.data.operations.freshness.status, "available");
+    assert.equal(envelope.data.operations.calendar.status, "available");
+    assert.equal(envelope.data.operations.dailyRooms.status, "not_measured");
+    assert.equal(envelope.data.measurement.expandedStartedOn, null);
+    assert.equal(fs.existsSync(sidecar), false, "admin GET does not create analytics");
+    assert.deepEqual(database.serialize(), mainBefore);
+    assert.equal((await fetch(base + "/api/v1/admin/analytics", { headers: headers(member) })).status, 403);
+    assert.equal((await fetch(base + "/api/v1/admin/analytics", { headers: browserHeaders() })).status, 401);
+    const input = { product: "leago", category: "rosters", pageViews: 1, activeSeconds: 25 };
+    const post = await fetch(base + "/api/v1/analytics/aggregate", { method: "POST", headers: browserHeaders(), body: JSON.stringify(input) });
+    assert.equal(post.status, 204);
+    assert.equal(post.headers.get("access-control-allow-credentials"), null);
+    assert.equal(post.headers.get("set-cookie"), null);
+    const metricResponse = await fetch(base + "/api/v1/analytics/aggregate", { method: "POST", headers: browserHeaders(),
+      body: JSON.stringify({ metric: "install.reported", value: 1 }) });
+    assert.equal(metricResponse.status, 204);
+    assert.equal(fs.existsSync(sidecar), true);
+    assert.deepEqual(database.serialize(), mainBefore, "analytics writes never change main storage");
+    assert.deepEqual(dailySnapshot(), dailyBefore, "analytics never changes or initializes Daily data");
+    const aggregateBefore = fs.readFileSync(sidecar);
+    const after = await fetch(base + "/api/v1/admin/analytics?days=7", { headers: headers(admin) });
+    const expandedReport = (await after.json()).data;
+    assert.deepEqual(expandedReport.totals, { pageViews: 1, activeSeconds: 25 });
+    assert.equal(expandedReport.metrics.find(row => row.metric === "install.reported").count, 1);
+    assert.equal(expandedReport.peakUsage.status, "insufficient_data");
+    assert.deepEqual(fs.readFileSync(sidecar), aggregateBefore);
+    assert.deepEqual(database.serialize(), mainBefore);
+    now = admin.session.absoluteExpiresAtMs + 1;
+    const expired = await fetch(base + "/api/v1/admin/analytics", { headers: headers(admin) });
+    assert.equal(expired.status, 401);
+    assert.deepEqual(database.serialize(), mainBefore, "expired analytics GET must not persist expiry or activity");
+  } finally { runtime.close(); }
 });

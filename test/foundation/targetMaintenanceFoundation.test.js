@@ -58,6 +58,7 @@ describe("M7-03 target maintenance write closure", () => {
     const baseUrl = await start(t, appForMode(calls, "closed"));
     for (const [method, pathname] of [
       ["POST", "/api/v1/accounts"],
+      ["POST", "/api/v1/analytics/aggregate"],
       ["PUT", "/api/v1/leagues/00000000-0000-4000-8000-000000000001/auctions/00000000-0000-4000-8000-000000000002/bids/mine"],
       ["PATCH", "/api/v1/leagues/00000000-0000-4000-8000-000000000001/auctions/00000000-0000-4000-8000-000000000002/bids/00000000-0000-4000-8000-000000000003"],
       ["DELETE", "/api/v1/leagues/00000000-0000-4000-8000-000000000001/teams/00000000-0000-4000-8000-000000000002/manager-assignment"],
@@ -84,6 +85,7 @@ describe("M7-03 target maintenance write closure", () => {
     const baseUrl = await start(t, appForMode(calls, "closed"));
     for (const [method, pathname] of [
       ["GET", "/api/v1/leagues"],
+      ["GET", "/api/v1/admin/analytics"],
       ["POST", "/api/v1/session"],
       ["DELETE", "/api/v1/session"],
     ]) {
@@ -95,7 +97,7 @@ describe("M7-03 target maintenance write closure", () => {
     }
     assert.deepEqual(
       calls.map(({ method, path }) => `${method} ${path}`),
-      ["GET /api/v1/leagues", "POST /api/v1/session", "DELETE /api/v1/session"]
+      ["GET /api/v1/leagues", "GET /api/v1/admin/analytics", "POST /api/v1/session", "DELETE /api/v1/session"]
     );
   });
 

@@ -1,7 +1,7 @@
 "use strict";
 
 const { createHash, randomUUID } = require("node:crypto");
-const { MINUTE, ROSTER_SIZE, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom } = require("./dailyRoom");
+const { MINUTE, ROSTER_SIZE, auctionStart, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom } = require("./dailyRoom");
 const { validatedScoringDetails } = require("./dailyScoring");
 const { validateAuctionStart } = require("./dailySchedule");
 const { validateDailyAppearance } = require("./dailyProfile");
@@ -12,7 +12,7 @@ const { CAP_SAVINGS_VERSION, CLASSIC_VERSION, validateCapSavingsBonus } = requir
 const DAILY_DATABASE_ID = 1212433457;
 const MEMBER_PHASES = new Set(["waiting", "auction"]);
 
-function createDailyStore({ filename, clock = Date.now, existingOnly = false } = {}) {
+function createDailyStore({ filename, clock = Date.now, existingOnly = false, recordAggregateMetrics = null } = {}) {
   const { DatabaseSync } = require("node:sqlite");
   if (!filename) throw new TypeError("Daily needs its own SQLite filename.");
   if (existingOnly) {
@@ -26,16 +26,48 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
   }
   const db = new DatabaseSync(filename);
   db.exec("PRAGMA busy_timeout = 5000");
+  let aggregateEvents = null;
   function transaction(operation) {
     db.exec("BEGIN IMMEDIATE");
+    aggregateEvents = [];
+    let result, events;
     try {
-      const result = operation();
+      result = operation();
       db.exec("COMMIT");
-      return result;
+      events = aggregateEvents;
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
+    } finally { aggregateEvents = null; }
+    // Gameplay commits first. Aggregate failures can never undo or fail a room action.
+    if (typeof recordAggregateMetrics === "function") {
+      for (let offset = 0; offset < events.length; offset += 12) {
+        try { recordAggregateMetrics(events.slice(offset, offset + 12)); } catch {}
+      }
     }
+    return result;
+  }
+  function roomMetric(room, name, value = 1) {
+    aggregateEvents?.push({ metric: "room." + name + "." + (room.mode === "practice" ? "practice" : "scheduled"), value });
+  }
+  function captureRoomAnalytics(room, now, startOnly = false) {
+    const markers = room.analytics;
+    if (markers?.version !== 1 || typeof recordAggregateMetrics !== "function") return false;
+    let changed = false;
+    if (!markers.started && !room.closed && !room.void && now >= auctionStart(room)) {
+      markers.started = true; changed = true;
+      roomMetric(room, "started");
+      roomMetric(room, "seats_at_start", room.members.length);
+      roomMetric(room, "capacity_at_start", room.capacity);
+    }
+    if (startOnly) return changed;
+    if (room.finished && !room.void && !markers.completed) {
+      markers.completed = true; changed = true; roomMetric(room, "completed");
+    }
+    if ((room.void || (room.closed && !room.finished)) && !markers.cancelled) {
+      markers.cancelled = true; changed = true; roomMetric(room, "cancelled");
+    }
+    return changed;
   }
   try {
     function initialized() {
@@ -150,6 +182,12 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
     return Object.assign(JSON.parse(row.info), JSON.parse(row.play));
   }
   function save(row, room) {
+    if (room.analytics?.version === 1 && !room.analytics.started) {
+      const before = fromRow(row);
+      captureRoomAnalytics(before, clock(), true);
+      if (before.analytics?.started) room.analytics.started = true;
+    }
+    captureRoomAnalytics(room, clock());
     const { lots, scores, scoringDetails, ...info } = room;
     const nextInfo = JSON.stringify(info);
     const nextPlay = JSON.stringify({ lots, scores, ...(scoringDetails ? { scoringDetails } : {}) });
@@ -242,6 +280,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
       const room = fromRow(row);
       const slate = getSlate(row);
       const now = clock();
+      captureRoomAnalytics(room, now, true);
       fn(room, slate, now);
       save(row, room);
       return presentRoom(room, slate, actor, now);
@@ -290,7 +329,10 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
         scoringVersion: capSavingsBonus === false ? CLASSIC_VERSION : CAP_SAVINGS_VERSION, allowSpectatorChat,
         mode, firstGameAt: slate.firstGameAt, ...(mode === "practice" ? { practiceEndsAt: now + 30 * MINUTE } : {}),
         ...(scheduledStartsAt === undefined ? {} : { scheduledStartsAt, requestedAuctionStartsAt: scheduledStartsAt }),
-        members: [member], winners: [], closed: false, finished: false, void: false };
+        members: [member], winners: [], closed: false, finished: false, void: false,
+        ...(typeof recordAggregateMetrics === "function" ? { analytics: { version: 1, started: false, completed: false, cancelled: false } } : {}),
+      };
+      if (info.analytics) { roomMetric(info, "created"); captureRoomAnalytics(info, now); }
       const play = { lots: [], scores: {} };
       db.prepare(`INSERT INTO rooms(id,slate_id,date,first_game_at,info,play,creator_id,request_id)
         VALUES(?,?,?,?,?,?,?,?)`).run(info.id, slateId, info.date, auctionEnd(info), JSON.stringify(info),
@@ -394,6 +436,18 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
       const row = findRoom(notice.roomId), room = fromRow(row);
       room.notificationReceipts = [...(room.notificationReceipts || []), notice.id];
       save(row, room);
+    });
+  }
+
+  function captureAnalyticsStarts() {
+    if (typeof recordAggregateMetrics !== "function") return;
+    return transaction(() => {
+      const now = clock();
+      for (const row of db.prepare(`SELECT * FROM rooms WHERE closed=0 AND ended=0
+        AND json_extract(info,'$.analytics.version')=1 AND json_extract(info,'$.analytics.started')=0`).all()) {
+        const room = fromRow(row);
+        if (captureRoomAnalytics(room, now, true)) save(row, room);
+      }
     });
   }
 
@@ -507,7 +561,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false } =
   }
 
   return {
-    getNotificationSettings, updateNotificationSettings, listDuePushNotifications, markPushNotificationSent, pushTargetDelivered, markPushTargetDelivered,
+    captureAnalyticsStarts, getNotificationSettings, updateNotificationSettings, listDuePushNotifications, markPushNotificationSent, pushTargetDelivered, markPushTargetDelivered,
     listRooms: ({ actor } = {}) => visibleRows.all().map(row => summary(fromRow(row), actor, clock())),
     getRoom, readRoomForDisplay, getRoomDate, replayCreate, createRoom, joinRoom, bid, closeRoom, listScoringRooms, listStatsHydrationRooms, updateScores,
     getProfile, updateProfile, getChat, postChat, reactToChat, canReadChat, listDueNotifications, markNotificationSent,

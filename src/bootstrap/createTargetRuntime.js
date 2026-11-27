@@ -1,4 +1,7 @@
 const { runStatisticsWorker } = require("../jobs/runStatisticsWorker");
+const { createAggregateAnalyticsStore } = require("../analytics/createAggregateAnalyticsStore");
+const { createOperationalAnalyticsReader } = require("../analytics/readOperationalAnalytics");
+const { createAggregateAnalyticsRouter, aggregateAnalyticsEndpoints } = require("../transport/http/createAggregateAnalyticsRouter");
 const { createDailyService } = require("../daily/createDailyService");
 const { createDailyPlayerDetails } = require("../daily/createDailyPlayerDetails");
 const { createHundoDailyRouter, dailyEndpoints } = require("../transport/http/createHundoDailyRouter");
@@ -853,6 +856,7 @@ const SPORTSDATAIO_LIVE_UUID_V4_PATTERN =
 const SPORTSDATAIO_LIVE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const TARGET_ENDPOINTS = Object.freeze([
+  ...aggregateAnalyticsEndpoints.map(([method, path]) => [method, path, "aggregateAnalytics"]),
   ...dailyEndpoints.map(([method, path]) => [method, path, "hundoDaily"]),
   ["GET", "/api/v1/leagues/:leagueId/tip-jar/leaderboard", "tipJar"],
   ["GET", "/api/v1/leagues/:leagueId/mr-boni/leaderboard", "mrBoni"],
@@ -3437,6 +3441,7 @@ function createTargetServices({
 
 function createTargetRouters({
   services,
+  aggregateAnalytics = null,
   daily,
   dailyActor,
   dailyPlayerDetails = null,
@@ -3472,6 +3477,11 @@ function createTargetRouters({
     networkSourceResolver,
   };
   const routers = Object.freeze({
+    aggregateAnalytics: createAggregateAnalyticsRouter({
+      store: aggregateAnalytics, adminSecurity: dailySecurity,
+      platformAuthorization: services.authorizations.platform,
+      isAllowedOrigin: config.isAllowedFrontendOrigin, clock: () => securityFoundations.clock.nowMs(),
+    }),
     hundoDaily: createHundoDailyRouter({
       requestSecurity: dailySecurity, service: daily, getActor: dailyActor,
       playerDetails: dailyPlayerDetails,
@@ -3771,7 +3781,22 @@ function createTargetRuntime({
     matchupProcessingEnabled,
     nhlFetchImplementation,
   });
+  const aggregateAnalytics = createAggregateAnalyticsStore({
+    filename: database.name && !database.memory ? require("node:path").resolve(database.name) + ".analytics.sqlite3" : ":memory:",
+    clock: () => securityFoundations.clock.nowMs(),
+    buildId: securityFoundations.config.buildId,
+    readOperations: createOperationalAnalyticsReader({ database,
+      dailyFilename: database.name && !database.memory ? require("node:path").resolve(database.name) + ".hundo-daily.sqlite3" : ":memory:",
+      clock: () => securityFoundations.clock.nowMs(),
+    }).read,
+    readAccountTotals({ startMs, endMs }) {
+      return database.prepare(`SELECT COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN created_at_ms>=? AND created_at_ms<? THEN 1 ELSE 0 END),0) AS createdInPeriod
+        FROM users`).get(startMs, endMs);
+    },
+  });
   const daily = createDailyService({
+    recordAggregateMetrics: events => aggregateAnalytics.recordSystemMetrics(events),
     notificationInbox: require("../daily/createDailyNotificationInbox").createDailyNotificationInbox({ database, clock: () => securityFoundations.clock.nowMs() }),
     publishChatChange: require("../daily/dailyChat").createDailyChatPublisher({
       getIo: () => targetApplication?.get("io"),
@@ -3802,6 +3827,7 @@ function createTargetRuntime({
     },
   });
   const transport = createTargetRouters({
+    aggregateAnalytics,
     daily,
     dailyPlayerDetails: createDailyPlayerDetails({ playerRepository: repositories.players, currentNhlSeason: currentSeason.nhlSeasonKey }),
     dailyActor(session) {
@@ -3845,7 +3871,8 @@ function createTargetRuntime({
   return Object.freeze({
     app,
     daily,
-    close: () => daily.close(),
+    aggregateAnalytics,
+    close: () => { try { daily.close(); } finally { aggregateAnalytics.close(); } },
     migrationState,
     migrationsDirectory,
     repositories,
