@@ -4,6 +4,7 @@ const { scoringCategories, playerScoringDetails, teamScoringDetails } = require(
 const { CLASSIC_VERSION, capBonusRatePercent, dailyTeamScore } = require("./dailyTeamScore");
 
 const MINUTE = 60_000;
+const MINUTE_FLOOR_VERSION = "minute-floor-v1";
 const RULES = Object.freeze({ cap: 100, minBid: 1, lotSeconds: 120, forwards: 3, defense: 2, extras: 2 });
 const ROSTER_SIZE = RULES.forwards + RULES.defense + RULES.extras;
 const FORWARDS = new Set(["F", "C", "L", "R", "LW", "RW"]);
@@ -11,6 +12,12 @@ const iso = (value) => new Date(value).toISOString();
 const auctionEnd = (room) => room.practiceEndsAt ?? (room.scheduledStartsAt === undefined ? room.firstGameAt
   : Math.min(room.firstGameAt, room.scheduledStartsAt + 30 * MINUTE));
 const auctionStart = (room) => room.scheduledStartsAt ?? auctionEnd(room) - 30 * MINUTE;
+const biddingVersion = (room) => room.biddingVersion === MINUTE_FLOOR_VERSION ? MINUTE_FLOOR_VERSION : "classic";
+const biddingStart = (room) => room.biddingStartsAt ?? auctionStart(room);
+const nominationMinimum = (room, now) => biddingVersion(room) === MINUTE_FLOOR_VERSION
+  ? RULES.minBid + Math.floor(Math.max(0, now - biddingStart(room)) / MINUTE) : RULES.minBid;
+const lotMinimum = (room, lot) => biddingVersion(room) === MINUTE_FLOOR_VERSION
+  ? lot.minimumBid ?? RULES.minBid : RULES.minBid;
 
 function reject(status, code, message) {
   throw Object.assign(new Error(message), { status, code });
@@ -49,6 +56,7 @@ function summary(room, actor, now) {
   const currentPhase = phase(room, now);
   return {
     id: room.id, name: room.name, capacity: room.capacity, memberCount: room.members.length,
+    biddingVersion: biddingVersion(room),
     scoringVersion: room.scoringVersion ?? CLASSIC_VERSION, capBonusRatePercent: capBonusRatePercent(room),
     allowSpectatorChat: room.allowSpectatorChat === true,
     joined: room.members.some((member) => member.id === actor?.id),
@@ -107,6 +115,13 @@ function bidLimit(team, position) {
 
 function roomView(room, slate, actor, now) {
   const detail = { ...summary(room, actor, now), rules: RULES, scoringCategories };
+  // A closed room's display must not continue increasing after its last legal bid.
+  const minimumTime = Math.min(now, Date.parse(detail.auctionEndsAt) - 1,
+    room.closedAt ?? Infinity, room.voidAt ?? Infinity);
+  detail.nominationMinimum = nominationMinimum(room, minimumTime);
+  detail.nominationMinimumIncreasesAt = detail.biddingVersion === MINUTE_FLOOR_VERSION &&
+    ["waiting", "auction"].includes(detail.phase)
+    ? iso(biddingStart(room) + detail.nominationMinimum * MINUTE) : null;
   const closed = { maxAmount: 0, reason: "Bidding is closed." };
   detail.bidLimits = { F: closed, D: closed };
   if (room.closed) return { ...detail, winners: [], members: [], availablePlayers: [], auctions: [] };
@@ -131,6 +146,7 @@ function roomView(room, slate, actor, now) {
     availablePlayers: ["waiting", "auction"].includes(detail.phase) ? slate.players.filter((player) => !nominated.has(player.id)) : [],
     auctions: room.lots.filter((lot) => !room.void && now < lot.endsAt).map((lot) => ({
       ...byId.get(lot.playerId), bidCount: lot.bids.length, endsAt: iso(lot.endsAt),
+      minimumBid: lotMinimum(room, lot),
       ownBid: lot.bids.find((bid) => bid.userId === actor?.id)?.amount ?? null,
     })),
   };
@@ -150,6 +166,13 @@ function placeBid(room, slate, actor, playerId, amount, now) {
   if (lot && now >= lot.endsAt) reject(409, "DAILY_PLAYER_SIGNED", "This player has already signed.");
   if (previous) reject(409, "DAILY_BID_BINDING", "Your bid on this player is already binding.");
 
+  const minimumBid = lot ? lotMinimum(room, lot) : nominationMinimum(room, now);
+  if (amount < minimumBid) {
+    reject(409, "DAILY_BID_MINIMUM", lot
+      ? `This player’s auction has a $${minimumBid} minimum bid.`
+      : `New player auctions now start at $${minimumBid}. Enter at least $${minimumBid}.`);
+  }
+
   const team = analyzeRoom(room, slate.players, now).get(actor.id);
   const limit = bidLimit(team, player.position);
   if (amount > limit.maxAmount) {
@@ -158,7 +181,15 @@ function placeBid(room, slate, actor, playerId, amount, now) {
   }
   const offer = { userId: actor.id, amount };
   if (lot) lot.bids.push(offer);
-  else room.lots.push({ playerId, endsAt: Math.min(now + RULES.lotSeconds * 1000, auctionEnd(room)), bids: [offer] });
+  else {
+    // Capture the room clock only after a valid nomination. Later NHL schedule
+    // changes may shorten the auction, but must not change this bidding clock.
+    if (biddingVersion(room) === MINUTE_FLOOR_VERSION && room.biddingStartsAt === undefined) {
+      room.biddingStartsAt = auctionStart(room);
+    }
+    room.lots.push({ playerId, nominatedAt: now, minimumBid,
+      endsAt: Math.min(now + RULES.lotSeconds * 1000, auctionEnd(room)), bids: [offer] });
+  }
 }
 
 function scoreRoom(room, pointsByPlayerId, final, voided, now) {
@@ -195,4 +226,4 @@ function scoreRoom(room, pointsByPlayerId, final, voided, now) {
   }
 }
 
-module.exports = { MINUTE, ROSTER_SIZE, auctionStart, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom };
+module.exports = { MINUTE, MINUTE_FLOOR_VERSION, ROSTER_SIZE, auctionStart, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom };

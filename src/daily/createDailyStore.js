@@ -1,7 +1,7 @@
 "use strict";
 
 const { createHash, randomUUID } = require("node:crypto");
-const { MINUTE, ROSTER_SIZE, auctionStart, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom } = require("./dailyRoom");
+const { MINUTE, MINUTE_FLOOR_VERSION, ROSTER_SIZE, auctionStart, auctionEnd, reject, requireActor, phase, summary, roomView, placeBid, scoreRoom } = require("./dailyRoom");
 const { validatedScoringDetails } = require("./dailyScoring");
 const { validateAuctionStart } = require("./dailySchedule");
 const { validateDailyAppearance } = require("./dailyProfile");
@@ -326,6 +326,7 @@ function createDailyStore({ filename, clock = Date.now, existingOnly = false, re
       if (mode === "scheduled" && now >= slate.firstGameAt) reject(409, "DAILY_ROOM_LOCKED", "The first game has already started.");
       const member = { id: actor.id, name: actor.name };
       const info = { id: randomUUID(), name: name.trim(), capacity, commissionerId: actor.id, date: slate.date,
+        biddingVersion: MINUTE_FLOOR_VERSION,
         scoringVersion: capSavingsBonus === false ? CLASSIC_VERSION : CAP_SAVINGS_VERSION, allowSpectatorChat,
         mode, firstGameAt: slate.firstGameAt, ...(mode === "practice" ? { practiceEndsAt: now + 30 * MINUTE } : {}),
         ...(scheduledStartsAt === undefined ? {} : { scheduledStartsAt, requestedAuctionStartsAt: scheduledStartsAt }),
