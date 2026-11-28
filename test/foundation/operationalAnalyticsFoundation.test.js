@@ -225,3 +225,16 @@ test("existing active Daily WAL remains readable without creating files or chang
     assert.deepEqual(fs.readFileSync(f.dailyFilename + "-wal"), walBefore);
   } finally { writer.close(); }
 });
+
+test("historical calendar months and one-day current periods keep business totals historical and health current", t => {
+  const f=fixture(t);
+  f.database.prepare("INSERT INTO trades VALUES(?,?,?)").run("completed",at("2026-10-01"),"private-trade");
+  f.database.prepare("INSERT INTO trades VALUES(?,?,?)").run("completed",at("2026-10-31"),"private-trade");
+  f.database.prepare("INSERT INTO trades VALUES(?,?,?)").run("completed",at("2026-11-01"),"private-trade");
+  f.database.prepare("INSERT INTO stat_refreshes VALUES(?,?)").run("succeeded",NOW-1000);
+  f.database.prepare("INSERT INTO job_runs VALUES(?)").run("pending");
+  f.room({date:"2026-10-31",finished:true});
+  const month={days:31,startDate:"2026-10-01",endDate:"2026-10-31",startMs:at("2026-10-01"),endMs:at("2026-11-01")};
+  const result=unchanged(f,()=>f.reader.read(month));assert.equal(result.gameplay.totals.completedTrades,2);assert.equal(result.gameplay.totals.dailyDrafts,1);assert.equal(result.calendar.days.length,31);assert.equal(result.freshness.statistics.lastSuccessAtMs,NOW-1000);assert.equal(result.freshness.jobs.pendingCount,1);
+  const oneDay=unchanged(f,()=>f.reader.read({days:1,startDate:"2026-11-01",endDate:"2026-11-01",startMs:at("2026-11-01"),endMs:at("2026-11-02")}));assert.equal(oneDay.gameplay.totals.completedTrades,1);assert.equal(oneDay.calendar.days.length,1);
+});

@@ -7,11 +7,7 @@ const DAY_MS = 86400000;
 const OFFSET_MS = 8 * 60 * 60 * 1000;
 const ANALYTICS_DATABASE_ID = 1212239444;
 const RETENTION_DAYS = 365;
-const CATEGORIES = Object.freeze({
-  leago: Object.freeze(["dashboard", "rosters", "players", "matchups", "standings", "auctions", "trades", "drafts", "activity", "commissioner", "teams"]),
-  daily: Object.freeze(["lobby", "room", "history", "profile", "notifications", "create", "practice"]),
-  shared: Object.freeze(["home", "account", "notifications", "install", "games", "leagues"]),
-});
+const { CATEGORIES, isRefinedCategory, legacyCategory } = require("./pageCatalog");
 const PRODUCTS = Object.freeze(Object.keys(CATEGORIES));
 const BROWSER_METRICS = Object.freeze([
   "install.reported", "launch.installed", "launch.browser", "layout.small", "layout.large",
@@ -71,6 +67,44 @@ function safeCount(value) {
   return value;
 }
 
+function laterDate(first, second) { return first > second ? first : second; }
+function availableFrom(startedOn, retainedFrom) { return startedOn ? laterDate(startedOn, retainedFrom) : null; }
+function coverageFor(startedOn, retainedFrom, startDate, endDate) {
+  const available = availableFrom(startedOn, retainedFrom);
+  if (!available || available > endDate) return "not_started";
+  return startDate < available || startedOn === startDate ? "partial" : "full";
+}
+function resolveAnalyticsPeriod(selection = 28, nowMs = Date.now()) {
+  const today = dateAt(nowMs);
+  const retainedFrom = dateShift(today, 1 - RETENTION_DAYS);
+  if (typeof selection === "number") {
+    if (![7, 28, 90].includes(selection)) throw invalid();
+    const startDate = dateShift(today, 1 - selection);
+    return { today, retainedFrom, period: { days: selection, startDate, endDate: today,
+      previousStartDate: dateShift(startDate, -selection), previousEndDate: dateShift(startDate, -1) } };
+  }
+  if (!selection || typeof selection !== "object" || Array.isArray(selection) || Object.keys(selection).length !== 1) throw invalid();
+  const kind = Object.keys(selection)[0];
+  const value = selection[kind];
+  let startDate, calendarEndDate, previousStartDate, previousEndDate;
+  if (kind === "week" && validDate(value) && new Date(value + "T00:00:00Z").getUTCDay() === 1) {
+    startDate = value;
+    calendarEndDate = dateShift(startDate, 6);
+    previousStartDate = dateShift(startDate, -7);
+    previousEndDate = dateShift(startDate, -1);
+  } else if (kind === "month" && typeof value === "string" && /^\d{4}-\d{2}$/.test(value) && validDate(value + "-01")) {
+    startDate = value + "-01";
+    calendarEndDate = new Date(Date.UTC(Number(value.slice(0, 4)), Number(value.slice(5)), 0)).toISOString().slice(0, 10);
+    previousEndDate = dateShift(startDate, -1);
+    previousStartDate = previousEndDate.slice(0, 7) + "-01";
+  } else throw invalid();
+  if (Number(startDate.slice(0, 4)) < 1970 || startDate > today) throw invalid();
+  const endDate = calendarEndDate < today ? calendarEndDate : today;
+  const days = Math.floor((Date.parse(endDate) - Date.parse(startDate)) / DAY_MS) + 1;
+  return { today, retainedFrom, period: { days, startDate, endDate, previousStartDate, previousEndDate,
+    kind, value, calendarEndDate, today } };
+}
+
 function createAggregateAnalyticsStore({ filename, clock = Date.now, readAccountTotals, readOperations = unavailableOperations, buildId = null } = {}) {
   if (typeof filename !== "string" || !filename || typeof clock !== "function" ||
       typeof readAccountTotals !== "function") throw new TypeError("Aggregate analytics requires isolated storage, clock and account-count reader.");
@@ -118,12 +152,25 @@ function createAggregateAnalyticsStore({ filename, clock = Date.now, readAccount
     db.prepare("INSERT INTO analytics_expansion VALUES(1,?)").run(today);
   }
 
-  function readExpansion(db, startDate, endDate, previousStartDate) {
+  function ensurePageDetail(db, today) {
+    // Additive, lazy sidecar metadata only. Never initialize or migrate during a GET.
+    db.exec("CREATE TABLE IF NOT EXISTS analytics_page_detail (id INTEGER PRIMARY KEY CHECK(id=1), started_on TEXT NOT NULL)");
+    db.prepare("INSERT OR IGNORE INTO analytics_page_detail VALUES(1,?)").run(today);
+  }
+
+  function readPageDetailStart(db, today) {
+    if (!db || !db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='analytics_page_detail'").get()) return null;
+    const startedOn = db.prepare("SELECT started_on FROM analytics_page_detail WHERE id=1").get()?.started_on;
+    if (!validDate(startedOn) || startedOn > today) throw new Error("Detailed page measurement date is unavailable.");
+    return startedOn;
+  }
+
+  function readExpansion(db, startDate, endDate, previousStartDate, today, retainedFrom) {
     const expanded = db && db.prepare("PRAGMA user_version").get().user_version === 2;
     const startedOn = expanded ? db.prepare("SELECT started_on FROM analytics_expansion WHERE id=1").get()?.started_on : null;
-    if (expanded && (!validDate(startedOn) || startedOn > endDate)) throw new Error("Analytics expansion date is unavailable.");
+    if (expanded && (!validDate(startedOn) || startedOn > today)) throw new Error("Analytics expansion date is unavailable.");
     const metrics = ALL_METRICS.map(metric => ({ metric, count: 0, previousCount: 0 }));
-    const metricRows = expanded ? db.prepare("SELECT day,metric,count FROM analytics_metrics WHERE day>=? AND day<=?").all(previousStartDate, endDate) : [];
+    const metricRows = expanded ? db.prepare("SELECT day,metric,count FROM analytics_metrics WHERE day>=? AND day<=?").all(laterDate(previousStartDate, retainedFrom), endDate) : [];
     for (const row of metricRows) {
       const target = metrics.find(item => item.metric === row.metric);
       if (!target || !validDate(row.day) || row.day < startedOn) throw new Error("Analytics metric is unavailable.");
@@ -134,7 +181,7 @@ function createAggregateAnalyticsStore({ filename, clock = Date.now, readAccount
       weekday, block, pageViews: 0, activeSeconds: 0, suppressed: false,
     }))).flat();
     const blockRows = expanded ? db.prepare("SELECT day,block,page_views,active_seconds FROM analytics_time_blocks WHERE day>=? AND day<=?")
-      .all(startDate, endDate) : [];
+      .all(laterDate(startDate, retainedFrom), endDate) : [];
     let measuredViews = 0;
     for (const row of blockRows) {
       if (!validDate(row.day) || row.day < startedOn || !TIME_BLOCKS.includes(row.block)) throw new Error("Analytics time block is unavailable.");
@@ -144,21 +191,23 @@ function createAggregateAnalyticsStore({ filename, clock = Date.now, readAccount
       target.activeSeconds = safeCount(target.activeSeconds + safeCount(row.active_seconds));
       measuredViews = safeCount(measuredViews + row.page_views);
     }
-    const firstTrafficDay = expanded ? db.prepare("SELECT MIN(day) day FROM analytics_time_blocks").get()?.day : null;
-    const measurementStart = firstTrafficDay && firstTrafficDay > startDate ? firstTrafficDay : startDate;
-    const measuredDays = firstTrafficDay ? Math.floor((Date.parse(endDate) - Date.parse(measurementStart)) / DAY_MS) : 0;
-    const peakStatus = !startedOn ? "not_measured" : measuredDays < 14 || measuredViews < 20 ? "insufficient_data" : "available";
+    const firstTrafficDay = expanded ? db.prepare("SELECT MIN(day) day FROM analytics_time_blocks WHERE day>=?").get(retainedFrom)?.day : null;
+    const measurementStart = firstTrafficDay ? [startDate, retainedFrom, dateShift(startedOn, 1), dateShift(firstTrafficDay, 1)].sort().at(-1) : null;
+    const completedEnd = endDate < today ? endDate : dateShift(today, -1);
+    const measuredDays = measurementStart ? Math.max(0, Math.floor((Date.parse(completedEnd) - Date.parse(measurementStart)) / DAY_MS) + 1) : 0;
+    const expandedCoverage = coverageFor(startedOn, retainedFrom, startDate, endDate);
+    const peakStatus = expandedCoverage === "not_started" ? "not_measured" : measuredDays < 14 || measuredViews < 20 ? "insufficient_data" : "available";
     for (const cell of timeBlocks) {
       const sparse = cell.pageViews < 5 && (cell.pageViews > 0 || cell.activeSeconds > 0);
       cell.suppressed = peakStatus === "available" && sparse;
       if (peakStatus !== "available" || sparse) { cell.pageViews = null; cell.activeSeconds = null; }
     }
     const releases = expanded ? db.prepare("SELECT day,build_id FROM analytics_releases WHERE day>=? AND day<=? ORDER BY day DESC,build_id LIMIT 365")
-      .all(startDate, endDate).map(row => {
+      .all(laterDate(startDate, retainedFrom), endDate).map(row => {
         if (!validDate(row.day) || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.build_id)) throw new Error("Analytics build marker is unavailable.");
         return { date: row.day, buildId: row.build_id };
       }).reverse() : [];
-    return { expandedStartedOn: startedOn, expandedCoverage: !startedOn ? "not_started" : startedOn >= startDate ? "partial" : "full",
+    return { expandedStartedOn: startedOn, expandedCoverage, expandedAvailableFrom: availableFrom(startedOn, retainedFrom),
       metrics, timeBlocks, releases,
       peakUsage: { status: peakStatus, minimumMeasuredDays: 14, minimumPageViews: 20, suppressionThreshold: 5 } };
   }
@@ -208,6 +257,7 @@ function createAggregateAnalyticsStore({ filename, clock = Date.now, readAccount
       try {
         verify(db, true, today);
         ensureExpansion(db, today);
+        if (values.some(value => isRefinedCategory(value.product, value.category))) ensurePageDetail(db, today);
         for (const value of values) {
           if (value.metric) {
             db.prepare("INSERT INTO analytics_metrics VALUES(?,?,?) ON CONFLICT(day,metric) DO UPDATE SET count=count+excluded.count")
@@ -235,17 +285,18 @@ function createAggregateAnalyticsStore({ filename, clock = Date.now, readAccount
     });
   }
 
-  function read(days = 28) {
-    if (![7, 28, 90].includes(days)) throw invalid();
-    const endDate = dateAt(clock());
-    const startDate = dateShift(endDate, 1 - days);
-    const previousEndDate = dateShift(startDate, -1);
-    const previousStartDate = dateShift(startDate, -days);
+  function read(selection = 28, options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options) ||
+        Object.keys(options).some(key => key !== "detail") ||
+        (Object.hasOwn(options, "detail") && options.detail !== "pages")) throw invalid();
+    const detailed = options.detail === "pages";
+    const { period, today, retainedFrom } = resolveAnalyticsPeriod(selection, clock());
+    const { days, startDate, endDate, previousStartDate } = period;
     const report = withDatabase(false, db => {
       const startedOn = db ? verify(db, false) : null;
-      if (startedOn && startedOn > endDate) throw new Error("The analytics measurement date is unavailable.");
+      if (startedOn && startedOn > today) throw new Error("The analytics measurement date is unavailable.");
       const rows = db ? db.prepare(`SELECT day,product,category,page_views,active_seconds FROM analytics_daily
-        WHERE day>=? AND day<=? ORDER BY day,product,category`).all(previousStartDate, endDate) : [];
+        WHERE day>=? AND day<=? ORDER BY day,product,category`).all(laterDate(previousStartDate, retainedFrom), endDate) : [];
       const totals = { pageViews: 0, activeSeconds: 0 };
       const previousTotals = { pageViews: 0, activeSeconds: 0 };
       const products = PRODUCTS.map(product => ({ product, pageViews: 0, activeSeconds: 0 }));
@@ -253,6 +304,12 @@ function createAggregateAnalyticsStore({ filename, clock = Date.now, readAccount
         date: dateShift(startDate, index), pageViews: 0, activeSeconds: 0,
       }));
       const pages = new Map();
+      const detailedPages = detailed ? new Map(Object.entries(CATEGORIES).flatMap(([product, categories]) =>
+        categories.map(category => [product + "/" + category, { product, category, pageViews: 0, activeSeconds: 0 }]))) : null;
+      const dailyProducts = detailed ? daily.map(day => ({ date: day.date,
+        products: PRODUCTS.map(product => ({ product, pageViews: 0, activeSeconds: 0 })) })) : null;
+      const detailStartedOn = detailed ? readPageDetailStart(db, today) : null;
+      if (detailStartedOn && detailStartedOn < startedOn) throw new Error("Detailed page measurement date is unavailable.");
       function add(target, row) {
         target.pageViews = safeCount(target.pageViews + safeCount(row.page_views));
         target.activeSeconds = safeCount(target.activeSeconds + safeCount(row.active_seconds));
@@ -266,22 +323,36 @@ function createAggregateAnalyticsStore({ filename, clock = Date.now, readAccount
         add(totals, row);
         add(products.find(product => product.product === row.product), row);
         add(daily.find(day => day.date === row.day), row);
-        const key = row.product + "/" + row.category;
-        if (!pages.has(key)) pages.set(key, { product: row.product, category: row.category, pageViews: 0, activeSeconds: 0 });
+        const category = legacyCategory(row.product, row.category);
+        const key = row.product + "/" + category;
+        if (!pages.has(key)) pages.set(key, { product: row.product, category, pageViews: 0, activeSeconds: 0 });
         add(pages.get(key), row);
+        if (detailed) {
+          if (isRefinedCategory(row.product, row.category) && (!detailStartedOn || row.day < detailStartedOn)) {
+            throw new Error("Detailed page measurement date is unavailable.");
+          }
+          add(detailedPages.get(row.product + "/" + row.category), row);
+          add(dailyProducts.find(day => day.date === row.day).products.find(product => product.product === row.product), row);
+        }
       }
-      const expansion = readExpansion(db, startDate, endDate, previousStartDate);
+      const expansion = readExpansion(db, startDate, endDate, previousStartDate, today, retainedFrom);
       return {
         code: "ADMIN_ANALYTICS_FOUND", timeZone: "Etc/GMT+8",
-        period: { days, startDate, endDate, previousStartDate, previousEndDate },
+        period,
         measurement: {
-          startedOn, coverage: !startedOn ? "not_started" : startedOn >= startDate ? "partial" : "full",
+          startedOn, coverage: coverageFor(startedOn, retainedFrom, startDate, endDate),
           retentionDays: RETENTION_DAYS, expandedStartedOn: expansion.expandedStartedOn, expandedCoverage: expansion.expandedCoverage,
+          ...(period.kind ? { retainedFrom, availableFrom: availableFrom(startedOn, retainedFrom), expandedAvailableFrom: expansion.expandedAvailableFrom } : {}),
         },
         totals, previousTotals, products, metrics: expansion.metrics, timeBlocks: expansion.timeBlocks, peakUsage: expansion.peakUsage, releases: expansion.releases,
         pages: [...pages.values()].sort((a, b) => b.pageViews - a.pageViews || b.activeSeconds - a.activeSeconds ||
           a.product.localeCompare(b.product) || a.category.localeCompare(b.category)),
         daily,
+        ...(detailed ? { pageDetail: { startedOn: detailStartedOn, availableFrom: availableFrom(detailStartedOn, retainedFrom),
+          coverage: coverageFor(detailStartedOn, retainedFrom, startDate, endDate),
+          rows: [...detailedPages.values()].sort((a, b) => b.pageViews - a.pageViews || b.activeSeconds - a.activeSeconds ||
+            a.product.localeCompare(b.product) || a.category.localeCompare(b.category)),
+          dailyProducts } } : {}),
       };
     });
     const counts = readAccountTotals({ startMs: dayStartMs(startDate), endMs: dayStartMs(dateShift(endDate, 1)) });
@@ -299,4 +370,4 @@ function createAggregateAnalyticsStore({ filename, clock = Date.now, readAccount
   });
 }
 
-module.exports = { createAggregateAnalyticsStore, validateAggregateInput, CATEGORIES, PRODUCTS, BROWSER_METRICS, ROOM_METRICS, ALL_METRICS, ANALYTICS_DATABASE_ID };
+module.exports = { createAggregateAnalyticsStore, validateAggregateInput, resolveAnalyticsPeriod, CATEGORIES, PRODUCTS, BROWSER_METRICS, ROOM_METRICS, ALL_METRICS, ANALYTICS_DATABASE_ID };

@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const express = require("express");
 const { DatabaseSync } = require("node:sqlite");
-const { createAggregateAnalyticsStore, validateAggregateInput, CATEGORIES } = require("../../src/analytics/createAggregateAnalyticsStore");
+const { createAggregateAnalyticsStore, validateAggregateInput, resolveAnalyticsPeriod, CATEGORIES } = require("../../src/analytics/createAggregateAnalyticsStore");
 const { createAggregateAnalyticsRouter } = require("../../src/transport/http/createAggregateAnalyticsRouter");
 const { createTargetRequestSecurity } = require("../../src/transport/http/createTargetRequestSecurity");
 const { createPlatformAuthorizationService } = require("../../src/application/services/authorization/requirePlatformAdministrator");
@@ -343,4 +343,230 @@ test("operational-source failures remain unavailable while traffic remains reada
   assert.equal(report.operations.dailyRooms.status, "unavailable");
   assert.equal(report.operations.freshness.statistics, null);
   assert.equal(JSON.stringify(report).includes("internal source details"), false);
+});
+
+
+test("calendar periods resolve full Monday weeks and variable preceding months across year and leap boundaries", () => {
+  const october=resolveAnalyticsPeriod({month:"2026-10"},NOW).period;
+  assert.deepEqual(october,{days:31,startDate:"2026-10-01",endDate:"2026-10-31",previousStartDate:"2026-09-01",previousEndDate:"2026-09-30",kind:"month",value:"2026-10",calendarEndDate:"2026-10-31",today:"2026-11-27"});
+  const leap=resolveAnalyticsPeriod({month:"2024-02"},NOW).period;assert.equal(leap.days,29);assert.equal(leap.calendarEndDate,"2024-02-29");assert.equal(leap.previousStartDate,"2024-01-01");assert.equal(leap.previousEndDate,"2024-01-31");
+  assert.equal(resolveAnalyticsPeriod({month:"2025-02"},NOW).period.days,28);
+  const january=resolveAnalyticsPeriod({month:"2026-01"},NOW).period;assert.equal(january.previousStartDate,"2025-12-01");assert.equal(january.previousEndDate,"2025-12-31");
+  const week=resolveAnalyticsPeriod({week:"2025-12-29"},NOW).period;assert.equal(week.days,7);assert.equal(week.endDate,"2026-01-04");assert.equal(week.previousStartDate,"2025-12-22");assert.equal(week.previousEndDate,"2025-12-28");
+});
+
+test("current calendar periods clip to the fixed UTC-8 day and preserve full prior calendar comparisons", () => {
+  const month=resolveAnalyticsPeriod({month:"2026-11"},NOW).period;assert.equal(month.days,27);assert.equal(month.endDate,"2026-11-27");assert.equal(month.calendarEndDate,"2026-11-30");assert.equal(month.previousStartDate,"2026-10-01");assert.equal(month.previousEndDate,"2026-10-31");
+  const week=resolveAnalyticsPeriod({week:"2026-11-23"},NOW).period;assert.equal(week.days,5);assert.equal(week.calendarEndDate,"2026-11-29");assert.equal(week.previousEndDate,"2026-11-22");
+  assert.throws(()=>resolveAnalyticsPeriod({week:"2026-11-23"},Date.parse("2026-11-23T07:59:59Z")),{code:"ANALYTICS_INPUT_INVALID"});
+  const boundary=resolveAnalyticsPeriod({week:"2026-11-23"},Date.parse("2026-11-23T08:00:00Z")).period;assert.equal(boundary.days,1);assert.equal(boundary.today,"2026-11-23");
+});
+
+test("invalid calendar selectors reject before storage is opened", t => {
+  const f=fixture(t);
+  for(const selection of [null,[],{},"2026-10",{week:"2026-11-24"},{week:"2026-11-30"},{week:"2026-02-30"},{week:"2026-1-05"},
+    {month:"2026-13"},{month:"2026-00"},{month:"2026-12"},{month:"2026-1"},{month:"1969-12"},{week:"1969-12-29"},
+    {week:"2026-11-23",month:"2026-11"},{month:"2026-10",days:28},{days:28}]) assert.throws(()=>f.store.read(selection),{code:"ANALYTICS_INPUT_INVALID"});
+  assert.equal(fs.existsSync(f.filename),false);
+});
+
+test("historical periods before collection remain readable and still query historical accounts and operations", t => {
+  const operations=[];const f=fixture(t,{readOperations(input){operations.push(input);return{historical:true};}});
+  f.store.record(INPUT);const before=fs.readFileSync(f.filename);const result=f.store.read({month:"2026-10"});
+  assert.equal(result.measurement.startedOn,"2026-11-27");assert.equal(result.measurement.expandedStartedOn,"2026-11-27");
+  assert.equal(result.measurement.coverage,"not_started");assert.equal(result.measurement.expandedCoverage,"not_started");
+  assert.equal(result.measurement.retainedFrom,"2025-11-28");assert.equal(result.measurement.availableFrom,"2026-11-27");assert.equal(result.measurement.expandedAvailableFrom,"2026-11-27");
+  assert.deepEqual(result.totals,{pageViews:0,activeSeconds:0});assert.equal(result.daily.length,31);assert.equal(result.peakUsage.status,"not_measured");
+  assert.deepEqual(f.accountReads.at(-1),{startMs:Date.parse("2026-10-01T08:00:00Z"),endMs:Date.parse("2026-11-01T08:00:00Z")});
+  assert.equal(operations[0].days,31);assert.equal(operations[0].startDate,"2026-10-01");assert.equal(operations[0].endDate,"2026-10-31");
+  assert.deepEqual(result.accounts,{total:9,createdInPeriod:2});assert.deepEqual(fs.readFileSync(f.filename),before);
+});
+
+test("calendar totals and metric comparisons use the full preceding month rather than an equal-day lookback", t => {
+  const f=fixture(t,{filename:":memory:"});
+  for(const date of ["2026-08-31","2026-09-01","2026-09-30","2026-10-01","2026-10-31"]){f.setNow(Date.parse(date+"T08:00:00Z"));f.store.record(INPUT);f.store.record({metric:"launch.browser",value:1});}
+  f.setNow(NOW);const report=f.store.read({month:"2026-10"});
+  assert.deepEqual(report.totals,{pageViews:2,activeSeconds:60});assert.deepEqual(report.previousTotals,{pageViews:2,activeSeconds:60});
+  assert.deepEqual(report.metrics.find(row=>row.metric==="launch.browser"),{metric:"launch.browser",count:2,previousCount:2});
+  assert.equal(report.measurement.coverage,"full");assert.equal(report.measurement.expandedCoverage,"full");
+});
+
+test("historical reads mask all expired aggregate rows using today's cutoff without pruning storage", t => {
+  const f=fixture(t,{buildId:"expired-build"});
+  for(const date of ["2025-10-15","2025-11-14","2025-11-15"]){f.setNow(Date.parse(date+"T08:00:00Z"));f.store.record(INPUT);f.store.record({metric:"launch.browser",value:1});}
+  databaseAt(f.filename,db=>db.exec("UPDATE analytics_daily SET page_views=100 WHERE day='2025-11-14'; UPDATE analytics_metrics SET count=100 WHERE day='2025-11-14'; UPDATE analytics_time_blocks SET page_views=100 WHERE day='2025-11-14';"));
+  const later=createAggregateAnalyticsStore({filename:f.filename,clock:()=>Date.parse("2025-11-15T08:00:00Z"),buildId:"retained-build",readAccountTotals:()=>({total:0,createdInPeriod:0})});
+  later.record({metric:"install.reported",value:1});later.close();
+  f.setNow(Date.parse("2026-11-14T08:00:00Z"));const before=fs.readFileSync(f.filename);const report=f.store.read({month:"2025-11"});
+  assert.equal(report.measurement.retainedFrom,"2025-11-15");assert.equal(report.measurement.startedOn,"2025-10-15");assert.equal(report.measurement.availableFrom,"2025-11-15");
+  assert.equal(report.measurement.coverage,"partial");assert.equal(report.measurement.expandedCoverage,"partial");assert.equal(report.measurement.expandedAvailableFrom,"2025-11-15");
+  assert.deepEqual(report.totals,{pageViews:1,activeSeconds:30});assert.deepEqual(report.previousTotals,{pageViews:0,activeSeconds:0});
+  assert.deepEqual(report.metrics.find(row=>row.metric==="launch.browser"),{metric:"launch.browser",count:1,previousCount:0});
+  assert.deepEqual(report.releases,[{date:"2025-11-15",buildId:"retained-build"}]);
+  assert.equal(report.peakUsage.status,"insufficient_data","expired views cannot meet the heatmap's20-view threshold");
+  const older=f.store.read({month:"2025-10"});assert.equal(older.measurement.coverage,"not_started");assert.equal(older.measurement.expandedCoverage,"not_started");assert.equal(older.peakUsage.status,"not_measured");
+  assert.equal(older.totals.pageViews,0);assert.deepEqual(fs.readFileSync(f.filename),before);
+  databaseAt(f.filename,db=>assert.equal(db.prepare("SELECT COUNT(*) n FROM analytics_daily WHERE day<'2025-11-15'").get().n,2));
+});
+
+test("calendar coverage keeps initial collection days partial and expanded measurement dates independent", t => {
+  const f=fixture(t);
+  databaseAt(f.filename,db=>db.exec("CREATE TABLE analytics_metadata(id INTEGER PRIMARY KEY,started_on TEXT); CREATE TABLE analytics_daily(day TEXT,product TEXT,category TEXT,page_views INTEGER,active_seconds INTEGER,PRIMARY KEY(day,product,category)); PRAGMA application_id=1212239444; PRAGMA user_version=1; INSERT INTO analytics_metadata VALUES(1,'2026-09-01'); INSERT INTO analytics_daily VALUES('2026-10-01','daily','room',8,60);"));
+  const before=fs.readFileSync(f.filename);const legacy=f.store.read({month:"2026-10"});assert.equal(legacy.measurement.coverage,"full");assert.equal(legacy.measurement.expandedAvailableFrom,null);assert.deepEqual(fs.readFileSync(f.filename),before);
+  f.store.record({metric:"launch.browser",value:1});const historical=f.store.read({month:"2026-10"});assert.equal(historical.measurement.coverage,"full");assert.equal(historical.measurement.expandedStartedOn,"2026-11-27");assert.equal(historical.measurement.expandedCoverage,"not_started");assert.equal(historical.totals.pageViews,8);
+  const initial=fixture(t,{filename:":memory:"});initial.setNow(Date.parse("2026-10-01T08:00:00Z"));initial.store.record(INPUT);initial.setNow(NOW);assert.equal(initial.store.read({month:"2026-10"}).measurement.coverage,"partial");
+});
+
+test("heatmap counts a completed historical last day but excludes today's and the initial collection day's partial coverage", t => {
+  const f=fixture(t,{filename:":memory:"});f.setNow(Date.parse("2026-10-17T08:00:00Z"));for(let i=0;i<20;i++)f.store.record(INPUT);
+  f.setNow(Date.parse("2026-10-31T20:00:00Z"));assert.equal(f.store.read({month:"2026-10"}).peakUsage.status,"insufficient_data");
+  f.setNow(Date.parse("2026-11-01T08:00:00Z"));assert.equal(f.store.read({month:"2026-10"}).peakUsage.status,"available");
+  assert.equal(f.store.read({week:"2026-10-19"}).peakUsage.status,"insufficient_data");
+});
+
+test("calendar support preserves exact legacy response keys and rejects metadata dated after today", t => {
+  const f=fixture(t);f.store.record(INPUT);
+  for(const selection of [undefined,7,28,90]){const result=f.store.read(selection);assert.deepEqual(Object.keys(result.period).sort(),["days","endDate","previousEndDate","previousStartDate","startDate"]);assert.deepEqual(Object.keys(result.measurement).sort(),["coverage","expandedCoverage","expandedStartedOn","retentionDays","startedOn"]);}
+  databaseAt(f.filename,db=>db.exec("UPDATE analytics_metadata SET started_on='2026-11-28'"));assert.throws(()=>f.store.read({month:"2026-10"}));
+  databaseAt(f.filename,db=>db.exec("UPDATE analytics_metadata SET started_on='2026-11-27'; UPDATE analytics_expansion SET started_on='2026-11-28'"));assert.throws(()=>f.store.read({month:"2026-10"}));
+});
+
+test("Admin calendar selectors require current authority and reject mixed, duplicate, future and invalid ranges",async t=>{
+  const f=await httpFixture(t);const url=f.base+"/api/v1/admin/analytics";const headers={Origin:ORIGIN,Cookie:"session=valid"};
+  assert.equal((await fetch(url+"?month=2026-10",{headers:{Origin:ORIGIN}})).status,401);
+  for(const [query,kind,value]of [["week=2026-11-23","week","2026-11-23"],["month=2026-10","month","2026-10"]]){const response=await fetch(url+"?"+query,{headers});assert.equal(response.status,200);const envelope=await response.json();assert.equal(envelope.data.period.kind,kind);assert.equal(envelope.data.period.value,value);assert.equal(envelope.data.measurement.availableFrom,null);assert.match(envelope.meta.requestId,/^[0-9a-f-]+$/);}
+  for(const query of ["month=2026-10&days=28","week=2026-11-23&month=2026-11","month=2026-10&month=2026-11","week=2026-11-24","week=2026-11-30","month=2026-12","month=2026-02-30","month=1969-12","week[x]=2026-11-23","year=2026"]){const response=await fetch(url+"?"+query,{headers});assert.equal(response.status,400,query);assert.equal((await response.json()).error.code,"ANALYTICS_INPUT_INVALID");}
+  f.revokeAdmin();assert.equal((await fetch(url+"?month=invalid",{headers})).status,403);assert.equal(fs.existsSync(f.filename),false);
+});
+
+
+test("detailed page reports are opt-in, zero-fill the bounded catalog and never initialize missing storage", t => {
+  const f = fixture(t);
+  const legacy = f.store.read(28);
+  const report = f.store.read(28, { detail: "pages" });
+  assert.deepEqual(Object.keys(report).sort(), [...Object.keys(legacy), "pageDetail"].sort());
+  assert.equal(report.pageDetail.startedOn, null);
+  assert.equal(report.pageDetail.availableFrom, null);
+  assert.equal(report.pageDetail.coverage, "not_started");
+  assert.equal(report.pageDetail.rows.length, 55);
+  assert.equal(report.pageDetail.dailyProducts.length, 28);
+  assert.equal(new Set(report.pageDetail.rows.map(row => row.product + "/" + row.category)).size, 55);
+  for (const day of report.pageDetail.dailyProducts) {
+    assert.deepEqual(day.products, ["leago", "daily", "shared"].map(product => ({ product, pageViews: 0, activeSeconds: 0 })));
+  }
+  for (const options of [null, [], { detail: "all" }, { detail: "pages", userId: USER }, { detail: undefined }]) {
+    assert.throws(() => f.store.read(28, options), { code: "ANALYTICS_INPUT_INVALID" });
+  }
+  assert.deepEqual(fs.readdirSync(f.directory), []);
+});
+
+test("refined page counts preserve legacy combined history and default clients receive only original categories", t => {
+  const { LEGACY_CATEGORIES, REFINED_CATEGORY_PARENTS } = require("../../src/analytics/pageCatalog");
+  const f = fixture(t);
+  f.setNow(Date.parse("2026-11-25T08:00:00Z"));
+  f.store.record({ product: "shared", category: "games", pageViews: 1, activeSeconds: 20 });
+  f.store.record({ product: "leago", category: "players", pageViews: 1, activeSeconds: 10 });
+  const beforeDetail = fs.readFileSync(f.filename);
+  assert.equal(f.store.read(7, { detail: "pages" }).pageDetail.startedOn, null);
+  assert.deepEqual(fs.readFileSync(f.filename), beforeDetail);
+  f.setNow(NOW);
+  for (const [product, parents] of Object.entries(REFINED_CATEGORY_PARENTS)) {
+    for (const category of Object.keys(parents)) f.store.record({ product, category, pageViews: 1, activeSeconds: 3 });
+  }
+  f.store.record(INPUT);
+  const beforeRead = fs.readFileSync(f.filename);
+  const plain = f.store.read(7);
+  const report = f.store.read(7, { detail: "pages" });
+  const row = (product, category) => report.pageDetail.rows.find(item => item.product === product && item.category === category);
+  assert.equal(report.pageDetail.startedOn, "2026-11-27");
+  assert.equal(report.pageDetail.coverage, "partial");
+  assert.equal(report.pageDetail.availableFrom, "2026-11-27");
+  assert.equal(plain.pageDetail, undefined);
+  assert.deepEqual(report.pages, plain.pages);
+  assert.ok(plain.pages.every(item => LEGACY_CATEGORIES[item.product].includes(item.category)));
+  assert.equal(plain.pages.find(item => item.category === "games").pageViews, 3);
+  assert.equal(row("shared", "games").pageViews, 1);
+  assert.equal(row("shared", "tip_jar").pageViews, 1);
+  assert.equal(row("shared", "mr_boni").pageViews, 1);
+  assert.equal(row("leago", "players").pageViews, 1);
+  assert.equal(row("leago", "players_list").pageViews, 1);
+  assert.equal(row("leago", "player_detail").pageViews, 1);
+  assert.equal(report.pageDetail.rows.reduce((sum,item) => sum + item.pageViews, 0), report.totals.pageViews);
+  assert.deepEqual(report.pageDetail.rows.map(item=>item.pageViews), report.pageDetail.rows.map(item=>item.pageViews).sort((a,b)=>b-a));
+  for (const day of report.pageDetail.dailyProducts) {
+    const combined = report.daily.find(item => item.date === day.date);
+    assert.equal(day.products.reduce((sum,item)=>sum+item.pageViews,0), combined.pageViews);
+    assert.equal(day.products.reduce((sum,item)=>sum+item.activeSeconds,0), combined.activeSeconds);
+  }
+  for (const product of report.products) {
+    assert.equal(report.pageDetail.dailyProducts.reduce((sum,day)=>sum+day.products.find(item=>item.product===product.product).pageViews,0),product.pageViews);
+  }
+  databaseAt(f.filename, db => {
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 2);
+    assert.deepEqual(db.prepare("PRAGMA table_info(analytics_page_detail)").all().map(item=>item.name), ["id","started_on"]);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM analytics_page_detail").get().n,1);
+  });
+  assert.deepEqual(fs.readFileSync(f.filename), beforeRead);
+});
+
+test("detailed pages preserve historical pre-collection periods and use current retention without read-time cleanup", t => {
+  const f = fixture(t);
+  f.setNow(Date.parse("2025-11-10T08:00:00Z"));
+  f.store.record({ product:"shared",category:"games",pageViews:1,activeSeconds:10 });
+  f.setNow(Date.parse("2025-11-14T08:00:00Z"));
+  f.store.record({ product:"shared",category:"tip_jar",pageViews:1,activeSeconds:20 });
+  f.setNow(Date.parse("2025-11-15T08:00:00Z"));
+  f.store.record({ product:"shared",category:"mr_boni",pageViews:1,activeSeconds:30 });
+  f.setNow(Date.parse("2026-11-14T08:00:00Z"));
+  const before = fs.readFileSync(f.filename);
+  const report = f.store.read({ month:"2025-11" },{detail:"pages"});
+  assert.equal(report.pageDetail.startedOn,"2025-11-14");
+  assert.equal(report.pageDetail.availableFrom,"2025-11-15");
+  assert.equal(report.pageDetail.coverage,"partial");
+  assert.equal(report.pageDetail.rows.find(row=>row.category==="games").pageViews,0);
+  assert.equal(report.pageDetail.rows.find(row=>row.category==="tip_jar").pageViews,0);
+  assert.equal(report.pageDetail.rows.find(row=>row.category==="mr_boni").pageViews,1);
+  assert.equal(report.pageDetail.dailyProducts.find(day=>day.date==="2025-11-14").products.find(row=>row.product==="shared").pageViews,0);
+  const earlier = f.store.read({month:"2025-10"},{detail:"pages"});
+  assert.equal(earlier.pageDetail.startedOn,"2025-11-14");
+  assert.equal(earlier.pageDetail.coverage,"not_started");
+  assert.equal(earlier.totals.pageViews,0);
+  assert.deepEqual(fs.readFileSync(f.filename),before);
+  databaseAt(f.filename,db=>assert.equal(db.prepare("SELECT COUNT(*) n FROM analytics_daily").get().n,3));
+});
+
+test("old schema reads do not add detailed metadata and first accepted refined event sets its independent start", t => {
+  const f = fixture(t);
+  databaseAt(f.filename,db=>db.exec("CREATE TABLE analytics_metadata(id INTEGER PRIMARY KEY,started_on TEXT); CREATE TABLE analytics_daily(day TEXT,product TEXT,category TEXT,page_views INTEGER,active_seconds INTEGER,PRIMARY KEY(day,product,category)); PRAGMA application_id=1212239444; PRAGMA user_version=1; INSERT INTO analytics_metadata VALUES(1,'2026-10-01'); INSERT INTO analytics_daily VALUES('2026-10-02','shared','games',4,60);"));
+  const before = fs.readFileSync(f.filename);
+  const old = f.store.read({month:"2026-10"},{detail:"pages"});
+  assert.equal(old.pageDetail.startedOn,null);
+  assert.equal(old.pageDetail.rows.find(row=>row.category==="games").pageViews,4);
+  assert.deepEqual(fs.readFileSync(f.filename),before);
+  f.store.record({metric:"launch.browser",value:1});
+  assert.equal(f.store.read(28,{detail:"pages"}).pageDetail.startedOn,null);
+  f.store.record({product:"shared",category:"tip_jar",pageViews:1,activeSeconds:0});
+  assert.equal(f.store.read({month:"2026-10"},{detail:"pages"}).pageDetail.coverage,"not_started");
+  assert.equal(f.store.read(28,{detail:"pages"}).pageDetail.startedOn,"2026-11-27");
+  f.setNow(Date.parse("2026-12-05T08:00:00Z"));
+  assert.equal(f.store.read(7,{detail:"pages"}).pageDetail.coverage,"full");
+  databaseAt(f.filename,db=>db.exec("UPDATE analytics_page_detail SET started_on='2026-12-06'"));
+  assert.throws(()=>f.store.read(7,{detail:"pages"}));
+  assert.doesNotThrow(()=>f.store.read(7),"optional detail failure does not alter legacy reports");
+});
+
+test("detailed HTTP reports enforce authority, strict option parsing and anonymous collection of fixed new categories", async t => {
+  const f=await httpFixture(t);const url=f.base+"/api/v1/admin/analytics";const headers={Origin:ORIGIN,Cookie:"session=valid"};
+  assert.equal((await fetch(url+"?detail=pages",{headers:{Origin:ORIGIN}})).status,401);
+  for(const query of ["detail=pages","days=7&detail=pages","month=2026-10&detail=pages","week=2026-11-23&detail=pages"]){
+    const response=await fetch(url+"?"+query,{headers});assert.equal(response.status,200,query);
+    const envelope=await response.json();assert.equal(envelope.data.pageDetail.rows.length,55);assert.match(envelope.meta.requestId,/^[0-9a-f-]+$/);
+    assert.equal(response.headers.get("cache-control"),"no-store");
+  }
+  assert.equal(fs.existsSync(f.filename),false);
+  for(const query of ["detail=", "detail=all", "detail=pages&detail=pages", "detail[x]=pages", "detail=pages&month=2026-10&days=28", "detail=pages&userId=private"]){assert.equal((await fetch(url+"?"+query,{headers})).status,400,query);}
+  for(const category of ["tip_jar","mr_boni"]){assert.equal((await f.send({product:"shared",category,pageViews:1,activeSeconds:0})).status,204);}
+  assert.equal((await f.send({product:"shared",category:"/games/private",pageViews:1,activeSeconds:0})).status,400);
+  const plain=await (await fetch(url,{headers})).json();assert.equal(plain.data.pageDetail,undefined);assert.equal(plain.data.pages[0].category,"games");assert.equal(plain.data.pages[0].pageViews,2);
+  const before=fs.readFileSync(f.filename);f.revokeAdmin();assert.equal((await fetch(url+"?detail=invalid",{headers})).status,403);assert.deepEqual(fs.readFileSync(f.filename),before);
 });

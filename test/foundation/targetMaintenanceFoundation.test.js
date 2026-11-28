@@ -86,6 +86,8 @@ describe("M7-03 target maintenance write closure", () => {
     for (const [method, pathname] of [
       ["GET", "/api/v1/leagues"],
       ["GET", "/api/v1/admin/analytics"],
+      ["GET", "/api/v1/admin/account-directory"],
+      ["GET", "/api/v1/admin/analytics/health"],
       ["POST", "/api/v1/session"],
       ["DELETE", "/api/v1/session"],
     ]) {
@@ -97,7 +99,7 @@ describe("M7-03 target maintenance write closure", () => {
     }
     assert.deepEqual(
       calls.map(({ method, path }) => `${method} ${path}`),
-      ["GET /api/v1/leagues", "GET /api/v1/admin/analytics", "POST /api/v1/session", "DELETE /api/v1/session"]
+      ["GET /api/v1/leagues", "GET /api/v1/admin/analytics", "GET /api/v1/admin/account-directory", "GET /api/v1/admin/analytics/health", "POST /api/v1/session", "DELETE /api/v1/session"]
     );
   });
 

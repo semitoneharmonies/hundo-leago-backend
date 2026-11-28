@@ -1,3 +1,7 @@
+const { createAnalyticsHealthReader } = require("../analytics/readAnalyticsHealth");
+const { createAnalyticsHealthRouter, ANALYTICS_HEALTH_PATH } = require("../transport/http/createAnalyticsHealthRouter");
+const { createSqliteAdminAccountDirectoryReader } = require("../infrastructure/persistence/sqlite/SqliteAdminAccountDirectoryReader");
+const { createAdminAccountDirectoryRouter, ACCOUNT_DIRECTORY_PATH } = require("../transport/http/createAdminAccountDirectoryRouter");
 const { runStatisticsWorker } = require("../jobs/runStatisticsWorker");
 const { createAggregateAnalyticsStore } = require("../analytics/createAggregateAnalyticsStore");
 const { createOperationalAnalyticsReader } = require("../analytics/readOperationalAnalytics");
@@ -856,6 +860,8 @@ const SPORTSDATAIO_LIVE_UUID_V4_PATTERN =
 const SPORTSDATAIO_LIVE_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const TARGET_ENDPOINTS = Object.freeze([
+  ["GET", ACCOUNT_DIRECTORY_PATH, "adminAccountDirectory"],
+  ["GET", ANALYTICS_HEALTH_PATH, "analyticsHealth"],
   ...aggregateAnalyticsEndpoints.map(([method, path]) => [method, path, "aggregateAnalytics"]),
   ...dailyEndpoints.map(([method, path]) => [method, path, "hundoDaily"]),
   ["GET", "/api/v1/leagues/:leagueId/tip-jar/leaderboard", "tipJar"],
@@ -3442,6 +3448,8 @@ function createTargetServices({
 function createTargetRouters({
   services,
   aggregateAnalytics = null,
+  accountDirectory = null,
+  analyticsHealth = null,
   daily,
   dailyActor,
   dailyPlayerDetails = null,
@@ -3477,6 +3485,14 @@ function createTargetRouters({
     networkSourceResolver,
   };
   const routers = Object.freeze({
+    analyticsHealth: createAnalyticsHealthRouter({
+      reader: analyticsHealth, requestSecurity: dailySecurity, platformAuthorization: services.authorizations.platform,
+      clock: () => securityFoundations.clock.nowMs(),
+    }),
+    adminAccountDirectory: createAdminAccountDirectoryRouter({
+      reader: accountDirectory, requestSecurity: dailySecurity,
+      platformAuthorization: services.authorizations.platform,
+    }),
     aggregateAnalytics: createAggregateAnalyticsRouter({
       store: aggregateAnalytics, adminSecurity: dailySecurity,
       platformAuthorization: services.authorizations.platform,
@@ -3827,6 +3843,11 @@ function createTargetRuntime({
     },
   });
   const transport = createTargetRouters({
+    analyticsHealth: createAnalyticsHealthReader({ database,
+      dailyFilename: database.name && !database.memory ? require("node:path").resolve(database.name) + ".hundo-daily.sqlite3" : ":memory:",
+      clock: () => securityFoundations.clock.nowMs(),
+    }),
+    accountDirectory: createSqliteAdminAccountDirectoryReader({ database }),
     aggregateAnalytics,
     daily,
     dailyPlayerDetails: createDailyPlayerDetails({ playerRepository: repositories.players, currentNhlSeason: currentSeason.nhlSeasonKey }),

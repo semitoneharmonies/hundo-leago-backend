@@ -1524,19 +1524,21 @@ test("Hundo Daily plays a room through authenticated HTTP without changing seaso
 });
 
 describe("M3-19 exact target endpoint dispatch", () => {
-  test("declares 248 unique method/path contracts across the exact router set", () => {
-    assert.equal(TARGET_ENDPOINTS.length, 248);
+  test("declares 250 unique method/path contracts across the exact router set", () => {
+    assert.equal(TARGET_ENDPOINTS.length, 250);
     assert.equal(
       new Set(TARGET_ENDPOINTS.map(({ method, path }) => `${method} ${path}`))
         .size,
-      248
+      250
     );
     assert.deepEqual(TARGET_ROUTER_KEYS, [
       "accountProfile",
       "accountRegistration",
       "accountSession",
       "activityNotification",
+      "adminAccountDirectory",
       "aggregateAnalytics",
+      "analyticsHealth",
       "auction",
       "auctionReveal",
       "auctionTiming",
@@ -2838,7 +2840,7 @@ describe("M3-19 exact-schema target dependency composition", () => {
     assert.equal(job.created_at_ms, NOW_MS);
     assert.equal(job.updated_at_ms, NOW_MS);
     assert.equal(job.version, 1);
-    assert.equal(TARGET_ENDPOINTS.length, 248);
+    assert.equal(TARGET_ENDPOINTS.length, 250);
   });
 
   for (const dailyStaging of [false, true]) test(`runs FAD readiness through the composed target runtime and opens every Candidate Card atomically (daily staging: ${dailyStaging})`, async (t) => {
@@ -8720,6 +8722,24 @@ test("aggregate analytics runtime preserves main and Daily data and read-only au
     assert.deepEqual(expandedReport.totals, { pageViews: 1, activeSeconds: 25 });
     assert.equal(expandedReport.metrics.find(row => row.metric === "install.reported").count, 1);
     assert.equal(expandedReport.peakUsage.status, "insufficient_data");
+    const historical = await fetch(base + "/api/v1/admin/analytics?month=2026-06", { headers: headers(admin) });
+    assert.equal(historical.status, 200);
+    const historicalReport = (await historical.json()).data;
+    assert.equal(historicalReport.period.kind, "month");
+    assert.equal(historicalReport.period.days, 30);
+    assert.equal(historicalReport.measurement.startedOn, "2026-07-22");
+    assert.equal(historicalReport.measurement.coverage, "not_started");
+    assert.equal(historicalReport.measurement.expandedCoverage, "not_started");
+    assert.deepEqual(historicalReport.accounts, { total: 2, createdInPeriod: 0 });
+    assert.equal(historicalReport.operations.gameplay.status, "available");
+    const currentWeek = await fetch(base + "/api/v1/admin/analytics?week=2026-07-20", { headers: headers(admin) });
+    assert.equal(currentWeek.status, 200);
+    const weekReport = (await currentWeek.json()).data;
+    assert.equal(weekReport.period.days, 3);
+    assert.equal(weekReport.period.endDate, "2026-07-22");
+    assert.equal(weekReport.period.calendarEndDate, "2026-07-26");
+    assert.equal(weekReport.period.previousStartDate, "2026-07-13");
+    assert.equal(weekReport.period.previousEndDate, "2026-07-19");
     assert.deepEqual(fs.readFileSync(sidecar), aggregateBefore);
     assert.deepEqual(database.serialize(), mainBefore);
     now = admin.session.absoluteExpiresAtMs + 1;
@@ -8727,4 +8747,64 @@ test("aggregate analytics runtime preserves main and Daily data and read-only au
     assert.equal(expired.status, 401);
     assert.deepEqual(database.serialize(), mainBefore, "expired analytics GET must not persist expiry or activity");
   } finally { runtime.close(); }
+});
+
+
+test("account directory runtime includes all accounts without session activity, analytics writes or assignment-list changes", async t => {
+  let now=NOW_MS;
+  const database=createDatabase(t);
+  const runtime=createTargetRuntime(runtimeOptions(database,{securityFoundations:createSecurityFoundations({env:securityEnv(),now:()=>now,loggerSink(){}})}));
+  try {
+    const base=await startRuntimeApp(t,runtime);
+    const users=[[941001,"Admin","active"],[941002,"Member","active"],[941003,"Pending Verification","pending_verification"],
+      [941004,"Pending Setup","pending_credential_setup"],[941005,"Deactivated","deactivated"],[941006,"Disabled","disabled"]];
+    const insert=database.prepare("INSERT INTO users(id,email_normalized,email_display,display_name,display_name_normalized,status,created_at_ms,updated_at_ms,version) VALUES(?,?,?,?,?,?,?,?,1)");
+    for(const[number,name,status]of users){const email=name.toLowerCase().replaceAll(" ","")+"@example.test";insert.run(uuid(number),email,email,name,name.toLowerCase(),status,now,now);}
+    database.prepare("INSERT INTO platform_roles VALUES (?,?,'platform_administrator','active',NULL,?,NULL,1)").run(uuid(941007),uuid(941001),now);
+    const admin=runtime.services.sessionService.issueForUser({userId:uuid(941001)});
+    const member=runtime.services.sessionService.issueForUser({userId:uuid(941002)});
+    const headers=session=>browserHeaders({Cookie:runtime.transport.sessionCookie.name+"="+session.rawSessionToken});
+    const oldList=await fetch(base+"/api/v1/admin/users",{headers:headers(admin)});assert.equal(oldList.status,200);
+    assert.deepEqual((await oldList.json()).data.users.map(user=>user.id),[uuid(941001),uuid(941002),uuid(941004)],"assignment endpoint still contains only its original eligible statuses");
+    const directoryPath=base+"/api/v1/admin/account-directory";
+    const sidecars=[database.name+".analytics.sqlite3",database.name+".hundo-daily.sqlite3"];
+    const mainBefore=database.serialize();const entriesBefore=fs.readdirSync(path.dirname(database.name)).sort();
+    now+=6*60*1000;
+    const response=await fetch(directoryPath,{headers:headers(admin)});assert.equal(response.status,200);assert.equal(response.headers.get("cache-control"),"no-store");assert.equal(response.headers.get("set-cookie"),null);
+    const envelope=await response.json();assert.match(envelope.meta.requestId,/^[0-9a-f-]+$/);assert.equal(envelope.data.accounts.length,6);assert.equal(envelope.data.pagination.total,6);
+    assert.deepEqual(new Set(envelope.data.accounts.map(account=>account.status)),new Set(users.map(user=>user[2])));
+    assert.ok(envelope.data.accounts.every(account=>account.leagues.length===0));
+    assert.deepEqual(database.serialize(),mainBefore,"GET does not refresh the administrator session after the activity-write threshold");
+    assert.deepEqual(fs.readdirSync(path.dirname(database.name)).sort(),entriesBefore,"directory does not initialize another datastore");
+    for(const sidecar of sidecars){assert.equal(fs.existsSync(sidecar),false);fs.writeFileSync(sidecar,"UNRELATED_PRIVATE_SIDECAR_BYTES");}
+    const second=await fetch(directoryPath+"?limit=2&offset=2",{headers:headers(admin)});assert.equal(second.status,200);assert.equal((await second.json()).data.accounts.length,2);
+    for(const sidecar of sidecars)assert.equal(fs.readFileSync(sidecar,"utf8"),"UNRELATED_PRIVATE_SIDECAR_BYTES");
+    assert.equal((await fetch(directoryPath,{headers:headers(member)})).status,403);
+    assert.equal((await fetch(directoryPath,{headers:browserHeaders()})).status,401);
+    assert.deepEqual(database.serialize(),mainBefore);
+    database.prepare("UPDATE platform_roles SET status='ended',ended_at_ms=?,version=version+1 WHERE id=?").run(now,uuid(941007));
+    const revokedBefore=database.serialize();
+    const revoked=await fetch(directoryPath+"?unknown=private",{headers:headers(admin)});assert.equal(revoked.status,403);assert.equal((await revoked.json()).error.code,"PLATFORM_ADMINISTRATOR_REQUIRED");assert.deepEqual(database.serialize(),revokedBefore);
+    now=admin.session.absoluteExpiresAtMs+1;
+    assert.equal((await fetch(directoryPath,{headers:headers(admin)})).status,401);assert.deepEqual(database.serialize(),revokedBefore,"expired session read does not persist expiry");
+  } finally {runtime.close();}
+});
+
+test("analytics health runtime keeps sessions and both sidecars unchanged across authorized, denied and expired reads",async t=>{
+  let now=NOW_MS;const database=createDatabase(t);
+  const runtime=createTargetRuntime(runtimeOptions(database,{securityFoundations:createSecurityFoundations({env:securityEnv(),now:()=>now,loggerSink(){}})}));
+  try {
+    const base=await startRuntimeApp(t,runtime),userId=uuid(951001),roleId=uuid(951002);
+    database.prepare("INSERT INTO users(id,email_normalized,email_display,display_name,display_name_normalized,status,created_at_ms,updated_at_ms,version) VALUES(?,?,?,?,?,'active',?,?,1)").run(userId,"health@example.test","health@example.test","Health Admin","health admin",now,now);
+    database.prepare("INSERT INTO platform_roles VALUES (?,?,'platform_administrator','active',NULL,?,NULL,1)").run(roleId,userId,now);
+    const admin=runtime.services.sessionService.issueForUser({userId}),headers=browserHeaders({Cookie:runtime.transport.sessionCookie.name+"="+admin.rawSessionToken});
+    now+=6*60*1000;const before=database.serialize(),files=fs.readdirSync(path.dirname(database.name)).sort();
+    for(const group of require('../../src/analytics/readAnalyticsHealth').HEALTH_GROUPS){
+      const response=await fetch(base+"/api/v1/admin/analytics/health?group="+group+"&days=7",{headers});assert.equal(response.status,200);assert.equal(response.headers.get("cache-control"),"no-store");assert.equal(response.headers.get("set-cookie"),null);const data=(await response.json()).data;assert.equal(data.group,group);assert.equal(data.status,group==="daily_scoring_pending"?"not_measured":"available");
+    }
+    assert.deepEqual(database.serialize(),before,"health reads never touch session activity or other main rows");assert.deepEqual(fs.readdirSync(path.dirname(database.name)).sort(),files,"health reads do not initialize sidecars");
+    database.prepare("UPDATE platform_roles SET status='ended',ended_at_ms=?,version=version+1 WHERE id=?").run(now,roleId);const revoked=database.serialize();
+    assert.equal((await fetch(base+"/api/v1/admin/analytics/health?group=failed_jobs",{headers})).status,403);assert.deepEqual(database.serialize(),revoked);
+    now=admin.session.absoluteExpiresAtMs+1;assert.equal((await fetch(base+"/api/v1/admin/analytics/health?group=failed_jobs",{headers})).status,401);assert.deepEqual(database.serialize(),revoked,"expired read must not persist expiry");
+  } finally {runtime.close();}
 });

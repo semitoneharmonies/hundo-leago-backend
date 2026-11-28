@@ -1,7 +1,7 @@
 "use strict";
 
 const express = require("express");
-const { validateAggregateInput } = require("../../analytics/createAggregateAnalyticsStore");
+const { validateAggregateInput, resolveAnalyticsPeriod } = require("../../analytics/createAggregateAnalyticsStore");
 
 const COLLECT_PATH = "/api/v1/analytics/aggregate";
 const READ_PATH = "/api/v1/admin/analytics";
@@ -89,12 +89,27 @@ function createAggregateAnalyticsRouter({
     } catch {
       return fail(response, 403, "PLATFORM_ADMINISTRATOR_REQUIRED", "Platform-administrator authority is required.", adminSecurity.getRequestId(request));
     }
-    if (Object.keys(request.query).some(key => key !== "days") ||
-        (request.query.days !== undefined && !["7", "28", "90"].includes(request.query.days))) {
-      return fail(response, 400, "ANALYTICS_INPUT_INVALID", "Choose 7, 28 or 90 days.", adminSecurity.getRequestId(request));
+    let selection = 28;
+    let options = {};
+    try {
+      if (Object.hasOwn(request.query, "detail")) {
+        if (request.query.detail !== "pages") throw new Error("Invalid analytics detail.");
+        options = { detail: "pages" };
+      }
+      const keys = Object.keys(request.query).filter(key => key !== "detail");
+      if (keys.length > 1) throw new Error("Choose one analytics period.");
+      if (keys.length === 1) {
+        const key = keys[0], value = request.query[key];
+        if (key === "days" && ["7", "28", "90"].includes(value)) selection = Number(value);
+        else if ((key === "week" || key === "month") && typeof value === "string") selection = { [key]: value };
+        else throw new Error("Invalid analytics period.");
+      }
+      resolveAnalyticsPeriod(selection, clock());
+    } catch {
+      return fail(response, 400, "ANALYTICS_INPUT_INVALID", "Choose a valid week, month or recent period.", adminSecurity.getRequestId(request));
     }
     try {
-      return response.status(200).json({ data: analyticsStore.read(request.query.days === undefined ? 28 : Number(request.query.days)),
+      return response.status(200).json({ data: analyticsStore.read(selection, options),
         meta: { requestId: adminSecurity.getRequestId(request) } });
     } catch {
       return fail(response, 503, "ANALYTICS_UNAVAILABLE", "Analytics could not be loaded. Try again shortly.", adminSecurity.getRequestId(request));
